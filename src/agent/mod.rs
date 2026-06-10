@@ -4,6 +4,7 @@
 //! The loop is UI-agnostic: it emits [`AgentEvent`]s over a channel that the
 //! Ratatui TUI (genie) or the headless runner (sovereign) consumes.
 
+pub mod mission;
 pub mod prompts;
 pub mod session;
 pub mod subagent;
@@ -210,6 +211,9 @@ pub struct Agent {
 
 /// Consecutive identical failures that trip the sovereign circuit breaker.
 const CIRCUIT_BREAKER_LIMIT: u32 = 3;
+
+/// Number of most-recent messages preserved verbatim when compacting history.
+const KEEP_RECENT: usize = 10;
 
 /// Consecutive failures of one tool (any args) before the model is nudged
 /// to change approach.
@@ -444,6 +448,7 @@ impl Agent {
         events: &mpsc::Sender<AgentEvent>,
     ) -> Result<DoneReason> {
         self.push(ChatMessage::user(input));
+        self.compact_if_needed(events).await;
         let max_steps = self.config.max_steps.max(1);
 
         for step in 1..=max_steps {
@@ -458,7 +463,7 @@ impl Agent {
                 return Ok(reason);
             }
 
-            let (content, mut tool_calls) = self.stream_completion(events).await?;
+            let (content, mut tool_calls) = self.stream_completion_with_retry(events).await?;
             let assistant = ChatMessage {
                 role: Role::Assistant,
                 content: content.clone(),
@@ -536,6 +541,160 @@ impl Agent {
             }
         }
         Ok((content, tool_calls))
+    }
+
+    /// [`stream_completion`] with sleep-and-wake exponential backoff so a
+    /// transient LLM outage (server down, rate-limited, mid-stream drop)
+    /// pauses and retries instead of aborting the run. In continuous mode it
+    /// retries indefinitely; otherwise it gives up after ~6 attempts. A
+    /// non-transient error (e.g. missing model) returns immediately.
+    async fn stream_completion_with_retry(
+        &self,
+        events: &mpsc::Sender<AgentEvent>,
+    ) -> Result<(String, Vec<ToolCall>)> {
+        let mut attempt: u32 = 0;
+        loop {
+            match self.stream_completion(events).await {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    // Default to transient so mid-stream interruptions (which
+                    // are not typed `OllamaError`) also retry.
+                    let transient = err
+                        .downcast_ref::<crate::llm::ollama::OllamaError>()
+                        .map(|e| e.is_transient())
+                        .unwrap_or(true);
+                    if !transient {
+                        return Err(err);
+                    }
+                    if !self.config.continuous && attempt >= 6 {
+                        return Err(err);
+                    }
+                    let secs = self.config.retry_max_secs.min(
+                        self.config
+                            .retry_base_secs
+                            .saturating_mul(2u64.saturating_pow(attempt)),
+                    );
+                    let n = attempt + 1;
+                    let _ = emit(
+                        events,
+                        AgentEvent::Error(format!(
+                            "LLM unavailable ({err:#}); sleeping {secs}s then retrying (attempt {n})"
+                        )),
+                    )
+                    .await;
+                    tokio::time::sleep(Duration::from_secs(secs)).await;
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    /// Keep history bounded so the agent can run indefinitely. When the
+    /// serialized history exceeds `compact_threshold_bytes`, summarize the
+    /// middle span (everything between the system prompt and the last
+    /// [`KEEP_RECENT`] messages) into a single progress note. Best-effort:
+    /// a summarization failure falls back to dropping the middle span. Never
+    /// aborts the turn.
+    async fn compact_if_needed(&mut self, events: &mpsc::Sender<AgentEvent>) {
+        let total: usize = self.history.iter().map(|msg| msg.content.len()).sum();
+        if total <= self.config.compact_threshold_bytes {
+            return;
+        }
+        // Need history[0] (system prompt) + a non-empty middle + the recent tail.
+        if self.history.len() <= KEEP_RECENT + 1 {
+            return;
+        }
+        let start = 1;
+        let end = self.history.len() - KEEP_RECENT;
+        if start >= end {
+            return;
+        }
+        let middle_count = end - start;
+
+        // Render the middle span as one text blob, capped to ~20k chars.
+        let mut blob = String::new();
+        for msg in &self.history[start..end] {
+            let role = match msg.role {
+                Role::System => "system",
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::Tool => "tool",
+            };
+            blob.push_str(role);
+            blob.push_str(": ");
+            blob.push_str(&msg.content);
+            blob.push('\n');
+            if blob.len() >= 20_000 {
+                blob.truncate(20_000);
+                break;
+            }
+        }
+
+        match self.summarize_transcript(&blob).await {
+            Ok(summary) => {
+                let replacement =
+                    ChatMessage::system(format!("[Compacted progress summary]\n{summary}"));
+                self.history.splice(start..end, std::iter::once(replacement));
+                let _ = emit(
+                    events,
+                    AgentEvent::Error(format!("compacted {middle_count} messages → summary")),
+                )
+                .await;
+            }
+            Err(err) => {
+                // Fall back to truncation: drop the middle span outright.
+                self.history.drain(start..end);
+                let _ = emit(
+                    events,
+                    AgentEvent::Error(format!(
+                        "compacted {middle_count} messages by truncation (summary LLM failed: {err:#})"
+                    )),
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Summarize a transcript blob into a terse progress note via the model.
+    /// Used by [`compact_if_needed`]; deltas are not forwarded to the UI.
+    async fn summarize_transcript(&self, blob: &str) -> Result<String> {
+        let request = ChatRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                ChatMessage::system(
+                    "Summarize the following Wizard agent transcript into a compact progress \
+                     note. Preserve: the mission/goal, decisions made, files changed, commands \
+                     run, what worked/failed, and open next steps. Be terse and factual.",
+                ),
+                ChatMessage::user(blob.to_string()),
+            ],
+            tools: Vec::new(),
+            stream: true,
+            options: Some(ChatOptions {
+                temperature: Some(0.2),
+                num_ctx: None,
+            }),
+        };
+
+        let mut stream = self
+            .client
+            .chat_stream(request)
+            .await
+            .context("starting compaction summary")?;
+        let mut summary = String::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("reading compaction stream")?;
+            if let Some(message) = chunk.message {
+                summary.push_str(&message.content);
+            }
+            if chunk.done {
+                break;
+            }
+        }
+        if summary.trim().is_empty() {
+            anyhow::bail!("empty summary");
+        }
+        Ok(summary)
     }
 
     /// Gate, execute, and feed back one tool call. Returns `Some(reason)`
@@ -722,17 +881,30 @@ fn read_project_instructions(project_root: &Path) -> Option<String> {
     None
 }
 
-/// Sovereign-mode headless runner: builds an [`Agent`], runs the task from
-/// `cli.prompt` in an outer loop with `--max-hours` / `--loop` limits, the
-/// `.wizard/loop-control` file, and a circuit breaker (stop after 3
-/// consecutive identical failures). Prints progress to stdout instead of the
-/// TUI.
+/// Sovereign-mode headless runner: builds an [`Agent`] and drives it in an
+/// outer loop. The goal comes from `cli.prompt`, or (on a self-evolve
+/// re-exec) from the persisted [`mission::Mission`]. With `--continuous` it
+/// runs perpetually — persisting a mission, self-directing the next action
+/// after each completed cycle, sleeping-and-waking through transient LLM
+/// outages, compacting context, and re-exec'ing itself after a self-evolve —
+/// until stopped via `.wizard/loop-control`, `--max-hours`, or the circuit
+/// breaker. Otherwise it honors the `--loop N` bound. Prints progress to
+/// stdout instead of the TUI.
 pub async fn run_headless(config: Config, cli: Cli) -> Result<()> {
-    let task = cli
-        .prompt
-        .clone()
-        .context("headless mode needs a task: pass -p \"<task>\"")?;
     let project_root = std::env::current_dir().context("determining project root")?;
+
+    // Goal resolution: an explicit `-p` wins; otherwise resume the standing
+    // mission (this is the path taken after a self-evolve re-exec, which
+    // relaunches without `-p`); otherwise there is nothing to do.
+    let goal = if let Some(prompt) = cli.prompt.clone() {
+        prompt
+    } else if let Some(existing) = mission::Mission::load(&project_root)? {
+        existing.goal
+    } else {
+        return Err(anyhow::anyhow!(
+            "headless mode needs a task: pass -p \"<task>\""
+        ));
+    };
 
     let client = OllamaClient::new(&config.ollama_host);
     client
@@ -792,6 +964,9 @@ pub async fn run_headless(config: Config, cli: Cli) -> Result<()> {
         subagent_configs,
         client.clone(),
         Arc::clone(&base),
+    )));
+    registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
+        config.clone(),
     )));
 
     // Skills: repo/bundled roots + user (~/.wizard/skills), user shadowing.
@@ -858,24 +1033,53 @@ pub async fn run_headless(config: Config, cli: Cli) -> Result<()> {
     });
 
     println!(
-        "wizard {} — model {} @ {} — task: {task}",
+        "wizard {} — model {} @ {} — task: {goal}",
         config.mode, config.model, config.ollama_host
     );
 
+    // Continuous mode persists a long-lived mission so the loop survives
+    // restarts and binary self-replacement (deep evolve re-exec).
+    let mut mission_state = if config.continuous {
+        let mission = match mission::Mission::load(&project_root)? {
+            Some(existing) => existing,
+            None => {
+                let fresh = mission::Mission::new(goal.clone());
+                fresh.save(&project_root)?;
+                fresh
+            }
+        };
+        Some(mission)
+    } else {
+        None
+    };
+
     let max_iterations = cli.loop_limit.unwrap_or(1).max(1);
-    let mut input = task;
+    let mut input = goal.clone();
     let mut final_reason = DoneReason::Completed;
     let mut run_error: Option<anyhow::Error> = None;
+    // Set when a self-evolve marker is consumed: after draining the printer we
+    // re-exec into the freshly built/extended binary.
+    let mut reexec_after = false;
+    let mut iteration: u32 = 0;
 
-    for iteration in 1..=max_iterations {
+    loop {
+        iteration += 1;
+        if !config.continuous && iteration > max_iterations {
+            break;
+        }
+
+        // Honor a graceful stop at the top of every cycle.
         if read_loop_control(&project_root) == Some(LoopControl::Stop) {
             clear_loop_control(&project_root);
             final_reason = DoneReason::Stopped;
             break;
         }
-        if max_iterations > 1 {
+        if config.continuous {
+            println!("\n=== cycle {iteration} ===");
+        } else if max_iterations > 1 {
             println!("\n=== iteration {iteration}/{max_iterations} ===");
         }
+
         match agent.run_turn(&input, tx.clone()).await {
             Ok(reason) => {
                 final_reason = reason;
@@ -885,10 +1089,33 @@ pub async fn run_headless(config: Config, cli: Cli) -> Result<()> {
                                  complete, summarize what was done."
                             .to_string();
                     }
-                    DoneReason::Completed
-                    | DoneReason::Stopped
-                    | DoneReason::TimeLimit
-                    | DoneReason::CircuitBreaker => break,
+                    DoneReason::Completed => {
+                        if config.continuous {
+                            // Never idle: record the cycle and self-direct the
+                            // next most valuable action toward the mission.
+                            if let Some(mission) = mission_state.as_mut() {
+                                mission.record_cycle(Some(format!("cycle done: {reason:?}")));
+                                mission.save(&project_root)?;
+                                input = format!(
+                                    "You are operating CONTINUOUSLY and autonomously toward this \
+                                     standing mission:\n\n{goal}\n\nYou just reported the current \
+                                     sub-task complete (cycle {}). Re-examine the project state, \
+                                     then choose and carry out the single most valuable next \
+                                     action that advances the mission. If the mission itself is \
+                                     genuinely and fully complete, instead pick a high-value \
+                                     improvement to the project — better tests, docs, \
+                                     performance, robustness — or improve your OWN capabilities \
+                                     using the `evolve` tool. Never idle; always advance.",
+                                    mission.cycles
+                                );
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    DoneReason::Stopped | DoneReason::TimeLimit | DoneReason::CircuitBreaker => {
+                        break;
+                    }
                 }
             }
             Err(err) => {
@@ -896,10 +1123,46 @@ pub async fn run_headless(config: Config, cli: Cli) -> Result<()> {
                 break;
             }
         }
+
+        // After the turn, react to self-evolution markers: a deep rebuild
+        // (`evolve-reexec`) or a tier-1 extension (`evolve-reload`) both mean
+        // the running image is stale, so we re-exec to reload everything.
+        // Only meaningful in continuous mode, where the persisted mission lets
+        // the relaunched process resume without a `-p` goal; a one-shot run
+        // just finishes and the next launch picks up the new binary.
+        let reexec = mission::reexec_marker(&project_root);
+        let reload = mission::reload_marker(&project_root);
+        if config.continuous && (reexec.exists() || reload.exists()) {
+            if let Some(mission) = mission_state.as_ref() {
+                mission.save(&project_root)?;
+            }
+            let _ = std::fs::remove_file(&reexec);
+            let _ = std::fs::remove_file(&reload);
+            reexec_after = true;
+            break;
+        }
+
+        if config.cycle_pause_secs > 0 {
+            tokio::time::sleep(Duration::from_secs(config.cycle_pause_secs)).await;
+        }
     }
 
     drop(tx);
     let _ = printer.await;
+
+    if reexec_after {
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe().context("locating current executable for re-exec")?;
+        println!("[re-exec into evolved binary {}]", exe.display());
+        let err = std::process::Command::new(exe)
+            .arg("--mode")
+            .arg("sovereign")
+            .arg("--continuous")
+            .arg("--cwd")
+            .arg(&project_root)
+            .exec(); // never returns on success
+        return Err(anyhow::anyhow!("re-exec after evolve failed: {err}"));
+    }
 
     if let Some(err) = run_error {
         return Err(err);

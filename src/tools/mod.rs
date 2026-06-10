@@ -3,6 +3,7 @@
 //! MCP tools (`crate::mcp`). All three present a uniform interface through
 //! [`registry::ToolRegistry`], so the model calls them identically.
 
+pub mod evolve;
 pub mod file;
 pub mod git;
 pub mod registry;

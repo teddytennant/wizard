@@ -41,6 +41,12 @@ pub struct Cli {
     #[arg(long = "loop", value_name = "N")]
     pub loop_limit: Option<u32>,
 
+    /// Run sovereign mode perpetually: keep working toward the goal,
+    /// self-directing and self-improving, until stopped (loop-control
+    /// `stop` or --max-hours). Implies --mode sovereign.
+    #[arg(long)]
+    pub continuous: bool,
+
     /// Project root override (defaults to the current directory).
     #[arg(long)]
     pub cwd: Option<PathBuf>,
@@ -76,6 +82,7 @@ mod tests {
         assert!(!cli.auto);
         assert_eq!(cli.max_hours, None);
         assert_eq!(cli.loop_limit, None);
+        assert!(!cli.continuous);
         assert_eq!(cli.cwd, None);
         assert!(!cli.resume);
     }
@@ -92,6 +99,7 @@ mod tests {
             "1.5",
             "--loop",
             "10",
+            "--continuous",
             "--cwd",
             "/tmp/project",
             "--resume",
@@ -102,6 +110,7 @@ mod tests {
         assert!(cli.auto);
         assert_eq!(cli.max_hours, Some(1.5));
         assert_eq!(cli.loop_limit, Some(10));
+        assert!(cli.continuous);
         assert_eq!(
             cli.cwd.as_deref(),
             Some(std::path::Path::new("/tmp/project"))

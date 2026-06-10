@@ -66,6 +66,19 @@ pub struct Config {
     /// Agent loop limit per turn (genie). Sovereign uses its own default
     /// unless this is explicitly raised above it.
     pub max_steps: u32,
+    /// Perpetual sovereign operation: keep working/self-directing/self-improving
+    /// until stopped.
+    pub continuous: bool,
+    /// Base seconds for exponential backoff when the LLM server is unreachable
+    /// or rate-limited.
+    pub retry_base_secs: u64,
+    /// Cap on backoff sleep in seconds.
+    pub retry_max_secs: u64,
+    /// Pause between continuous cycles (0 = none).
+    pub cycle_pause_secs: u64,
+    /// When the serialized chat history exceeds this many bytes, compact older
+    /// messages into a summary.
+    pub compact_threshold_bytes: usize,
 }
 
 impl Default for Config {
@@ -76,6 +89,11 @@ impl Default for Config {
             mode: Mode::Genie,
             auto_approve: false,
             max_steps: 25,
+            continuous: false,
+            retry_base_secs: 5,
+            retry_max_secs: 300,
+            cycle_pause_secs: 0,
+            compact_threshold_bytes: 48_000,
         }
     }
 }
@@ -211,6 +229,10 @@ impl Config {
         if let Some(mode) = cli.mode {
             self.mode = mode;
         }
+        if cli.continuous {
+            self.mode = Mode::Sovereign;
+            self.continuous = true;
+        }
         if cli.auto || self.mode == Mode::Sovereign {
             self.auto_approve = true;
         }
@@ -239,6 +261,11 @@ mod tests {
         assert_eq!(config.mode, Mode::Genie);
         assert!(!config.auto_approve);
         assert_eq!(config.max_steps, 25);
+        assert!(!config.continuous);
+        assert_eq!(config.retry_base_secs, 5);
+        assert_eq!(config.retry_max_secs, 300);
+        assert_eq!(config.cycle_pause_secs, 0);
+        assert_eq!(config.compact_threshold_bytes, 48_000);
     }
 
     #[test]
@@ -268,6 +295,11 @@ mod tests {
             mode: Mode::Sovereign,
             auto_approve: true,
             max_steps: 200,
+            continuous: true,
+            retry_base_secs: 10,
+            retry_max_secs: 600,
+            cycle_pause_secs: 30,
+            compact_threshold_bytes: 96_000,
         };
         let raw = toml::to_string_pretty(&original).expect("serialize");
         let parsed: Config = toml::from_str(&raw).expect("parse back");
@@ -276,6 +308,14 @@ mod tests {
         assert_eq!(parsed.mode, original.mode);
         assert_eq!(parsed.auto_approve, original.auto_approve);
         assert_eq!(parsed.max_steps, original.max_steps);
+        assert_eq!(parsed.continuous, original.continuous);
+        assert_eq!(parsed.retry_base_secs, original.retry_base_secs);
+        assert_eq!(parsed.retry_max_secs, original.retry_max_secs);
+        assert_eq!(parsed.cycle_pause_secs, original.cycle_pause_secs);
+        assert_eq!(
+            parsed.compact_threshold_bytes,
+            original.compact_threshold_bytes
+        );
     }
 
     #[test]
@@ -327,6 +367,16 @@ mod tests {
         assert_eq!(config.mode, Mode::Sovereign);
         assert!(config.auto_approve, "sovereign implies auto-approve");
         assert_eq!(config.max_steps, 100, "sovereign raises the step budget");
+    }
+
+    #[test]
+    fn continuous_flag_forces_sovereign() {
+        let mut config = Config::default();
+        config.apply_cli(&cli(&["--continuous"]));
+        assert_eq!(config.mode, Mode::Sovereign);
+        assert!(config.continuous);
+        assert!(config.auto_approve);
+        assert_eq!(config.max_steps, 100);
     }
 
     #[test]

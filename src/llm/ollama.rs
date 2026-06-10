@@ -43,6 +43,21 @@ pub enum OllamaError {
     },
 }
 
+impl OllamaError {
+    /// Whether this error is transient — a retry after backoff may succeed.
+    /// Connection/timeout failures and server-busy/rate-limit/5xx statuses
+    /// are transient; a missing model or a 4xx (other than 429) is not.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            OllamaError::Unreachable { .. } => true,
+            OllamaError::ModelMissing(_) => false,
+            OllamaError::Api { status, .. } => {
+                status.as_u16() == 429 || status.is_server_error()
+            }
+        }
+    }
+}
+
 /// Client bound to one Ollama host. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct OllamaClient {
@@ -348,6 +363,33 @@ mod tests {
         let err = parse_chunk_line(r#"{"error":"model 'x' not found"}"#)
             .expect_err("error line must fail");
         assert!(err.to_string().contains("model 'x' not found"));
+    }
+
+    #[test]
+    fn transient_classification() {
+        let status = |code: u16| reqwest::StatusCode::from_u16(code).expect("valid status");
+        assert!(
+            OllamaError::Api {
+                status: status(503),
+                body: String::new(),
+            }
+            .is_transient()
+        );
+        assert!(
+            OllamaError::Api {
+                status: status(429),
+                body: String::new(),
+            }
+            .is_transient()
+        );
+        assert!(
+            !OllamaError::Api {
+                status: status(400),
+                body: String::new(),
+            }
+            .is_transient()
+        );
+        assert!(!OllamaError::ModelMissing("m".to_string()).is_transient());
     }
 
     #[tokio::test]

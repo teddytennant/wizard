@@ -22,6 +22,8 @@ One command installs the `wizard` binary, Ollama, and an official **Qwen 3.6** m
 
 **Genie / Sovereign dual modes.** Genie is the interactive default: full TUI, confirms every write, shell command, and evolution before it runs. Sovereign is the autonomous mode: headless-capable, auto-approves everything, circuit-breaks on repeated failures, controllable mid-run via a loop-control file. Same tools, same model — different trust posture, switchable live with `/genie` and `/sovereign`.
 
+**Perpetual `--continuous` mode.** Sovereign can also run *forever*. Given one goal, `--continuous` never stops at "done": it persists a durable mission to `.wizard/mission.toml`, self-directs the next most valuable action each cycle, sleeps-and-wakes through transient model-server outages instead of dying, compacts its own context so it never overflows, and — when it improves itself via `evolve`, up to rebuilding its own binary — re-execs into the new image and resumes the mission. Zero human in the loop; the kill switch is one line in `.wizard/loop-control`, and deep self-modification stays gated by an automated build + smoke test with `wizard.prev` rollback. See [docs/modes.md](docs/modes.md#continuous-mode-perpetual-sovereign).
+
 ---
 
 ## Quick start
@@ -35,6 +37,9 @@ wizard
 
 # Sovereign autonomous mode
 wizard --mode sovereign -p "refactor the auth module and add tests"
+
+# Perpetual mode — keeps working and self-improving until you stop it
+wizard --continuous -p "keep hardening this codebase: tests, docs, performance"
 
 # Self-extension: add a capability live (skill / MCP server / scripted tool)
 wizard --evolve -p "add a skill for conventional commit messages"
