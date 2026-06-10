@@ -51,9 +51,7 @@ impl OllamaError {
         match self {
             OllamaError::Unreachable { .. } => true,
             OllamaError::ModelMissing(_) => false,
-            OllamaError::Api { status, .. } => {
-                status.as_u16() == 429 || status.is_server_error()
-            }
+            OllamaError::Api { status, .. } => status.as_u16() == 429 || status.is_server_error(),
         }
     }
 }

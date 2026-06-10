@@ -634,7 +634,8 @@ impl Agent {
             Ok(summary) => {
                 let replacement =
                     ChatMessage::system(format!("[Compacted progress summary]\n{summary}"));
-                self.history.splice(start..end, std::iter::once(replacement));
+                self.history
+                    .splice(start..end, std::iter::once(replacement));
                 let _ = emit(
                     events,
                     AgentEvent::Error(format!("compacted {middle_count} messages → summary")),

@@ -82,8 +82,7 @@ impl Mission {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating control dir at {}", dir.display()))?;
         let path = mission_path(project_root);
-        let serialized =
-            toml::to_string_pretty(self).context("serializing mission to TOML")?;
+        let serialized = toml::to_string_pretty(self).context("serializing mission to TOML")?;
         std::fs::write(&path, serialized)
             .with_context(|| format!("writing mission file at {}", path.display()))?;
         Ok(())
@@ -119,8 +118,11 @@ mod tests {
     impl TempDir {
         fn new() -> Self {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir()
-                .join(format!("wizard-mission-test-{}-{}", std::process::id(), n));
+            let dir = std::env::temp_dir().join(format!(
+                "wizard-mission-test-{}-{}",
+                std::process::id(),
+                n
+            ));
             std::fs::create_dir_all(&dir).expect("create temp dir");
             Self(dir)
         }
