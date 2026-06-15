@@ -73,9 +73,12 @@ cargo install --path .
 > the checkout after `cargo install` breaks the bridge. You can override the bridge paths
 > with `python` / `bridge_script` in the config (see below).
 
-> **Note:** the `install.sh` curl one-liner in this repo is for the *old* prebuilt-binary
-> architecture and does not work with this build. It is being reworked for the
-> build-from-source + uv flow above.
+> **One-liner:** `install.sh` automates the steps above (installs Rust/uv if needed, clones to
+> `~/.local/share/wizard`, runs `uv sync`, and `cargo install`s the binary):
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
+> ```
+> (Building this branch before it lands on `main`? `… | WIZARD_REF=ahe-backend bash`.)
 
 Run it:
 
@@ -167,22 +170,27 @@ file references are supported — see [docs/commands.md](docs/commands.md).
 does not reimplement it — it shells out to AHE's own `scripts/evolve.sh`, which runs
 `python evolve.py` in a detached tmux session. **AHE owns all of its own configuration.**
 
+AHE runs every harness on the **local Docker daemon** — no cloud sandbox — so a loop
+needs only Docker + LLM keys.
+
 Point Wizard at an AHE checkout:
 
 ```toml
 [evolve]
 ahe_repo = "/path/to/agentic-harness-engineering"
-# experiment_config = "configs/experiments/exp-simple-code-gpt54.yaml"  # optional
+# experiment_config = "configs/experiments/exp-local-sample.yaml"  # optional (default)
 ```
 
-Evolve is **off** until this section is present. AHE supplies its own credentials and
-data — Wizard provides none of them. To actually run a loop, the AHE checkout needs its
-own `.env` and `configs/`:
+Evolve is **off** until this section is present. AHE supplies its own configuration and
+data — Wizard provides none of them. To actually run a loop, the AHE checkout needs:
 
-- an **E2B** account → `E2B_API_KEY` (sandboxed execution)
-- a **GitHub token** → `GITHUB_TOKEN`
-- **LLM keys** → `LLM_API_KEY`, `LLM_BASE_URL`, …
-- a **dataset** for the experiment config you select
+- **Docker** → the `docker` CLI on PATH with a running daemon (`docker ps` works)
+- **LLM keys** → `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` (a local `llama-server` is
+  fine), in `<ahe_repo>/.env` or the environment
+- a **dataset** for the experiment config (the default `exp-local-sample` ships its own)
+
+No **E2B** account or **GitHub token** is needed — those were only for the old cloud
+sandbox mode, which AHE no longer defaults to.
 
 ```bash
 wizard evolve start      # preflight, then launch in a detached tmux session
@@ -192,8 +200,9 @@ wizard evolve stop <s>   # kill a session
 wizard evolve attach     # print the tmux attach command
 ```
 
-`evolve start` preflights for `scripts/evolve.sh`, `evolve.py`, `.env`, and the experiment
-config, reporting anything missing first. Progress is read from
+`evolve start` preflights for `scripts/evolve.sh`, `evolve.py`, a working `docker`, LLM
+keys (`.env` or environment), and the experiment config, reporting anything missing
+first. Progress is read from
 `<ahe_repo>/experiments/<TIMESTAMP>__<name>/` (`iteration_scores.md`,
 `evolution_history.md`). Full details: [docs/ahe-evolve.md](docs/ahe-evolve.md).
 

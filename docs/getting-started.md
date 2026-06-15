@@ -28,8 +28,9 @@ cargo build --release    # → ./target/release/wizard
 > `cargo install`, the bridge won't launch. You can override the bridge interpreter/script
 > with `python` / `bridge_script` in `~/.wizard/config.toml`.
 
-> The repo's `install.sh` curl one-liner targets the old prebuilt-binary design and does
-> not apply to this build; it is being reworked for the build-from-source + uv flow above.
+> Or let `install.sh` do all of the above (installs Rust/uv if missing, clones to
+> `~/.local/share/wizard`, `uv sync`, `cargo install`):
+> `curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash`
 
 ## First run
 

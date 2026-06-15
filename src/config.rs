@@ -99,8 +99,8 @@ impl UiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvolveConfig {
     /// Path to an Agentic-Harness-Engineering checkout. Wizard launches its
-    /// `scripts/evolve.sh`; AHE owns its own `.env` (E2B/GitHub/LLM keys) and
-    /// `configs/`.
+    /// `scripts/evolve.sh`; AHE owns its own `.env` (LLM keys) and `configs/`.
+    /// AHE runs harnesses on the **local Docker daemon** — no cloud sandbox.
     pub ahe_repo: PathBuf,
     /// Experiment config to run, as a path relative to `ahe_repo` (or an
     /// absolute path).
@@ -108,9 +108,10 @@ pub struct EvolveConfig {
     pub experiment_config: String,
 }
 
-/// Default experiment config: AHE's simple code-generation experiment.
+/// Default experiment config: AHE's fully-local Docker smoke-test experiment
+/// (one trivial task, no cloud sandbox).
 fn default_experiment_config() -> String {
-    "configs/experiments/exp-simple-code-gpt54.yaml".to_string()
+    "configs/experiments/exp-local-sample.yaml".to_string()
 }
 
 /// Default wire API: chat/completions, which the widest range of endpoints

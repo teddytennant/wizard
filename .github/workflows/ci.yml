@@ -43,10 +43,10 @@ jobs:
         run: cargo build --release --locked
 
   shellcheck:
-    name: Shellcheck installers
+    name: Shellcheck installer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       - name: shellcheck
-        run: shellcheck install.sh install-byom.sh
+        run: shellcheck install.sh

@@ -1,8 +1,10 @@
 //! Drives AHE's *real* harness-evolution loop by shelling out to its
 //! `scripts/evolve.sh` (which wraps `python evolve.py` in a detached tmux
 //! session). Wizard owns none of AHE's configuration: the AHE checkout brings
-//! its own `.env` (E2B/GitHub/LLM keys), its `configs/`, and its dataset. We
-//! only launch it, locate its live status files, and surface progress.
+//! its own `.env` (LLM keys), its `configs/`, and its dataset. AHE executes
+//! harnesses on the **local Docker daemon** — there is no cloud sandbox, so the
+//! only credentials a run needs are LLM keys. We only launch it, locate its
+//! live status files, and surface progress.
 //!
 //! Status files AHE writes under `<ahe_repo>/experiments/<TIMESTAMP>__<name>/`:
 //! `iteration_scores.md`, `evolution_history.md`, `iteration_scores.yaml`,
@@ -36,8 +38,10 @@ fn experiments_dir(cfg: &EvolveConfig) -> PathBuf {
 }
 
 /// Verify everything AHE needs to be launchable from here. Reports *all*
-/// missing pieces at once, and reminds the user that AHE's own `.env` must
-/// carry the E2B / GitHub / LLM keys and a dataset to actually run.
+/// missing pieces at once. AHE runs harnesses on the local Docker daemon — no
+/// cloud sandbox — so the requirements are: the AHE scripts, a reachable Docker
+/// daemon, the selected experiment config, and LLM keys (from `<repo>/.env` or
+/// the inherited environment).
 pub fn preflight(cfg: &EvolveConfig) -> Result<()> {
     let repo = &cfg.ahe_repo;
     let mut missing: Vec<String> = Vec::new();
@@ -62,10 +66,24 @@ pub fn preflight(cfg: &EvolveConfig) -> Result<()> {
         missing.push(format!("evolve.py (looked at {})", evolve_py.display()));
     }
 
+    // Local Docker execution: AHE builds and runs each task's container on the
+    // local daemon, so the `docker` CLI must be on PATH.
+    if !docker_available() {
+        missing.push(
+            "`docker` CLI on PATH — AHE runs harnesses on the local Docker daemon \
+             (install Docker and ensure `docker ps` works)"
+                .to_string(),
+        );
+    }
+
+    // LLM keys: the code agent needs a reachable LLM. They can live in the AHE
+    // checkout's `.env` *or* be inherited from the environment. We require one
+    // of those; we do NOT require any cloud-sandbox (E2B) or GitHub credentials.
     let env_file = repo.join(".env");
-    if !env_file.is_file() {
+    if !env_file.is_file() && !llm_env_present() {
         missing.push(format!(
-            ".env (looked at {}) — AHE reads its E2B_API_KEY, GITHUB_TOKEN and LLM_* keys from here",
+            ".env with LLM keys (looked at {}), or LLM_API_KEY/LLM_BASE_URL/LLM_MODEL \
+             exported in the environment",
             env_file.display()
         ));
     }
@@ -84,13 +102,29 @@ pub fn preflight(cfg: &EvolveConfig) -> Result<()> {
     }
 
     bail!(
-        "evolve preflight failed — missing:\n  - {}\n\nAHE owns its own configuration: \
-         it needs an E2B account (E2B_API_KEY), a GitHub token, LLM keys, and a dataset, \
-         all supplied via {}/.env and {}/configs/.",
+        "evolve preflight failed — missing:\n  - {}\n\nAHE runs fully locally: it needs \
+         Docker + LLM keys, no cloud sandbox. Supply LLM keys via {}/.env (or the \
+         environment) and pick an experiment under {}/configs/.",
         missing.join("\n  - "),
         repo.display(),
         repo.display(),
     )
+}
+
+/// Whether the `docker` CLI is available and the daemon responds (`docker ps`).
+fn docker_available() -> bool {
+    Command::new("docker")
+        .arg("ps")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Whether the LLM keys are present in the inherited environment.
+fn llm_env_present() -> bool {
+    ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"]
+        .iter()
+        .all(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
 }
 
 /// Launch AHE's evolve loop. Runs `bash scripts/evolve.sh <experiment_config>`
@@ -312,10 +346,14 @@ mod tests {
     fn preflight_lists_missing_pieces_in_a_real_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let err = preflight(&cfg(tmp.path())).unwrap_err().to_string();
+        // These pieces are always absent in an empty temp dir, regardless of the
+        // ambient environment (Docker presence / LLM_* vars vary by host).
         assert!(err.contains("scripts/evolve.sh"), "got: {err}");
         assert!(err.contains("evolve.py"), "got: {err}");
-        assert!(err.contains(".env"), "got: {err}");
-        assert!(err.contains("E2B"), "got: {err}");
+        assert!(err.contains("experiment config"), "got: {err}");
+        // Local-Docker framing — no cloud sandbox / E2B requirement.
+        assert!(err.contains("no cloud sandbox"), "got: {err}");
+        assert!(!err.contains("E2B account"), "got: {err}");
     }
 
     #[test]
