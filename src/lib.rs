@@ -1,196 +1,130 @@
-//! Wizard — a single-binary, fully local agent.
+//! Wizard — a Claude-Code-style chat TUI whose backend is the NexAU code
+//! agent, reached over a Python bridge subprocess.
 //!
-//! A Ratatui front end on top of an Ollama-backed agent loop with an
-//! extensible tool set (native + scripted + MCP) and tiered self-extension.
-//! See `docs/architecture.md` for the full design.
+//! A Ratatui front end ([`ui`], [`app`]) streams [`agent::AgentEvent`]s from
+//! the bridge ([`backend::nexau`]) and renders them. There is exactly one
+//! mode: the interactive TUI.
 
 pub mod agent;
 pub mod app;
-pub mod bench;
-pub mod checkpoint;
+pub mod auth;
+pub mod backend;
 pub mod cli;
 pub mod commands;
 pub mod config;
-pub mod dispatch;
-pub mod doctor;
 pub mod event;
 pub mod evolve;
-pub mod fleet;
-pub mod gateway;
-pub mod hardware;
-pub mod hooks;
-pub mod instructions;
-pub mod llm;
-pub mod local_setup;
-pub mod mcp;
-pub mod memory;
 pub mod onboarding;
-pub mod output;
-pub mod progress;
-pub mod schedule;
-pub mod server;
-pub mod skills;
-pub mod tools;
 pub mod ui;
-pub mod usage;
 
 use std::io::IsTerminal;
 
 use anyhow::Result;
 
-use crate::config::Mode;
-
-/// Top-level entry point: load config, apply CLI overrides, and dispatch to
-/// the selected run mode (genie TUI, sovereign headless loop, or `--evolve`).
-///
-/// Returns the process exit code: headless runs map their outcome through
-/// [`output::exit_code`] (0 completed, 2 max-steps, 3 circuit breaker, 4 time
-/// limit); every other mode exits 0 on success. Hard errors surface as `Err`
-/// and exit 1 from `main`.
+/// Top-level entry point: apply CLI overrides, load (or onboard) the config,
+/// then launch the interactive TUI. Returns the process exit code.
 pub async fn run(cli: cli::Cli) -> Result<i32> {
-    // Bench is self-contained tooling: it must work with no config and no
-    // LLM, so dispatch before onboarding and before the config load.
-    if let Some(cli::Command::Bench { cmd }) = &cli.command {
-        if let Some(dir) = &cli.cwd {
-            std::env::set_current_dir(dir)?;
-        }
-        return bench::run(cmd.clone()).await.map(|()| 0);
+    if let Some(cli::Command::Login { provider }) = &cli.command {
+        return login(provider).await.map(|()| 0);
     }
 
-    // Doctor diagnoses the environment — starting with "does the config
-    // parse?" — so it too dispatches before the config load and can never
-    // trigger onboarding. Exits 0 when no check failed, 1 otherwise.
-    if let Some(cli::Command::Doctor) = &cli.command {
-        if let Some(dir) = &cli.cwd {
-            std::env::set_current_dir(dir)?;
-        }
-        return doctor::run().await;
+    if let Some(cli::Command::Evolve { action }) = &cli.command {
+        return run_evolve(action);
     }
-
-    // Schedule CRUD and the scheduler daemon are config-independent too:
-    // they only touch ~/.wizard/schedule.toml, and the jobs they spawn are
-    // wizard child processes that load config themselves. `schedule run`
-    // propagates the child's exit code.
-    if let Some(cli::Command::Schedule { cmd }) = &cli.command {
-        if let Some(dir) = &cli.cwd {
-            std::env::set_current_dir(dir)?;
-        }
-        return schedule::run(cmd.clone()).await;
-    }
-    if let Some(cli::Command::Scheduler) = &cli.command {
-        if let Some(dir) = &cli.cwd {
-            std::env::set_current_dir(dir)?;
-        }
-        return schedule::run_daemon().await;
-    }
-
-    // Fleet dispatches before the normal flow too, but `fleet run` loads
-    // config itself (its planning and synthesis turns drive a real
-    // in-process agent); `fleet status` / `fleet stop` only touch the
-    // project's `.wizard/fleet/` directory.
-    if let Some(cli::Command::Fleet { cmd }) = &cli.command {
-        if let Some(dir) = &cli.cwd {
-            std::env::set_current_dir(dir)?;
-        }
-        return fleet::run(cmd.clone()).await;
-    }
-
-    // `--login` is a one-shot credential flow: no config, no onboarding,
-    // no TUI. Tokens land in a dedicated file under ~/.wizard/.
-    if let Some(provider) = &cli.login {
-        return match provider.as_str() {
-            "xai" => llm::xai_oauth::login(|line: &str| println!("{line}"))
-                .await
-                .map(|()| 0),
-            other => anyhow::bail!("unknown login provider '{other}' (supported: xai)"),
-        };
-    }
-
-    // First-run onboarding: build a fresh config interactively when requested,
-    // or automatically on a fresh install in an interactive terminal. A
-    // cancelled wizard exits gracefully without touching anything.
-    let mut config = if should_onboard(&cli)? {
-        match onboarding::run().await? {
-            Some(config) => config,
-            None => {
-                println!("onboarding cancelled — run `wizard --onboard` any time.");
-                return Ok(0);
-            }
-        }
-    } else {
-        let config_path = config::Config::path()?;
-        if !config_path.exists() {
-            // Non-interactive first runs (piped stdout, CI, cron) must not
-            // silently fall back to a baked-in local provider — there is no
-            // config yet and onboarding needs a TTY.
-            let headless_with_prompt =
-                cli.prompt.is_some() && (cli.mode == Some(Mode::Sovereign) || cli.continuous);
-            if !headless_with_prompt {
-                anyhow::bail!(
-                    "no config at {} — run `wizard` in an interactive terminal \
-                     (or `wizard --onboard`) to pick a provider",
-                    config_path.display()
-                );
-            }
-        }
-        config::Config::load()?
-    };
-    if !config.auto_approve {
-        eprintln!(
-            "warning: `auto_approve = false` in config.toml is no longer honored — \
-             approval gating was removed; every tool call executes directly"
-        );
-    }
-    config.apply_cli(&cli);
 
     if let Some(dir) = &cli.cwd {
         std::env::set_current_dir(dir)?;
     }
 
-    if cli.publish {
-        return evolve::run_publish_cli(config, cli).await.map(|()| 0);
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+
+    let existing = config::Config::load()?;
+    // Onboard when forced, when there is no config, or when the config it
+    // loaded cannot authenticate (e.g. a key env var that is not set) — so a
+    // broken config opens setup instead of hard-failing at launch.
+    let needs_onboarding = cli.onboard
+        || existing.is_none()
+        || existing.as_ref().is_some_and(|c| !c.has_usable_auth());
+
+    let mut config = if let Some(config) = existing.clone().filter(|_| !needs_onboarding) {
+        config
+    } else {
+        if !interactive {
+            anyhow::bail!(
+                "no usable config at {} — run wizard in an interactive terminal \
+                 (or `wizard --onboard`) to set up a provider",
+                config::Config::path()?.display()
+            );
+        }
+        match onboarding::run().await? {
+            Some(config) => config,
+            // Cancelled: fall back to the existing config only if it can
+            // actually authenticate; otherwise there is nothing to launch.
+            None => match existing.filter(config::Config::has_usable_auth) {
+                Some(config) => config,
+                None => {
+                    println!("setup cancelled — run `wizard --onboard` any time.");
+                    return Ok(0);
+                }
+            },
+        }
+    };
+
+    if let Some(model) = &cli.model {
+        config.model = model.clone();
     }
 
-    if cli.evolve {
-        return evolve::run_cli(config, cli).await.map(|()| 0);
-    }
-
-    if cli.gateway {
-        return gateway::run(config, cli).await.map(|()| 0);
-    }
-
-    match config.mode {
-        Mode::Genie => app::run_tui(config, cli).await,
-        Mode::Sovereign => agent::run_headless(config, cli).await,
-    }
+    app::run_tui(config, cli).await
 }
 
-/// Decide whether to run onboarding before the normal flow.
-///
-/// `--onboard` forces it (when a terminal is available); otherwise it runs
-/// only on a genuine first run: the config file is absent, stdin/stdout are a
-/// terminal, and this is not a publish / evolve / gateway invocation or a
-/// headless-with-prompt sovereign run. A non-interactive run never onboards,
-/// so piping into Wizard never blocks.
-fn should_onboard(cli: &cli::Cli) -> Result<bool> {
-    // Subcommands (bench) are dispatched before this is ever consulted; the
-    // check here is a defensive guarantee that they can never onboard.
-    if cli.command.is_some() {
-        return Ok(false);
+/// Handle `wizard evolve <action>`: drive AHE's evolve loop. Loads the config
+/// (without onboarding), reads its `[evolve]` section, and runs the matching
+/// [`evolve`] action, printing results. Returns the process exit code.
+fn run_evolve(action: &cli::EvolveAction) -> Result<i32> {
+    let config = config::Config::load()?.unwrap_or_default();
+    let evolve = config.evolve_ready()?;
+
+    match action {
+        cli::EvolveAction::Start => {
+            let session = evolve::start(evolve)?;
+            println!("evolve launched in tmux session '{session}'.");
+            println!("  attach:  tmux attach -t {session}");
+            println!("  status:  wizard evolve status");
+            println!("  stop:    wizard evolve stop {session}");
+        }
+        cli::EvolveAction::Status => println!("{}", evolve::status(evolve)?),
+        cli::EvolveAction::Sessions => {
+            let sessions = evolve::sessions()?;
+            if sessions.is_empty() {
+                println!("no ahe-* evolve sessions running.");
+            } else {
+                println!("running evolve sessions:");
+                for session in sessions {
+                    println!("  {session}  (attach: tmux attach -t {session})");
+                }
+            }
+        }
+        cli::EvolveAction::Stop { session } => {
+            evolve::stop(session)?;
+            println!("stopped tmux session '{session}'.");
+        }
+        cli::EvolveAction::Attach => match evolve::sessions()?.first() {
+            Some(session) => {
+                println!("attach with:  tmux attach -t {session}");
+            }
+            None => {
+                println!("no ahe-* evolve sessions running — start one with `wizard evolve start`.")
+            }
+        },
     }
-    if cli.publish || cli.evolve || cli.gateway || cli.login.is_some() {
-        return Ok(false);
+    Ok(0)
+}
+
+/// Handle `wizard login <provider>`: run the provider's OAuth flow, printing
+/// progress to stdout.
+async fn login(provider: &str) -> Result<()> {
+    match provider {
+        "xai" => auth::xai_oauth::login(|line| println!("{line}")).await,
+        other => anyhow::bail!("unknown login provider '{other}' (try: xai)"),
     }
-    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    if !interactive {
-        return Ok(false);
-    }
-    if cli.onboard {
-        return Ok(true);
-    }
-    // Headless-with-prompt sovereign runs are batch jobs — don't interrupt them.
-    let headless_with_prompt =
-        cli.prompt.is_some() && (cli.mode == Some(Mode::Sovereign) || cli.continuous);
-    let config_missing = !config::Config::path()?.exists();
-    Ok(config_missing && !headless_with_prompt)
 }

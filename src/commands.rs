@@ -3,16 +3,15 @@
 //! Custom commands are markdown files in `~/.wizard/commands/` and
 //! `<project>/.wizard/commands/` (project files shadow global ones on a name
 //! collision). The file stem is the command name; an optional `---`-fenced
-//! frontmatter block (the same convention as skills) may carry a
-//! `description` shown in the TUI suggestion popup. The body is a prompt
+//! frontmatter block may carry a `description` shown in the TUI suggestion
+//! popup. The body is a prompt
 //! template: `$ARGUMENTS` expands to everything typed after the command name
 //! and `$1`..`$9` to the whitespace-split positional arguments (missing
 //! positions expand to the empty string).
 //!
 //! `@path` tokens in user input expand to the referenced file's contents in a
-//! fenced code block. Both the TUI (`App::submit`) and headless `-p` runs go
-//! through the same [`preprocess`] pipeline, so a prompt behaves identically
-//! on every surface.
+//! fenced code block. The TUI submit path runs every prompt through the same
+//! [`preprocess`] pipeline.
 
 use std::path::{Path, PathBuf};
 
@@ -86,12 +85,12 @@ pub fn load_from_dirs(dirs: &[PathBuf]) -> Vec<CustomCommand> {
                     continue;
                 }
             };
-            let (meta, body) = crate::skills::split_frontmatter(&raw);
+            let (description, body) = split_frontmatter(&raw);
             by_name.insert(
                 name.to_string(),
                 CustomCommand {
                     name: name.to_string(),
-                    description: meta.description,
+                    description,
                     template: body,
                     path,
                 },
@@ -99,6 +98,35 @@ pub fn load_from_dirs(dirs: &[PathBuf]) -> Vec<CustomCommand> {
         }
     }
     by_name.into_values().collect()
+}
+
+/// Split an optional `---`-fenced YAML-ish frontmatter block off the head of
+/// `raw`, returning the `description:` field (if any) and the remaining body.
+/// Only the `description` key is recognized; everything else is ignored.
+fn split_frontmatter(raw: &str) -> (Option<String>, String) {
+    let trimmed = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    let Some(rest) = trimmed.strip_prefix("---") else {
+        return (None, raw.trim_start_matches('\u{feff}').to_string());
+    };
+    // The opening fence must be its own line.
+    let rest = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"));
+    let Some(rest) = rest else {
+        return (None, trimmed.to_string());
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (None, trimmed.to_string());
+    };
+    let meta = &rest[..end];
+    let after = &rest[end + 4..];
+    let body = after.trim_start_matches(['\r', '\n']).to_string();
+    let description = meta.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("description:")?;
+        let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+        (!value.is_empty()).then(|| value.to_string())
+    });
+    (description, body)
 }
 
 /// Expand `$ARGUMENTS` and `$1`..`$9` in `template`. A single pass over the
@@ -258,7 +286,6 @@ fn fence_for(content: &str) -> String {
 
 /// The one shared preprocessing pipeline for user prompts: expand a custom
 /// `/command` invocation (when `input` is one), then `@file` references.
-/// Used by both the TUI submit path and headless `-p` runs.
 pub fn preprocess(input: &str, commands: &[CustomCommand], project_root: &Path) -> String {
     let expanded = expand_custom(input, commands).unwrap_or_else(|| input.to_string());
     expand_file_refs(&expanded, project_root)

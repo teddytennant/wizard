@@ -1,274 +1,98 @@
 # Architecture
 
-Wizard is a single-binary Rust application: a Ratatui front end on top of a provider-agnostic agent loop with an extensible tool set (native tools + MCP servers + scripted tools) and tiered self-extension. Providers are interchangeable: any OpenAI-compatible endpoint, Anthropic, Ollama, or a local llama.cpp server whose `llama-server` lifecycle Wizard manages itself.
-
-## High-level overview
-
-```mermaid
-flowchart TB
-    subgraph install [install.sh]
-        A[detect OS + arch] --> D[download wizard binary]
-        D --> E["lay down ~/.wizard/ loadout"]
-    end
-
-    subgraph runtime [wizard binary]
-        CLI[clap CLI] --> Mode{mode}
-        Mode -->|genie| TUI[ratatui TUI]
-        Mode -->|sovereign| Headless[autonomous loop]
-        TUI --> Agent[agent loop]
-        Headless --> Agent
-        Agent --> LLM["llama-server /v1 (OpenAI-compatible)"]
-        Agent -.spawns when down.-> Server[llama-server lifecycle]
-        Agent --> Tools[tool registry]
-        Agent --> MCP[MCP client]
-        Agent --> Sub[subagent spawner]
-        Agent --> Skills[skills loader]
-        TUI --> Evolve["/evolve"]
-        Evolve -->|tier 1| Live[register skill / MCP / scripted tool + reload]
-        Evolve -->|tier 2 --deep| Build[fetch source + cargo build + exec restart]
-    end
-
-    install --> runtime
-```
-
-## Crate layout (planned)
+Wizard is a thin, fast Rust front end over the **AHE (Agentic Harness Engineering)**
+backend. It owns the terminal UI and the lifecycle of two external things: a long-lived
+**NexAU code agent** (for chat) and, on demand, **AHE's `evolve.py` loop** (for
+self-evolve). It does not own an agent loop, a tool registry, or a model client of its
+own — those live in NexAU.
 
 ```
-wizard/
-├── src/
-│   ├── main.rs          # entry, terminal setup
-│   ├── cli.rs           # argument parsing
-│   ├── config.rs        # ~/.wizard/config.toml
-│   ├── app.rs           # TUI state machine
-│   ├── ui.rs            # ratatui rendering
-│   ├── event.rs         # keyboard/mouse events
-│   ├── agent/
-│   │   ├── mod.rs       # tool-calling loop
-│   │   ├── prompts.rs   # genie vs sovereign system prompts
-│   │   ├── subagent.rs  # isolated sub-context spawner
-│   │   └── session.rs   # JSONL session persistence
-│   ├── server.rs        # llama-server lifecycle: spawn / health / stop
-│   ├── llm/
-│   │   ├── provider.rs  # LlmProvider trait
-│   │   ├── llamacpp.rs  # llama-server client (default; wraps the OpenAI client)
-│   │   ├── openai.rs    # OpenAI-compatible streaming client
-│   │   ├── ollama.rs    # Ollama native /api/chat client
-│   │   └── anthropic.rs # Anthropic client
-│   ├── mcp/
-│   │   └── mod.rs       # MCP client (stdio / HTTP tool servers)
-│   ├── tools/
-│   │   ├── file.rs      # read, write, edit, list, search
-│   │   ├── shell.rs     # execute commands
-│   │   ├── git.rs       # status, diff
-│   │   └── registry.rs  # unified native + scripted + MCP tool registry
-│   ├── evolve/
-│   │   └── mod.rs       # tiered self-extension pipeline
-│   └── skills/
-│       └── mod.rs       # skills/*.md loader
-├── skills/              # bundled skill definitions
-├── loadout/             # canonical default loadout (mcp.toml, subagents/)
-├── install.sh           # the one installer (default / local / BYOM / minimal flavors)
-└── install-byom.sh      # back-compat shim: install.sh with WIZARD_BYOM=1
+┌──────────────────────────┐   NDJSON over stdio   ┌───────────────────────────┐
+│  wizard (Rust / Ratatui) │ ───── prompt ───────▶ │  backend/nexau_bridge.py  │
+│  TUI · input · rendering │ ◀──── events ──────── │  long-lived subprocess    │
+└──────────────────────────┘                       └────────────┬──────────────┘
+                                                                 │ builds + runs
+                                                                 ▼
+                                                   ┌───────────────────────────┐
+                                                   │  NexAU Agent (agent/)     │
+                                                   │  LocalSandbox · shell tool │
+                                                   │  → your LLM endpoint       │
+                                                   └───────────────────────────┘
 ```
 
-## Components
+## Components (in `src/`)
 
-### CLI (`cli.rs`)
+| Module | Responsibility |
+|--------|----------------|
+| `main.rs` / `lib.rs` | entry point; CLI dispatch, config load / onboarding, then launch the TUI |
+| `cli.rs` | argument parsing (`--cwd`, `--model`, `-p`, `--onboard`; `login`, `evolve` subcommands) |
+| `config.rs` | `~/.wizard/config.toml` model; resolves a `BridgeConfig` to launch the bridge |
+| `onboarding.rs` | first-run setup: provider presets → endpoint/key/workdir form → config |
+| `auth/xai_oauth.rs` | xAI account sign-in (PKCE) and automatic bearer-token refresh |
+| `backend/nexau.rs` | spawns and talks to the bridge; maps NexAU events → `AgentEvent`s |
+| `agent/mod.rs` | the `Agent` handle the TUI drives, and the `AgentEvent` enum |
+| `app.rs` | TUI state machine: input, slash commands, the main event loop |
+| `ui.rs` | rendering (transcript, tool cards, status bar) |
+| `commands.rs` | custom `/commands` and `@path` file-reference preprocessing |
+| `evolve.rs` | drives AHE's `scripts/evolve.sh`; reads its status files |
 
-Parses arguments and selects run mode:
+## The bridge protocol
 
-| Flag | Purpose |
-|------|---------|
-| `--mode genie\|sovereign` | Personality |
-| `-p, --prompt` | Initial task (headless or pre-fill) |
-| `--evolve` | Self-extension mode |
-| `--auto` | Skip confirmation prompts |
-| `--max-hours` | Time limit (sovereign mode) |
-| `--cwd` | Project root override |
+`backend/nexau_bridge.py` is a long-lived NDJSON stdio adapter around a NexAU agent. It is
+spawned **once** per session, so the NexAU agent keeps its multi-turn history.
 
-### Config (`config.rs`)
+The bridge hardens its stdout: it dups the real fd 1, then points fd 1 at stderr, so
+anything NexAU (or a C extension) prints lands on stderr — only the bridge's `emit()`
+reaches the real stdout, keeping the NDJSON stream clean. The child's stderr is redirected
+by Wizard to `~/.wizard/logs/bridge.log`.
 
-Loaded from `~/.wizard/config.toml` with optional env overrides (`WIZARD_MODEL`, `WIZARD_LLAMACPP_HOST`, `WIZARD_GGUF_PATH`, `WIZARD_OLLAMA_HOST`):
+**TUI → bridge** (one JSON object per line):
 
-```toml
-active_provider = "local"
-mode = "genie"
-auto_approve = true
-max_steps = 25
-
-[[providers]]
-name = "local"
-kind = "llamacpp"
-base_url = "http://127.0.0.1:8080"
-model = "Qwen3.6-27B-Q4_K_M"
-gguf_path = "/home/you/.wizard/models/Qwen3.6-27B-Q4_K_M.gguf"
+```json
+{"type": "prompt", "text": "<user message>"}
+{"type": "interrupt"}                    // cancel the in-flight turn
+{"type": "set_api_key", "key": "..."}    // OAuth token refresh (between turns)
+{"type": "shutdown"}                     // exit cleanly
 ```
 
-When no `[[providers]]` are configured, Wizard synthesizes a local llama.cpp provider at `http://127.0.0.1:8080` (legacy `model` / `ollama_host`-only files included; Ollama is opt-in via an explicit `[[providers]]` entry).
+**bridge → TUI:**
 
-At TUI startup, a local backend that is missing or cannot start is not fatal: Wizard falls back to bring-your-own-provider: first any configured cloud provider, then one synthesized from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, and finally the interactive onboarding wizard. The fallback becomes the session's active provider in memory; only onboarding writes config to disk.
+- `BRIDGE_READY` — emitted once on boot (Wizard blocks on this handshake)
+- `BRIDGE_ERROR` — fatal / construction error
+- streamed NexAU events: `TEXT_MESSAGE_CONTENT`, `THINKING_TEXT_MESSAGE_CONTENT`,
+  `TOOL_CALL_START` / `TOOL_CALL_ARGS` / `TOOL_CALL_END` / `TOOL_CALL_RESULT`, `RUN_ERROR`
+- `TURN_COMPLETE` — the authoritative end-of-turn marker
 
-### LLM clients (`llm/`)
+`backend/nexau.rs` accumulates the streamed tool-call args per id and renders each as a
+tool card; `TURN_COMPLETE` (or a closed stream) ends the turn and unblocks the UI.
 
-All providers implement the `LlmProvider` trait (health, model listing, streaming chat). The default, `llm/llamacpp.rs`, drives llama.cpp's `llama-server` through its OpenAI-compatible `/v1/chat/completions` endpoint (it composes the `llm/openai.rs` client rather than duplicating it) and probes the server's native `GET /health`:
+## The agent definition (`agent/`)
 
-- Streaming token delivery to the TUI
-- Native tool-call round-trips, with a prompt-based JSON fallback when the model lacks native tool support
-- Actionable errors when the server is down (`llama-server -m <model.gguf> --port 8080`)
+The NexAU agent is built from `agent/code_agent.yaml` (loaded by the bridge with
+`AgentConfig.from_yaml`). The vendored agent registers a single **shell tool**
+(`agent/tools/shell_tools/run_shell_command.py`) and runs in NexAU's `LocalSandbox`, so
+file and shell operations happen directly in `workdir` (`SANDBOX_WORK_DIR`). The system
+prompt is `agent/systemprompt.md`. This directory is vendored from
+agentic-harness-engineering (Apache-2.0).
 
-`llm/ollama.rs` is a thin `reqwest` client over Ollama's native `/api/chat` endpoint (not the `/v1` shim; the native endpoint exposes Ollama's streaming and `tool_calls` fields directly), with its own health probe (`GET /api/tags`) and no `ollama-rs` dependency. `llm/anthropic.rs` covers the Anthropic API.
+The agent's capabilities are therefore NexAU's, not a Wizard-native tool registry: the
+tools the model can call are whatever the agent definition registers.
 
-### llama-server lifecycle (`server.rs`)
+## Configuration → bridge launch
 
-When the active provider is llama.cpp and nothing answers at its `base_url`, Wizard starts `llama-server` itself, at TUI/headless/gateway startup and after `/provider use` switches to a llama.cpp provider. Requirements: the URL points at this machine, `llama-server` is on `PATH`, and the provider's `gguf_path` exists. The child is detached in its own process group (it survives Wizard's exit and Ctrl-C), logs to `~/.wizard/llama-server.log`, and its PID is recorded in `~/.wizard/llama-server.pid`. Readiness is polled at `GET /health` for up to 60 s (503 = model still loading). `/server status|start|stop` manages it from the TUI; `stop` verifies the recorded PID is still a `llama-server` before signalling, so a recycled PID can never kill an unrelated process.
+`config.rs` resolves the config into a `BridgeConfig` and passes the agent's settings to
+the bridge as environment variables: `SANDBOX_WORK_DIR`, `LLM_MODEL`, `LLM_BASE_URL`,
+`LLM_API_KEY`, `LLM_API_TYPE`. The interpreter defaults to the crate's bundled
+`.venv/bin/python` and the script to `backend/nexau_bridge.py`, both resolved relative to
+`CARGO_MANIFEST_DIR` — which is why the checkout must stay in place after install. Both
+paths can be overridden with `python` / `bridge_script` in the config.
 
-### Agent loop (`agent/mod.rs`)
+## Self-evolve (`evolve.rs`)
 
-```
-┌─────────────────────────────────────────┐
-│  1. Build message list                  │
-│     system prompt + skills + history    │
-│  2. Stream completion from the provider │
-│  3. Parse tool calls from response      │
-│  4. Execute tools → append results        │
-│  5. Repeat until done or max_steps      │
-└─────────────────────────────────────────┘
-```
-
-Sessions are appended to `~/.wizard/sessions/<timestamp>.jsonl` after each turn.
-
-### Tools (`tools/`)
-
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents with optional line range |
-| `write_file` | Create or overwrite a file |
-| `edit_file` | Search-and-replace edit |
-| `list_files` | Directory listing with glob filter |
-| `search_files` | Ripgrep/grep content search |
-| `execute` | Run shell command with timeout; `run_in_background` detaches it as a background task ([tasks.md](tasks.md)) |
-| `git_status` | Working tree status |
-| `git_diff` | Staged/unstaged diff |
-| `web_fetch` | Fetch a URL, HTML converted to markdown; SSRF-guarded ([web.md](web.md)) |
-| `web_search` | Web search via DuckDuckGo (default), Brave, or Tavily ([web.md](web.md)) |
-| `task_output` | Status and buffered output of a background task ([tasks.md](tasks.md)) |
-| `task_kill` | Kill a running background task ([tasks.md](tasks.md)) |
-
-Both modes auto-approve tool calls by default. Genie is conversational and interactive; sovereign works continuously without human input.
-
-Beyond these built-ins, the registry also serves scripted tools (agent-authored scripts in `~/.wizard/tools/`, run through the `execute` sandbox; the Hermes `execute_code` analog) and MCP tools (see below). All three kinds present the same interface to the agent loop, so the model calls them identically.
-
-### MCP client (`mcp/`)
-
-Wizard speaks the Model Context Protocol as a client, so external capabilities plug in without recompiling the binary:
-
-- Servers are declared in `~/.wizard/mcp.toml` (stdio or HTTP transport)
-- On startup (and on `/reload`), Wizard lists each server's tools and merges them into the registry
-- This is the supported path for computer use, browser control, database access, and any other capability shipped as an MCP server
-- `/evolve` can register a new MCP server live (tier 1) without a rebuild
-
-### Subagents (`agent/subagent.rs`)
-
-The agent can spawn isolated subagents for parallel or decomposed work:
-
-- Each subagent gets its own message history, step budget, and tool scope
-- Results return to the parent as a single tool result, so a multi-step sub-task costs the parent one turn of context
-- Sovereign mode uses these to fan out across multi-file tasks; v0.2 expands them into coordinated swarms
-
-### Skills (`skills/`)
-
-Markdown files with frontmatter that get injected into the system prompt:
-
-```
-skills/
-├── coding/SKILL.md     # general coding guidelines
-└── evolve/SKILL.md     # self-extension instructions
-```
-
-Skills are loaded at startup and on `/reload`.
-
-### Self-extension (`evolve/`)
-
-Triggered by `/evolve` in the TUI or `--evolve` on the CLI. Self-extension is split into two tiers so it works on the prebuilt binary, not just dev installs. Full walkthrough in [evolve.md](evolve.md).
-
-**Tier 1, runtime extension (default; no recompile).** Adds a skill, registers an MCP server, authors a scripted tool, or configures a subagent. Changes are written under `~/.wizard/` and activated by `/reload`. This covers most new capability (including computer use, via MCP) and works on every install.
-
-**Tier 2, deep evolve (`/evolve --deep`; recompiles core).** For changes that require new Rust in the core:
-
-1. Locate source (`~/.wizard/src`; cloned from the repo on first use)
-2. Ensure a Rust toolchain (installed via `rustup` on first use if absent; see [Install scripts](#install-scripts))
-3. Agent proposes a unified diff over its own source
-4. User approves (skipped by default; opt in via `auto_approve = false`)
-5. `cargo build --release`
-6. Replace the running process via `exec` (hot-reload)
-
-If no toolchain or source is available and it can't be provisioned, deep evolve falls back to Tier 1 with a clear message. Evolution events are logged to `~/.wizard/evolution.jsonl`.
-
-### TUI (`app.rs`, `ui.rs`, `event.rs`)
-
-Ratatui + crossterm terminal UI:
-
-- Chat panel with streaming markdown
-- Tool invocation cards (collapsible)
-- Git diff sidebar
-- Status bar: model, mode, step count
-- Command mode for `/slash` commands
-
-## Data on disk
-
-| Path | Contents |
-|------|----------|
-| `~/.wizard/config.toml` | User configuration |
-| `~/.wizard/models/*.gguf` | Downloaded GGUF model files |
-| `~/.wizard/llama.cpp/` | llama.cpp release tree installed by `install.sh` |
-| `~/.wizard/llama-server.log` | Output of llama-servers Wizard spawned |
-| `~/.wizard/llama-server.pid` | PID of the llama-server Wizard spawned |
-| `~/.wizard/mcp.toml` | MCP server declarations (Playwright browser by default) |
-| `~/.wizard/subagents/*.toml` | Subagent definitions (default roster: reviewer, researcher, tester, documenter) |
-| `~/.wizard/tools/` | Agent-authored scripted tools |
-| `~/.wizard/src/` | Source checkout for deep evolve (created on demand) |
-| `~/.wizard/sessions/*.jsonl` | Chat history |
-| `~/.wizard/evolution.jsonl` | Self-extension log |
-| `~/.wizard/logs/` | Debug traces |
-| `.wizard/loop-control` | Sovereign-mode run control (per project) |
-| `.wizard/checkpoints/` | Per-file edit snapshots powering `/rewind` (per project; see [checkpoints.md](checkpoints.md)) |
-
-## Install scripts
-
-### `install.sh` (the one installer)
-
-By default it installs the binary and the [default loadout](loadout.md) (browser MCP + subagents, embedded as heredocs mirroring `loadout/`) — no model, no config, no Rust toolchain; the first `wizard` run opens onboarding to pick a provider. Flavors: `WIZARD_LOCAL=1` preinstalls the local stack non-interactively (llama.cpp's `llama-server` from official ggml-org releases, a VRAM-tiered Qwen 3 GGUF, and `config.toml`; no server is started at install time — Wizard spawns it on first run), `WIZARD_USE_OLLAMA=1` is the Ollama variant of that flavor and implies it, `WIZARD_BYOM=1` sets up Ollama with a model of your choice, and `WIZARD_MINIMAL=1` installs the binary only (onboarding on first run; `WIZARD_BESPOKE=1` is a deprecated alias). The toolchain required for deep evolve (Tier 2) is installed via `rustup --profile minimal` on the first `/evolve --deep` (~0.5–1 GB). Set `WIZARD_WITH_TOOLCHAIN=1` to install it at setup time instead (e.g. for air-gapped machines).
-
-### `install-byom.sh` (back-compat shim)
-
-Kept so the old BYOM one-liner URL still works: it downloads `install.sh` and runs it with `WIZARD_BYOM=1`. With the llama.cpp default, "bring your own model" usually just means pointing `gguf_path` at any GGUF; see [byom.md](byom.md).
-
-## Dependencies
-
-| Crate | Role |
-|-------|------|
-| `ratatui` + `crossterm` | Terminal UI |
-| `tokio` | Async runtime |
-| `reqwest` | Provider HTTP (llama-server, Ollama, cloud) |
-| `clap` | CLI parsing |
-| `serde` / `serde_json` | Serialization |
-| `toml` + `dirs` | Config |
-| `syntect` | Syntax highlighting in diffs |
-
-Target release binary: **< 60 MB** (strip + LTO).
-
-## Security model
-
-- Inference goes to the active provider and nowhere else: a local server (llama.cpp or Ollama) with the local option, or the configured cloud API
-- Beyond the active provider, the core loop makes no outbound API calls in v0.1 (except the GGUF/model download during install). MCP servers and scripted tools you add can make their own network and system calls; they run with your privileges, so only register ones you trust
-- The `execute` tool runs real shell commands and cannot be confined to the working directory (absolute paths, `cd ..`, and pipes are all reachable). Treat tool execution as full local access, not a sandbox
-- Both modes auto-approve tool calls (writes, shell, git, and `/evolve` changes) by default. An opt-in y/n confirmation gate is available via `auto_approve = false`. The modes differ in interactivity and continuity: genie is conversational; **sovereign works unattended and self-directs continuously**. Run sovereign mode only on tasks and repos where unattended local command execution is acceptable
-- Official Qwen 3.6 models retain their safety training
-
-## Roadmap additions
-
-| Version | Architecture change |
-|---------|-------------------|
-| v0.2 | Subagent swarms, deep `/evolve` source rebuild, plugin marketplace (dynamic `.so` / WASM) |
-| v0.3 | `ollama launch wizard` (Ollama-native launcher integration) |
-| Future | tree-sitter symbol search, tmux background tasks, remote subagent execution |
+Self-evolve is a separate path that does **not** go through the bridge. `evolve.rs` shells
+out to AHE's own `scripts/evolve.sh` (with the working directory set to `ahe_repo`),
+which launches `python evolve.py` in a detached tmux session named `ahe-<name>-<ts>`.
+Wizard then reads the markdown status files AHE writes under
+`<ahe_repo>/experiments/<TIMESTAMP>__<name>/` (`iteration_scores.md`,
+`evolution_history.md`) to summarize progress. AHE owns its own `.env`, `configs/`, and
+dataset. See [ahe-evolve.md](ahe-evolve.md).

@@ -1,6 +1,5 @@
 //! Binary entry point: parse arguments, install a terminal-restoring panic
-//! hook, and hand off to the library runner. Routing (genie TUI, sovereign
-//! headless, `--evolve`) happens in [`wizard::run`].
+//! hook, and hand off to the library runner ([`wizard::run`]).
 
 use clap::Parser;
 
@@ -28,9 +27,6 @@ async fn main() {
             1
         }
     };
-    // Headless runs encode their outcome in the exit code (see
-    // `wizard::output::exit_code`); flush before exiting so structured
-    // output is never cut off.
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
     std::process::exit(code);

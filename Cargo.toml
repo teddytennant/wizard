@@ -9,20 +9,10 @@ repository = "https://github.com/teddytennant/wizard"
 [dependencies]
 # Errors
 anyhow = "1"
-thiserror = "2"
 
-# Async runtime + streams
+# Async runtime + streams (the bridge subprocess + the TUI event loop)
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
-async-trait = "0.1"
-
-# Ollama HTTP (rustls so the binary has no OpenSSL link dependency)
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-
-# OAuth sign-in (xAI): PKCE hashing, base64url tokens, randomness
-sha2 = "0.10"
-base64 = "0.22"
-getrandom = "0.3"
 
 # Serialization / config
 serde = { version = "1", features = ["derive"] }
@@ -43,32 +33,15 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 pulldown-cmark = { version = "0.13", default-features = false }
 unicode-width = "0.2"
 
-# Plain-terminal progress (bench runs, headless turns, llama-server waits).
-# Defaults are minimal (just unicode-width, which the braille frames need).
-indicatif = "0.17"
-
-# IDs / timestamps (sessions, evolution log)
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-
-# Cron parsing + next-occurrence math (`wizard schedule` / `wizard scheduler`)
-croner = "3"
-
-# File matching for list_files / skills discovery
-globset = "0.4"
-
 # Debug traces (~/.wizard/logs/)
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 
-# Web tools: HTML → markdown for web_fetch, result scraping for web_search
-htmd = "0.5"
-scraper = "0.27"
-
-# Process-group kill for background tasks (`task_kill`, timeouts)
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# xAI OAuth sign-in: HTTPS to auth.x.ai (rustls so no OpenSSL link), PKCE
+# hashing, base64url tokens, and CSPRNG randomness.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,0 +1,15 @@
+[project]
+name = "wizard-backend"
+version = "0.1.0"
+description = "NexAU code-agent bridge for the Wizard TUI (AHE backend)"
+requires-python = ">=3.13"
+dependencies = [
+    "nexau",
+]
+
+[tool.uv.sources]
+nexau = { git = "https://github.com/nex-agi/NexAU.git", rev = "v0.3.9" }
+
+[tool.setuptools]
+# Bridge is a single script, not a package; nothing to build here.
+py-modules = []

@@ -1,10 +1,7 @@
-//! TUI state machine: application state, slash commands, and the genie-mode
-//! main loop. Rendering lives in [`crate::ui`]; raw events in
-//! [`crate::event`].
+//! TUI state machine: application state, slash commands, and the main loop.
+//! Rendering lives in [`crate::ui`]; raw events in [`crate::event`].
 
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -12,23 +9,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::agent::{Agent, AgentEvent, DoneReason, PlanVerdict, session::Session, subagent};
+use crate::agent::{Agent, AgentEvent, DoneReason};
 use crate::cli::Cli;
 use crate::commands::CustomCommand;
-use crate::config::{Config, Mode, ProviderConfig, ProviderKind};
+use crate::config::{Config, Mode};
 use crate::event::{Event, EventLoop};
-use crate::evolve::{EvolveOutcome, EvolveRequest, EvolveTier, Evolver, PublishRequest, publish};
-use crate::hooks::HookEngine;
-use crate::llm::provider::LlmProvider;
-use crate::mcp::{McpConfig, McpManager};
-use crate::memory::MemoryStore;
-use crate::server;
-use crate::skills::Skill;
-use crate::tools::registry::ToolRegistry;
-use crate::tools::todo::TodoItem;
 
 /// One rendered entry in the chat transcript.
 #[derive(Debug)]
@@ -47,30 +35,8 @@ pub enum TranscriptEntry {
         is_error: bool,
         collapsed: bool,
     },
-    /// System notice (mode switch, reload result, errors).
+    /// System notice (mode switch, errors).
     Notice(String),
-}
-
-/// Outcome of a background agent rebuild (model switch, crash recovery),
-/// delivered to the main loop via [`Event::AgentRebuilt`].
-pub struct AgentRebuild {
-    /// Agent to restore into the main loop's slot. `None` when the rebuild
-    /// failed outright and no previous agent could be preserved.
-    pub agent: Option<Agent>,
-    /// On a successful model switch, the tag to record in config/status.
-    pub model: Option<String>,
-    /// Notice appended to the transcript.
-    pub notice: String,
-}
-
-impl std::fmt::Debug for AgentRebuild {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentRebuild")
-            .field("agent", &self.agent.is_some())
-            .field("model", &self.model)
-            .field("notice", &self.notice)
-            .finish()
-    }
 }
 
 /// What the input line is currently doing.
@@ -83,148 +49,28 @@ pub enum InputMode {
     Command,
 }
 
-/// Parsed `/slash` command (see the README table).
+/// Parsed `/slash` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
     Help,
+    /// Clear the conversation (respawns a fresh bridge).
     Clear,
     /// `/model [tag]` — show current model, or switch to `tag`.
     Model(Option<String>),
-    /// `/mode [genie|sovereign]` — show or switch mode.
+    /// `/mode [genie|sovereign]` — show the picker, or switch mode.
     Mode(Option<Mode>),
-    /// `/evolve [--deep] <description>`.
-    Evolve {
-        deep: bool,
-        description: String,
-    },
-    /// Reload skills, scripted tools, and MCP servers without restart.
-    Reload,
-    /// Toggle plan mode (also Shift+Tab): read-only investigation until a
-    /// plan is approved via `exit_plan`.
-    Plan,
-    /// `/rewind [turn]` — restore file checkpoints and truncate history.
-    /// `None` opens the turn picker; `Some` rewinds to before that turn.
-    Rewind(Option<u64>),
-    /// Toggle the git diff sidebar.
-    Diff,
-    /// Toggle the todo side panel.
-    Todos,
-    /// Show session token usage (and cost when rates are configured).
-    Cost,
-    /// Show the saved project memories.
-    Memory,
-    /// Run the environment diagnostics (same checks as `wizard doctor`).
-    Doctor,
-    /// Show the session status: model, provider, mode, session id, usage,
-    /// todo progress, background tasks, plan mode.
-    Status,
-    /// `/publish [branch]` — fork Wizard and get a one-line installer.
-    Publish {
-        branch: Option<String>,
-    },
-    /// `/provider ...` — add, remove, or switch LLM providers.
-    Provider(ProviderAction),
-    /// `/server ...` — status / start / stop the local llama-server.
-    Server(ServerAction),
-    /// `/login <provider>`: OAuth sign-in for providers that support it
-    /// (currently `xai`).
-    Login(String),
+    /// `/evolve [start|status]` — drive AHE's harness-evolution loop.
+    Evolve(EvolveSlash),
     Quit,
 }
 
-/// What a `/provider` subcommand does.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderAction {
-    /// `/provider` / `/provider list` — show configured providers.
-    List,
-    /// `/provider use <name>` — switch the active provider.
-    Use(String),
-    /// `/provider add <name> <kind> <base_url> <model> [API_KEY_ENV]`.
-    Add {
-        name: String,
-        kind: ProviderKind,
-        base_url: String,
-        model: String,
-        api_key_env: Option<String>,
-    },
-    /// `/provider remove <name>`.
-    Remove(String),
-}
-
-/// Parse the arguments to `/provider` (everything after the command word).
-fn parse_provider(args: &[&str]) -> Result<SlashCommand, String> {
-    let action = match args.first().copied() {
-        None | Some("list") => ProviderAction::List,
-        Some("use") => match args.get(1) {
-            Some(name) => ProviderAction::Use((*name).to_string()),
-            None => return Err("usage: /provider use <name>".to_string()),
-        },
-        Some("add") => {
-            if args.len() < 5 {
-                return Err(
-                    "usage: /provider add <name> <llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth> <base_url> <model> [API_KEY_ENV]"
-                        .to_string(),
-                );
-            }
-            let kind = match args[2] {
-                "llamacpp" => ProviderKind::LlamaCpp,
-                "ollama" => ProviderKind::Ollama,
-                "openai" => ProviderKind::Openai,
-                "anthropic" => ProviderKind::Anthropic,
-                "openrouter" => ProviderKind::OpenRouter,
-                "xai" => ProviderKind::Xai,
-                "xaioauth" => ProviderKind::XaiOauth,
-                other => {
-                    return Err(format!(
-                        "unknown provider kind '{other}' (llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth)"
-                    ));
-                }
-            };
-            ProviderAction::Add {
-                name: args[1].to_string(),
-                kind,
-                base_url: args[3].to_string(),
-                model: args[4].to_string(),
-                api_key_env: args.get(5).map(|s| s.to_string()),
-            }
-        }
-        Some("remove") => match args.get(1) {
-            Some(name) => ProviderAction::Remove((*name).to_string()),
-            None => return Err("usage: /provider remove <name>".to_string()),
-        },
-        Some(other) => {
-            return Err(format!(
-                "unknown /provider subcommand '{other}' (list|use|add|remove)"
-            ));
-        }
-    };
-    Ok(SlashCommand::Provider(action))
-}
-
-/// What a `/server` subcommand does.
+/// What a `/evolve` invocation does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerAction {
-    /// `/server` / `/server status` — health of the local llama-server.
-    Status,
-    /// `/server start` — start llama-server for the active provider.
+pub enum EvolveSlash {
+    /// Preflight and launch the evolve loop (default, also `/evolve start`).
     Start,
-    /// `/server stop` — stop the llama-server Wizard started.
-    Stop,
-}
-
-/// Parse the arguments to `/server` (everything after the command word).
-fn parse_server(args: &[&str]) -> Result<SlashCommand, String> {
-    let action = match args.first().copied() {
-        None | Some("status") => ServerAction::Status,
-        Some("start") => ServerAction::Start,
-        Some("stop") => ServerAction::Stop,
-        Some(other) => {
-            return Err(format!(
-                "unknown /server subcommand '{other}' (status|start|stop)"
-            ));
-        }
-    };
-    Ok(SlashCommand::Server(action))
+    /// Summarize the latest experiment's progress.
+    Status,
 }
 
 impl SlashCommand {
@@ -249,38 +95,10 @@ impl SlashCommand {
             },
             "genie" => Ok(Self::Mode(Some(Mode::Genie))),
             "sovereign" => Ok(Self::Mode(Some(Mode::Sovereign))),
-            "evolve" => {
-                let deep = args.first() == Some(&"--deep");
-                let description = if deep { &args[1..] } else { &args[..] }.join(" ");
-                if description.is_empty() {
-                    Err("usage: /evolve [--deep] <what to add>".to_string())
-                } else {
-                    Ok(Self::Evolve { deep, description })
-                }
-            }
-            "reload" => Ok(Self::Reload),
-            "plan" => Ok(Self::Plan),
-            "rewind" => match args.first() {
-                None => Ok(Self::Rewind(None)),
-                Some(arg) => arg
-                    .parse::<u64>()
-                    .map(|turn| Self::Rewind(Some(turn)))
-                    .map_err(|_| "usage: /rewind [turn]".to_string()),
-            },
-            "diff" => Ok(Self::Diff),
-            "todos" => Ok(Self::Todos),
-            "cost" => Ok(Self::Cost),
-            "memory" => Ok(Self::Memory),
-            "doctor" => Ok(Self::Doctor),
-            "status" => Ok(Self::Status),
-            "publish" => Ok(Self::Publish {
-                branch: args.first().map(|s| s.to_string()),
-            }),
-            "provider" => parse_provider(&args),
-            "server" => parse_server(&args),
-            "login" => match args.first() {
-                Some(provider) => Ok(Self::Login((*provider).to_string())),
-                None => Err("usage: /login xai".to_string()),
+            "evolve" => match args.first() {
+                None | Some(&"start") => Ok(Self::Evolve(EvolveSlash::Start)),
+                Some(&"status") => Ok(Self::Evolve(EvolveSlash::Status)),
+                Some(other) => Err(format!("unknown evolve action '{other}' (start|status)")),
             },
             "quit" | "q" | "exit" => Ok(Self::Quit),
             other => Err(format!("unknown command '/{other}' — try /help")),
@@ -307,7 +125,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "model",
         args: "[tag]",
-        description: "pick or switch the model",
+        description: "show or switch the model",
         takes_args: false,
     },
     CommandSpec {
@@ -329,87 +147,9 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
-        name: "plan",
-        args: "",
-        description: "toggle plan mode: read-only until a plan is approved",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "rewind",
-        args: "[turn]",
-        description: "rewind files and conversation to before a turn",
-        takes_args: false,
-    },
-    CommandSpec {
         name: "evolve",
-        args: "[--deep] <desc>",
-        description: "self-extend: add a skill, tool, or MCP server",
-        takes_args: true,
-    },
-    CommandSpec {
-        name: "publish",
-        args: "[branch]",
-        description: "fork & publish your Wizard, get a one-line installer",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "provider",
-        args: "[list|use|add|remove]",
-        description: "add, remove, or switch LLM providers",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "server",
-        args: "[status|start|stop]",
-        description: "manage the local llama-server",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "login",
-        args: "<xai>",
-        description: "sign in to a provider account (xAI OAuth)",
-        takes_args: true,
-    },
-    CommandSpec {
-        name: "diff",
-        args: "",
-        description: "toggle the git diff sidebar",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "todos",
-        args: "",
-        description: "toggle the todo side panel",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "cost",
-        args: "",
-        description: "show session token usage and cost",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "memory",
-        args: "",
-        description: "show saved project memories",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "status",
-        args: "",
-        description: "show session status: model, usage, todos, tasks",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "doctor",
-        args: "",
-        description: "diagnose config, providers, MCP, hooks, state dirs",
-        takes_args: false,
-    },
-    CommandSpec {
-        name: "reload",
-        args: "",
-        description: "reload skills, scripted tools, and MCP servers",
+        args: "[start|status]",
+        description: "drive AHE's harness-evolution loop",
         takes_args: false,
     },
     CommandSpec {
@@ -485,16 +225,13 @@ fn is_builtin_command(name: &str) -> bool {
 /// What an open [`Picker`] selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
-    Model,
     Mode,
-    /// A turn to rewind to (item values are turn ids).
-    Rewind,
 }
 
 /// One selectable row in a picker popup.
 #[derive(Debug)]
 pub struct PickerItem {
-    /// Value applied on selection (model tag / mode name).
+    /// Value applied on selection (the mode name).
     pub value: String,
     /// Secondary text shown dimmed next to the value.
     pub detail: String,
@@ -512,21 +249,6 @@ pub struct Picker {
     pub selected: usize,
 }
 
-/// In-flight plan review (plan mode): the model called `exit_plan` and the
-/// turn is paused inside the tool until a [`PlanVerdict`] is sent back.
-#[derive(Debug)]
-pub struct PlanReview {
-    /// The plan markdown, rendered in the review modal.
-    pub plan: String,
-    /// Verdict channel back into the paused `exit_plan` call; taken exactly
-    /// once when the review finishes.
-    respond: Option<tokio::sync::oneshot::Sender<PlanVerdict>>,
-    /// `Some` while collecting rejection feedback (the text typed so far).
-    pub feedback: Option<String>,
-    /// Scroll offset from the top of the plan.
-    pub scroll: u16,
-}
-
 /// Status bar contents.
 #[derive(Debug, Default)]
 pub struct StatusLine {
@@ -534,13 +256,8 @@ pub struct StatusLine {
     pub mode: Mode,
     /// Current step within the running turn (0 when idle).
     pub step: u32,
-    pub max_steps: u32,
     /// True while a turn is streaming.
     pub busy: bool,
-    /// Session prompt-token total (from [`AgentEvent::Usage`]).
-    pub prompt_tokens: u64,
-    /// Session completion-token total.
-    pub completion_tokens: u64,
 }
 
 /// Full TUI state. [`crate::ui::draw`] renders it; [`App::handle_event`]
@@ -561,18 +278,6 @@ pub struct App {
     /// flushed to the transcript alongside `streaming`.
     pub streaming_thinking: String,
     pub status: StatusLine,
-    /// Git diff sidebar visibility and cached contents.
-    pub show_diff: bool,
-    pub diff_text: String,
-    /// Todo side panel visibility (toggled by `/todos`; auto-shown on the
-    /// first todo update of the session).
-    pub show_todos: bool,
-    /// The agent's current todo list, mirrored from
-    /// [`AgentEvent::TodoUpdated`].
-    pub todos: Vec<TodoItem>,
-    /// Whether a todo update has arrived yet (drives the one-time
-    /// auto-show).
-    todos_seen: bool,
     /// Transcript scroll offset from the bottom (0 = pinned to latest).
     pub scroll: u16,
     pub should_quit: bool,
@@ -584,19 +289,12 @@ pub struct App {
     /// Highlighted row in `suggestions`.
     pub suggestion_index: usize,
     /// Custom commands loaded from `~/.wizard/commands/` and
-    /// `<project>/.wizard/commands/` (set by `run_tui`, refreshed by
-    /// `/reload`).
+    /// `<project>/.wizard/commands/` (set by `run_tui`).
     pub custom_commands: Vec<CustomCommand>,
     /// Project root `@file` references resolve against.
     pub project_root: PathBuf,
-    /// Open selection popup (model / mode / rewind picker), if any.
+    /// Open selection popup (mode picker), if any.
     pub picker: Option<Picker>,
-    /// Whether plan mode is active (mirrors the agent's flag for the status
-    /// bar; toggled by `/plan` and Shift+Tab).
-    pub plan_mode: bool,
-    /// Open plan-review modal (the turn is paused inside `exit_plan` until
-    /// it resolves), if any.
-    pub plan_review: Option<PlanReview>,
     /// Previously submitted inputs, oldest first (↑/↓ recall).
     pub history: Vec<String>,
     /// Position while browsing `history`; `None` when composing fresh input.
@@ -605,10 +303,6 @@ pub struct App {
     history_draft: String,
     /// When the in-flight turn started (drives the elapsed-time display).
     pub turn_started: Option<Instant>,
-    /// Label of an in-progress background agent rebuild (model switch,
-    /// crash recovery); rendered as a spinner in the status bar. Input that
-    /// needs the agent is rejected with a notice while this is `Some`.
-    pub rebuilding: Option<String>,
     /// Verb shown next to the busy spinner ("Conjuring…"); re-rolled at the
     /// start of each busy period by [`App::roll_spinner_verb`].
     pub spinner_verb: String,
@@ -620,16 +314,12 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> Self {
         let mode = config.mode;
-        let plan_mode = config.plan_first;
         let spinner_verb = config.ui.spinner_verb(0).to_string();
         let status = StatusLine {
-            model: config.active().model,
+            model: config.model.clone(),
             mode,
             step: 0,
-            max_steps: config.max_steps,
             busy: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
         };
         Self {
             config,
@@ -641,11 +331,6 @@ impl App {
             streaming: String::new(),
             streaming_thinking: String::new(),
             status,
-            show_diff: false,
-            diff_text: String::new(),
-            show_todos: false,
-            todos: Vec::new(),
-            todos_seen: false,
             scroll: 0,
             should_quit: false,
             tick: 0,
@@ -654,13 +339,10 @@ impl App {
             custom_commands: Vec::new(),
             project_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             picker: None,
-            plan_mode,
-            plan_review: None,
             history: Vec::new(),
             history_pos: None,
             history_draft: String::new(),
             turn_started: None,
-            rebuilding: None,
             spinner_verb,
             verb_rolls: 0,
         }
@@ -911,13 +593,10 @@ impl App {
                 self.handle_agent_event(agent_event);
                 Ok(None)
             }
-            Event::Notice(message) => {
-                self.notice(message);
+            Event::Notice(text) => {
+                self.notice(text);
                 Ok(None)
             }
-            // Owned by the main loop (it holds the agent slot); never
-            // reaches here.
-            Event::AgentRebuilt(_) => Ok(None),
         }
     }
 
@@ -966,23 +645,8 @@ impl App {
                     self.toggle_last_tool_card();
                     return Ok(None);
                 }
-                KeyCode::Char('p') => {
-                    // Shortcut for the interactive model picker; ignored
-                    // while a turn runs.
-                    if self.status.busy {
-                        return Ok(None);
-                    }
-                    return Ok(Some(AppAction::Command(SlashCommand::Model(None))));
-                }
                 _ => {}
             }
-        }
-
-        // An open plan review captures all keys: the turn is paused inside
-        // exit_plan until a verdict is sent.
-        if self.plan_review.is_some() {
-            self.handle_plan_review_key(key);
-            return Ok(None);
         }
 
         // An open picker captures navigation keys.
@@ -1011,9 +675,6 @@ impl App {
                         return Ok(None);
                     };
                     let action = match picker.kind {
-                        PickerKind::Model => {
-                            AppAction::Command(SlashCommand::Model(Some(item.value.clone())))
-                        }
                         PickerKind::Mode => {
                             let mode = if item.value == "sovereign" {
                                 Mode::Sovereign
@@ -1021,13 +682,6 @@ impl App {
                                 Mode::Genie
                             };
                             AppAction::Command(SlashCommand::Mode(Some(mode)))
-                        }
-                        PickerKind::Rewind => {
-                            // Item values are always turn ids we formatted.
-                            let Ok(turn) = item.value.parse::<u64>() else {
-                                return Ok(None);
-                            };
-                            AppAction::Command(SlashCommand::Rewind(Some(turn)))
                         }
                     };
                     return Ok(Some(action));
@@ -1078,8 +732,6 @@ impl App {
                 }
                 None
             }
-            // Shift+Tab toggles plan mode (same as /plan).
-            KeyCode::BackTab => Some(AppAction::Command(SlashCommand::Plan)),
             KeyCode::Esc => {
                 if self.scroll > 0 {
                     self.scroll = 0;
@@ -1158,7 +810,7 @@ impl App {
                 let takes_args = spec.takes_args;
                 self.accept_suggestion();
                 if takes_args {
-                    // Completed to "/evolve " — wait for the arguments.
+                    // Completed to e.g. "/review " — wait for the arguments.
                     return None;
                 }
             }
@@ -1205,10 +857,6 @@ impl App {
         if self.status.busy {
             // Rejected input never ran; do not record it in history.
             self.notice("the agent is busy — wait for the current turn to finish");
-            return None;
-        }
-        if self.rebuilding.is_some() {
-            self.notice("the agent is rebuilding — try again in a moment");
             return None;
         }
         let expanded =
@@ -1289,67 +937,6 @@ impl App {
         self.insert_str(&completion[prefix.len()..]);
     }
 
-    /// Keys while the plan-review modal is open. Review state: `y`/Enter
-    /// approves, `n` opens a feedback line, ↑/↓/PgUp/PgDn scroll the plan.
-    /// Feedback state: typing edits, Enter sends the rejection, Esc returns
-    /// to the review.
-    fn handle_plan_review_key(&mut self, key: KeyEvent) {
-        let Some(review) = self.plan_review.as_mut() else {
-            return;
-        };
-        if let Some(feedback) = review.feedback.as_mut() {
-            match key.code {
-                KeyCode::Enter => {
-                    let feedback = review.feedback.take().unwrap_or_default();
-                    self.finish_plan_review(PlanVerdict::reject(feedback));
-                }
-                KeyCode::Esc => review.feedback = None,
-                KeyCode::Backspace => {
-                    feedback.pop();
-                }
-                KeyCode::Char(c)
-                    if !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    feedback.push(c);
-                }
-                _ => {}
-            }
-            return;
-        }
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Enter => {
-                self.finish_plan_review(PlanVerdict::approve());
-            }
-            KeyCode::Char('n') => review.feedback = Some(String::new()),
-            KeyCode::Up => review.scroll = review.scroll.saturating_sub(1),
-            KeyCode::Down => review.scroll = review.scroll.saturating_add(1),
-            KeyCode::PageUp => review.scroll = review.scroll.saturating_sub(10),
-            KeyCode::PageDown => review.scroll = review.scroll.saturating_add(10),
-            _ => {}
-        }
-    }
-
-    /// Close the plan review and send `verdict` back into the paused
-    /// `exit_plan` call. Approval mirrors the agent clearing its plan-mode
-    /// flag; rejection stays in plan mode.
-    fn finish_plan_review(&mut self, verdict: PlanVerdict) {
-        let Some(mut review) = self.plan_review.take() else {
-            return;
-        };
-        let approved = verdict.approved;
-        if let Some(respond) = review.respond.take() {
-            let _ = respond.send(verdict);
-        }
-        if approved {
-            self.plan_mode = false;
-            self.notice("plan approved — executing it");
-        } else {
-            self.notice("plan rejected — still in plan mode");
-        }
-    }
-
     /// Record a submitted input for ↑/↓ recall (skipping immediate repeats).
     fn push_history(&mut self, input: &str) {
         if self.history.last().map(String::as_str) != Some(input) {
@@ -1402,8 +989,8 @@ impl App {
                         *slot = Some(output.content);
                     }
                     None => {
-                        // No matching running card (e.g. denied before start
-                        // was emitted) — record the result standalone.
+                        // No matching running card — record the result
+                        // standalone.
                         self.transcript.push(TranscriptEntry::ToolCard {
                             name,
                             args: Value::Null,
@@ -1421,66 +1008,13 @@ impl App {
                 self.flush_streaming();
                 self.notice(format!("error: {message}"));
             }
-            AgentEvent::HookFired {
-                event,
-                command,
-                outcome,
-            } => {
-                self.notice(format!("hook {event}: {outcome} ({command})"));
-            }
-            AgentEvent::PlanReady { plan, respond } => {
-                self.flush_streaming();
-                // A plan awaiting review implies plan mode is on, however
-                // the turn was started (e.g. `--plan`).
-                self.plan_mode = true;
-                self.plan_review = Some(PlanReview {
-                    plan,
-                    respond: Some(respond),
-                    feedback: None,
-                    scroll: 0,
-                });
-            }
-            AgentEvent::Usage {
-                prompt_tokens,
-                completion_tokens,
-            } => {
-                self.status.prompt_tokens += prompt_tokens;
-                self.status.completion_tokens += completion_tokens;
-            }
-            AgentEvent::TaskFinished {
-                id,
-                command,
-                status,
-            } => {
-                self.notice(format!(
-                    "background task #{id} finished ({}): {command}",
-                    status.describe()
-                ));
-            }
-            AgentEvent::TodoUpdated(items) => {
-                self.todos = items;
-                // Auto-show the panel the first time the agent starts a
-                // list; afterwards /todos controls visibility.
-                if !self.todos_seen && !self.todos.is_empty() {
-                    self.todos_seen = true;
-                    self.show_todos = true;
-                }
-            }
             AgentEvent::Done { reason } => {
                 self.flush_streaming();
                 self.status.busy = false;
                 self.turn_started = None;
                 match reason {
                     DoneReason::Completed => {}
-                    DoneReason::MaxSteps => self.notice(format!(
-                        "step budget reached ({} steps) — send another message to continue",
-                        self.status.max_steps
-                    )),
-                    DoneReason::TimeLimit => self.notice("time limit reached"),
                     DoneReason::Stopped => self.notice("turn stopped"),
-                    DoneReason::CircuitBreaker => {
-                        self.notice("circuit breaker tripped: repeated identical failures");
-                    }
                 }
             }
         }
@@ -1529,8 +1063,7 @@ fn restore_terminal() -> Result<()> {
 }
 
 /// Restore the terminal if (and only if) raw mode is active. Safe to call
-/// from a panic hook or after a headless run — it does nothing when the TUI
-/// never started.
+/// from a panic hook — it does nothing when the TUI never started.
 pub fn restore_terminal_best_effort() {
     if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
         let _ = restore_terminal();
@@ -1547,450 +1080,59 @@ impl Drop for TerminalGuard {
 }
 
 // ---------------------------------------------------------------------------
-// Agent wiring helpers
+// TUI entry point
 // ---------------------------------------------------------------------------
-
-/// Load skills from the canonical roots (repo checkout, bundled beside the
-/// binary, `~/.wizard/skills/`; later roots shadow earlier ones).
-fn load_skill_roots() -> Vec<Skill> {
-    let roots = crate::skills::default_roots();
-    match crate::skills::load_skills(&roots) {
-        Ok(skills) => skills,
-        Err(err) => {
-            tracing::warn!("loading skills: {err:#}");
-            Vec::new()
-        }
-    }
-}
-
-/// Native + scripted + MCP tools, freshly composed, with the subagent
-/// spawner layered on top. The spawn tool captures the base registry
-/// (without itself) so subagents cannot recurse, plus the lifecycle `hooks`
-/// so subagent tool calls fire the same hooks as the parent's.
-async fn build_registry(
-    manager: &McpManager,
-    client: &Arc<dyn LlmProvider>,
-    hooks: &Arc<HookEngine>,
-) -> Result<ToolRegistry> {
-    let mut base = ToolRegistry::with_native_tools();
-    match Config::scripted_tools_dir() {
-        Ok(dir) => {
-            if let Err(err) = base.load_scripted(&dir) {
-                tracing::warn!("loading scripted tools: {err:#}");
-            }
-        }
-        Err(err) => tracing::warn!("resolving ~/.wizard/tools: {err:#}"),
-    }
-    if let Err(err) = base.attach_mcp(manager).await {
-        tracing::warn!("attaching MCP tools: {err:#}");
-    }
-
-    let subagents_dir = Config::subagents_dir()?;
-    let subagent_configs = subagent::available_configs(&subagents_dir);
-    let base = Arc::new(base);
-    let mut registry = subagent::scoped_registry(&base, None);
-    registry.register(Arc::new(subagent::SpawnSubagentTool::new(
-        subagent_configs,
-        Arc::clone(client),
-        Arc::clone(&base),
-        Arc::clone(hooks),
-    )));
-    Ok(registry)
-}
-
-/// Attach the config-dependent tools (evolve, publish) to a registry built
-/// by [`build_registry`]. Called by [`build_agent`] after the base registry
-/// is assembled.
-fn attach_config_tools(registry: &mut crate::tools::registry::ToolRegistry, config: &Config) {
-    registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
-        config.clone(),
-    )));
-    registry.register(Arc::new(crate::tools::publish::PublishTool::new(
-        config.clone(),
-    )));
-}
-
-/// Build a fully wired [`Agent`]. `resume` reopens the latest session file
-/// instead of starting a new one.
-async fn build_agent(
-    client: &Arc<dyn LlmProvider>,
-    config: &Config,
-    skills: &[Skill],
-    project_root: &Path,
-    manager: &McpManager,
-    resume: bool,
-) -> Result<Agent> {
-    // Session first: the hook engine carries its id in every payload.
-    let sessions_dir = Config::sessions_dir()?;
-    let session = if resume {
-        match Session::open_latest(&sessions_dir)? {
-            Some(session) => session,
-            None => Session::create(&sessions_dir)?,
-        }
-    } else {
-        Session::create(&sessions_dir)?
-    };
-    let hooks = Arc::new(HookEngine::new(
-        crate::hooks::load(project_root),
-        project_root.to_path_buf(),
-        session.id.clone(),
-    ));
-    let mut registry = build_registry(manager, client, &hooks).await?;
-    attach_config_tools(&mut registry, config);
-    let model = config.active().model;
-    let native_tools = match client.supports_native_tools(&model).await {
-        Ok(supported) => supported,
-        Err(err) => {
-            tracing::warn!("probing tool support for {model}: {err:#}");
-            false
-        }
-    };
-    Agent::new(
-        Arc::clone(client),
-        registry,
-        config.clone(),
-        skills.to_vec(),
-        project_root.to_path_buf(),
-        session,
-        native_tools,
-        hooks,
-    )
-}
-
-/// Run `git <args>` in `root` and return stdout.
-async fn git_output(root: &Path, args: &[&str]) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .await
-        .context("running git")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// Compose the `/diff` sidebar contents: unstaged then staged changes.
-async fn git_diff_text(root: &Path) -> Result<String> {
-    let unstaged = git_output(root, &["diff"]).await?;
-    let staged = git_output(root, &["diff", "--staged"]).await?;
-    let mut text = String::new();
-    if !unstaged.trim().is_empty() {
-        text.push_str(&unstaged);
-    }
-    if !staged.trim().is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str("# --- staged ---\n");
-        text.push_str(&staged);
-    }
-    if text.is_empty() {
-        text = "(working tree clean)".to_string();
-    }
-    Ok(text)
-}
-
-fn describe_evolve_outcome(outcome: &EvolveOutcome) -> String {
-    match outcome {
-        EvolveOutcome::SkillAdded { name, path } => {
-            format!(
-                "evolve: added skill '{name}' at {} — run /reload to activate",
-                path.display()
-            )
-        }
-        EvolveOutcome::McpServerRegistered { name } => {
-            format!("evolve: registered MCP server '{name}' — run /reload to activate")
-        }
-        EvolveOutcome::ScriptedToolAdded { name, path } => {
-            format!(
-                "evolve: added scripted tool '{name}' at {} — run /reload to activate",
-                path.display()
-            )
-        }
-        EvolveOutcome::SubagentAdded { name } => {
-            format!("evolve: added subagent '{name}' — run /reload to activate")
-        }
-        EvolveOutcome::DeepRebuilt { binary } => {
-            format!(
-                "evolve: deep rebuild succeeded ({}) — restart wizard to run the new binary",
-                binary.display()
-            )
-        }
-        EvolveOutcome::FellBackToRuntime { reason, outcome } => {
-            format!(
-                "evolve: fell back to runtime tier ({reason}); {}",
-                describe_evolve_outcome(outcome)
-            )
-        }
-        EvolveOutcome::Denied => "evolve: change denied".to_string(),
-    }
-}
 
 const HELP_TEXT: &str = "available commands:\n  \
 /help                       show this help\n  \
 /clear                      clear the conversation\n  \
-/model [tag]                pick a model interactively, or switch directly\n  \
+/model [tag]                show the current model, or switch to a tag\n  \
 /mode [genie|sovereign]     pick or switch personality mode\n  \
 /genie · /sovereign         switch mode directly\n  \
-/plan                       toggle plan mode (read-only until a plan is approved)\n  \
-/rewind [turn]              rewind files and conversation to before a turn\n  \
-/evolve [--deep] <desc>     self-extension (skill / MCP / scripted tool)\n  \
-/publish [branch]           fork Wizard to your GitHub, get a one-line installer\n  \
-/provider [list|use|...]    add, remove, or switch LLM providers (llamacpp/ollama/openai/anthropic/openrouter/xai/xaioauth)\n  \
-/server [status|start|stop] manage the local llama-server\n  \
-/login xai                  sign in with your xAI account (OAuth, no API key)\n  \
-/reload                     reload skills, scripted tools, and MCP servers\n  \
-/diff                       toggle the git diff sidebar\n  \
-/todos                      toggle the todo side panel\n  \
-/cost                       show session token usage and cost\n  \
-/memory                     show saved project memories\n  \
-/status                     show session status (model, usage, todos, tasks)\n  \
-/doctor                     diagnose config, providers, MCP, hooks, state dirs\n  \
+/evolve [start|status]      drive AHE's harness-evolution loop\n  \
 /quit                       exit\n\
 keys:\n  \
 Tab / →                     accept command completion\n  \
-Shift+Tab                   toggle plan mode\n  \
 ↑ / ↓                       select suggestion · browse input history\n  \
 PgUp/PgDn · mouse wheel     scroll the transcript\n  \
-Ctrl-P                      model picker  ·  Ctrl-T toggle last tool card\n  \
+Ctrl-T                      toggle the last tool card\n  \
 Ctrl-A/E Home/End ←/→       move cursor   ·  Ctrl-W/U/K kill word/to start/to end\n  \
 Ctrl-C                      quit";
 
-// ---------------------------------------------------------------------------
-// Genie-mode entry point
-// ---------------------------------------------------------------------------
-
-/// True for backends that run on this machine (no API key, no cloud).
-fn is_local_kind(kind: ProviderKind) -> bool {
-    matches!(kind, ProviderKind::LlamaCpp | ProviderKind::Ollama)
-}
-
-/// Build `provider`'s client and prove it usable: for local llama.cpp this
-/// spawns `llama-server` when possible (the terminal is still in normal mode
-/// at startup, so spawn/load progress shows on a plain-terminal spinner),
-/// then runs the provider's health probe.
-async fn try_provider(provider: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
-    let client = provider
-        .build()
-        .with_context(|| format!("building provider '{}'", provider.name))?;
-    if provider.kind == ProviderKind::LlamaCpp {
-        let wait = crate::progress::ServerSpinner::start();
-        let outcome = server::ensure_running(provider, &|line: &str| wait.update(line)).await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
-    client
-        .health()
-        .await
-        .with_context(|| format!("LLM health check failed for {}", client.label()))?;
-    Ok(client)
-}
-
-/// Cloud providers synthesized from standard API-key env vars when the local
-/// backend is unavailable and nothing usable is configured:
-/// `(key env var, kind, base URL, model, provider name)`.
-const BYOP_ENV_FALLBACKS: &[(&str, ProviderKind, &str, &str, &str)] = &[
-    (
-        "ANTHROPIC_API_KEY",
-        ProviderKind::Anthropic,
-        "https://api.anthropic.com",
-        "claude-fable-5",
-        "anthropic",
-    ),
-    (
-        "OPENAI_API_KEY",
-        ProviderKind::Openai,
-        "https://api.openai.com/v1",
-        "gpt-4o",
-        "openai",
-    ),
-    (
-        "XAI_API_KEY",
-        ProviderKind::Xai,
-        "https://api.x.ai/v1",
-        "grok-4.3",
-        "xai",
-    ),
-    (
-        "OPENROUTER_API_KEY",
-        ProviderKind::OpenRouter,
-        "https://openrouter.ai/api/v1",
-        "openrouter/auto",
-        "openrouter",
-    ),
-];
-
-/// Resolve a working LLM client at startup. The active provider is tried
-/// first. A failing *local* backend (llama.cpp not installed, server not
-/// running, no model file, …) is not fatal: Wizard falls back to
-/// bring-your-own-provider — any configured cloud provider, then one
-/// synthesized from a standard API-key env var, then (interactively) the
-/// onboarding wizard. The chosen fallback becomes the active provider in the
-/// in-memory config so the session's picker and status bar reflect it; only
-/// onboarding persists anything to disk.
-async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmProvider>> {
-    let active = config.active();
-    let local_err = match try_provider(&active).await {
-        Ok(client) => return Ok(client),
-        Err(err) if is_local_kind(active.kind) => err,
-        Err(err) => return Err(err),
+/// Spawn a fresh bridge-backed agent from the current config.
+async fn spawn_agent(config: &Config) -> Result<Agent> {
+    let mut bridge = config.bridge_config()?;
+    // For xAI OAuth, resolve a fresh bearer up front and keep the source for
+    // per-turn refresh; otherwise the key already lives in the bridge config.
+    let tokens = if config.is_oauth() {
+        let source = std::sync::Arc::new(crate::auth::xai_oauth::XaiTokenSource::new()?);
+        bridge.api_key = source.bearer().await?;
+        Some(source)
+    } else {
+        None
     };
-    println!("local model unavailable: {local_err:#}");
-
-    // Any other configured cloud provider.
-    for provider in config.providers.clone() {
-        if is_local_kind(provider.kind) || provider.name == active.name {
-            continue;
-        }
-        match try_provider(&provider).await {
-            Ok(client) => {
-                println!(
-                    "falling back to provider '{}' ({})",
-                    provider.name, provider.model
-                );
-                config.active_provider = Some(provider.name);
-                return Ok(client);
-            }
-            Err(err) => println!("provider '{}' is also unavailable: {err:#}", provider.name),
-        }
-    }
-
-    // A provider synthesized from a standard API-key env var.
-    for &(key_env, kind, base_url, model, name) in BYOP_ENV_FALLBACKS {
-        if !std::env::var(key_env).is_ok_and(|v| !v.trim().is_empty()) {
-            continue;
-        }
-        let provider = ProviderConfig {
-            name: name.to_string(),
-            kind,
-            base_url: base_url.to_string(),
-            model: model.to_string(),
-            api_key_env: Some(key_env.to_string()),
-            gguf_path: None,
-            usd_per_mtok_in: None,
-            usd_per_mtok_out: None,
-        };
-        match try_provider(&provider).await {
-            Ok(client) => {
-                println!("falling back to {model} via ${key_env}");
-                // Replace any same-named (failed) entry so active() resolves
-                // to this one.
-                config.providers.retain(|p| p.name != provider.name);
-                config.active_provider = Some(provider.name.clone());
-                config.providers.push(provider);
-                return Ok(client);
-            }
-            Err(err) => println!("{name} via ${key_env} is also unavailable: {err:#}"),
-        }
-    }
-
-    // Nothing usable: let the user bring their own provider interactively.
-    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        println!("no working provider — opening setup so you can pick one (Esc to cancel).");
-        if let Some(new_config) = crate::onboarding::run().await? {
-            let active = new_config.active();
-            let client = try_provider(&active).await?;
-            *config = new_config;
-            return Ok(client);
-        }
-    }
-
-    Err(local_err.context(
-        "the local model is unavailable and no fallback provider is configured — \
-         run `wizard --onboard` to set one up",
-    ))
+    Agent::spawn(bridge, config.mode, tokens).await
 }
 
-/// Genie-mode entry point: set up the terminal (raw mode + alternate
-/// screen), build the agent stack (LLM provider, registry with scripted +
-/// MCP tools, skills, session), pre-fill `cli.prompt` if given, and drive
-/// the [`EventLoop`](crate::event::EventLoop) until quit. Restores the
-/// terminal on exit and on panic. Returns the process exit code: 0 from the
-/// TUI itself; the headless fallback propagates its outcome code.
-pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
-    // No usable terminal: run headless when a task was given, otherwise we
-    // cannot do anything sensible.
+/// Interactive entry point: set up the terminal, spawn the NexAU bridge,
+/// pre-fill `cli.prompt` if given, and drive the [`EventLoop`] until quit.
+/// Restores the terminal on exit and on panic.
+pub async fn run_tui(config: Config, cli: Cli) -> Result<i32> {
+    use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        if cli.prompt.is_some() {
-            return crate::agent::run_headless(config, cli).await;
-        }
-        anyhow::bail!("wizard needs a terminal for the TUI; pass -p \"task\" to run headless");
+        anyhow::bail!("wizard needs an interactive terminal");
     }
-
-    let mut client = startup_client(&mut config).await?;
 
     let project_root = std::env::current_dir().context("resolving project root")?;
-    let mut skills = load_skill_roots();
 
-    let mcp_path = Config::mcp_config_path()?;
-    let mcp_config = match McpConfig::load(&mcp_path) {
-        Ok(config) => config,
-        Err(err) => {
-            tracing::warn!("loading {}: {err:#}", mcp_path.display());
-            McpConfig::default()
-        }
-    };
-    // Shared with background rebuild tasks (model switch, crash recovery).
-    let manager = Arc::new(Mutex::new(
-        match McpManager::connect_all(&mcp_config).await {
-            Ok(manager) => manager,
-            Err(err) => {
-                tracing::warn!("connecting MCP servers: {err:#}");
-                McpManager::empty()
-            }
-        },
-    ));
-
-    let mut agent_slot: Option<Agent> = Some(
-        build_agent(
-            &client,
-            &config,
-            &skills,
-            &project_root,
-            &*manager.lock().await,
-            cli.resume,
-        )
-        .await?,
-    );
-    // `--plan` / `plan_first = true`: the session starts in plan mode (the
-    // App mirror is set from the same config in App::new below).
-    if config.plan_first
-        && let Some(agent) = agent_slot.as_mut()
-    {
-        agent.set_plan_mode(true);
-    }
+    let mut agent_slot: Option<Agent> = Some(spawn_agent(&config).await?);
     let mut agent_task: Option<JoinHandle<Agent>> = None;
-
-    // Genie-mode max_steps as configured, used when switching back from
-    // sovereign in-session.
-    let genie_max_steps = config.max_steps;
 
     let mut app = App::new(config);
     app.project_root = project_root.clone();
     app.custom_commands = crate::commands::load(&project_root);
     if let Some(prompt) = cli.prompt.clone() {
         app.set_input(prompt);
-    }
-    // No startup notice: the welcome screen already shows the model, mode,
-    // and help pointers until the first message arrives.
-
-    // session_start hooks fire before the first draw; their activity (and
-    // any failures) lands in the transcript as notices.
-    {
-        let (hook_tx, mut hook_rx) = mpsc::channel::<AgentEvent>(256);
-        if let Some(agent) = agent_slot.as_mut() {
-            agent.fire_session_start(&hook_tx).await;
-        }
-        drop(hook_tx);
-        while let Some(event) = hook_rx.recv().await {
-            app.handle_agent_event(event);
-        }
     }
 
     let mut events = EventLoop::new(Duration::from_millis(100));
@@ -2003,26 +1145,6 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         let Some(event) = events.next().await else {
             break;
         };
-
-        // A background rebuild finished: restore the agent into the slot.
-        if let Event::AgentRebuilt(rebuild) = event {
-            let rebuild = *rebuild;
-            app.rebuilding = None;
-            if let Some(model) = rebuild.model {
-                app.config.model = model.clone();
-                app.status.model = model;
-            }
-            if let Some(mut agent) = rebuild.agent {
-                // A rebuilt agent starts with plan mode off; restore the
-                // session's setting.
-                if app.plan_mode {
-                    agent.set_plan_mode(true);
-                }
-                agent_slot = Some(agent);
-            }
-            app.notice(rebuild.notice);
-            continue;
-        }
 
         let turn_done = matches!(&event, Event::Agent(AgentEvent::Done { .. }));
 
@@ -2071,14 +1193,8 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
                 AppAction::Command(command) => {
                     CommandContext {
                         app: &mut app,
-                        client: &mut client,
                         agent_slot: &mut agent_slot,
-                        manager: &manager,
-                        skills: &mut skills,
-                        project_root: &project_root,
-                        mcp_path: &mcp_path,
-                        genie_max_steps,
-                        events: &events,
+                        notices: events.sender(),
                     }
                     .run(command)
                     .await;
@@ -2090,43 +1206,18 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
             match handle.await {
                 Ok(agent) => agent_slot = Some(agent),
                 Err(err) => {
-                    // The turn task panicked and took the agent with it.
-                    // Rebuild off the event loop so the TUI stays responsive.
+                    // The turn task panicked and took the agent with it;
+                    // respawn a fresh bridge so the session can continue.
                     app.notice(format!("agent task crashed: {err}"));
-                    app.rebuilding = Some("restarting agent".to_string());
-                    let client = client.clone();
-                    let config = app.config.clone();
-                    let skills = skills.clone();
-                    let project_root = project_root.clone();
-                    let manager = Arc::clone(&manager);
-                    let notify = events.sender();
-                    tokio::spawn(async move {
-                        let manager = manager.lock().await;
-                        let rebuild = match build_agent(
-                            &client,
-                            &config,
-                            &skills,
-                            &project_root,
-                            &manager,
-                            true,
-                        )
-                        .await
-                        {
-                            Ok(agent) => AgentRebuild {
-                                agent: Some(agent),
-                                model: None,
-                                notice: "agent restarted from the last session".to_string(),
-                            },
-                            Err(err) => AgentRebuild {
-                                agent: None,
-                                model: None,
-                                notice: format!(
-                                    "could not restart the agent: {err:#} — /quit and relaunch"
-                                ),
-                            },
-                        };
-                        let _ = notify.send(Event::AgentRebuilt(Box::new(rebuild))).await;
-                    });
+                    match spawn_agent(&app.config).await {
+                        Ok(agent) => {
+                            agent_slot = Some(agent);
+                            app.notice("agent restarted");
+                        }
+                        Err(err) => app.notice(format!(
+                            "could not restart the agent: {err:#} — /quit and relaunch"
+                        )),
+                    }
                 }
             }
         }
@@ -2136,10 +1227,8 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         }
     }
 
-    // session_end hooks: best-effort — skipped when quitting mid-turn took
-    // the agent — with no event surfacing (the TUI is going away).
-    if let Some(agent) = agent_slot.as_ref() {
-        agent.fire_session_end(None).await;
+    if let Some(agent) = agent_slot.take() {
+        agent.shutdown().await;
     }
 
     drop(_guard);
@@ -2151,14 +1240,10 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
 /// the duration of one dispatch.
 struct CommandContext<'a> {
     app: &'a mut App,
-    client: &'a mut Arc<dyn LlmProvider>,
     agent_slot: &'a mut Option<Agent>,
-    manager: &'a Arc<Mutex<McpManager>>,
-    skills: &'a mut Vec<Skill>,
-    project_root: &'a Path,
-    mcp_path: &'a Path,
-    genie_max_steps: u32,
-    events: &'a EventLoop,
+    /// Sender for posting notices from background tasks (e.g. `/evolve`)
+    /// back into the transcript without blocking the main loop.
+    notices: mpsc::Sender<Event>,
 }
 
 impl CommandContext<'_> {
@@ -2167,175 +1252,73 @@ impl CommandContext<'_> {
         match command {
             SlashCommand::Help => self.app.notice(HELP_TEXT),
             SlashCommand::Quit => self.app.should_quit = true,
-            SlashCommand::Diff => self.toggle_diff().await,
-            SlashCommand::Todos => self.toggle_todos(),
-            SlashCommand::Cost => self.cost(),
-            SlashCommand::Memory => self.memory(),
-            SlashCommand::Doctor => self.doctor().await,
-            SlashCommand::Status => self.status(),
-            SlashCommand::Clear => self.clear(),
-            SlashCommand::Model(None) => self.open_model_picker().await,
-            SlashCommand::Model(Some(tag)) => self.switch_model(tag),
+            SlashCommand::Clear => self.clear().await,
+            SlashCommand::Model(None) => self.show_model(),
+            SlashCommand::Model(Some(tag)) => self.switch_model(tag).await,
             SlashCommand::Mode(None) => self.open_mode_picker(),
             SlashCommand::Mode(Some(mode)) => self.switch_mode(mode),
-            SlashCommand::Plan => self.toggle_plan(),
-            SlashCommand::Rewind(None) => self.open_rewind_picker(),
-            SlashCommand::Rewind(Some(turn)) => self.rewind(turn),
-            SlashCommand::Reload => self.reload().await,
-            SlashCommand::Evolve { deep, description } => self.evolve(deep, description),
-            SlashCommand::Publish { branch } => self.publish(branch),
-            SlashCommand::Provider(action) => self.provider(action).await,
-            SlashCommand::Server(action) => self.server(action).await,
-            SlashCommand::Login(provider) => self.login(provider),
+            SlashCommand::Evolve(action) => self.run_evolve(action),
         }
     }
 
-    /// True (with a notice) when the agent cannot be touched right now —
-    /// a turn is running or a background rebuild is in flight.
+    /// `/evolve [start|status]`: drive AHE's evolve loop on a background task
+    /// so the (subprocess + file I/O) work never blocks the UI. The result —
+    /// the launched session, a status summary, or an error — comes back as an
+    /// [`Event::Notice`].
+    fn run_evolve(&mut self, action: EvolveSlash) {
+        let evolve = match self.app.config.evolve_ready() {
+            Ok(cfg) => cfg.clone(),
+            Err(err) => {
+                self.app.notice(format!("{err:#}"));
+                return;
+            }
+        };
+        self.app.notice(match action {
+            EvolveSlash::Start => "evolve: preflighting and launching…",
+            EvolveSlash::Status => "evolve: reading latest experiment…",
+        });
+        let notices = self.notices.clone();
+        tokio::spawn(async move {
+            let work = tokio::task::spawn_blocking(move || match action {
+                EvolveSlash::Start => crate::evolve::start(&evolve).map(|session| {
+                    format!(
+                        "evolve launched in tmux session '{session}' — \
+                         attach: tmux attach -t {session} · /evolve status for progress"
+                    )
+                }),
+                EvolveSlash::Status => crate::evolve::status(&evolve),
+            })
+            .await;
+            let text = match work {
+                Ok(Ok(message)) => message,
+                Ok(Err(err)) => format!("evolve error: {err:#}"),
+                Err(err) => format!("evolve task failed: {err}"),
+            };
+            let _ = notices.send(Event::Notice(text)).await;
+        });
+    }
+
+    /// True (with a notice) when the agent cannot be touched right now (a
+    /// turn is running).
     fn agent_unavailable(&mut self, action: &str) -> bool {
         if self.app.status.busy {
             self.app
                 .notice(format!("cannot {action} while a turn is running"));
-            true
-        } else if self.app.rebuilding.is_some() {
-            self.app
-                .notice(format!("cannot {action} while the agent is rebuilding"));
             true
         } else {
             false
         }
     }
 
-    async fn toggle_diff(&mut self) {
-        self.app.show_diff = !self.app.show_diff;
-        if self.app.show_diff {
-            self.app.diff_text = match git_diff_text(self.project_root).await {
-                Ok(text) => text,
-                Err(err) => format!("could not read git diff: {err:#}"),
-            };
-        }
-    }
-
-    /// `/todos`: toggle the todo side panel.
-    fn toggle_todos(&mut self) {
-        self.app.show_todos = !self.app.show_todos;
-        if self.app.show_todos && self.app.todos.is_empty() {
-            self.app
-                .notice("todo list is empty — the agent fills it via the `todo` tool");
-        }
-    }
-
-    /// `/cost`: session token totals, plus an estimate when the active
-    /// provider has `usd_per_mtok_in` / `usd_per_mtok_out` configured.
-    fn cost(&mut self) {
-        let prompt = self.app.status.prompt_tokens;
-        let completion = self.app.status.completion_tokens;
-        let mut text = format!("session usage: {prompt} prompt + {completion} completion tokens");
-        let provider = self.app.config.active();
-        match crate::usage::cost_usd(
-            prompt,
-            completion,
-            provider.usd_per_mtok_in,
-            provider.usd_per_mtok_out,
-        ) {
-            Some(cost) => text.push_str(&format!(" · est. ${cost:.4}")),
-            None => text.push_str(&format!(
-                "\nset usd_per_mtok_in / usd_per_mtok_out on provider '{}' in \
-                 ~/.wizard/config.toml for cost estimates",
-                provider.name
-            )),
-        }
-        self.app.notice(text);
-    }
-
-    /// `/memory`: list the saved project memories (name — description).
-    fn memory(&mut self) {
-        let store = match MemoryStore::open(self.project_root) {
-            Ok(store) => store,
-            Err(err) => {
-                self.app
-                    .notice(format!("could not open memory store: {err:#}"));
-                return;
-            }
-        };
-        match store.list() {
-            Ok(entries) if entries.is_empty() => self
-                .app
-                .notice(format!("no memories saved yet ({})", store.dir().display())),
-            Ok(entries) => {
-                let mut text = format!("saved memories ({}):\n", store.dir().display());
-                for entry in &entries {
-                    text.push_str(&format!("  {} — {}\n", entry.name, entry.description));
-                }
-                self.app.notice(text.trim_end().to_string());
-            }
-            Err(err) => self.app.notice(format!("could not list memories: {err:#}")),
-        }
-    }
-
-    /// `/doctor`: the same diagnostics as `wizard doctor`, in the
-    /// transcript. Network probes are capped at 5s each, but a slow
-    /// provider or MCP server still blocks the UI for that long.
-    async fn doctor(&mut self) {
-        let checks = crate::doctor::run_checks(self.project_root).await;
-        self.app
-            .notice(format!("doctor:\n{}", crate::doctor::render(&checks)));
-    }
-
-    /// `/status`: one snapshot of the session — model, provider, mode,
-    /// session id, usage, todo progress, background tasks, plan mode.
-    fn status(&mut self) {
-        let provider = self.app.config.active();
-        let mut text = format!(
-            "model: {}\nprovider: {} ({:?} @ {})\nmode: {}",
-            self.app.status.model, provider.name, provider.kind, provider.base_url, self.app.mode,
-        );
-        match self.agent_slot.as_ref() {
-            Some(agent) => {
-                let (prompt, completion) = agent.usage().session_totals();
-                text.push_str(&format!(
-                    "\nsession: {}\nusage: {prompt} prompt + {completion} completion tokens",
-                    agent.session().id,
-                ));
-                text.push_str(&format!(
-                    "\nbackground tasks: {} running",
-                    agent.running_tasks()
-                ));
-            }
-            None => {
-                // Mid-turn (or rebuilding): the status bar mirror is the
-                // best available source.
-                let (prompt, completion) = (
-                    self.app.status.prompt_tokens,
-                    self.app.status.completion_tokens,
-                );
-                text.push_str(&format!(
-                    "\nsession: (turn running)\nusage: {prompt} prompt + {completion} completion tokens",
-                ));
-            }
-        }
-        let (done, total) = crate::tools::todo::progress(&self.app.todos);
-        if total > 0 {
-            text.push_str(&format!("\ntodos: {done}/{total} done"));
-        } else {
-            text.push_str("\ntodos: none");
-        }
-        text.push_str(&format!(
-            "\nplan mode: {}",
-            if self.app.plan_mode { "on" } else { "off" }
-        ));
-        self.app.notice(text);
-    }
-
-    fn clear(&mut self) {
+    /// `/clear`: respawn a fresh bridge and wipe the transcript.
+    async fn clear(&mut self) {
         if self.agent_unavailable("clear") {
             return;
         }
         if let Some(agent) = self.agent_slot.as_mut()
-            && let Err(err) = agent.clear()
+            && let Err(err) = agent.clear().await
         {
-            self.app
-                .notice(format!("failed to rotate session: {err:#}"));
+            self.app.notice(format!("failed to clear: {err:#}"));
             return;
         }
         self.app.transcript.clear();
@@ -2345,74 +1328,50 @@ impl CommandContext<'_> {
         self.app.notice("conversation cleared");
     }
 
-    /// Open the interactive model picker with all installed models.
-    async fn open_model_picker(&mut self) {
+    /// `/model` with no argument: report the active model.
+    fn show_model(&mut self) {
+        self.app.notice(format!(
+            "model: {} — switch with /model <tag>",
+            self.app.status.model
+        ));
+    }
+
+    /// `/model <tag>`: respawn the bridge with the new model (resets history).
+    async fn switch_model(&mut self, tag: String) {
         if self.agent_unavailable("switch models") {
             return;
         }
-        match self.client.list_models().await {
-            Ok(models) if !models.is_empty() => {
-                let current = self.app.status.model.clone();
-                let items: Vec<PickerItem> = models
-                    .into_iter()
-                    .map(|model| PickerItem {
-                        current: model == current
-                            || model.split(':').next() == Some(current.as_str()),
-                        detail: String::new(),
-                        value: model,
-                    })
-                    .collect();
-                let selected = items.iter().position(|item| item.current).unwrap_or(0);
-                self.app.picker = Some(Picker {
-                    kind: PickerKind::Model,
-                    title: " select model ".to_string(),
-                    items,
-                    selected,
-                });
+        let Some(agent) = self.agent_slot.as_mut() else {
+            self.app
+                .notice("the agent is unavailable — try again in a moment");
+            return;
+        };
+        match agent.set_model(tag.clone()).await {
+            Ok(()) => {
+                self.app.config.model = tag.clone();
+                self.app.status.model = tag.clone();
+                self.app.transcript.clear();
+                self.app.streaming.clear();
+                self.app.streaming_thinking.clear();
+                self.app.scroll = 0;
+                self.app
+                    .notice(format!("switched to model {tag} (conversation reset)"));
             }
-            Ok(_) => self
-                .app
-                .notice("no models installed — try `ollama pull <model>`"),
-            Err(err) => self.app.notice(format!("could not list models: {err:#}")),
+            Err(err) => self.app.notice(format!("failed to switch model: {err:#}")),
         }
     }
 
-    /// Switch models off the event loop: the validation probe and any agent
-    /// rebuild run in a background task and come back as
-    /// [`Event::AgentRebuilt`], so the TUI never freezes.
-    fn switch_model(&mut self, tag: String) {
-        if self.agent_unavailable("switch models") {
-            return;
-        }
-        let agent = self.agent_slot.take();
-        self.app.rebuilding = Some(format!("switching to {tag}"));
-        let client = self.client.clone();
-        let config = self.app.config.clone();
-        let skills = self.skills.clone();
-        let project_root = self.project_root.to_path_buf();
-        let manager = Arc::clone(self.manager);
-        let notify = self.events.sender();
-        tokio::spawn(async move {
-            let rebuild =
-                switch_model_task(agent, tag, &client, config, skills, project_root, manager).await;
-            let _ = notify.send(Event::AgentRebuilt(Box::new(rebuild))).await;
-        });
-    }
-
-    /// Open the interactive mode picker.
+    /// `/mode` with no argument: open the interactive mode picker.
     fn open_mode_picker(&mut self) {
-        if self.agent_unavailable("switch modes") {
-            return;
-        }
         let items = vec![
             PickerItem {
                 value: "genie".to_string(),
-                detail: "interactive — bypass permissions; acts without asking".to_string(),
+                detail: "interactive — acts on each turn".to_string(),
                 current: self.app.mode == Mode::Genie,
             },
             PickerItem {
                 value: "sovereign".to_string(),
-                detail: "autonomous — works continuously; self-directing".to_string(),
+                detail: "autonomous — framed for longer, self-directed work".to_string(),
                 current: self.app.mode == Mode::Sovereign,
             },
         ];
@@ -2425,605 +1384,15 @@ impl CommandContext<'_> {
         });
     }
 
-    /// `/plan` (and Shift+Tab): toggle plan mode on the live agent.
-    fn toggle_plan(&mut self) {
-        if self.agent_unavailable("toggle plan mode") {
-            return;
-        }
-        let on = !self.app.plan_mode;
-        if let Some(agent) = self.agent_slot.as_mut() {
-            agent.set_plan_mode(on);
-        }
-        self.app.plan_mode = on;
-        self.app.notice(if on {
-            "plan mode on — the agent investigates read-only and presents a plan via \
-             exit_plan for approval (/plan or Shift+Tab to leave)"
-        } else {
-            "plan mode off"
-        });
-    }
-
-    /// `/rewind`: open the turn picker (newest first). Each row shows the
-    /// turn number, the files its edits snapshotted, and the first line of
-    /// the prompt that started it. Esc cancels.
-    fn open_rewind_picker(&mut self) {
-        if self.agent_unavailable("rewind") {
-            return;
-        }
-        let Some(agent) = self.agent_slot.as_ref() else {
-            self.app.notice("the agent is busy — try again in a moment");
-            return;
-        };
-        let candidates = agent.rewind_candidates(20);
-        if candidates.is_empty() {
-            self.app.notice("nothing to rewind yet");
-            return;
-        }
-        let items: Vec<PickerItem> = candidates
-            .iter()
-            .map(|candidate| {
-                let files = candidate
-                    .files
-                    .iter()
-                    .map(|path| {
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.display().to_string())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let detail = match (candidate.prompt.is_empty(), files.is_empty()) {
-                    (false, false) => format!("{} · {files}", candidate.prompt),
-                    (false, true) => candidate.prompt.clone(),
-                    (true, false) => files,
-                    (true, true) => String::new(),
-                };
-                PickerItem {
-                    value: candidate.turn.to_string(),
-                    detail,
-                    current: false,
-                }
-            })
-            .collect();
-        self.app.picker = Some(Picker {
-            kind: PickerKind::Rewind,
-            title: " rewind to before turn ".to_string(),
-            items,
-            selected: 0,
-        });
-    }
-
-    /// `/rewind <turn>` (or a picker selection): restore the files and drop
-    /// the rewound turns from the session and the transcript.
-    fn rewind(&mut self, turn: u64) {
-        if self.agent_unavailable("rewind") {
-            return;
-        }
-        let Some(agent) = self.agent_slot.as_mut() else {
-            self.app.notice("the agent is busy — try again in a moment");
-            return;
-        };
-        match agent.rewind_to(turn) {
-            Ok(restored) => {
-                // The rewound turns no longer exist: reset the transcript
-                // view to match the truncated conversation.
-                self.app.transcript.clear();
-                self.app.streaming.clear();
-                self.app.streaming_thinking.clear();
-                self.app.scroll = 0;
-                let files = if restored.is_empty() {
-                    "no files needed restoring".to_string()
-                } else {
-                    format!(
-                        "restored {}",
-                        restored
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                self.app.notice(format!(
-                    "rewound to before turn {turn} — {files}; conversation truncated"
-                ));
-            }
-            Err(err) => self.app.notice(format!("rewind failed: {err:#}")),
-        }
-    }
-
+    /// `/mode <name>` (or a picker selection): switch the personality mode.
     fn switch_mode(&mut self, mode: Mode) {
-        if self.agent_unavailable("switch modes") {
-            return;
-        }
         if let Some(agent) = self.agent_slot.as_mut() {
             agent.set_mode(mode);
         }
         self.app.mode = mode;
         self.app.config.mode = mode;
         self.app.status.mode = mode;
-        match mode {
-            Mode::Sovereign => {
-                self.app.config.max_steps = self
-                    .app
-                    .config
-                    .max_steps
-                    .max(Mode::Sovereign.default_max_steps());
-            }
-            Mode::Genie => {
-                self.app.config.max_steps = self.genie_max_steps;
-            }
-        }
-        self.app.status.max_steps = self.app.config.max_steps;
         self.app.notice(format!("switched to {mode} mode"));
-    }
-
-    async fn reload(&mut self) {
-        if self.agent_unavailable("reload") {
-            return;
-        }
-        *self.skills = load_skill_roots();
-        self.app.custom_commands = crate::commands::load(self.project_root);
-        let mut manager = self.manager.lock().await;
-        match McpConfig::load(self.mcp_path) {
-            Ok(mcp_config) => {
-                if let Err(err) = manager.reload(&mcp_config).await {
-                    self.app.notice(format!("MCP reload warning: {err:#}"));
-                }
-            }
-            Err(err) => self
-                .app
-                .notice(format!("could not reload MCP config: {err:#}")),
-        }
-        // The rebuilt registry's subagent spawner keeps the session's hooks.
-        let Some(hooks) = self
-            .agent_slot
-            .as_ref()
-            .map(|agent| Arc::clone(agent.hooks()))
-        else {
-            return;
-        };
-        match build_registry(&manager, self.client, &hooks).await {
-            Ok(registry) => {
-                let tool_count = registry.len();
-                if let Some(agent) = self.agent_slot.as_mut() {
-                    agent.set_registry(registry);
-                    agent.set_skills(self.skills.clone());
-                }
-                self.app.notice(format!(
-                    "reloaded: {tool_count} tools, {} skills",
-                    self.skills.len()
-                ));
-            }
-            Err(err) => self.app.notice(format!("reload failed: {err:#}")),
-        }
-    }
-
-    fn evolve(&mut self, deep: bool, description: String) {
-        let tier = if deep {
-            EvolveTier::Deep
-        } else {
-            EvolveTier::Runtime
-        };
-        self.app.notice(format!(
-            "evolving ({}): {description}",
-            if deep { "deep" } else { "runtime" }
-        ));
-        // The explicit `/evolve` command is the user's consent; the outcome
-        // notice reports exactly what was added.
-        let request = EvolveRequest { description, tier };
-        let mut evolver = Evolver::new(self.app.config.clone());
-        let notify = self.events.sender();
-        tokio::spawn(async move {
-            let message = match evolver.run(request).await {
-                Ok(outcome) => describe_evolve_outcome(&outcome),
-                Err(err) => format!("evolve failed: {err:#}"),
-            };
-            let _ = notify.send(Event::Notice(message)).await;
-        });
-    }
-
-    /// Fork Wizard to the user's GitHub and surface the one-liner install
-    /// command. Runs in a background task so the TUI stays responsive.
-    fn publish(&mut self, branch: Option<String>) {
-        self.app.notice(format!(
-            "publishing Wizard{}…",
-            branch
-                .as_deref()
-                .map(|b| format!(" (branch: {b})"))
-                .unwrap_or_default()
-        ));
-        let config = self.app.config.clone();
-        let notify = self.events.sender();
-        tokio::spawn(async move {
-            let req = PublishRequest { branch };
-            let message = match publish(&config, req, false).await {
-                Ok(outcome) => format!(
-                    "publish: forked to {}  (branch: {})\n\nInstall one-liner:\n{}",
-                    outcome.fork_url, outcome.branch, outcome.install_one_liner
-                ),
-                Err(err) => format!("publish failed: {err:#}"),
-            };
-            let _ = notify.send(Event::Notice(message)).await;
-        });
-    }
-
-    /// Persist `App.config` to disk, surfacing any error as a notice.
-    fn persist_config(&mut self) {
-        if let Err(err) = self.app.config.save() {
-            self.app.notice(format!("could not save config: {err:#}"));
-        }
-    }
-
-    /// Rebuild the live client + agent from the current active provider (after
-    /// a `/provider use`/`add`). Runs synchronously; reports `summary` on
-    /// success. Mirrors how the model picker probes the backend inline.
-    async fn rebuild_active_provider(&mut self, summary: String) {
-        let provider = self.app.config.active();
-        let client = match provider.build() {
-            Ok(client) => client,
-            Err(err) => {
-                self.app.notice(format!(
-                    "could not build provider '{}': {err:#}",
-                    provider.name
-                ));
-                return;
-            }
-        };
-        *self.client = client;
-        // A switch to llama.cpp may target a server that is not up yet:
-        // kick off the auto-start in the background (the rebuild below
-        // proceeds regardless; probes fall back until the model loads).
-        if provider.kind == ProviderKind::LlamaCpp
-            && server::probe(&provider.base_url).await == server::Health::Down
-        {
-            self.app.notice(format!(
-                "llama-server at {} is not running — starting it…",
-                provider.base_url
-            ));
-            self.start_server_task(provider.clone());
-        }
-        let manager = self.manager.lock().await;
-        match build_agent(
-            self.client,
-            &self.app.config,
-            self.skills,
-            self.project_root,
-            &manager,
-            false,
-        )
-        .await
-        {
-            Ok(mut agent) => {
-                // A rebuilt agent starts with plan mode off; restore the
-                // session's setting.
-                if self.app.plan_mode {
-                    agent.set_plan_mode(true);
-                }
-                *self.agent_slot = Some(agent);
-                self.app.status.model = self.app.config.active().model;
-                self.app.notice(summary);
-            }
-            Err(err) => {
-                *self.agent_slot = None;
-                self.app.notice(format!(
-                    "switched provider but could not start the agent: {err:#} — /quit and relaunch"
-                ));
-            }
-        }
-    }
-
-    /// Handle `/provider` subcommands: list, switch, add, or remove providers.
-    async fn provider(&mut self, action: ProviderAction) {
-        match action {
-            ProviderAction::List => self.provider_list(),
-            ProviderAction::Use(name) => self.provider_use(name).await,
-            ProviderAction::Add {
-                name,
-                kind,
-                base_url,
-                model,
-                api_key_env,
-            } => {
-                self.provider_add(name, kind, base_url, model, api_key_env)
-                    .await
-            }
-            ProviderAction::Remove(name) => self.provider_remove(name),
-        }
-    }
-
-    fn provider_list(&mut self) {
-        if self.app.config.providers.is_empty() {
-            let synth = self.app.config.active();
-            self.app.notice(format!(
-                "no providers configured — using the default: {} ({}) {} @ {}\n\
-                 add one with: /provider add <name> <llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth> <base_url> <model> [API_KEY_ENV]",
-                synth.name, synth.kind, synth.model, synth.base_url
-            ));
-            return;
-        }
-        let active = self.app.config.active().name;
-        let mut lines = String::from("configured providers:");
-        for provider in &self.app.config.providers {
-            let marker = if provider.name == active { "* " } else { "  " };
-            let key = provider
-                .api_key_env
-                .as_deref()
-                .map(|env| format!(" [key: ${env}]"))
-                .unwrap_or_default();
-            lines.push_str(&format!(
-                "\n{marker}{} ({}) {} @ {}{key}",
-                provider.name, provider.kind, provider.model, provider.base_url
-            ));
-        }
-        lines.push_str("\n(* = active)");
-        self.app.notice(lines);
-    }
-
-    async fn provider_use(&mut self, name: String) {
-        if self.agent_unavailable("switch providers") {
-            return;
-        }
-        if !self.app.config.providers.iter().any(|p| p.name == name) {
-            self.app
-                .notice(format!("no provider named '{name}' — try /provider list"));
-            return;
-        }
-        self.app.config.active_provider = Some(name.clone());
-        self.persist_config();
-        self.rebuild_active_provider(format!("switched to provider '{name}'"))
-            .await;
-    }
-
-    async fn provider_add(
-        &mut self,
-        name: String,
-        kind: ProviderKind,
-        base_url: String,
-        model: String,
-        api_key_env: Option<String>,
-    ) {
-        if self.agent_unavailable("add a provider") {
-            return;
-        }
-        let provider = ProviderConfig {
-            name: name.clone(),
-            kind,
-            base_url,
-            model,
-            api_key_env: api_key_env.clone(),
-            gguf_path: None,
-            usd_per_mtok_in: None,
-            usd_per_mtok_out: None,
-        };
-        // Dedup by name: replace an existing entry with the same name.
-        self.app.config.providers.retain(|p| p.name != name);
-        self.app.config.providers.push(provider);
-        self.app.config.active_provider = Some(name.clone());
-        self.persist_config();
-        let reminder = api_key_env
-            .map(|env| format!(" — remember to `export {env}=<key>` for this provider"))
-            .unwrap_or_default();
-        self.rebuild_active_provider(format!("added and switched to provider '{name}'{reminder}"))
-            .await;
-    }
-
-    fn provider_remove(&mut self, name: String) {
-        if self.app.config.active().name == name {
-            self.app.notice(format!(
-                "'{name}' is the active provider — switch with /provider use <other> first"
-            ));
-            return;
-        }
-        let before = self.app.config.providers.len();
-        self.app.config.providers.retain(|p| p.name != name);
-        if self.app.config.providers.len() == before {
-            self.app.notice(format!("no provider named '{name}'"));
-            return;
-        }
-        self.persist_config();
-        self.app.notice(format!("removed provider '{name}'"));
-    }
-
-    /// Handle `/server` subcommands: status, start, or stop the local
-    /// llama-server.
-    async fn server(&mut self, action: ServerAction) {
-        match action {
-            ServerAction::Status => self.server_status().await,
-            ServerAction::Start => self.server_start().await,
-            ServerAction::Stop => self.server_stop(),
-        }
-    }
-
-    /// The active provider when it is llama.cpp; otherwise a notice that
-    /// `/server` does not apply.
-    fn llamacpp_provider(&mut self) -> Option<ProviderConfig> {
-        let provider = self.app.config.active();
-        if provider.kind == ProviderKind::LlamaCpp {
-            Some(provider)
-        } else {
-            self.app.notice(format!(
-                "the active provider '{}' is {} — /server only manages a local llama.cpp server",
-                provider.name, provider.kind
-            ));
-            None
-        }
-    }
-
-    async fn server_status(&mut self) {
-        let Some(provider) = self.llamacpp_provider() else {
-            return;
-        };
-        let spawned = server::spawned_pid()
-            .map(|pid| format!(" (PID {pid}, started by wizard)"))
-            .unwrap_or_default();
-        let line = match server::probe(&provider.base_url).await {
-            server::Health::Ready => {
-                format!("llama-server at {}: ready{spawned}", provider.base_url)
-            }
-            server::Health::Loading => format!(
-                "llama-server at {}: loading its model{spawned}",
-                provider.base_url
-            ),
-            server::Health::Down => format!(
-                "llama-server at {}: not running — start it with /server start",
-                provider.base_url
-            ),
-        };
-        self.app.notice(line);
-    }
-
-    async fn server_start(&mut self) {
-        let Some(provider) = self.llamacpp_provider() else {
-            return;
-        };
-        if server::probe(&provider.base_url).await == server::Health::Ready {
-            self.app.notice(format!(
-                "llama-server at {} is already running",
-                provider.base_url
-            ));
-            return;
-        }
-        self.app
-            .notice(format!("starting llama-server at {}…", provider.base_url));
-        self.start_server_task(provider);
-    }
-
-    fn server_stop(&mut self) {
-        let message = match server::stop() {
-            Ok(server::StopOutcome::Stopped(pid)) => format!("stopped llama-server (PID {pid})"),
-            Ok(server::StopOutcome::NotRecorded) => {
-                "wizard has not started a llama-server — nothing to stop".to_string()
-            }
-            Ok(server::StopOutcome::NotRunning(pid)) => {
-                format!("llama-server (PID {pid}) already exited")
-            }
-            Ok(server::StopOutcome::NotOurs { pid, name }) => {
-                format!("refusing to stop PID {pid}: it is '{name}', not llama-server")
-            }
-            Err(err) => format!("could not stop llama-server: {err:#}"),
-        };
-        self.app.notice(message);
-    }
-
-    /// `/login <provider>`: run an OAuth sign-in in the background, streaming
-    /// progress (including the URL to open) into the transcript as notices.
-    fn login(&mut self, provider: String) {
-        if provider != "xai" {
-            self.app.notice(format!(
-                "unknown login provider '{provider}' (supported: xai)"
-            ));
-            return;
-        }
-        let notify = self.events.sender();
-        self.app
-            .notice("starting the xAI sign-in; your browser should open shortly");
-        tokio::spawn(async move {
-            let progress = {
-                let notify = notify.clone();
-                move |line: &str| {
-                    // The progress callback is sync; relay each line through
-                    // its own send task.
-                    let notify = notify.clone();
-                    let line = line.to_string();
-                    tokio::spawn(async move {
-                        let _ = notify.send(Event::Notice(line)).await;
-                    });
-                }
-            };
-            let message = match crate::llm::xai_oauth::login(progress).await {
-                Ok(()) => "signed in to xAI; add the provider with \
-                           /provider add xai xaioauth https://api.x.ai/v1 grok-4.3"
-                    .to_string(),
-                Err(err) => format!("xAI sign-in failed: {err:#}"),
-            };
-            let _ = notify.send(Event::Notice(message)).await;
-        });
-    }
-
-    /// Background half of `/server start` (and the post-switch auto-start):
-    /// ensure a llama-server is running for `provider`, streaming progress
-    /// into the transcript as notices.
-    fn start_server_task(&self, provider: ProviderConfig) {
-        let notify = self.events.sender();
-        tokio::spawn(async move {
-            let progress = {
-                let notify = notify.clone();
-                move |line: &str| {
-                    // The progress callback is sync; relay each line through
-                    // its own send task.
-                    let notify = notify.clone();
-                    let line = line.to_string();
-                    tokio::spawn(async move {
-                        let _ = notify.send(Event::Notice(line)).await;
-                    });
-                }
-            };
-            let message = match server::ensure_running(&provider, &progress).await {
-                Ok(()) => format!("llama-server at {} is ready", provider.base_url),
-                Err(err) => format!("llama-server: {err:#}"),
-            };
-            let _ = notify.send(Event::Notice(message)).await;
-        });
-    }
-}
-
-/// Background half of `/model <tag>`: validate the tag against the
-/// installed models, probe native tool support, then either retag the live
-/// agent (context preserved) or build a fresh one.
-async fn switch_model_task(
-    agent: Option<Agent>,
-    tag: String,
-    client: &Arc<dyn LlmProvider>,
-    mut config: Config,
-    skills: Vec<Skill>,
-    project_root: PathBuf,
-    manager: Arc<Mutex<McpManager>>,
-) -> AgentRebuild {
-    if let Ok(models) = client.list_models().await {
-        let known = models
-            .iter()
-            .any(|m| *m == tag || m.split(':').next() == Some(tag.as_str()));
-        if !known {
-            // Hand the untouched agent straight back.
-            return AgentRebuild {
-                agent,
-                model: None,
-                notice: format!("model '{tag}' is not installed (try `ollama pull {tag}`)"),
-            };
-        }
-    }
-    let native_tools = match client.supports_native_tools(&tag).await {
-        Ok(supported) => supported,
-        Err(err) => {
-            tracing::warn!("probing tool support for {tag}: {err:#}");
-            false
-        }
-    };
-    match agent {
-        Some(mut agent) => {
-            agent.set_model(tag.clone(), native_tools);
-            AgentRebuild {
-                agent: Some(agent),
-                model: Some(tag.clone()),
-                notice: format!("switched to model {tag} (context preserved)"),
-            }
-        }
-        None => {
-            config.model = tag.clone();
-            let manager = manager.lock().await;
-            match build_agent(client, &config, &skills, &project_root, &manager, false).await {
-                Ok(agent) => AgentRebuild {
-                    agent: Some(agent),
-                    model: Some(tag.clone()),
-                    notice: format!("switched to model {tag}"),
-                },
-                Err(err) => AgentRebuild {
-                    agent: None,
-                    model: None,
-                    notice: format!("failed to switch model: {err:#}"),
-                },
-            }
-        }
     }
 }
 
@@ -3055,29 +1424,13 @@ mod tests {
     }
 
     #[test]
-    fn spinner_verb_is_deterministic_and_stable_within_a_busy_period() {
-        let config = Config {
-            ui: crate::config::UiConfig {
-                spinner_verbs: vec![
-                    "Pondering".to_string(),
-                    "Musing".to_string(),
-                    "Noodling".to_string(),
-                ],
-            },
-            ..Config::default()
-        };
-        let mut a = App::new(config.clone());
-        let mut b = App::new(config);
-        a.tick = 17;
-        b.tick = 17;
-        a.roll_spinner_verb();
-        b.roll_spinner_verb();
-        // Same tick and roll count -> same verb.
-        assert_eq!(a.spinner_verb, b.spinner_verb);
-        // Ticks advancing mid-turn must not change the verb until a re-roll.
-        let during = a.spinner_verb.clone();
-        a.tick += 5;
-        assert_eq!(a.spinner_verb, during);
+    fn spinner_verb_is_stable_within_a_busy_period() {
+        let mut app = app();
+        app.tick = 17;
+        app.roll_spinner_verb();
+        let during = app.spinner_verb.clone();
+        app.tick += 5;
+        assert_eq!(app.spinner_verb, during);
     }
 
     #[test]
@@ -3097,15 +1450,14 @@ mod tests {
         let mut app = app();
         type_str(&mut app, "/mo");
         let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
-        // Prefix matches first, then substring matches ("me*mo*ry").
-        assert_eq!(names, ["model", "mode", "memory"]);
+        assert_eq!(names, ["model", "mode"]);
         assert_eq!(app.input_mode, InputMode::Command);
     }
 
     #[test]
     fn suggestions_hide_once_args_are_typed() {
         let mut app = app();
-        type_str(&mut app, "/evolve add");
+        type_str(&mut app, "/mode genie");
         assert!(app.suggestions.is_empty());
     }
 
@@ -3117,50 +1469,31 @@ mod tests {
         press(&mut app, KeyCode::Down);
         assert_eq!(app.suggestion_index, 1);
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.suggestion_index, 2);
-        press(&mut app, KeyCode::Down);
         assert_eq!(app.suggestion_index, 0);
         press(&mut app, KeyCode::Up);
-        assert_eq!(app.suggestion_index, 2);
+        assert_eq!(app.suggestion_index, 1);
     }
 
     #[test]
     fn tab_completes_the_selected_suggestion() {
         let mut app = app();
-        // "/re" would be ambiguous between /rewind and /reload.
-        type_str(&mut app, "/rel");
+        // "/mod" prefix-matches both model and mode; Tab completes the top.
+        type_str(&mut app, "/mod");
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.input, "/reload");
-        assert_eq!(app.cursor, "/reload".chars().count());
-    }
-
-    #[test]
-    fn tab_completion_appends_space_for_commands_taking_args() {
-        let mut app = app();
-        type_str(&mut app, "/ev");
-        press(&mut app, KeyCode::Tab);
-        assert_eq!(app.input, "/evolve ");
+        assert_eq!(app.input, "/model");
+        assert_eq!(app.cursor, "/model".chars().count());
     }
 
     #[test]
     fn enter_completes_and_runs_argless_commands() {
         let mut app = app();
-        type_str(&mut app, "/d");
+        type_str(&mut app, "/he");
         let action = press(&mut app, KeyCode::Enter);
         assert!(matches!(
             action,
-            Some(AppAction::Command(SlashCommand::Diff))
+            Some(AppAction::Command(SlashCommand::Help))
         ));
         assert!(app.input.is_empty());
-    }
-
-    #[test]
-    fn enter_on_partial_arg_command_completes_and_waits() {
-        let mut app = app();
-        type_str(&mut app, "/ev");
-        let action = press(&mut app, KeyCode::Enter);
-        assert!(action.is_none());
-        assert_eq!(app.input, "/evolve ");
     }
 
     #[test]
@@ -3196,7 +1529,7 @@ mod tests {
         )];
         type_str(&mut app, "/mo");
         let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["model", "mode", "models-report", "memory"]);
+        assert_eq!(names, ["model", "mode", "models-report"]);
         let spec = &app.suggestions[2];
         assert_eq!(spec.description, "report");
         assert!(spec.takes_args);
@@ -3212,7 +1545,6 @@ mod tests {
             panic!("expected a submit, got {action:?}");
         };
         assert_eq!(prompt, "Review src/app.rs with care.");
-        // The transcript shows what the user actually typed.
         assert!(matches!(
             app.transcript.last(),
             Some(TranscriptEntry::User(text)) if text == "/review src/app.rs"
@@ -3254,7 +1586,6 @@ mod tests {
             panic!("expected a submit, got {action:?}");
         };
         assert!(prompt.contains("the context"), "got: {prompt}");
-        // The transcript keeps the compact form.
         assert!(matches!(
             app.transcript.last(),
             Some(TranscriptEntry::User(text)) if text == "use @ctx.txt here"
@@ -3308,319 +1639,70 @@ mod tests {
     }
 
     #[test]
-    fn server_subcommands_parse() {
+    fn evolve_parses_default_and_explicit_actions() {
         assert_eq!(
-            SlashCommand::parse("/server"),
-            Some(Ok(SlashCommand::Server(ServerAction::Status)))
+            SlashCommand::parse("/evolve"),
+            Some(Ok(SlashCommand::Evolve(EvolveSlash::Start)))
         );
         assert_eq!(
-            SlashCommand::parse("/server status"),
-            Some(Ok(SlashCommand::Server(ServerAction::Status)))
+            SlashCommand::parse("/evolve start"),
+            Some(Ok(SlashCommand::Evolve(EvolveSlash::Start)))
         );
         assert_eq!(
-            SlashCommand::parse("/server start"),
-            Some(Ok(SlashCommand::Server(ServerAction::Start)))
+            SlashCommand::parse("/evolve status"),
+            Some(Ok(SlashCommand::Evolve(EvolveSlash::Status)))
         );
-        assert_eq!(
-            SlashCommand::parse("/server stop"),
-            Some(Ok(SlashCommand::Server(ServerAction::Stop)))
-        );
-        let parsed = SlashCommand::parse("/server restart").expect("is a slash command");
-        let message = parsed.expect_err("unknown subcommand");
-        assert!(message.contains("status|start|stop"), "got: {message}");
-    }
-
-    #[test]
-    fn provider_add_accepts_xai_kinds() {
-        let parsed =
-            SlashCommand::parse("/provider add xai xai https://api.x.ai/v1 grok-4.3 XAI_API_KEY")
-                .expect("is a slash command")
-                .expect("parses");
-        assert_eq!(
-            parsed,
-            SlashCommand::Provider(ProviderAction::Add {
-                name: "xai".to_string(),
-                kind: ProviderKind::Xai,
-                base_url: "https://api.x.ai/v1".to_string(),
-                model: "grok-4.3".to_string(),
-                api_key_env: Some("XAI_API_KEY".to_string()),
-            })
-        );
-
-        let parsed =
-            SlashCommand::parse("/provider add grok xaioauth https://api.x.ai/v1 grok-4.3")
-                .expect("is a slash command")
-                .expect("parses");
-        assert_eq!(
-            parsed,
-            SlashCommand::Provider(ProviderAction::Add {
-                name: "grok".to_string(),
-                kind: ProviderKind::XaiOauth,
-                base_url: "https://api.x.ai/v1".to_string(),
-                model: "grok-4.3".to_string(),
-                api_key_env: None,
-            })
-        );
-
-        // The error for an unknown kind names the xai kinds too.
-        let parsed = SlashCommand::parse("/provider add x bogus https://e.com m")
-            .expect("is a slash command");
-        let message = parsed.expect_err("unknown kind");
-        assert!(message.contains("xai|xaioauth"), "got: {message}");
-    }
-
-    #[test]
-    fn provider_add_accepts_openrouter_kind() {
-        let parsed = SlashCommand::parse(
-            "/provider add openrouter openrouter https://openrouter.ai/api/v1 openrouter/auto OPENROUTER_API_KEY",
-        )
-        .expect("is a slash command")
-        .expect("parses");
-        assert_eq!(
-            parsed,
-            SlashCommand::Provider(ProviderAction::Add {
-                name: "openrouter".to_string(),
-                kind: ProviderKind::OpenRouter,
-                base_url: "https://openrouter.ai/api/v1".to_string(),
-                model: "openrouter/auto".to_string(),
-                api_key_env: Some("OPENROUTER_API_KEY".to_string()),
-            })
-        );
-
-        // The error for an unknown kind names openrouter too.
-        let parsed = SlashCommand::parse("/provider add x bogus https://e.com m")
-            .expect("is a slash command");
-        let message = parsed.expect_err("unknown kind");
-        assert!(message.contains("openrouter"), "got: {message}");
-    }
-
-    #[test]
-    fn login_parses_with_a_provider_argument() {
-        assert_eq!(
-            SlashCommand::parse("/login xai"),
-            Some(Ok(SlashCommand::Login("xai".to_string())))
-        );
-        let parsed = SlashCommand::parse("/login").expect("is a slash command");
-        let message = parsed.expect_err("missing provider");
-        assert!(message.contains("/login xai"), "got: {message}");
-    }
-
-    #[test]
-    fn plan_parses_as_a_toggle() {
-        assert_eq!(SlashCommand::parse("/plan"), Some(Ok(SlashCommand::Plan)));
-    }
-
-    #[test]
-    fn todos_and_cost_parse() {
-        assert_eq!(SlashCommand::parse("/todos"), Some(Ok(SlashCommand::Todos)));
-        assert_eq!(SlashCommand::parse("/cost"), Some(Ok(SlashCommand::Cost)));
-    }
-
-    #[test]
-    fn rewind_parses_with_and_without_a_turn() {
-        assert_eq!(
-            SlashCommand::parse("/rewind"),
-            Some(Ok(SlashCommand::Rewind(None)))
-        );
-        assert_eq!(
-            SlashCommand::parse("/rewind 7"),
-            Some(Ok(SlashCommand::Rewind(Some(7))))
-        );
-        let parsed = SlashCommand::parse("/rewind soon").expect("is a slash command");
-        let message = parsed.expect_err("non-numeric turn");
-        assert!(message.contains("/rewind [turn]"), "got: {message}");
-    }
-
-    #[test]
-    fn rewind_picker_selection_becomes_a_rewind_command() {
-        let mut app = app();
-        app.picker = Some(Picker {
-            kind: PickerKind::Rewind,
-            title: " rewind to before turn ".to_string(),
-            items: vec![
-                PickerItem {
-                    value: "9".to_string(),
-                    detail: "fix tests · notes.txt".to_string(),
-                    current: false,
-                },
-                PickerItem {
-                    value: "8".to_string(),
-                    detail: String::new(),
-                    current: false,
-                },
-            ],
-            selected: 0,
-        });
-        press(&mut app, KeyCode::Down);
-        let action = press(&mut app, KeyCode::Enter);
         assert!(matches!(
-            action,
-            Some(AppAction::Command(SlashCommand::Rewind(Some(8))))
-        ));
-        assert!(app.picker.is_none(), "the picker closed");
-    }
-
-    #[test]
-    fn rewind_picker_esc_cancels() {
-        let mut app = app();
-        app.picker = Some(Picker {
-            kind: PickerKind::Rewind,
-            title: " rewind to before turn ".to_string(),
-            items: vec![PickerItem {
-                value: "3".to_string(),
-                detail: String::new(),
-                current: false,
-            }],
-            selected: 0,
-        });
-        let action = press(&mut app, KeyCode::Esc);
-        assert!(action.is_none());
-        assert!(app.picker.is_none(), "Esc closed the picker");
-    }
-
-    #[test]
-    fn todo_update_mirrors_the_list_and_auto_shows_the_panel_once() {
-        use crate::tools::todo::{TodoItem, TodoStatus};
-        let mut app = app();
-        assert!(!app.show_todos);
-
-        let items = vec![TodoItem {
-            content: "first".to_string(),
-            status: TodoStatus::InProgress,
-        }];
-        app.handle_agent_event(AgentEvent::TodoUpdated(items.clone()));
-        assert_eq!(app.todos, items);
-        assert!(app.show_todos, "first update auto-shows the panel");
-
-        // The user hides it; later updates respect that.
-        app.show_todos = false;
-        app.handle_agent_event(AgentEvent::TodoUpdated(items.clone()));
-        assert!(!app.show_todos, "auto-show happens only once");
-        assert_eq!(app.todos, items, "the list still updates");
-    }
-
-    #[test]
-    fn usage_events_accumulate_session_totals_in_the_status_bar() {
-        let mut app = app();
-        app.handle_agent_event(AgentEvent::Usage {
-            prompt_tokens: 100,
-            completion_tokens: 20,
-        });
-        app.handle_agent_event(AgentEvent::Usage {
-            prompt_tokens: 50,
-            completion_tokens: 5,
-        });
-        assert_eq!(app.status.prompt_tokens, 150);
-        assert_eq!(app.status.completion_tokens, 25);
-    }
-
-    #[test]
-    fn backtab_toggles_plan_mode() {
-        let mut app = app();
-        let action = press(&mut app, KeyCode::BackTab);
-        assert!(matches!(
-            action,
-            Some(AppAction::Command(SlashCommand::Plan))
+            SlashCommand::parse("/evolve frobnicate"),
+            Some(Err(message)) if message.contains("unknown evolve action")
         ));
     }
 
     #[test]
-    fn backtab_in_a_picker_still_navigates() {
-        let mut app = app();
-        app.picker = Some(Picker {
-            kind: PickerKind::Mode,
-            title: " select mode ".to_string(),
-            items: vec![
-                PickerItem {
-                    value: "genie".to_string(),
-                    detail: String::new(),
-                    current: true,
-                },
-                PickerItem {
-                    value: "sovereign".to_string(),
-                    detail: String::new(),
-                    current: false,
-                },
-            ],
-            selected: 0,
-        });
-        let action = press(&mut app, KeyCode::BackTab);
-        assert!(action.is_none(), "the picker captured the key");
-        assert_eq!(app.picker.as_ref().expect("open").selected, 1);
-    }
-
-    /// Open a plan review via the agent event, returning the verdict
-    /// receiver.
-    fn open_review(app: &mut App, plan: &str) -> tokio::sync::oneshot::Receiver<PlanVerdict> {
-        let (respond, rx) = tokio::sync::oneshot::channel();
-        app.handle_agent_event(AgentEvent::PlanReady {
-            plan: plan.to_string(),
-            respond,
-        });
-        rx
-    }
-
-    #[test]
-    fn plan_ready_opens_a_review_and_y_approves() {
-        let mut app = app();
-        let mut rx = open_review(&mut app, "# the plan");
-        let review = app.plan_review.as_ref().expect("review open");
-        assert_eq!(review.plan, "# the plan");
-        assert!(app.plan_mode, "a pending plan implies plan mode");
-
-        // Review keys never leak into the input line.
-        press(&mut app, KeyCode::Char('y'));
-        assert!(app.input.is_empty());
-        assert!(app.plan_review.is_none(), "review closed");
-        assert!(!app.plan_mode, "approval clears the plan-mode mirror");
-        assert_eq!(rx.try_recv(), Ok(PlanVerdict::approve()));
-    }
-
-    #[test]
-    fn plan_review_enter_also_approves() {
-        let mut app = app();
-        let mut rx = open_review(&mut app, "# p");
-        let action = press(&mut app, KeyCode::Enter);
-        assert!(action.is_none());
-        assert_eq!(rx.try_recv(), Ok(PlanVerdict::approve()));
-    }
-
-    #[test]
-    fn plan_review_rejection_collects_feedback() {
-        let mut app = app();
-        let mut rx = open_review(&mut app, "# p");
-
-        press(&mut app, KeyCode::Char('n'));
-        let review = app.plan_review.as_ref().expect("still open");
-        assert_eq!(review.feedback.as_deref(), Some(""));
-
-        type_str(&mut app, "add testz");
-        press(&mut app, KeyCode::Backspace);
-        type_str(&mut app, "s first");
-        assert!(app.input.is_empty(), "feedback typing never hits the input");
-        press(&mut app, KeyCode::Enter);
-
-        assert!(app.plan_review.is_none(), "review closed");
-        assert!(app.plan_mode, "rejection keeps plan mode on");
-        assert_eq!(rx.try_recv(), Ok(PlanVerdict::reject("add tests first")));
-    }
-
-    #[test]
-    fn plan_review_esc_leaves_feedback_entry() {
-        let mut app = app();
-        let mut rx = open_review(&mut app, "# p");
-        press(&mut app, KeyCode::Char('n'));
-        type_str(&mut app, "half a thought");
-        press(&mut app, KeyCode::Esc);
-        let review = app.plan_review.as_ref().expect("still open");
-        assert!(review.feedback.is_none(), "back to the review state");
-        assert!(rx.try_recv().is_err(), "no verdict sent yet");
-        // 'n' again starts fresh feedback.
-        press(&mut app, KeyCode::Char('n'));
+    fn model_parses_with_and_without_a_tag() {
         assert_eq!(
-            app.plan_review.as_ref().expect("open").feedback.as_deref(),
-            Some("")
+            SlashCommand::parse("/model"),
+            Some(Ok(SlashCommand::Model(None)))
         );
+        assert_eq!(
+            SlashCommand::parse("/model grok-4"),
+            Some(Ok(SlashCommand::Model(Some("grok-4".to_string()))))
+        );
+    }
+
+    #[test]
+    fn done_stopped_notes_the_turn_stopped() {
+        let mut app = app();
+        app.status.busy = true;
+        app.handle_agent_event(AgentEvent::Done {
+            reason: DoneReason::Stopped,
+        });
+        assert!(!app.status.busy);
+        assert!(matches!(
+            app.transcript.last(),
+            Some(TranscriptEntry::Notice(text)) if text == "turn stopped"
+        ));
+    }
+
+    #[test]
+    fn tool_started_then_finished_fills_the_card() {
+        let mut app = app();
+        app.handle_agent_event(AgentEvent::ToolStarted {
+            name: "shell".to_string(),
+            args: serde_json::json!({"cmd": "ls"}),
+        });
+        app.handle_agent_event(AgentEvent::ToolFinished {
+            name: "shell".to_string(),
+            output: crate::agent::ToolOutput {
+                content: "file.txt".to_string(),
+                is_error: false,
+            },
+        });
+        assert!(matches!(
+            app.transcript.last(),
+            Some(TranscriptEntry::ToolCard { output: Some(text), is_error: false, .. })
+                if text == "file.txt"
+        ));
     }
 
     #[test]
@@ -3661,16 +1743,16 @@ mod tests {
     fn picker_navigation_wraps_and_enter_selects() {
         let mut app = app();
         app.picker = Some(Picker {
-            kind: PickerKind::Model,
-            title: " select model ".to_string(),
+            kind: PickerKind::Mode,
+            title: " select mode ".to_string(),
             items: vec![
                 PickerItem {
-                    value: "qwen3.6:27b".to_string(),
+                    value: "genie".to_string(),
                     detail: String::new(),
                     current: true,
                 },
                 PickerItem {
-                    value: "llama4:8b".to_string(),
+                    value: "sovereign".to_string(),
                     detail: String::new(),
                     current: false,
                 },
@@ -3682,10 +1764,10 @@ mod tests {
         assert_eq!(app.picker.as_ref().expect("open").selected, 1);
         let action = press(&mut app, KeyCode::Enter);
         match action {
-            Some(AppAction::Command(SlashCommand::Model(Some(tag)))) => {
-                assert_eq!(tag, "llama4:8b");
+            Some(AppAction::Command(SlashCommand::Mode(Some(mode)))) => {
+                assert_eq!(mode, Mode::Sovereign);
             }
-            other => panic!("expected model switch, got {other:?}"),
+            other => panic!("expected mode switch, got {other:?}"),
         }
         assert!(app.picker.is_none());
     }
@@ -3705,6 +1787,31 @@ mod tests {
         });
         press(&mut app, KeyCode::Esc);
         assert!(app.picker.is_none());
+    }
+
+    #[test]
+    fn backtab_in_a_picker_navigates() {
+        let mut app = app();
+        app.picker = Some(Picker {
+            kind: PickerKind::Mode,
+            title: " select mode ".to_string(),
+            items: vec![
+                PickerItem {
+                    value: "genie".to_string(),
+                    detail: String::new(),
+                    current: true,
+                },
+                PickerItem {
+                    value: "sovereign".to_string(),
+                    detail: String::new(),
+                    current: false,
+                },
+            ],
+            selected: 0,
+        });
+        let action = press(&mut app, KeyCode::BackTab);
+        assert!(action.is_none(), "the picker captured the key");
+        assert_eq!(app.picker.as_ref().expect("open").selected, 1);
     }
 
     #[test]
@@ -3762,30 +1869,5 @@ mod tests {
             .expect("key handled");
         assert_eq!(app.input, " world");
         assert_eq!(app.cursor, 0);
-    }
-
-    #[test]
-    fn submit_rejected_while_agent_rebuilds() {
-        let mut app = app();
-        app.rebuilding = Some("switching to qwen3:0.6b".to_string());
-        type_str(&mut app, "hello");
-        let action = press(&mut app, KeyCode::Enter);
-        assert!(action.is_none());
-        assert!(app.history.is_empty());
-        assert!(matches!(
-            app.transcript.last(),
-            Some(TranscriptEntry::Notice(_))
-        ));
-    }
-
-    #[test]
-    fn ctrl_p_is_a_noop_while_busy() {
-        let mut app = app();
-        app.status.busy = true;
-        let action = app
-            .handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))
-            .expect("key handled");
-        assert!(action.is_none());
-        assert!(app.picker.is_none());
     }
 }

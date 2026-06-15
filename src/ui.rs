@@ -1,7 +1,6 @@
 //! Ratatui rendering: pure functions from [`App`] state to widgets.
-//! Layout: chat transcript (with optional git diff sidebar) above the input
-//! line and a quiet status line. Floating layers: the command-suggestion
-//! popup and the model/mode/rewind picker.
+//! Layout: chat transcript above the input line and a quiet status line.
+//! Floating layers: the command-suggestion popup and the mode picker.
 //!
 //! Design rules (do not regress):
 //! - **Transparent**: never paint a background color; everything renders on
@@ -23,7 +22,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
@@ -65,41 +64,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(frame.area());
 
-    if app.show_diff || app.show_todos {
-        let [chat_area, side_area] =
-            Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .areas(main_area);
-        draw_transcript(frame, app, chat_area);
-        match (app.show_todos, app.show_diff) {
-            (true, true) => {
-                // Both panels share the sidebar: todos on top (sized to the
-                // list), the diff below.
-                let todo_height = (app.todos.len() as u16 + 1).clamp(2, side_area.height / 2);
-                let [todo_area, diff_area] =
-                    Layout::vertical([Constraint::Length(todo_height), Constraint::Min(1)])
-                        .areas(side_area);
-                draw_todo_sidebar(frame, app, todo_area);
-                draw_diff_sidebar(frame, app, diff_area);
-            }
-            (true, false) => draw_todo_sidebar(frame, app, side_area),
-            _ => draw_diff_sidebar(frame, app, side_area),
-        }
-    } else {
-        draw_transcript(frame, app, main_area);
-    }
-
+    draw_transcript(frame, app, main_area);
     draw_input(frame, app, input_area);
     draw_status_bar(frame, app, status_area);
 
     // Floating layers, back to front.
-    if app.picker.is_none() && app.plan_review.is_none() {
+    if app.picker.is_none() {
         draw_suggestions(frame, app, input_area);
     }
     if app.picker.is_some() {
         draw_picker(frame, app);
-    }
-    if app.plan_review.is_some() {
-        draw_plan_review(frame, app);
     }
 }
 
@@ -192,7 +166,7 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("/model", accent()),
-            Span::styled("  pick a model (or Ctrl-P)", dim()),
+            Span::styled("  show or switch the model", dim()),
         ]),
         Line::from(vec![
             Span::styled("/help", accent()),
@@ -424,67 +398,6 @@ fn tool_card_lines(
     }
 }
 
-/// Todo side panel (`/todos`, auto-shown on the first todo update): the
-/// agent's working list with status glyphs — ✓ completed (dim,
-/// struck-through), ▸ in progress (accent), ☐ pending.
-fn draw_todo_sidebar(frame: &mut Frame, app: &App, area: Rect) {
-    let (done, total) = crate::tools::todo::progress(&app.todos);
-    let block = Block::new()
-        .borders(Borders::LEFT)
-        .border_style(dim())
-        .title(Line::from(vec![
-            Span::styled(" ≡ ", accent()),
-            Span::styled(
-                format!("todos {done}/{total}"),
-                Style::default().fg(TEXT_DIM),
-            ),
-        ]));
-    let inner_width = block.inner(area).width as usize;
-    let lines: Vec<Line<'static>> = if app.todos.is_empty() {
-        vec![Line::from(Span::styled("(empty)", dim().italic()))]
-    } else {
-        app.todos
-            .iter()
-            .map(|item| {
-                use crate::tools::todo::TodoStatus;
-                let (glyph_style, text_style) = match item.status {
-                    TodoStatus::Completed => (dim(), dim().add_modifier(Modifier::CROSSED_OUT)),
-                    TodoStatus::InProgress => (accent(), accent().bold()),
-                    TodoStatus::Pending => (dim(), Style::default().fg(TEXT_DIM)),
-                };
-                truncate_line(
-                    Line::from(vec![
-                        Span::styled(format!("{} ", item.status.glyph()), glyph_style),
-                        Span::styled(item.content.clone(), text_style),
-                    ]),
-                    inner_width,
-                )
-            })
-            .collect()
-    };
-    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
-}
-
-/// Git diff sidebar (`/diff`): separated from the chat by a single dim
-/// rule, syntax-highlighted (foreground colors only). Lines wider than
-/// the sidebar are cut with a dim `…` instead of clipping silently.
-fn draw_diff_sidebar(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::new()
-        .borders(Borders::LEFT)
-        .border_style(dim())
-        .title(Line::from(vec![
-            Span::styled(" ± ", accent()),
-            Span::styled("git diff", Style::default().fg(TEXT_DIM)),
-        ]));
-    let inner_width = block.inner(area).width as usize;
-    let lines: Vec<Line<'static>> = highlight_diff(&app.diff_text)
-        .lines
-        .into_iter()
-        .map(|line| truncate_line(line, inner_width))
-        .collect();
-    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
-}
-
 /// Bottom status line: model, mode, and turn state on the left; contextual
 /// key hints on the right. One quiet line, no background fill.
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -495,23 +408,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(" · ", dim()),
         mode_span(app.status.mode),
     ];
-    if app.plan_mode {
-        spans.push(Span::styled(" · ", dim()));
-        spans.push(Span::styled("PLAN", accent().bold()));
-    }
-    let token_total = app.status.prompt_tokens + app.status.completion_tokens;
-    if token_total > 0 {
-        spans.push(Span::styled(" · ", dim()));
-        spans.push(Span::styled(
-            crate::usage::format_tokens(token_total),
-            dim(),
-        ));
-    }
-    if let Some(label) = &app.rebuilding {
-        spans.push(Span::styled(" · ", dim()));
-        spans.push(Span::styled(format!("{spinner} "), accent()));
-        spans.push(Span::styled(format!("{label}…"), dim().italic()));
-    } else if app.status.busy {
+    if app.status.busy {
         let elapsed = app
             .turn_started
             .map(|started| started.elapsed().as_secs())
@@ -519,10 +416,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(" · ", dim()));
         spans.push(Span::styled(format!("{spinner} "), accent()));
         spans.push(Span::styled(
-            format!(
-                "step {}/{} · {elapsed}s",
-                app.status.step, app.status.max_steps
-            ),
+            format!("step {} · {elapsed}s", app.status.step),
             dim(),
         ));
     }
@@ -532,20 +426,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     // Contextual key hints, right-aligned in a sub-rect so the left side is
     // never overdrawn.
-    let hints = if let Some(review) = &app.plan_review {
-        if review.feedback.is_some() {
-            "type feedback · Enter reject · Esc back"
-        } else {
-            "y/Enter approve · n reject · ↑↓ scroll"
-        }
-    } else if app.picker.is_some() {
+    let hints = if app.picker.is_some() {
         "↑↓ move · Enter select · Esc cancel"
     } else if !app.suggestions.is_empty() {
         "↑↓ select · Tab complete · Enter run"
     } else if app.status.busy {
         "PgUp/PgDn scroll · ^C quit"
     } else {
-        "/ commands · ↑ history · ^P model · ^C quit"
+        "/ commands · ↑ history · ^C quit"
     };
     let width = hints.width() as u16 + 1;
     if area.width > left_width + width {
@@ -631,7 +519,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         area,
     );
 
-    if app.picker.is_none() && app.plan_review.is_none() {
+    if app.picker.is_none() {
         frame.set_cursor_position(Position::new(cursor_x, area.y + 1));
     }
 }
@@ -707,7 +595,7 @@ fn draw_suggestions(frame: &mut Frame, app: &App, input_area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
 }
 
-/// Centered modal for the model / mode / rewind picker.
+/// Centered modal for the mode picker.
 fn draw_picker(frame: &mut Frame, app: &App) {
     let Some(picker) = &app.picker else {
         return;
@@ -781,95 +669,6 @@ fn draw_picker(frame: &mut Frame, app: &App) {
             Line::from(Span::styled(" ↑↓ move · Enter select · Esc cancel ", dim())).centered(),
         );
     frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
-}
-
-/// Plan-review modal (plan mode): the plan markdown with a verdict footer.
-/// The turn is paused inside `exit_plan` until the user answers, so this
-/// floats above everything else. While rejecting, a feedback line replaces
-/// the bottom edge of the body.
-fn draw_plan_review(frame: &mut Frame, app: &App) {
-    let Some(review) = &app.plan_review else {
-        return;
-    };
-
-    let frame_area = frame.area();
-    let width = frame_area.width.saturating_sub(6).clamp(24, 100);
-    let height = frame_area.height.saturating_sub(2).max(5);
-    let area = Rect {
-        x: frame_area.x + (frame_area.width.saturating_sub(width)) / 2,
-        y: frame_area.y + (frame_area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    }
-    .intersection(frame_area);
-    if area.height < 5 || area.width < 10 {
-        return;
-    }
-    frame.render_widget(Clear, area);
-
-    let hints = if review.feedback.is_some() {
-        " feedback · Enter reject · Esc back "
-    } else {
-        " y approve · n reject · ↑↓ scroll "
-    };
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(dim())
-        .title(Line::from(vec![
-            Span::styled(" ✦", accent()),
-            Span::styled(" plan review ", Style::default().fg(TEXT_DIM)),
-        ]))
-        .title_bottom(Line::from(Span::styled(hints, dim())).centered());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // Body: the plan, wrapped and scrolled; the bottom line is reserved for
-    // the feedback input while rejecting.
-    let body_area = if review.feedback.is_some() {
-        Rect {
-            height: inner.height.saturating_sub(1),
-            ..inner
-        }
-    } else {
-        inner
-    };
-    if body_area.height > 0 {
-        let lines = wrap_lines(render_markdown(&review.plan), body_area.width as usize);
-        let max_scroll = lines.len().saturating_sub(body_area.height as usize);
-        let scroll = (review.scroll as usize).min(max_scroll);
-        let visible: Vec<Line<'static>> = lines
-            .into_iter()
-            .skip(scroll)
-            .take(body_area.height as usize)
-            .collect();
-        frame.render_widget(Paragraph::new(Text::from(visible)), body_area);
-    }
-
-    if let Some(feedback) = &review.feedback {
-        let feedback_area = Rect {
-            y: inner.bottom().saturating_sub(1),
-            height: 1,
-            ..inner
-        };
-        let budget =
-            (feedback_area.width as usize).saturating_sub("rejection feedback ❯  ".width());
-        let shown: String = feedback
-            .chars()
-            .rev()
-            .take(budget)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("rejection feedback ❯ ", accent().bold()),
-                Span::raw(shown),
-                Span::styled("▍", dim()),
-            ])),
-            feedback_area,
-        );
-    }
 }
 
 /// Wrap styled lines at `width` display columns (wide CJK/emoji glyphs
@@ -1132,34 +931,6 @@ fn truncate_width(text: &str, max: usize) -> String {
     out
 }
 
-/// Truncate a styled line to `max` display columns, appending a dim `…`
-/// when cut so clipped content is visible as such (used by the diff
-/// sidebar, where long lines would otherwise just stop mid-word).
-fn truncate_line(mut line: Line<'static>, max: usize) -> Line<'static> {
-    if line.width() <= max {
-        return line;
-    }
-    let budget = max.saturating_sub(1);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut used = 0usize;
-    for span in line.spans.drain(..) {
-        let span_width = span.content.width();
-        if used + span_width <= budget {
-            used += span_width;
-            spans.push(span);
-            continue;
-        }
-        let kept = take_width(&span.content, budget - used);
-        if !kept.is_empty() {
-            spans.push(Span::styled(kept.to_string(), span.style));
-        }
-        break;
-    }
-    spans.push(Span::styled("…", dim()));
-    line.spans = spans;
-    line
-}
-
 // ---------------------------------------------------------------------------
 // Syntax highlighting (syntect) — foreground colors only, never backgrounds,
 // so the terminal's own background always shows through.
@@ -1177,39 +948,6 @@ fn syntect_assets() -> &'static (SyntaxSet, Option<Theme>) {
         });
         (syntaxes, theme)
     })
-}
-
-/// Syntax-highlight a unified diff via syntect for terminal display.
-pub fn highlight_diff(diff: &str) -> Text<'static> {
-    let (syntaxes, theme) = syntect_assets();
-    let syntax = syntaxes
-        .find_syntax_by_name("Diff")
-        .or_else(|| syntaxes.find_syntax_by_extension("diff"));
-
-    let (Some(syntax), Some(theme)) = (syntax, theme.as_ref()) else {
-        return fallback_diff(diff);
-    };
-
-    let mut highlighter = HighlightLines::new(syntax, theme);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    for line in LinesWithEndings::from(diff) {
-        match highlighter.highlight_line(line, syntaxes) {
-            Ok(ranges) => {
-                let spans: Vec<Span<'static>> = ranges
-                    .into_iter()
-                    .map(|(style, content)| {
-                        Span::styled(
-                            content.trim_end_matches('\n').to_string(),
-                            syntect_style(style),
-                        )
-                    })
-                    .collect();
-                lines.push(Line::from(spans));
-            }
-            Err(_) => lines.push(Line::raw(line.trim_end_matches('\n').to_string())),
-        }
-    }
-    Text::from(lines)
 }
 
 /// Map a syntect style to ratatui, collapsing the theme's foreground to its
@@ -1230,30 +968,6 @@ fn syntect_style(style: syntect::highlighting::Style) -> Style {
         out = out.add_modifier(Modifier::UNDERLINED);
     }
     out
-}
-
-/// Plain prefix-based diff coloring used when syntect assets are missing.
-fn fallback_diff(diff: &str) -> Text<'static> {
-    let lines: Vec<Line<'static>> = diff
-        .lines()
-        .map(|line| {
-            let style = if line.starts_with("+++") || line.starts_with("---") {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else if line.starts_with('+') {
-                Style::default().fg(Color::White)
-            } else if line.starts_with('-') {
-                Style::default().fg(TEXT_DIM)
-            } else if line.starts_with("@@") {
-                accent()
-            } else if line.starts_with("diff ") || line.starts_with("index ") {
-                Style::default().fg(TEXT_DIM).bold()
-            } else {
-                dim()
-            };
-            Line::from(Span::styled(line.to_string(), style))
-        })
-        .collect();
-    Text::from(lines)
 }
 
 /// Highlight one fenced code block, memoized: completed blocks are
@@ -1694,23 +1408,5 @@ mod tests {
         assert_eq!(hanging_indent(&Line::raw("plain text")), 0);
         // A dim rule is not a mark (wider than two columns of glyphs).
         assert_eq!(hanging_indent(&Line::raw("────────")), 0);
-    }
-
-    #[test]
-    fn truncate_line_cuts_with_dim_ellipsis() {
-        let red = Style::default().fg(Color::Red);
-        let line = Line::from(vec![Span::raw("abc"), Span::styled("defgh", red)]);
-        let out = truncate_line(line, 5);
-        assert_eq!(flat(&out), "abcd…");
-        assert_eq!(out.spans[1].style, red);
-        assert_eq!(out.spans.last().unwrap().content.as_ref(), "…");
-        assert_eq!(out.spans.last().unwrap().style, dim());
-        assert!(out.width() <= 5);
-    }
-
-    #[test]
-    fn truncate_line_leaves_fitting_lines_alone() {
-        let line = Line::raw("short");
-        assert_eq!(truncate_line(line.clone(), 10), line);
     }
 }
