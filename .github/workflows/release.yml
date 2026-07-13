@@ -63,7 +63,14 @@ jobs:
         env:
           # Statically link the C runtime for the musl targets so the binary
           # carries no dynamic loader dependency (runs on NixOS/Alpine/old glibc).
-          RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
+          #
+          # `relocation-model=static` is required, not decoration. With only
+          # crt-static, rustc still emits a static-PIE carrying a PT_INTERP header
+          # naming /lib/ld-musl-x86_64.so.1. The kernel honours PT_INTERP even
+          # though nothing is dynamically linked, so the binary fails to exec on
+          # any host lacking that exact loader — i.e. the NixOS and glibc hosts
+          # this asset exists to serve. See the guard step below.
+          RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static -C relocation-model=static' || '' }}
           # Each musl runner is native (x86_64 runner / arm runner), so musl-tools'
           # `musl-gcc` targets the runner's own arch. Point cc-rs (ring's C build) and
           # the cargo linker at it explicitly; otherwise they look for a triple-prefixed
@@ -74,6 +81,21 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # A musl asset that needs a loader installs fine and then fails to exec,
+      # which surfaces to users as a broken install rather than a failed build.
+      # Catch it here instead. `ldd` cannot: glibc's ldd reports a musl binary as
+      # "statically linked" whether or not it actually is.
+      - name: Verify musl binary is freestanding
+        if: contains(matrix.target, '-musl')
+        run: |
+          bin=target/${{ matrix.target }}/release/wizard
+          if readelf -l "$bin" | grep -q INTERP; then
+            echo "FATAL: $bin requires an interpreter and will not exec on hosts without it"
+            readelf -l "$bin" | grep INTERP
+            exit 1
+          fi
+          echo "OK: no PT_INTERP — freestanding static binary"
 
       - name: Package
         run: |
