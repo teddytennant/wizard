@@ -46,17 +46,20 @@ Then Wizard, on one task:
 
 ```sh
 export XAI_API_KEY=...
-harbor run -d terminal-bench/terminal-bench-2-1 \
+PYTHONPATH="$PWD" harbor run -d terminal-bench/terminal-bench-2-1 \
     -a tbench.wizard_agent:WizardAgent -m xai/grok-4.5 \
-    -i hello-world -k 1
+    -i terminal-bench/build-cython-ext -k 1
 ```
 
-Run from the repo root so `tbench.wizard_agent` is importable.
+Run from the repo root, and set `PYTHONPATH`: `harbor` is an installed console
+script, so the current directory is *not* on `sys.path` and `tbench` will not
+import without it. Task names are namespaced (`terminal-bench/<task>`); `-l N`
+takes the first N instead of naming one.
 
 A scoring run over the full dataset:
 
 ```sh
-harbor run -d terminal-bench/terminal-bench-2-1 \
+PYTHONPATH="$PWD" harbor run -d terminal-bench/terminal-bench-2-1 \
     -a tbench.wizard_agent:WizardAgent -m xai/grok-4.5 \
     -k 5 -n 8 --max-retries 3 --retry-include ApiRateLimitError
 ```
