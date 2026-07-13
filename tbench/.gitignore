@@ -1,0 +1,3 @@
+# Built binary + Harbor run output — artifacts, not source.
+dist/
+runs/

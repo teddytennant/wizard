@@ -1,0 +1,47 @@
+# Builds a statically-linked wizard binary for Terminal-Bench task containers.
+#
+# Terminal-Bench task images vary by base distro (Debian, Ubuntu, Alpine, ...),
+# and the harness installs the agent into whichever one the task ships. A
+# glibc-linked binary would fail to exec on the musl-based images, so the agent
+# artifact must be static. Building in this image also sidesteps the host
+# toolchain: a cargo build on a Nix host links against Nix's glibc paths, which
+# resolve nowhere inside a task container.
+FROM rust:1-bookworm AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        musl-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add x86_64-unknown-linux-musl
+
+WORKDIR /src
+COPY . .
+
+# `ring` (pulled in by rustls) compiles C, so point cc-rs and the linker at
+# musl-gcc.
+#
+# `relocation-model=static` is the load-bearing flag. crt-static alone still
+# leaves rustc emitting a *static-PIE*, which carries a PT_INTERP header naming
+# /lib/ld-musl-x86_64.so.1. The kernel honours PT_INTERP even when nothing is
+# actually dynamically linked, so on any image without that exact loader — every
+# Debian/Ubuntu task image, and NixOS — exec fails before main() runs. This is
+# the same defect that makes the published musl release asset unrunnable.
+ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static" \
+    CC_x86_64_unknown_linux_musl=musl-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+
+RUN cargo build --release --locked --target x86_64-unknown-linux-musl
+
+# Fail the build here rather than at benchmark time: a binary needing a loader
+# execs fine in some task images and dies in others, and Harbor scores those
+# deaths as agent failures rather than infrastructure errors.
+#
+# Assert on PT_INTERP, not on `ldd`: glibc's ldd reports a musl binary as
+# "statically linked" whether or not it is, so it cannot detect this bug.
+RUN readelf -l target/x86_64-unknown-linux-musl/release/wizard | grep -q INTERP \
+    && { echo "FATAL: binary requires an interpreter; it will not exec in task containers"; \
+         readelf -l target/x86_64-unknown-linux-musl/release/wizard | grep INTERP; exit 1; } \
+    || echo "OK: no PT_INTERP — freestanding static binary"
+
+FROM scratch AS export
+COPY --from=build /src/target/x86_64-unknown-linux-musl/release/wizard /wizard
