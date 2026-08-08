@@ -45,5 +45,17 @@ RUN readelf -l target/x86_64-unknown-linux-musl/release/wizard | grep -q INTERP 
          readelf -l target/x86_64-unknown-linux-musl/release/wizard | grep INTERP; exit 1; } \
     || echo "OK: no PT_INTERP — freestanding static binary"
 
+# Record what this binary was built from, so the adapter can tell a current
+# artifact from a stale one. Contents, not timestamps: buildkit caches on content
+# digests, so a touched-but-unchanged file yields a cache hit that re-exports the
+# previous binary with its original mtime — an mtime check would then flag a
+# staleness that rebuilding cannot clear. `wizard_agent._source_digest` recomputes
+# this exact value on the host, so the two must stay in step.
+RUN find src Cargo.toml Cargo.lock build.rs -type f -print0 \
+    | LC_ALL=C sort -z \
+    | xargs -0 sha256sum \
+    | sha256sum | cut -d' ' -f1 > /source-digest
+
 FROM scratch AS export
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/wizard /wizard
+COPY --from=build /source-digest /wizard.sources

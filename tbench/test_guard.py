@@ -73,10 +73,8 @@ class GuardTestCase(unittest.TestCase):
         self.binary = root / "wizard"
         self._write_binary("2.0.0")
 
-        # Built after the sources, as a real build would be.
-        self._touch(self.binary, newest=True)
-
         self.agent = object.__new__(WizardAgent)
+        self._stamp()
         self._saved_env = {
             k: os.environ.get(k) for k in (SOURCE_ENV, BINARY_ENV, ALLOW_STALE_ENV)
         }
@@ -97,20 +95,10 @@ class GuardTestCase(unittest.TestCase):
         self.binary.write_text(f'#!/bin/sh\necho "wizard {version}"\n')
         self.binary.chmod(0o755)
 
-    def _touch(self, path: Path, newest: bool) -> None:
-        """Put `path` clearly after (or before) everything else in the fixture.
-
-        "Everything else" has to include the binary, not just the source tree: the
-        guard compares with a strict `>`, so a source file merely *tying* the
-        binary's mtime is correctly treated as not-newer.
-        """
-        others = [
-            p.stat().st_mtime
-            for p in [*self.source.rglob("*"), self.binary]
-            if p != path and p.is_file()
-        ]
-        base = max(others) if others else 0
-        os.utime(path, (base + 100, base + 100) if newest else (base - 100, base - 100))
+    def _stamp(self) -> None:
+        """Record the current source digest, as a successful build would."""
+        digest = self.agent._source_digest(self.source)
+        self.binary.with_name(self.binary.name + ".sources").write_text(f"{digest}\n")
 
     # --- version comparison ------------------------------------------------
 
@@ -136,7 +124,6 @@ class GuardTestCase(unittest.TestCase):
 
     def test_version_mismatch_is_refused(self):
         self._write_binary("1.1")
-        self._touch(self.binary, newest=True)
         with self.assertRaises(RuntimeError) as caught:
             self.agent._binary()
         message = str(caught.exception)
@@ -147,15 +134,39 @@ class GuardTestCase(unittest.TestCase):
         self.assertIn(str(self.source), message)
 
     def test_source_edited_after_build_is_refused(self):
-        edited = self.source / "src" / "main.rs"
-        self._touch(edited, newest=True)
+        (self.source / "src" / "main.rs").write_text("fn main() { panic!() }\n")
         with self.assertRaises(RuntimeError) as caught:
             self.agent._binary()
-        self.assertIn("src/main.rs", str(caught.exception))
+        self.assertIn("source has changed", str(caught.exception))
+
+    def test_new_source_file_is_refused(self):
+        # A file added without touching any existing one still changes the build.
+        (self.source / "src" / "extra.rs").write_text("pub fn f() {}\n")
+        with self.assertRaises(RuntimeError) as caught:
+            self.agent._binary()
+        self.assertIn("source has changed", str(caught.exception))
+
+    def test_touching_a_file_without_changing_it_is_not_stale(self):
+        """The regression that motivated digests over mtimes.
+
+        buildkit caches on content, so a touched-but-unchanged file is a cache hit
+        that re-exports the previous binary with its previous mtime. Under an mtime
+        check that reads as stale forever — rebuilding cannot clear it.
+        """
+        main = self.source / "src" / "main.rs"
+        stamped = self.binary.stat().st_mtime + 10_000
+        os.utime(main, (stamped, stamped))
+        self.assertEqual(self.agent._binary(), self.binary)
+
+    def test_missing_stamp_is_refused(self):
+        # A binary from before this check existed cannot be vouched for.
+        self.binary.with_name(self.binary.name + ".sources").unlink()
+        with self.assertRaises(RuntimeError) as caught:
+            self.agent._binary()
+        self.assertIn("wizard.sources", str(caught.exception))
 
     def test_allow_stale_downgrades_to_a_warning(self):
         self._write_binary("1.1")
-        self._touch(self.binary, newest=True)
         os.environ[ALLOW_STALE_ENV] = "1"
         with self.assertLogs("tbench.wizard_agent", level="WARNING") as logs:
             self.assertEqual(self.agent._binary(), self.binary)
