@@ -18,10 +18,24 @@ the adapter uploads this artifact into each task container rather than curling
 an installer at benchmark time — the thing we score is byte-identical to the
 thing we built, and no task depends on a network fetch mid-run.
 
+The build context is the Wizard checkout you want to score, and it is **not**
+this one. This adapter lives on a long-lived branch that does not track Wizard's
+development line, so building `.` here compiles whatever Wizard looked like when
+the branch was cut. Point the context at the checkout you develop in:
+
 ```sh
+export WIZARD_TB_SOURCE=~/path/to/wizard      # the checkout to benchmark
 docker build -f tbench/Dockerfile.build --target export \
-    --output type=local,dest=tbench/dist .
+    --output type=local,dest=tbench/dist "$WIZARD_TB_SOURCE"
 ```
+
+`WIZARD_TB_SOURCE` is also what the adapter checks the binary against at
+install time — see [Staleness](#staleness). It defaults to this checkout, which
+is almost never what you want.
+
+If the build appears to hang before its first layer, the source checkout is
+missing a `.dockerignore`: `target/` runs to tens of gigabytes and Docker sends
+the whole context up front. Ignore `target/`, `target-glibc/`, and `.git/`.
 
 The build **must** be done in Docker, not with a host `cargo build`. Two reasons:
 task images vary by base distro, so the binary has to be statically linked
@@ -31,6 +45,30 @@ links against Nix's glibc paths, which resolve nowhere inside a task container.
 dynamically-linked binary would run fine in some task containers and die in
 others, and Harbor scores those deaths as *agent failures*, not infrastructure
 errors.
+
+## Staleness
+
+Pinning a prebuilt artifact is deliberate, but an unchecked pin rots silently.
+This adapter shipped for months uploading a Wizard 1.1 binary while the product
+moved to 2.0, and nothing in a Harbor run says so: the trials pass or fail
+normally and the score describes software nobody is running.
+
+So `install()` verifies the binary against `WIZARD_TB_SOURCE` before uploading
+it and raises rather than benchmarking a mismatch. Two checks, because neither
+alone is enough — `--version` catches drift across a release, and comparing
+mtimes against `src/`, `Cargo.toml`, `Cargo.lock`, and `build.rs` catches edits
+within one version, where the version string cannot tell a rebuild from a stale
+artifact.
+
+| variable | meaning |
+| --- | --- |
+| `WIZARD_TB_SOURCE` | Checkout the binary must match. Defaults to this one. |
+| `WIZARD_TB_BINARY` | Artifact to upload. Defaults to `tbench/dist/wizard`. |
+| `WIZARD_TB_ALLOW_STALE` | Downgrade a mismatch to a warning. |
+
+Set `WIZARD_TB_ALLOW_STALE=1` only when the mismatch is the point — bisecting a
+regression, or reproducing an old leaderboard submission. It is not a way past a
+failing build.
 
 ## Running
 

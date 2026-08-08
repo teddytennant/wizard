@@ -1,3 +1,7 @@
 # Built binary + Harbor run output — artifacts, not source.
 dist/
 runs/
+
+# Regenerated on every import, and byte-dependent on the interpreter that wrote
+# them, so tracking these means a diff every time anyone runs the adapter.
+__pycache__/

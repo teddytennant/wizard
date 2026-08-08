@@ -6,29 +6,31 @@
 # artifact must be static. Building in this image also sidesteps the host
 # toolchain: a cargo build on a Nix host links against Nix's glibc paths, which
 # resolve nowhere inside a task container.
-FROM rust:1-bookworm AS build
+# The toolchain is Alpine's, not Debian's with musl-tools. Debian ships musl-gcc
+# as a wrapper around a gcc built for glibc, so any C dependency drags glibc's
+# libgcc_eh.a into what is meant to be a musl link. That is invisible until
+# something references a glibc-only symbol: LuaJIT (via mlua) hits
+# `undefined reference to _dl_find_object` and the build dies. Alpine's gcc is
+# musl-native, so there is only ever one libc in the link.
+FROM rust:1-alpine AS build
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        musl-tools \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN rustup target add x86_64-unknown-linux-musl
+# build-base for cc/ld/ar/readelf, perl and cmake for crates that shell out to
+# them during their build scripts.
+RUN apk add --no-cache build-base perl cmake
 
 WORKDIR /src
 COPY . .
 
-# `ring` (pulled in by rustls) compiles C, so point cc-rs and the linker at
-# musl-gcc.
-#
 # `relocation-model=static` is the load-bearing flag. crt-static alone still
 # leaves rustc emitting a *static-PIE*, which carries a PT_INTERP header naming
 # /lib/ld-musl-x86_64.so.1. The kernel honours PT_INTERP even when nothing is
 # actually dynamically linked, so on any image without that exact loader — every
 # Debian/Ubuntu task image, and NixOS — exec fails before main() runs. This is
 # the same defect that makes the published musl release asset unrunnable.
-ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static" \
-    CC_x86_64_unknown_linux_musl=musl-gcc \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+#
+# No CC_/LINKER overrides are needed here: the image's host target is already
+# x86_64-unknown-linux-musl, so cargo picks up the native musl toolchain.
+ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static"
 
 RUN cargo build --release --locked --target x86_64-unknown-linux-musl
 
