@@ -11,6 +11,13 @@ Wizard ships as a single static binary, so `install` uploads the one built by
 container. That keeps the benchmarked artifact byte-identical to the one we
 built and makes runs reproducible: no network fetch mid-benchmark, and no
 dependence on whatever the latest release happens to be that day.
+
+Pinning the artifact is the point, but an unchecked pin rots: this adapter spent
+months uploading a binary built from a branch that had long since stopped being
+Wizard, and every score it produced described software nobody was shipping. So
+`install` verifies the pin against the source tree it claims to represent before
+uploading it, and refuses to benchmark a binary that has fallen behind. See
+`_check_fresh`.
 """
 
 from __future__ import annotations
@@ -18,6 +25,8 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import subprocess
+import tomllib
 from pathlib import Path
 from typing import override
 
@@ -31,6 +40,21 @@ logger = logging.getLogger(__name__)
 # remote runner can point at an artifact it fetched elsewhere.
 DEFAULT_BINARY = Path(__file__).parent / "dist" / "wizard"
 BINARY_ENV = "WIZARD_TB_BINARY"
+
+# The Wizard checkout the binary is expected to have been built from. This
+# adapter lives on a long-lived branch that does not track Wizard's development
+# line, so its own tree is the wrong default for anyone benchmarking current
+# Wizard: point this at the checkout you actually develop in.
+DEFAULT_SOURCE = Path(__file__).parent.parent
+SOURCE_ENV = "WIZARD_TB_SOURCE"
+
+# Escape hatch for the deliberate case — bisecting a regression, reproducing an
+# old submission — where the binary is *meant* to disagree with the source.
+ALLOW_STALE_ENV = "WIZARD_TB_ALLOW_STALE"
+
+# Source files whose change invalidates a built binary. Everything else in the
+# tree (docs, this adapter, CI config) can move without a rebuild.
+SOURCE_INPUTS = ("src", "Cargo.toml", "Cargo.lock", "build.rs")
 
 CONTAINER_BINARY = "/installed-agent/wizard"
 
@@ -71,15 +95,160 @@ class WizardAgent(BaseInstalledAgent):
         # `wizard --version` prints "wizard <semver>".
         return stdout.strip().removeprefix("wizard").strip() or "dev"
 
+    def _source(self) -> Path:
+        return Path(os.environ.get(SOURCE_ENV, DEFAULT_SOURCE))
+
+    def _build_command(self) -> str:
+        """The exact command that produces a binary matching the source tree.
+
+        The build context is the *source* checkout, not this one. `Dockerfile.build`
+        does `COPY . .`, so the context decides which Wizard gets compiled; passing
+        it explicitly is what lets the adapter live on one branch and benchmark
+        another.
+        """
+        dockerfile = Path(__file__).parent / "Dockerfile.build"
+        dest = Path(__file__).parent / "dist"
+        return (
+            f"docker build -f {dockerfile} --target export "
+            f"--output type=local,dest={dest} {self._source()}"
+        )
+
+    def _source_version(self, source: Path) -> str | None:
+        """The version in the source tree's Cargo.toml, or None if unreadable."""
+        manifest = source / "Cargo.toml"
+        try:
+            with manifest.open("rb") as fh:
+                data = tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+        for table in (data.get("package"), data.get("workspace", {}).get("package")):
+            if isinstance(table, dict) and isinstance(table.get("version"), str):
+                return table["version"]
+        return None
+
+    def _binary_version(self, binary: Path) -> str | None:
+        """`wizard --version` run on the host, or None if it will not exec here.
+
+        The artifact is a freestanding static binary with no PT_INTERP, so it runs
+        on the host as readily as in a task container. If that ever stops being
+        true the check degrades to the mtime comparison rather than blocking a run.
+        """
+        try:
+            out = subprocess.run(
+                [str(binary), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.strip().removeprefix("wizard").strip() or None
+
+    @staticmethod
+    def _same_version(a: str, b: str) -> bool:
+        """Compare two Wizard versions, tolerating elided trailing zeros.
+
+        `wizard --version` prints "1.1" where Cargo.toml carries "1.1.0", so the
+        strings differ for every release ending in a zero. Comparing the padded
+        numeric triple plus any pre-release suffix keeps "1.1" == "1.1.0" without
+        also collapsing "2.0.0-rc1" into "2.0.0".
+        """
+
+        def parts(v: str) -> tuple[tuple[int, ...], str] | None:
+            core, _, suffix = v.partition("-")
+            core = core.partition("+")[0]
+            fields = core.split(".")
+            if not all(f.isdigit() for f in fields):
+                return None
+            padded = tuple(int(f) for f in fields) + (0,) * (3 - len(fields))
+            return padded[:3], suffix
+
+        pa, pb = parts(a), parts(b)
+        if pa is None or pb is None:
+            return a == b
+        return pa == pb
+
+    def _newer_than_binary(self, source: Path, binary: Path) -> list[Path]:
+        """Source inputs modified since the binary was built."""
+        built = binary.stat().st_mtime
+        changed: list[Path] = []
+        for name in SOURCE_INPUTS:
+            path = source / name
+            candidates = path.rglob("*") if path.is_dir() else [path]
+            for candidate in candidates:
+                try:
+                    if candidate.is_file() and candidate.stat().st_mtime > built:
+                        changed.append(candidate)
+                except OSError:
+                    # A dangling symlink in the tree is not evidence of a rebuild.
+                    continue
+        return changed
+
+    def _check_fresh(self, binary: Path, source: Path) -> None:
+        """Refuse to benchmark a binary that no longer represents `source`.
+
+        Two independent signals, because neither alone is sufficient. The version
+        strings disagreeing proves staleness across a release; mtimes catch the
+        much commoner case of edits within one version, where `--version` cannot
+        tell a rebuild from a stale artifact.
+        """
+        reasons: list[str] = []
+
+        src_version = self._source_version(source)
+        bin_version = self._binary_version(binary)
+        if (
+            src_version
+            and bin_version
+            and not self._same_version(src_version, bin_version)
+        ):
+            reasons.append(
+                f"binary is Wizard {bin_version}, but {source}/Cargo.toml says "
+                f"{src_version}"
+            )
+
+        if src_version is None:
+            reasons.append(f"no readable Cargo.toml under {source}")
+        else:
+            changed = self._newer_than_binary(source, binary)
+            if changed:
+                sample = ", ".join(str(p.relative_to(source)) for p in changed[:3])
+                more = f" (+{len(changed) - 3} more)" if len(changed) > 3 else ""
+                reasons.append(
+                    f"{len(changed)} source file(s) changed since the binary was "
+                    f"built: {sample}{more}"
+                )
+
+        if not reasons:
+            return
+
+        detail = "\n".join(f"  - {r}" for r in reasons)
+        if os.environ.get(ALLOW_STALE_ENV):
+            logger.warning(
+                "Benchmarking a stale Wizard binary because %s is set:\n%s",
+                ALLOW_STALE_ENV,
+                detail,
+            )
+            return
+
+        raise RuntimeError(
+            f"The Wizard binary at {binary} does not match the source at {source}:\n"
+            f"{detail}\n"
+            "Scoring it would describe software you are not shipping. Rebuild:\n"
+            f"  {self._build_command()}\n"
+            f"Point {SOURCE_ENV} at a different checkout, or set "
+            f"{ALLOW_STALE_ENV}=1 if the mismatch is deliberate."
+        )
+
     def _binary(self) -> Path:
         path = Path(os.environ.get(BINARY_ENV, DEFAULT_BINARY))
         if not path.is_file():
             raise FileNotFoundError(
                 f"No Wizard binary at {path}. Build one with:\n"
-                "  docker build -f tbench/Dockerfile.build --target export "
-                "--output type=local,dest=tbench/dist .\n"
+                f"  {self._build_command()}\n"
                 f"or point {BINARY_ENV} at an existing static build."
             )
+        self._check_fresh(path, self._source())
         return path
 
     def _provider(self) -> tuple[str, str, str]:
