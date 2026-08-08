@@ -55,10 +55,20 @@ normally and the score describes software nobody is running.
 
 So `install()` verifies the binary against `WIZARD_TB_SOURCE` before uploading
 it and raises rather than benchmarking a mismatch. Two checks, because neither
-alone is enough — `--version` catches drift across a release, and comparing
-mtimes against `src/`, `Cargo.toml`, `Cargo.lock`, and `build.rs` catches edits
-within one version, where the version string cannot tell a rebuild from a stale
-artifact.
+alone is enough — `--version` catches drift across a release, and a digest over
+`src/`, `Cargo.toml`, `Cargo.lock`, and `build.rs` catches edits within one
+version, where the version string cannot tell a rebuild from a stale artifact.
+
+`Dockerfile.build` writes that digest to `tbench/dist/wizard.sources` as it
+builds, and the adapter recomputes it on the host and compares. Keep the two in
+step: the `find | sort | sha256sum` pipeline in the build stage and
+`_source_digest` in the adapter must produce identical output.
+
+The digest is over contents, not mtimes, and that distinction is load-bearing.
+buildkit caches on content, so touching a file without changing it is a cache
+hit: the build re-exports the previous binary carrying its previous mtime. An
+mtime check reads that as stale and no rebuild can ever clear it. `git checkout`
+and rebases rewrite mtimes wholesale for the same false result.
 
 | variable | meaning |
 | --- | --- |

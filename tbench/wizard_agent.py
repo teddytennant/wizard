@@ -22,6 +22,7 @@ uploading it, and refuses to benchmark a binary that has fallen behind. See
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shlex
@@ -52,8 +53,9 @@ SOURCE_ENV = "WIZARD_TB_SOURCE"
 # old submission — where the binary is *meant* to disagree with the source.
 ALLOW_STALE_ENV = "WIZARD_TB_ALLOW_STALE"
 
-# Source files whose change invalidates a built binary. Everything else in the
-# tree (docs, this adapter, CI config) can move without a rebuild.
+# Source inputs whose contents invalidate a built binary. Everything else in the
+# tree (docs, this adapter, CI config) can move without a rebuild. Must match the
+# `find` list in Dockerfile.build.
 SOURCE_INPUTS = ("src", "Cargo.toml", "Cargo.lock", "build.rs")
 
 CONTAINER_BINARY = "/installed-agent/wizard"
@@ -131,7 +133,7 @@ class WizardAgent(BaseInstalledAgent):
 
         The artifact is a freestanding static binary with no PT_INTERP, so it runs
         on the host as readily as in a task container. If that ever stops being
-        true the check degrades to the mtime comparison rather than blocking a run.
+        true the check degrades to the digest comparison rather than blocking a run.
         """
         try:
             out = subprocess.run(
@@ -169,29 +171,60 @@ class WizardAgent(BaseInstalledAgent):
             return a == b
         return pa == pb
 
-    def _newer_than_binary(self, source: Path, binary: Path) -> list[Path]:
-        """Source inputs modified since the binary was built."""
-        built = binary.stat().st_mtime
-        changed: list[Path] = []
+    def _source_digest(self, source: Path) -> str | None:
+        """Hash the source inputs the same way `Dockerfile.build` does.
+
+        Must stay byte-identical to the `find | sort | sha256sum | sha256sum`
+        pipeline in the build stage: sha256 over each file's own sha256 line, in
+        bytewise path order, formatted exactly as `sha256sum` prints it.
+
+        Contents rather than timestamps, because buildkit caches on content. A
+        file that is touched but not changed produces a cache hit, so the rebuild
+        re-exports the previous binary with its previous mtime — an mtime check
+        would report a staleness that rebuilding could never clear. `git checkout`
+        and rebases rewrite mtimes wholesale for the same false result.
+        """
+        def is_regular(path: Path) -> bool:
+            # `find -type f` excludes symlinks; Path.is_file() follows them. Match
+            # find, or the two digests disagree the moment a link appears.
+            return path.is_file() and not path.is_symlink()
+
+        paths: list[Path] = []
         for name in SOURCE_INPUTS:
             path = source / name
-            candidates = path.rglob("*") if path.is_dir() else [path]
-            for candidate in candidates:
-                try:
-                    if candidate.is_file() and candidate.stat().st_mtime > built:
-                        changed.append(candidate)
-                except OSError:
-                    # A dangling symlink in the tree is not evidence of a rebuild.
-                    continue
-        return changed
+            if path.is_dir() and not path.is_symlink():
+                paths += [p for p in path.rglob("*") if is_regular(p)]
+            elif is_regular(path):
+                paths.append(path)
+        if not paths:
+            return None
+
+        outer = hashlib.sha256()
+        for relative in sorted(str(p.relative_to(source)) for p in paths):
+            try:
+                content = (source / relative).read_bytes()
+            except OSError:
+                # A dangling symlink contributes nothing either side of the wire.
+                continue
+            inner = hashlib.sha256(content).hexdigest()
+            outer.update(f"{inner}  {relative}\n".encode())
+        return outer.hexdigest()
+
+    def _recorded_digest(self, binary: Path) -> str | None:
+        """The digest `Dockerfile.build` exported next to this binary, if any."""
+        stamp = binary.with_name(binary.name + ".sources")
+        try:
+            return stamp.read_text().strip() or None
+        except OSError:
+            return None
 
     def _check_fresh(self, binary: Path, source: Path) -> None:
         """Refuse to benchmark a binary that no longer represents `source`.
 
         Two independent signals, because neither alone is sufficient. The version
-        strings disagreeing proves staleness across a release; mtimes catch the
-        much commoner case of edits within one version, where `--version` cannot
-        tell a rebuild from a stale artifact.
+        strings disagreeing proves staleness across a release; the source digest
+        catches the much commoner case of edits within one version, where
+        `--version` cannot tell a rebuild from a stale artifact.
         """
         reasons: list[str] = []
 
@@ -209,15 +242,22 @@ class WizardAgent(BaseInstalledAgent):
 
         if src_version is None:
             reasons.append(f"no readable Cargo.toml under {source}")
-        else:
-            changed = self._newer_than_binary(source, binary)
-            if changed:
-                sample = ", ".join(str(p.relative_to(source)) for p in changed[:3])
-                more = f" (+{len(changed) - 3} more)" if len(changed) > 3 else ""
-                reasons.append(
-                    f"{len(changed)} source file(s) changed since the binary was "
-                    f"built: {sample}{more}"
-                )
+
+        recorded = self._recorded_digest(binary)
+        current = self._source_digest(source)
+        if recorded is None:
+            reasons.append(
+                f"no {binary.name}.sources stamp beside the binary, so what it was "
+                "built from cannot be established — it predates this check, or was "
+                "not produced by Dockerfile.build"
+            )
+        elif current is None:
+            reasons.append(f"no source inputs found under {source}")
+        elif recorded != current:
+            reasons.append(
+                f"source has changed since the binary was built "
+                f"(recorded {recorded[:12]}, now {current[:12]})"
+            )
 
         if not reasons:
             return
