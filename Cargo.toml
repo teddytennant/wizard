@@ -205,7 +205,7 @@ blake2 = "0.10"
 
 # Config/skills sync (`wizard sync`): ed25519 signatures over the bundle
 # manifest. Keys are seeded from getrandom — no rand/rand_core dependency.
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 
 # The P2P mesh transport (`src/mesh/quic.rs`): QUIC with mutual TLS, where the
 # certificate's key IS the node's ed25519 identity, so the handshake proves the
