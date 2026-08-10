@@ -134,7 +134,7 @@ shellexpand = "3"
 clap = { version = "4", features = ["derive"] }
 
 # TUI (crossterm pinned to the version ratatui re-exports)
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.28", features = ["event-stream"] }
 
 # Rendering helpers
