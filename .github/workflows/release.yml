@@ -37,7 +37,7 @@ jobs:
     name: Verify tag matches Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Verify tag matches Cargo.toml version
         shell: bash
@@ -107,7 +107,7 @@ jobs:
         runner: [ubuntu-22.04, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -152,7 +152,7 @@ jobs:
             native: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -346,7 +346,7 @@ jobs:
             runnable: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -410,7 +410,7 @@ jobs:
       # anything is published, so a secret that has drifted from the key users
       # actually carry fails the release instead of shipping ten assets nobody
       # can install.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
@@ -505,7 +505,7 @@ jobs:
       # from this page by hand gets none of that enforcement — they are the one
       # reader who has to run the check themselves, and this is the page they
       # are standing on when they need it.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: false
           prerelease: false

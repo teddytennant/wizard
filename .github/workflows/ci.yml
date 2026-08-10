@@ -28,7 +28,7 @@ jobs:
     name: Rust checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Needs only the checkout, so it runs before toolchain setup.
       - name: File-size ratchet
@@ -261,7 +261,7 @@ jobs:
             experimental: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -345,7 +345,7 @@ jobs:
     name: Coverage ratchet self-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # GITHUB_STEP_SUMMARY is blanked so the fixture's invented numbers cannot
       # land in the run summary and be mistaken for a measurement.
@@ -426,7 +426,7 @@ jobs:
     needs: [coverage-selfcheck]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -480,7 +480,7 @@ jobs:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: taiki-e/install-action@v2
         with:
@@ -567,7 +567,7 @@ jobs:
             nixos: true
             experimental: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Read-only mount: install.sh writes to its own mktemp dir, to $HOME and
       # to the install dir, never into the checkout, and this proves it.
@@ -611,7 +611,7 @@ jobs:
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: shellcheck
         run: |
@@ -631,7 +631,7 @@ jobs:
     name: Nix flake check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: cachix/install-nix-action@v31
 
