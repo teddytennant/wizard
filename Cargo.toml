@@ -300,7 +300,7 @@ iced_test = { version = "0.14", optional = true }
 # Embedded LuaJIT for self-extension: scripted tools and evolve glue run through
 # the just-in-time compiler in-process. Vendored so the binary has no system
 # libluajit dependency; `send` so Lua handles can cross await points.
-mlua = { version = "0.11", default-features = false, features = ["luajit", "vendored", "send", "serialize"] }
+mlua = { version = "0.12", default-features = false, features = ["luajit", "vendored", "send", "serialize"] }
 
 # Process-group kill for background tasks (`task_kill`, timeouts)
 [target.'cfg(unix)'.dependencies]
