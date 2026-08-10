@@ -112,7 +112,7 @@ async-trait = "0.1"
 # Agent Client Protocol server (`wizard acp`): embeds Wizard in ACP editors
 # (Zed, Neovim, Emacs). tokio-util/compat adapts tokio stdio to the crate's
 # futures I/O; the crate's connection futures are !Send (run on a LocalSet).
-agent-client-protocol = "0.10.4"
+agent-client-protocol = "2.0.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 
 # Ollama HTTP (rustls so the binary has no OpenSSL link dependency)
