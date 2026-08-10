@@ -121,7 +121,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # OAuth sign-in (xAI): PKCE hashing, base64url tokens, randomness
 sha2 = "0.10"
 base64 = "0.22"
-getrandom = "0.3"
+getrandom = "0.4"
 
 # Serialization / config
 serde = { version = "1", features = ["derive"] }
