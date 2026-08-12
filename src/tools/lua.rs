@@ -508,7 +508,7 @@ fn blank_globals(lua: &Lua) -> mlua::Result<()> {
     // The wrapper mirrors Lua's own contract: it returns `nil, message` on a
     // refusal rather than raising, so an honest caller's error handling is
     // unchanged.
-    let load_text = lua.create_function(|lua, (chunk, name): (mlua::String, Option<String>)| {
+    let load_text = lua.create_function(|lua, (chunk, name): (mlua::LuaString, Option<String>)| {
         let bytes = chunk.as_bytes();
         if bytes.first() == Some(&0x1b) {
             return Ok((
