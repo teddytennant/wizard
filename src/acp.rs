@@ -17,20 +17,22 @@
 //! does its own file and shell I/O.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_client_protocol::schema::v1::{
     AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock, ContentChunk,
     Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-    PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
-    StopReason, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
+    PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate, StopReason,
+    ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind,
 };
-use agent_client_protocol::{self as acp, Agent as AcpRole, Client, ConnectionTo, Responder, Stdio};
+use agent_client_protocol::{
+    self as acp, Agent as AcpRole, Client, ConnectionTo, Responder, Stdio,
+};
 use anyhow::{Context, Result};
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::agent::session::Session;
 use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanVerdict};
@@ -65,11 +67,9 @@ pub async fn run(config: Config) -> Result<()> {
                 // Echo the client's protocol version; advertise Wizard with
                 // default capabilities — text prompts, no auth, no client-side
                 // fs/terminal needed (Wizard does its own I/O).
-                responder.respond(
-                    InitializeResponse::new(args.protocol_version).agent_info(
-                        Implementation::new("wizard", env!("CARGO_PKG_VERSION")).title("Wizard"),
-                    ),
-                )
+                responder.respond(InitializeResponse::new(args.protocol_version).agent_info(
+                    Implementation::new("wizard", env!("CARGO_PKG_VERSION")).title("Wizard"),
+                ))
             },
             acp::on_receive_request!(),
         )
@@ -84,9 +84,7 @@ pub async fn run(config: Config) -> Result<()> {
             acp::on_receive_request!(),
         )
         .on_receive_request(
-            async move |args: NewSessionRequest,
-                        responder: Responder<NewSessionResponse>,
-                        _cx| {
+            async move |args: NewSessionRequest, responder: Responder<NewSessionResponse>, _cx| {
                 match open_session(&new_session_state, args).await {
                     Ok(response) => responder.respond(response),
                     Err(err) => responder.respond_with_error(internal(err)),
