@@ -12,8 +12,8 @@ use tokio::process::Command;
 
 use super::shell::{render_command_result, run_command};
 use super::{
-    MAX_OUTPUT_BYTES, Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args,
-    resolve_path, truncate_output,
+    MAX_ERROR_BYTES, MAX_LISTING_BYTES, MAX_OUTPUT_BYTES, MAX_SEARCH_BYTES, Tool, ToolAccess,
+    ToolContext, ToolError, ToolOutput, parse_args, resolve_path, truncate_output,
 };
 
 /// Maximum number of lines a single `read_file` call returns.
@@ -427,7 +427,7 @@ fn list_single_level(tool: &str, dir: &Path) -> Result<ToolOutput, ToolError> {
             "\n... [listing truncated at {MAX_LIST_ENTRIES} entries]"
         ));
     }
-    Ok(ToolOutput::ok(truncate_output(content, MAX_OUTPUT_BYTES)))
+    Ok(ToolOutput::ok(truncate_output(content, MAX_LISTING_BYTES)))
 }
 
 /// Recursive glob listing. Prefers `git ls-files` (which respects
@@ -463,7 +463,7 @@ async fn list_recursive(
             "\n... [listing truncated at {MAX_LIST_ENTRIES} entries]"
         ));
     }
-    Ok(ToolOutput::ok(truncate_output(content, MAX_OUTPUT_BYTES)))
+    Ok(ToolOutput::ok(truncate_output(content, MAX_LISTING_BYTES)))
 }
 
 /// `git ls-files --cached --others --exclude-standard` relative to `dir`.
@@ -622,7 +622,7 @@ impl Tool for SearchFilesTool {
         match result.code {
             Some(0) => Ok(ToolOutput::ok(truncate_output(
                 result.stdout.trim_end().to_string(),
-                MAX_OUTPUT_BYTES,
+                MAX_SEARCH_BYTES,
             ))),
             Some(1) => Ok(ToolOutput::ok(format!(
                 "No matches for pattern '{}'.",
@@ -637,7 +637,7 @@ impl Tool for SearchFilesTool {
                 };
                 Ok(ToolOutput::error(truncate_output(
                     detail.to_string(),
-                    MAX_OUTPUT_BYTES,
+                    MAX_ERROR_BYTES,
                 )))
             }
         }

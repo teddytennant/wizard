@@ -1021,6 +1021,7 @@ impl TurnText {
             // keyboard, so its tool context leaves `ConsoleAccess` at `None`
             // and no command opens one; there is nothing to collect.
             AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
             | AgentEvent::ConsoleOutput { .. }
             | AgentEvent::ConsoleClosed { .. } => {}
         }

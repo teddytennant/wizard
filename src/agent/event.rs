@@ -275,6 +275,25 @@ pub enum AgentEvent {
         command: String,
         gate: ConsoleGate,
     },
+    /// The command behind `gate` looks like it is waiting for an answer.
+    ///
+    /// [`Self::ConsoleOpened`] says a console *exists*; this says somebody
+    /// should be typing into it. They are separate because almost no command
+    /// ever prompts: `ls` and `cargo build` open a console and never ask
+    /// anything, and a surface that repurposes its composer the moment a
+    /// console opens takes Enter away from the agent for the whole of every
+    /// command it runs. A surface claims the gate at `ConsoleOpened` (so the
+    /// writer is held before any question can appear) and switches its composer
+    /// here.
+    ///
+    /// The test is the one [`run_command_interactive`](crate::tools) already
+    /// applies to stop the unattended-time clock: the child's last write left
+    /// the cursor mid-line, and it has been quiet since. That is the shape of a
+    /// question in every shell, installer and REPL. Emitted once per command —
+    /// a command that has asked one question is assumed to be conversational
+    /// from then on, and a composer that flipped back on the next line of
+    /// output would be worse than one that stayed.
+    ConsoleWaiting { gate: ConsoleGate },
     /// Output a running foreground command has produced so far, scoped to the
     /// console it came from.
     ///
@@ -342,6 +361,7 @@ impl AgentEvent {
             | Self::PlanReady { .. }
             | Self::Interview { .. }
             | Self::ConsoleOpened { .. }
+            | Self::ConsoleWaiting { .. }
             | Self::ConsoleOutput { .. }
             | Self::ConsoleClosed { .. }
             | Self::OmakaseProceeding { .. }
