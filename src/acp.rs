@@ -9,22 +9,28 @@
 //! agent's events back as `session/update` notifications; `session/cancel`
 //! interrupts it.
 //!
-//! The `agent-client-protocol` crate's futures are `!Send`, so the server runs
-//! on a single-threaded `LocalSet` with `spawn_local` (see [`run`]) — the
-//! agent's own turns still use the multi-thread runtime underneath. Wizard runs
-//! tools without a per-action approval gate, so the server never needs to call
-//! the client back for permission; it advertises no client-side capabilities
-//! and does its own file and shell I/O.
+//! ACP 2.0's request handlers run inside the connection's dispatch loop, so a
+//! long `session/prompt` is spawned off the loop (see [`ConnectionTo::spawn`])
+//! so `session/cancel` can still be delivered mid-turn. Wizard runs tools
+//! without a per-action approval gate, so the server never needs to call the
+//! client back for permission; it advertises no client-side capabilities and
+//! does its own file and shell I/O.
 
-use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use agent_client_protocol::{self as acp, Client as _};
+use agent_client_protocol::schema::v1::{
+    AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock, ContentChunk,
+    Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
+    PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
+    StopReason, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind,
+};
+use agent_client_protocol::{self as acp, Agent as AcpRole, Client, ConnectionTo, Responder, Stdio};
 use anyhow::{Context, Result};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
-use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::agent::session::Session;
 use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanVerdict};
@@ -40,194 +46,217 @@ const TOOL_OUTPUT_CAP: usize = 8_192;
 pub async fn run(config: Config) -> Result<()> {
     // Connect MCP once and share it across every session (a per-session connect
     // would spawn a duplicate of every server).
-    let mcp = Rc::new(agent::connect_mcp().await);
+    let state = Arc::new(State {
+        config,
+        mcp: Arc::new(agent::connect_mcp().await),
+        sessions: Mutex::new(HashMap::new()),
+        next_call_id: Arc::new(AtomicU64::new(0)),
+    });
 
-    // The crate's connection futures are !Send: run them on a LocalSet.
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async move {
-            let (update_tx, mut update_rx) = mpsc::unbounded_channel();
-            let server = WizardAcp::new(update_tx, config, mcp);
+    let new_session_state = Arc::clone(&state);
+    let prompt_state = Arc::clone(&state);
+    let cancel_state = Arc::clone(&state);
 
-            let outgoing = tokio::io::stdout().compat_write();
-            let incoming = tokio::io::stdin().compat();
-            let (conn, handle_io) =
-                acp::AgentSideConnection::new(server, outgoing, incoming, |fut| {
-                    tokio::task::spawn_local(fut);
-                });
-
-            // Pump the server's session updates out to the client, acking each
-            // so a `prompt` handler can keep its updates ordered before its
-            // response (mirrors the crate's own agent example).
-            tokio::task::spawn_local(async move {
-                while let Some((notification, ack)) = update_rx.recv().await {
-                    if let Err(err) = conn.session_notification(notification).await {
-                        tracing::warn!("acp: session update failed: {err}");
-                        break;
-                    }
-                    let _ = ack.send(());
+    AcpRole
+        .builder()
+        .name("wizard")
+        .on_receive_request(
+            async move |args: InitializeRequest, responder: Responder<InitializeResponse>, _cx| {
+                // Echo the client's protocol version; advertise Wizard with
+                // default capabilities — text prompts, no auth, no client-side
+                // fs/terminal needed (Wizard does its own I/O).
+                responder.respond(
+                    InitializeResponse::new(args.protocol_version).agent_info(
+                        Implementation::new("wizard", env!("CARGO_PKG_VERSION")).title("Wizard"),
+                    ),
+                )
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_args: AuthenticateRequest,
+                        responder: Responder<AuthenticateResponse>,
+                        _cx| {
+                // Wizard authenticates to its own providers via ~/.wizard
+                // config; the editor never authenticates it.
+                responder.respond(AuthenticateResponse::default())
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |args: NewSessionRequest,
+                        responder: Responder<NewSessionResponse>,
+                        _cx| {
+                match open_session(&new_session_state, args).await {
+                    Ok(response) => responder.respond(response),
+                    Err(err) => responder.respond_with_error(internal(err)),
                 }
-            });
-
-            handle_io.await.context("acp stdio loop")
-        })
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |args: PromptRequest, responder: Responder<PromptResponse>, cx| {
+                // Hold the dispatch loop only long enough to spawn: a turn can
+                // run for minutes, and `session/cancel` must still be delivered.
+                let state = Arc::clone(&prompt_state);
+                let connection = cx.clone();
+                cx.spawn(async move {
+                    // Never return Err from a spawned task — that tears down the
+                    // whole connection. Surface turn failures on the responder.
+                    if let Err(err) = run_prompt(&state, args, &connection, responder).await {
+                        tracing::warn!("acp: prompt task failed: {err}");
+                    }
+                    Ok(())
+                })?;
+                Ok(())
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_notification(
+            async move |args: CancelNotification, _cx: ConnectionTo<Client>| {
+                // Fires the cancel handle without touching the agent lock the
+                // running turn holds — cooperative, stops at the next
+                // stream/tool boundary.
+                if let Some(entry) = cancel_state
+                    .sessions
+                    .lock()
+                    .await
+                    .get(args.session_id.0.as_ref())
+                {
+                    entry.cancel.cancel();
+                }
+                Ok(())
+            },
+            acp::on_receive_notification!(),
+        )
+        .connect_to(Stdio::new())
         .await
+        .context("acp stdio loop")
 }
 
-/// A live ACP session: the built agent (behind a cell so a turn can borrow it
+/// Shared connection state. `Send + Sync` so ACP 2.0's dispatch handlers (which
+/// require `Send`) can share it across request/notification callbacks.
+struct State {
+    config: Config,
+    mcp: Arc<McpManager>,
+    sessions: Mutex<HashMap<String, SessionEntry>>,
+    /// Monotonic across the whole connection so every tool call gets a unique
+    /// ACP `toolCallId`.
+    next_call_id: Arc<AtomicU64>,
+}
+
+/// A live ACP session: the built agent (behind a mutex so a turn can borrow it
 /// mutably without touching the sessions map) and a cancel handle the
 /// `session/cancel` notification fires without disturbing a running turn.
 struct SessionEntry {
-    agent: Rc<RefCell<Agent>>,
+    agent: Arc<Mutex<Agent>>,
     cancel: CancelHandle,
 }
 
-/// The ACP agent. Single-threaded (`!Send`), so plain `Rc`/`RefCell`/`Cell`.
-struct WizardAcp {
-    updates: mpsc::UnboundedSender<(acp::SessionNotification, oneshot::Sender<()>)>,
-    config: Config,
-    mcp: Rc<McpManager>,
-    sessions: Rc<RefCell<HashMap<String, SessionEntry>>>,
-    /// Monotonic across the whole connection so every tool call gets a unique
-    /// ACP `toolCallId`.
-    next_call_id: Rc<Cell<u64>>,
+async fn open_session(
+    state: &State,
+    args: NewSessionRequest,
+) -> Result<NewSessionResponse, acp::Error> {
+    let cwd = args.cwd;
+    let sessions_dir = Config::sessions_dir().map_err(internal)?;
+    let session = Session::create_in(&sessions_dir, &cwd).map_err(internal)?;
+    let session_id = session.id.clone();
+
+    let mut agent =
+        agent::build_headless_agent_for_session(&state.config, &cwd, session, Some(&state.mcp))
+            .await
+            .map_err(internal)?;
+    // No Wizard slash commands over ACP: `run_command` refuses cleanly to
+    // the model rather than silently dropping work.
+    agent.set_command_dispatch(CommandDispatch::None);
+    let cancel = agent.cancel_handle();
+
+    state.sessions.lock().await.insert(
+        session_id.clone(),
+        SessionEntry {
+            agent: Arc::new(Mutex::new(agent)),
+            cancel,
+        },
+    );
+    Ok(NewSessionResponse::new(session_id))
 }
 
-impl WizardAcp {
-    fn new(
-        updates: mpsc::UnboundedSender<(acp::SessionNotification, oneshot::Sender<()>)>,
-        config: Config,
-        mcp: Rc<McpManager>,
-    ) -> Self {
-        Self {
-            updates,
-            config,
-            mcp,
-            sessions: Rc::new(RefCell::new(HashMap::new())),
-            next_call_id: Rc::new(Cell::new(0)),
+async fn run_prompt(
+    state: &State,
+    args: PromptRequest,
+    connection: &ConnectionTo<Client>,
+    responder: Responder<PromptResponse>,
+) -> Result<(), acp::Error> {
+    let session_id = args.session_id.clone();
+    let text = prompt_text(&args.prompt);
+
+    // Short borrow of the sessions map: clone out the agent cell and cancel
+    // handle, then release it so `cancel` can run during the turn.
+    let (agent_cell, cancel) = {
+        let sessions = state.sessions.lock().await;
+        let entry = sessions
+            .get(session_id.0.as_ref())
+            .ok_or_else(acp::Error::invalid_params)?;
+        (Arc::clone(&entry.agent), entry.cancel.clone())
+    };
+    // One turn at a time per session: a still-running turn keeps the lock.
+    let mut agent = agent_cell
+        .try_lock()
+        .map_err(|_| acp::Error::internal_error())?;
+
+    let (update_tx, mut update_rx) = mpsc::unbounded_channel();
+    let mut translator = Translator {
+        session_id: session_id.clone(),
+        updates: update_tx,
+        next_call_id: Arc::clone(&state.next_call_id),
+        open_calls: HashMap::new(),
+    };
+
+    // Pump session updates out while the turn runs, then respond. Closing the
+    // translator (and its channel) ends the pump so the PromptResponse stays
+    // ordered after every update.
+    let pump = async {
+        while let Some(notification) = update_rx.recv().await {
+            if let Err(err) = connection.send_notification(notification) {
+                tracing::warn!("acp: session update failed: {err}");
+                break;
+            }
         }
-    }
-}
+    };
 
-#[async_trait::async_trait(?Send)]
-impl acp::Agent for WizardAcp {
-    async fn initialize(
-        &self,
-        args: acp::InitializeRequest,
-    ) -> Result<acp::InitializeResponse, acp::Error> {
-        // Echo the client's protocol version (both crate lines negotiate V1);
-        // advertise Wizard with default capabilities — text prompts, no auth,
-        // no client-side fs/terminal needed (Wizard does its own I/O).
-        Ok(
-            acp::InitializeResponse::new(args.protocol_version).agent_info(
-                acp::Implementation::new("wizard", env!("CARGO_PKG_VERSION")).title("Wizard"),
-            ),
-        )
-    }
-
-    async fn authenticate(
-        &self,
-        _args: acp::AuthenticateRequest,
-    ) -> Result<acp::AuthenticateResponse, acp::Error> {
-        // Wizard authenticates to its own providers via ~/.wizard config; the
-        // editor never authenticates it.
-        Ok(acp::AuthenticateResponse::default())
-    }
-
-    async fn new_session(
-        &self,
-        args: acp::NewSessionRequest,
-    ) -> Result<acp::NewSessionResponse, acp::Error> {
-        let cwd = args.cwd;
-        let sessions_dir = Config::sessions_dir().map_err(internal)?;
-        let session = Session::create_in(&sessions_dir, &cwd).map_err(internal)?;
-        let session_id = session.id.clone();
-
-        let mut agent =
-            agent::build_headless_agent_for_session(&self.config, &cwd, session, Some(&self.mcp))
-                .await
-                .map_err(internal)?;
-        // No Wizard slash commands over ACP: `run_command` refuses cleanly to
-        // the model rather than silently dropping work.
-        agent.set_command_dispatch(CommandDispatch::None);
-        let cancel = agent.cancel_handle();
-
-        self.sessions.borrow_mut().insert(
-            session_id.clone(),
-            SessionEntry {
-                agent: Rc::new(RefCell::new(agent)),
-                cancel,
-            },
-        );
-        Ok(acp::NewSessionResponse::new(session_id))
-    }
-
-    // The `RefMut` is held across the turn's awaits on purpose: everything runs
-    // on one thread in a LocalSet, and a still-borrowed cell is how a second
-    // `prompt` on the same session gets rejected (see `try_borrow_mut` below).
-    #[allow(clippy::await_holding_refcell_ref)]
-    async fn prompt(&self, args: acp::PromptRequest) -> Result<acp::PromptResponse, acp::Error> {
-        let session_id = args.session_id.clone();
-        let text = prompt_text(&args.prompt);
-
-        // Short borrow of the sessions map: clone out the agent cell and cancel
-        // handle, then release it so `cancel` can run during the turn.
-        let (agent_cell, cancel) = {
-            let sessions = self.sessions.borrow();
-            let entry = sessions
-                .get(session_id.0.as_ref())
-                .ok_or_else(acp::Error::invalid_params)?;
-            (Rc::clone(&entry.agent), entry.cancel.clone())
-        };
-        // One turn at a time per session: a still-running turn keeps the borrow.
-        let mut agent = agent_cell
-            .try_borrow_mut()
-            .map_err(|_| acp::Error::internal_error())?;
-
-        let mut translator = Translator {
-            session_id: session_id.clone(),
-            updates: self.updates.clone(),
-            next_call_id: Rc::clone(&self.next_call_id),
-            open_calls: HashMap::new(),
-        };
+    let turn = async {
         let (events_tx, mut events_rx) = mpsc::channel::<AgentEvent>(256);
         let collector = async {
             while let Some(event) = events_rx.recv().await {
-                translator.handle(event).await;
+                translator.handle(event);
             }
         };
         // Stream while the turn runs — the bounded channel back-pressures, so
         // draining concurrently is required, not optional.
         let (result, ()) = tokio::join!(agent.run_turn(&text, events_tx), collector);
-        let reason = result.map_err(internal)?;
+        drop(translator);
+        result
+    };
 
-        Ok(acp::PromptResponse::new(stop_reason(
-            reason,
-            cancel.is_cancelled(),
-        )))
-    }
-
-    async fn cancel(&self, args: acp::CancelNotification) -> Result<(), acp::Error> {
-        // Fires the cancel handle without touching the agent cell the running
-        // turn holds — cooperative, stops at the next stream/tool boundary.
-        if let Some(entry) = self.sessions.borrow().get(args.session_id.0.as_ref()) {
-            entry.cancel.cancel();
-        }
-        Ok(())
-    }
+    let (result, ()) = tokio::join!(turn, pump);
+    let reason = result.map_err(internal)?;
+    responder.respond(PromptResponse::new(stop_reason(
+        reason,
+        cancel.is_cancelled(),
+    )))
 }
 
 /// Map a `DoneReason` (plus whether the user cancelled) to the ACP stop
 /// reason.
-fn stop_reason(reason: DoneReason, cancelled: bool) -> acp::StopReason {
+fn stop_reason(reason: DoneReason, cancelled: bool) -> StopReason {
     match reason {
-        DoneReason::Completed => acp::StopReason::EndTurn,
-        DoneReason::MaxSteps => acp::StopReason::MaxTurnRequests,
+        DoneReason::Completed => StopReason::EndTurn,
+        DoneReason::MaxSteps => StopReason::MaxTurnRequests,
         // `Stopped` is a clean cancel or a mid-turn provider failure that was
         // already surfaced as an error message; the cancel handle disambiguates.
-        DoneReason::Stopped if cancelled => acp::StopReason::Cancelled,
+        DoneReason::Stopped if cancelled => StopReason::Cancelled,
         DoneReason::Stopped | DoneReason::TimeLimit | DoneReason::CircuitBreaker => {
-            acp::StopReason::EndTurn
+            StopReason::EndTurn
         }
     }
 }
@@ -235,12 +264,12 @@ fn stop_reason(reason: DoneReason, cancelled: bool) -> acp::StopReason {
 /// Concatenate the text of a prompt's content blocks. Images/audio are not
 /// advertised in `PromptCapabilities`, so a well-behaved client won't send
 /// them; resource links are named inline.
-fn prompt_text(blocks: &[acp::ContentBlock]) -> String {
+fn prompt_text(blocks: &[ContentBlock]) -> String {
     let mut parts = Vec::new();
     for block in blocks {
         match block {
-            acp::ContentBlock::Text(text) => parts.push(text.text.clone()),
-            acp::ContentBlock::ResourceLink(link) => {
+            ContentBlock::Text(text) => parts.push(text.text.clone()),
+            ContentBlock::ResourceLink(link) => {
                 parts.push(format!("[resource: {} ({})]", link.name, link.uri));
             }
             _ => {}
@@ -252,50 +281,37 @@ fn prompt_text(blocks: &[acp::ContentBlock]) -> String {
 /// Translates one turn's [`AgentEvent`] stream into ACP `session/update`
 /// notifications, synthesizing stable tool-call ids.
 struct Translator {
-    session_id: acp::SessionId,
-    updates: mpsc::UnboundedSender<(acp::SessionNotification, oneshot::Sender<()>)>,
-    next_call_id: Rc<Cell<u64>>,
+    session_id: SessionId,
+    updates: mpsc::UnboundedSender<SessionNotification>,
+    next_call_id: Arc<AtomicU64>,
     /// Per tool name: a FIFO of (call id, args) from starts awaiting their
     /// finishes — the event stream carries no id tying the two together.
     open_calls: HashMap<String, VecDeque<(String, Value)>>,
 }
 
 impl Translator {
-    async fn send(&self, update: acp::SessionUpdate) {
-        let (ack, done) = oneshot::channel();
-        if self
+    fn send(&self, update: SessionUpdate) {
+        let _ = self
             .updates
-            .send((
-                acp::SessionNotification::new(self.session_id.clone(), update),
-                ack,
-            ))
-            .is_ok()
-        {
-            // Wait for the pump to flush this update, so updates stay ordered
-            // ahead of the eventual prompt response.
-            let _ = done.await;
-        }
+            .send(SessionNotification::new(self.session_id.clone(), update));
     }
 
     fn alloc_call_id(&self) -> String {
-        let id = self.next_call_id.get();
-        self.next_call_id.set(id + 1);
+        let id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
         format!("call-{id}")
     }
 
-    async fn handle(&mut self, event: AgentEvent) {
+    fn handle(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::TextDelta(text) => {
-                self.send(acp::SessionUpdate::AgentMessageChunk(
-                    acp::ContentChunk::new(acp::ContentBlock::from(text)),
-                ))
-                .await;
+                self.send(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    ContentBlock::from(text),
+                )));
             }
             AgentEvent::ThinkingDelta(text) => {
-                self.send(acp::SessionUpdate::AgentThoughtChunk(
-                    acp::ContentChunk::new(acp::ContentBlock::from(text)),
-                ))
-                .await;
+                self.send(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+                    ContentBlock::from(text),
+                )));
             }
             AgentEvent::ToolStarted { name, args } => {
                 let id = self.alloc_call_id();
@@ -303,13 +319,12 @@ impl Translator {
                     .entry(name.clone())
                     .or_default()
                     .push_back((id.clone(), args.clone()));
-                self.send(acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(acp::ToolCallId::new(id), tool_title(&name, &args))
+                self.send(SessionUpdate::ToolCall(
+                    ToolCall::new(ToolCallId::new(id), tool_title(&name, &args))
                         .kind(tool_kind(&name))
-                        .status(acp::ToolCallStatus::InProgress)
+                        .status(ToolCallStatus::InProgress)
                         .raw_input(args),
-                ))
-                .await;
+                ));
             }
             AgentEvent::ToolFinished { name, output } => {
                 // Pair to the matching start (FIFO per name); mint a fresh id if
@@ -321,24 +336,23 @@ impl Translator {
                     .map(|(id, _args)| id)
                     .unwrap_or_else(|| self.alloc_call_id());
                 let status = if output.is_error {
-                    acp::ToolCallStatus::Failed
+                    ToolCallStatus::Failed
                 } else {
-                    acp::ToolCallStatus::Completed
+                    ToolCallStatus::Completed
                 };
                 let text = truncate(&output.content, TOOL_OUTPUT_CAP);
-                let fields = acp::ToolCallUpdateFields::new()
+                let fields = ToolCallUpdateFields::new()
                     .status(status)
-                    .content(vec![acp::ToolCallContent::from(text)]);
-                self.send(acp::SessionUpdate::ToolCallUpdate(
-                    acp::ToolCallUpdate::new(acp::ToolCallId::new(id), fields),
-                ))
-                .await;
+                    .content(vec![ToolCallContent::from(text)]);
+                self.send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    ToolCallId::new(id),
+                    fields,
+                )));
             }
             AgentEvent::Error(message) | AgentEvent::Notice(message) => {
-                self.send(acp::SessionUpdate::AgentMessageChunk(
-                    acp::ContentChunk::new(acp::ContentBlock::from(format!("[wizard] {message}"))),
-                ))
-                .await;
+                self.send(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    ContentBlock::from(format!("[wizard] {message}")),
+                )));
             }
             // A dead stream is re-generated from scratch, and the deltas above
             // have already left the building: an ACP client paints each chunk
@@ -347,12 +361,11 @@ impl Translator {
             // abandoned attempt onto the front of its replacement, and the
             // editor shows the answer twice.
             AgentEvent::StreamRetrying => {
-                self.send(acp::SessionUpdate::AgentMessageChunk(
-                    acp::ContentChunk::new(acp::ContentBlock::from(
+                self.send(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    ContentBlock::from(
                         "\n[wizard] the response stream dropped; it restarts below\n".to_string(),
-                    )),
-                ))
-                .await;
+                    ),
+                )));
             }
             // Wizard runs in the default non-plan mode over ACP, so these should
             // not fire — but the exit_plan/interview tools are always
@@ -406,14 +419,14 @@ impl Translator {
 
 /// Classify a Wizard tool by name into an ACP tool kind (drives the editor's
 /// tool-call iconography).
-fn tool_kind(name: &str) -> acp::ToolKind {
+fn tool_kind(name: &str) -> ToolKind {
     match name {
-        "read_file" | "list_files" | "git_status" | "git_diff" => acp::ToolKind::Read,
-        "write_file" | "edit_file" => acp::ToolKind::Edit,
-        "search_files" | "web_search" | "x_search" => acp::ToolKind::Search,
-        "execute" => acp::ToolKind::Execute,
-        "web_fetch" => acp::ToolKind::Fetch,
-        _ => acp::ToolKind::Other,
+        "read_file" | "list_files" | "git_status" | "git_diff" => ToolKind::Read,
+        "write_file" | "edit_file" => ToolKind::Edit,
+        "search_files" | "web_search" | "x_search" => ToolKind::Search,
+        "execute" => ToolKind::Execute,
+        "web_fetch" => ToolKind::Fetch,
+        _ => ToolKind::Other,
     }
 }
 
@@ -454,14 +467,15 @@ fn internal<E: std::fmt::Display>(err: E) -> acp::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::ResourceLink;
     use serde_json::json;
 
     #[test]
     fn prompt_text_joins_text_and_names_resource_links() {
         let blocks = vec![
-            acp::ContentBlock::from("first line".to_string()),
-            acp::ContentBlock::ResourceLink(acp::ResourceLink::new("main.rs", "file:///main.rs")),
-            acp::ContentBlock::from("second line".to_string()),
+            ContentBlock::from("first line".to_string()),
+            ContentBlock::ResourceLink(ResourceLink::new("main.rs", "file:///main.rs")),
+            ContentBlock::from("second line".to_string()),
         ];
         assert_eq!(
             prompt_text(&blocks),
@@ -471,11 +485,11 @@ mod tests {
 
     #[test]
     fn tool_kind_classifies_the_native_tools() {
-        assert_eq!(tool_kind("read_file"), acp::ToolKind::Read);
-        assert_eq!(tool_kind("edit_file"), acp::ToolKind::Edit);
-        assert_eq!(tool_kind("execute"), acp::ToolKind::Execute);
-        assert_eq!(tool_kind("web_fetch"), acp::ToolKind::Fetch);
-        assert_eq!(tool_kind("some_mcp_tool"), acp::ToolKind::Other);
+        assert_eq!(tool_kind("read_file"), ToolKind::Read);
+        assert_eq!(tool_kind("edit_file"), ToolKind::Edit);
+        assert_eq!(tool_kind("execute"), ToolKind::Execute);
+        assert_eq!(tool_kind("web_fetch"), ToolKind::Fetch);
+        assert_eq!(tool_kind("some_mcp_tool"), ToolKind::Other);
     }
 
     #[test]
@@ -495,15 +509,15 @@ mod tests {
     fn stop_reason_maps_done_reasons() {
         assert_eq!(
             stop_reason(DoneReason::Completed, false),
-            acp::StopReason::EndTurn
+            StopReason::EndTurn
         );
         assert_eq!(
             stop_reason(DoneReason::Stopped, true),
-            acp::StopReason::Cancelled
+            StopReason::Cancelled
         );
         assert_eq!(
             stop_reason(DoneReason::MaxSteps, false),
-            acp::StopReason::MaxTurnRequests
+            StopReason::MaxTurnRequests
         );
     }
 
@@ -511,31 +525,22 @@ mod tests {
     /// stream cannot be un-rendered: the translator has to say the response
     /// restarts, or the abandoned attempt reads as the first half of the
     /// answer.
-    #[tokio::test]
-    async fn stream_retrying_tells_the_editor_the_response_restarts() {
+    #[test]
+    fn stream_retrying_tells_the_editor_the_response_restarts() {
         let (updates, mut rx) = mpsc::unbounded_channel();
         let mut translator = Translator {
-            session_id: acp::SessionId::new("session-1"),
+            session_id: SessionId::new("session-1"),
             updates,
-            next_call_id: Rc::new(Cell::new(1)),
+            next_call_id: Arc::new(AtomicU64::new(1)),
             open_calls: HashMap::new(),
         };
-        // `send` waits for the pump to acknowledge the update, so the drain has
-        // to run alongside it: dropping the ack is what a flushed update looks
-        // like from here.
-        let (notification, ()) = tokio::join!(
-            async {
-                let (notification, ack) = rx.recv().await.expect("one update");
-                drop(ack);
-                notification
-            },
-            translator.handle(AgentEvent::StreamRetrying),
-        );
+        translator.handle(AgentEvent::StreamRetrying);
+        let notification = rx.try_recv().expect("one update");
 
-        let acp::SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
+        let SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
             panic!("expected an assistant message chunk");
         };
-        let acp::ContentBlock::Text(text) = chunk.content else {
+        let ContentBlock::Text(text) = chunk.content else {
             panic!("expected text content");
         };
         assert!(text.text.contains("restarts below"), "{}", text.text);
