@@ -360,6 +360,7 @@ impl EventSink for TextSink {
             // nobody could answer. Named rather than wildcarded so that the day
             // headless grows an answerer, somebody has to decide here.
             AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
             | AgentEvent::ConsoleOutput { .. }
             | AgentEvent::ConsoleClosed { .. } => {}
             AgentEvent::Done { reason } => {
@@ -548,6 +549,7 @@ impl<W: Write + Send> EventSink for JsonSink<W> {
             // one-object summary has a field for anyway. The final tool result
             // carries the same output.
             | AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
             | AgentEvent::ConsoleOutput { .. }
             | AgentEvent::ConsoleClosed { .. } => {}
         }
@@ -791,6 +793,9 @@ impl<W: Write + Send> EventSink for StreamJsonSink<W> {
             // cannot claim it, and is not meant to.
             AgentEvent::ConsoleOpened { command, gate } => {
                 self.emit(json!({"type": "console_opened", "command": command, "gate": gate}));
+            }
+            AgentEvent::ConsoleWaiting { gate } => {
+                self.emit(json!({"type": "console_waiting", "gate": gate}));
             }
             AgentEvent::ConsoleOutput { gate, chunk } => {
                 self.emit(json!({"type": "console_output", "gate": gate, "chunk": chunk}));

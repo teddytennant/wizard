@@ -1456,18 +1456,65 @@ impl Agent {
         self.history.retain(|message| !ultra::is_guidance(message));
     }
 
-    /// Append this turn's token usage to the JSONL log (when the backend
-    /// reported counts and the log is enabled). Best-effort: failures are
-    /// logged, never surfaced.
+    /// Append this turn's token usage to the JSONL log. Compaction is not
+    /// part of it: it bills itself through
+    /// [`record_compaction_usage`](Self::record_compaction_usage).
     fn record_turn_usage(&self) {
         let (prompt_tokens, completion_tokens) = self.usage.turn_totals();
-        if prompt_tokens == 0 && completion_tokens == 0 {
+        let (cache_read_tokens, cache_write_tokens) = self.usage.turn_cache_totals();
+        self.append_usage_record(crate::usage::TurnTokens {
+            prompt: prompt_tokens,
+            completion: completion_tokens,
+            cache_read: cache_read_tokens,
+            cache_write: cache_write_tokens,
+        });
+    }
+
+    /// Bill one compaction pass ([`context::compact`]'s summarization calls).
+    ///
+    /// Its own line in the log rather than a share of the turn's, because a
+    /// pass does not always happen inside a turn: `/compact` between turns is
+    /// a model call like any other, and the per-turn counters are reset at the
+    /// top of the next turn, so anything parked in them would simply vanish.
+    /// Writing the line here also keeps the two paths from double-counting,
+    /// which is why the tracker is told
+    /// [`record_side_call`](crate::usage::UsageTracker::record_side_call)
+    /// rather than the turn totals: the session counters behind `/cost` see
+    /// the tokens, the turn record does not.
+    fn record_compaction_usage(&self, usage: &context::CompactUsage) {
+        if !usage.reported() {
+            return;
+        }
+        self.usage.record_side_call(
+            usage.prompt,
+            usage.completion,
+            usage.cache_read,
+            usage.cache_write,
+        );
+        self.append_usage_record(crate::usage::TurnTokens {
+            prompt: usage.prompt,
+            completion: usage.completion,
+            cache_read: usage.cache_read,
+            cache_write: usage.cache_write,
+        });
+    }
+
+    /// Append one priced record to the JSONL usage log (when the backend
+    /// reported counts and the log is enabled). Best-effort: failures are
+    /// logged, never surfaced.
+    fn append_usage_record(&self, tokens: crate::usage::TurnTokens) {
+        if tokens.prompt == 0 && tokens.completion == 0 {
             return;
         }
         let Some(path) = &self.usage_log else {
             return;
         };
-        let (cache_read_tokens, cache_write_tokens) = self.usage.turn_cache_totals();
+        let crate::usage::TurnTokens {
+            prompt: prompt_tokens,
+            completion: completion_tokens,
+            cache_read: cache_read_tokens,
+            cache_write: cache_write_tokens,
+        } = tokens;
         let provider = self.config.active();
         // Cost is settled here, at write time, because this is the only place
         // that holds all three inputs at once: the counts, the model that
@@ -1522,13 +1569,19 @@ impl Agent {
     /// so resume and the model both see that stewardship happened (the full
     /// pre-compact transcript remains earlier in the JSONL).
     pub async fn compact_now(&mut self) -> CompactOutcome {
+        let budget = context::Budget {
+            window: self.client.context_window(&self.model).await,
+            byte_threshold: self.config.compact_threshold_bytes,
+        };
         let compacted = context::compact(
             &mut self.history,
             context::Anchor::Conversation,
+            budget,
             &self.client,
             &self.model,
         )
         .await;
+        self.record_compaction_usage(&compacted.usage);
         // Persist the note so resume replays the stewardship breadcrumb; the
         // in-memory middle span is already replaced (the full transcript stays
         // earlier in the append-only JSONL).

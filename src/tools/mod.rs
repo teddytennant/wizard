@@ -356,7 +356,45 @@ pub enum ToolError {
 
 /// Byte cap applied to tool output returned to the model. Keeps a single
 /// tool result from flooding the context window.
+///
+/// The default, and the ceiling for the tools whose output genuinely is the
+/// answer: a command's stdout, a file the model asked to read, a fetched
+/// page, a manual section. 30 KB is roughly 7.5k tokens at the usual four
+/// chars per token, which is a real bite out of a window and is why the tools
+/// below take less.
 pub(crate) const MAX_OUTPUT_BYTES: usize = 30_000;
+
+/// Cap for `git_diff`.
+///
+/// A diff is the one summary output that is still worth several thousand
+/// tokens, because the model is usually about to act on every hunk in it. 16
+/// KB is about 400 lines of unified diff, past which the useful move is
+/// `git_diff` on a path rather than more bytes.
+pub(crate) const MAX_DIFF_BYTES: usize = 16_000;
+
+/// Cap for `search_files`.
+///
+/// Search results are a map, not the territory: the model reads them to
+/// decide what to open next. 12 KB is a few hundred matching lines, which is
+/// already past the point where a narrower pattern beats a longer result, and
+/// it is what a repeated grep would otherwise leave riding along on every
+/// subsequent step.
+pub(crate) const MAX_SEARCH_BYTES: usize = 12_000;
+
+/// Cap for listings: `list_files`, `git_status`.
+///
+/// Paths, one per line. 8 KB holds several hundred of them, comfortably more
+/// than the entry caps these tools already apply, and a working tree with more
+/// changed files than that is not one the model should be reading in full.
+pub(crate) const MAX_LISTING_BYTES: usize = 8_000;
+
+/// Cap for a tool's error text (a failed git invocation, a search that could
+/// not run).
+///
+/// Stderr this long has stopped being a message and started being a dump, and
+/// [`truncate_output`] keeps the head and the tail, which is where the cause
+/// and the summary line live.
+pub(crate) const MAX_ERROR_BYTES: usize = 4_000;
 
 /// Resolve a model-supplied path against the project root, expanding a
 /// leading `~`. Absolute paths are used as-is.
@@ -474,6 +512,37 @@ pub trait Tool: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One cap for every tool meant one result could inject 30 KB — about
+    /// 7.5k tokens — and then ride along on every step after it. A budget is
+    /// per tool because the tools differ in what their output *is*: a
+    /// command's stdout is the answer, a directory listing is a signpost.
+    #[test]
+    fn a_signpost_tool_gets_less_of_the_window_than_the_answer_tools() {
+        for budget in [MAX_DIFF_BYTES, MAX_SEARCH_BYTES, MAX_LISTING_BYTES] {
+            assert!(
+                budget < MAX_OUTPUT_BYTES,
+                "{budget} must be under the default"
+            );
+            assert!(
+                budget > TRUNCATION_MARKER_RESERVE * 4,
+                "{budget} still has room for head+tail framing around the marker"
+            );
+        }
+        const { assert!(MAX_ERROR_BYTES < MAX_LISTING_BYTES) };
+        // Each one still truncates to its own ceiling, framing intact.
+        for budget in [
+            MAX_OUTPUT_BYTES,
+            MAX_DIFF_BYTES,
+            MAX_SEARCH_BYTES,
+            MAX_LISTING_BYTES,
+            MAX_ERROR_BYTES,
+        ] {
+            let out = truncate_output("x".repeat(MAX_OUTPUT_BYTES * 2), budget);
+            assert!(out.len() <= budget, "{budget}: {} bytes", out.len());
+            assert!(out.contains("bytes omitted"), "{budget}: {out}");
+        }
+    }
 
     #[test]
     fn truncate_leaves_short_text_alone() {

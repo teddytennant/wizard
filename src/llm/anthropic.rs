@@ -50,6 +50,12 @@
 //! away, which holds to nineteen. That is the placement Anthropic documents
 //! for long turns: put a marker on a block within 20 of the previous turn's
 //! last cached block.
+//!
+//! The four are not all kept for the same length of time. The preamble is
+//! written once a session and read for the rest of it, so it takes the
+//! one-hour TTL and survives the pause that would otherwise cost a cold
+//! write; the two history breakpoints are rewritten every step and stay on
+//! the five-minute default. [`CacheTtl`] has the arithmetic.
 
 use std::collections::BTreeMap;
 
@@ -186,7 +192,7 @@ impl AnthropicProvider {
         // switch, a charter reload): the schemas stay cached even when
         // everything after them has to be written again.
         if let Some(last) = tools.last_mut() {
-            last["cache_control"] = cache_control();
+            last["cache_control"] = cache_control(CacheTtl::Hour);
         }
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools);
@@ -217,15 +223,47 @@ impl AnthropicProvider {
     }
 }
 
-/// One `cache_control` breakpoint: Anthropic's default 5-minute ephemeral
-/// cache.
+/// How long one breakpoint's entry lives. The choice is per breakpoint
+/// because the two kinds of prefix Wizard caches have opposite economics.
 ///
-/// The 5-minute entry costs 1.25x to write against a 2x one-hour entry, so it
-/// breaks even after two requests rather than three. An agent step is a
-/// request every few seconds, which is the shape this is for; a session idle
-/// past the TTL pays one cold write and is back to reads.
-fn cache_control() -> Value {
-    json!({ "type": "ephemeral" })
+/// A read costs 0.1x input either way. A write costs 1.25x at five minutes
+/// and 2x at an hour, so the five-minute entry pays for itself on the second
+/// request and the one-hour entry needs a third. What decides it is not how
+/// often the entry is read but how often it is *rewritten*:
+///
+/// * The preamble (tool schemas, then the system prompt) is byte-identical
+///   from the first step of a session to the last. It is written once and
+///   read on every request after that, so the only thing that ever ends it is
+///   the clock — and a user who reads a diff, takes a call, or thinks for six
+///   minutes drops a five-minute entry and pays a full cold write to get it
+///   back. That is the case the extra 0.75x buys out, and the preamble is
+///   also the largest of the four prefixes, so it is the one where a cold
+///   write hurts most.
+/// * The two history breakpoints move every turn by construction: the newest
+///   anchor is a message further along each step, so each request writes a
+///   *new* entry and the old one is dead the moment the next step starts. An
+///   hour of TTL on something with a life measured in seconds is 2x for
+///   nothing, and 20-odd such writes per turn is not a rounding error.
+///
+/// So: [`CacheTtl::Hour`] on the preamble, [`CacheTtl::Minutes`] on the
+/// history. No beta header is needed for either; `ttl` is a plain field on
+/// `cache_control`, and omitting it means five minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheTtl {
+    /// The API default, five minutes. Written at 1.25x.
+    Minutes,
+    /// One hour. Written at 2x.
+    Hour,
+}
+
+/// One `cache_control` breakpoint at the given TTL. See [`CacheTtl`].
+fn cache_control(ttl: CacheTtl) -> Value {
+    match ttl {
+        // Sent bare rather than as `"ttl": "5m"`: it is the default, and the
+        // shorter form is one less field on every request.
+        CacheTtl::Minutes => json!({ "type": "ephemeral" }),
+        CacheTtl::Hour => json!({ "type": "ephemeral", "ttl": "1h" }),
+    }
 }
 
 /// How a model takes its thinking configuration. Substring-matched on the
@@ -576,9 +614,11 @@ fn build_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<Value>) {
         .map(|text| json!({ "type": "text", "text": text }))
         .collect();
     // Breakpoint 2 of 4. `tools` render before `system`, so this one covers
-    // both: the whole fixed preamble Wizard re-sends on every step.
+    // both: the whole fixed preamble Wizard re-sends on every step. It is
+    // written once a session and read from then on, which is what the
+    // one-hour TTL is for (see [`CacheTtl`]).
     if let Some(last) = system.last_mut() {
-        last["cache_control"] = cache_control();
+        last["cache_control"] = cache_control(CacheTtl::Hour);
     }
     // Breakpoints 3 and 4 of 4: the conversation so far, minus the volatile
     // tail. The newest anchor writes an entry one turn longer than the last
@@ -586,11 +626,15 @@ fn build_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<Value>) {
     // anchor halves the distance a lookback has to walk to find the previous
     // step's entry, which is what keeps a parallel tool batch from silently
     // pushing that entry outside the 20-block window.
+    //
+    // Both stay at the default five minutes: an entry written here is
+    // superseded by the next step's, seconds later, so paying 2x to keep it
+    // alive for an hour buys nothing (see [`CacheTtl`]).
     for index in [previous_anchor, anchor].into_iter().flatten() {
         if let Some(blocks) = out[index].get_mut("content").and_then(Value::as_array_mut)
             && let Some(block) = blocks.last_mut()
         {
-            block["cache_control"] = cache_control();
+            block["cache_control"] = cache_control(CacheTtl::Minutes);
         }
     }
     (system, out)
@@ -1646,6 +1690,21 @@ mod tests {
         }
         // Four is the API's hard cap, and this is exactly four.
         assert_eq!(count_breakpoints(&body), 4, "{body}");
+
+        // The preamble is written once and read all session, so it takes the
+        // hour; the history breakpoints are rewritten every step, and an hour
+        // of TTL on a seconds-long entry is 2x for nothing.
+        assert_eq!(tools[1]["cache_control"]["ttl"], "1h");
+        assert_eq!(system[1]["cache_control"]["ttl"], "1h");
+        for message in &messages[1..] {
+            let blocks = message["content"].as_array().expect("blocks");
+            assert!(
+                blocks.last().expect("a block")["cache_control"]
+                    .get("ttl")
+                    .is_none(),
+                "history stays on the 5-minute default: {message}"
+            );
+        }
     }
 
     /// The older of the two history breakpoints is not decoration: it is what

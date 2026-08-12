@@ -122,6 +122,36 @@ impl UsageTracker {
             .fetch_add(completion_tokens, Ordering::Relaxed);
     }
 
+    /// Record a model call that is billed on its own line of
+    /// `usage.jsonl` instead of inside a turn record: history compaction,
+    /// which the agent writes as it happens.
+    ///
+    /// Session totals only, and that is the whole distinction. A compaction
+    /// pass can run *between* turns (`/compact` at the prompt), where the
+    /// per-turn counters are about to be zeroed by the next
+    /// [`begin_turn`](Self::begin_turn) and anything left in them is lost; and
+    /// when it runs *inside* a turn, adding it to the turn totals as well as
+    /// writing its own line would bill the same tokens twice. It stays off
+    /// `last_prompt` for the same reason a delegated call does: the
+    /// summarizer's prompt is a different history, and it says nothing about
+    /// how full this conversation's window is.
+    pub fn record_side_call(
+        &self,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+    ) {
+        self.session_prompt
+            .fetch_add(prompt_tokens, Ordering::Relaxed);
+        self.session_completion
+            .fetch_add(completion_tokens, Ordering::Relaxed);
+        self.session_cache_read
+            .fetch_add(cache_read_tokens, Ordering::Relaxed);
+        self.session_cache_write
+            .fetch_add(cache_write_tokens, Ordering::Relaxed);
+    }
+
     /// Reset the per-turn counters (called at the top of every turn).
     pub fn begin_turn(&self) {
         self.turn_prompt.store(0, Ordering::Relaxed);

@@ -1893,6 +1893,49 @@ impl crate::tools::Tool for BigOutputTool {
     }
 }
 
+/// Compaction is a model call and has to be billed like one. It was not for
+/// a long time: the summarizer holds a provider rather than an `Agent`, so
+/// its tokens reached no counter and no line of the log, and a run that
+/// compacted every few steps under-reported itself by however much that came
+/// to. It gets its own record rather than a share of the turn's, because a
+/// `/compact` between turns is not inside any turn.
+#[tokio::test]
+async fn a_compaction_pass_bills_itself_to_the_usage_log() {
+    let (mut agent, _provider, tmp) =
+        test_agent(vec![vec![usage_chunk("a terse progress note", 4_000, 120)]]);
+    for i in 0..(KEEP_RECENT + 5) {
+        agent.history.push(ChatMessage::user(format!("msg {i}")));
+    }
+
+    let outcome = agent.compact_now().await;
+    assert!(
+        matches!(outcome, CompactOutcome::Summarized(_)),
+        "{outcome:?}"
+    );
+
+    let log = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("usage log written");
+    let record: crate::usage::UsageRecord =
+        serde_json::from_str(log.lines().next().expect("one record")).expect("valid json");
+    assert_eq!(record.prompt_tokens, 4_000);
+    assert_eq!(record.completion_tokens, 120);
+
+    assert_eq!(
+        agent.usage().session_totals(),
+        (4_000, 120),
+        "and `/cost` sees it too"
+    );
+    assert_eq!(
+        agent.usage().turn_totals(),
+        (0, 0),
+        "but not through the turn counters, which would bill the same tokens a second time"
+    );
+    assert_eq!(
+        agent.usage().last_prompt_tokens(),
+        None,
+        "the summarizer's prompt is not this conversation's"
+    );
+}
+
 #[tokio::test]
 async fn compact_now_force_summarizes_and_keeps_the_recent_tail() {
     // One scripted response: the summarization call.

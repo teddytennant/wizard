@@ -293,6 +293,17 @@ pub struct App {
     /// it with Esc. What it changes is where Enter goes — see [`Console`] and
     /// [`App::submit_console`].
     pub console: Option<Console>,
+    /// A console whose writer we hold but whose command has not asked anything
+    /// yet, if any.
+    ///
+    /// Every foreground command opens a console, and almost none of them ever
+    /// prompt. Claiming has to be eager — the gate is claimed once, and the
+    /// writer has to be ours before a question can appear — but taking the
+    /// composer over for the whole of every `ls` is the bug this field exists
+    /// to avoid. It is promoted into `console` on `ConsoleWaiting` and dropped
+    /// on `ConsoleClosed`, so a command that never asks anything never touches
+    /// the composer at all.
+    pub console_pending: Option<Console>,
     /// Previously submitted inputs, oldest first (↑/↓ recall).
     pub history: Vec<String>,
     /// Where in `history` the composer is, and the draft it displaced, while
@@ -458,6 +469,7 @@ impl App {
             plan_review: None,
             interview: None,
             console: None,
+            console_pending: None,
             history: Vec::new(),
             history_browse: None,
             turn_started: None,
@@ -3504,6 +3516,10 @@ impl App {
     /// task aborted after the cooperative interrupt ran out of patience. Silent
     /// on the common case, because on the common case there is nothing open.
     pub(super) fn close_stale_console(&mut self) {
+        // A console still only held has no composer to give back, so it goes
+        // without a notice — but it still has to go, or its writer outlives the
+        // turn and keeps a dead command's clock stopped.
+        self.console_pending = None;
         if self.console.take().is_some() {
             self.notice("the command ended — Enter goes to the agent again");
         }
@@ -4012,20 +4028,49 @@ impl App {
                 let Some(writer) = gate.claim() else {
                     return;
                 };
-                self.notice(format!(
-                    "▶ {command} — Enter now types into this command \
-                     (Esc detaches · Ctrl-D ends input · Ctrl-C stops it)"
-                ));
-                self.console = Some(Console {
+                // Held, not driven. Claiming has to happen now — the writer
+                // must be ours before any question can appear — but the
+                // composer stays the agent's until the command actually asks
+                // something, which is `ConsoleWaiting` below. Most commands
+                // never get there.
+                self.console_pending = Some(Console {
                     command,
                     gate,
                     writer,
                 });
             }
+            // The command asked something. Now the composer changes hands, and
+            // says so: a composer that quietly meant something else would be a
+            // worse bug than the one consoles fix.
+            AgentEvent::ConsoleWaiting { gate } => {
+                if self
+                    .console_pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.gate == gate)
+                    && let Some(console) = self.console_pending.take()
+                {
+                    self.notice(format!(
+                        "▶ {} — Enter now types into this command \
+                         (Esc detaches · Ctrl-D ends input · Ctrl-C stops it)",
+                        console.command
+                    ));
+                    self.console = Some(console);
+                }
+            }
             // Already folded into the running tool's card by the model above;
             // there is nothing else on screen it drives.
             AgentEvent::ConsoleOutput { .. } => {}
             AgentEvent::ConsoleClosed { gate } => {
+                // A console that was only ever held goes quietly: the composer
+                // never changed, so there is nothing to hand back and nothing
+                // worth a line in the transcript.
+                if self
+                    .console_pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.gate == gate)
+                {
+                    self.console_pending = None;
+                }
                 // Only if it is *this* console. A close for a command we never
                 // attached to (or already detached from) must not silently
                 // take the composer back from one we did.

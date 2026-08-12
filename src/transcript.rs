@@ -600,7 +600,9 @@ impl TranscriptModel {
             // Opening and closing a console are facts about a child process,
             // not about the conversation. The row is already there
             // (`ToolStarted` laid it down), and `ToolFinished` will answer it.
-            AgentEvent::ConsoleOpened { .. } | AgentEvent::ConsoleClosed { .. } => {}
+            AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
+            | AgentEvent::ConsoleClosed { .. } => {}
             // The turn is over; nothing may still be streaming.
             AgentEvent::Done { .. } => self.commit_inner(),
             // Everything below reports on the *run*, not on the conversation:
