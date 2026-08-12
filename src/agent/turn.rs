@@ -1399,7 +1399,9 @@ impl Host for TurnHost<'_> {
             super::CompactOutcome::Nothing => return,
             // Success is informational; only a truncation (the summary LLM
             // genuinely failed) is an error.
-            super::CompactOutcome::Summarized(_) => sink.notice(outcome.describe()).await,
+            super::CompactOutcome::Summarized(_) | super::CompactOutcome::Evicted(_) => {
+                sink.notice(outcome.describe()).await
+            }
             super::CompactOutcome::Truncated { .. } => sink.error(outcome.describe()).await,
         }
         sink.turn_event(AgentEvent::ContextSize {
@@ -1650,6 +1652,7 @@ impl Agent {
                 )
             }
             crate::agent::CompactOutcome::Summarized(_)
+            | crate::agent::CompactOutcome::Evicted(_)
             | crate::agent::CompactOutcome::Truncated { .. } => {
                 format!(
                     "{}. Next-call pressure: {}",
@@ -1667,7 +1670,8 @@ impl Agent {
         };
 
         match &outcome {
-            crate::agent::CompactOutcome::Summarized(_) => {
+            crate::agent::CompactOutcome::Summarized(_)
+            | crate::agent::CompactOutcome::Evicted(_) => {
                 sink.notice(outcome.describe()).await;
             }
             crate::agent::CompactOutcome::Truncated { .. } => {

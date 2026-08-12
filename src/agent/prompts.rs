@@ -212,11 +212,13 @@ subject rather than guessing what it says.";
 /// The charter rules that stay resident.
 ///
 /// Every other section has a trigger that tells the model to go and look: a
-/// capability it lacks, a fork request, a subagent-shaped task. These three
+/// capability it lacks, a fork request, a subagent-shaped task. These four
 /// govern how *every* reply is written, so nothing would ever prompt the
-/// lookup, and a violated line of output cannot be un-sent afterwards.
+/// lookup, and a violated line of output cannot be un-sent afterwards. The
+/// last one is a summary: the prose rules themselves stay in §7, behind the
+/// `writing` lookup, because the digest cannot afford the whole section.
 ///
-/// Amending §6 of `WIZARD.md` means amending this constant too;
+/// Amending §6 or §7 of `WIZARD.md` means amending this constant too;
 /// `always_on_rules_are_still_in_the_charter` fails if the charter drops one.
 const CHARTER_ALWAYS_ON: &str = "\
 In force on every reply, never worth a lookup:
@@ -225,7 +227,9 @@ comma, colon, period, parentheses, or a plain hyphen.
 - Never fabricate success. Claim a build, test, install, fork, or publish only \
 when you ran it and saw the result.
 - Gates stay. Do not route around deep evolve's build and smoke gate, or plan \
-mode's read-only phase.";
+mode's read-only phase.
+- Write like a person: concise, plain, no AI-slop prose and no academic \
+padding. The full rules are `manual` topic `writing`.";
 
 /// Title given to the charter's preamble, which has no `##` header of its own.
 const OVERVIEW_TITLE: &str = "Overview";

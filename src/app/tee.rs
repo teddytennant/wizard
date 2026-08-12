@@ -546,6 +546,7 @@ mod tests {
                 gate,
                 chunk: "Do you want to continue? [Y/n] ".into(),
             },
+            AgentEvent::ConsoleWaiting { gate },
             AgentEvent::ConsoleClosed { gate },
         ] {
             assert!(
@@ -557,6 +558,7 @@ mod tests {
             let delivered = match crossed.as_event() {
                 AgentEvent::ConsoleOpened { gate, .. }
                 | AgentEvent::ConsoleOutput { gate, .. }
+                | AgentEvent::ConsoleWaiting { gate }
                 | AgentEvent::ConsoleClosed { gate } => *gate,
                 other => panic!("{other:?}"),
             };

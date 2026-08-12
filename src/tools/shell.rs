@@ -431,6 +431,10 @@ pub(crate) async fn run_command_interactive(
     // left the cursor mid-line. Together they are the prompt test.
     let mut idle_since = Instant::now();
     let mut open_line = false;
+    // Whether `ConsoleWaiting` has gone out. Once, per command: see the event's
+    // docs for why a composer that flipped back on the next line of output
+    // would be worse than one that stayed.
+    let mut announced_waiting = false;
     let mut inputs_open = true;
     let mut chunks_open = true;
 
@@ -545,7 +549,15 @@ pub(crate) async fn run_command_interactive(
                     timed_out = Some(timeout.as_secs());
                     break;
                 }
-                // Not the budget, so it was the prompt threshold.
+                // Not the budget, so it was the prompt threshold: the child's
+                // last write left the cursor mid-line and nothing has followed
+                // it. Tell the surface once, so a composer that has been left
+                // alone for every `ls` and `cargo build` switches over for the
+                // one command in a hundred that is actually asking something.
+                if open_line && !announced_waiting {
+                    announced_waiting = true;
+                    let _ = events.send(AgentEvent::ConsoleWaiting { gate }).await;
+                }
                 if host.attended() && inputs_open {
                     spent += since.elapsed();
                     running_since = None;
@@ -1381,6 +1393,59 @@ mod tests {
             started.elapsed() < Duration::from_millis(500),
             "took {:?}",
             started.elapsed()
+        );
+    }
+
+    /// A surface that records whether the command ever said it was waiting.
+    /// Returns `true` if `ConsoleWaiting` arrived before the console closed.
+    async fn waited(mut stream: tokio::sync::mpsc::Receiver<crate::agent::AgentEvent>) -> bool {
+        let mut waiting = false;
+        while let Some(event) = stream.recv().await {
+            match event {
+                AgentEvent::ConsoleWaiting { .. } => waiting = true,
+                AgentEvent::ConsoleClosed { .. } => break,
+                _ => {}
+            }
+        }
+        waiting
+    }
+
+    /// The reported bug, at the tool: a command that finishes its line and
+    /// exits is working, not asking. Announcing it as waiting is what took the
+    /// composer away from the agent for the whole of every `ls`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_that_ends_its_line_never_says_it_is_waiting() {
+        let tmp = TempDir::new();
+        let (result, waiting) = interactive(
+            &tmp.0,
+            "echo spellbook",
+            Duration::from_secs(20),
+            None,
+            waited,
+        )
+        .await;
+        assert_eq!(result.code, Some(0));
+        assert!(!waiting, "a whole line and an exit is not a question");
+    }
+
+    /// And the case the console exists for: output that stops mid-line and
+    /// stays there is a question, and the surface is told so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_parked_mid_line_says_it_is_waiting() {
+        let tmp = TempDir::new();
+        let (_result, waiting) = interactive(
+            &tmp.0,
+            r#"printf 'continue? [Y/n] '; read answer"#,
+            Duration::from_secs(2),
+            None,
+            waited,
+        )
+        .await;
+        assert!(
+            waiting,
+            "a cursor parked at the end of a line is the shape of a prompt"
         );
     }
 

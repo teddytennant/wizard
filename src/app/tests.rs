@@ -3987,7 +3987,83 @@ fn open_console(app: &mut App, command: &str) -> crate::agent::ConsoleHost {
         command: command.to_string(),
         gate,
     });
+    // Opening only holds the writer. The composer changes hands when the
+    // command actually asks something, which is what the tool reports here.
+    app.handle_agent_event(AgentEvent::ConsoleWaiting { gate });
     host
+}
+
+/// The reported bug: `ls` took the composer away from the agent for as long as
+/// it ran, even though it never asked anything. Opening a console must hold the
+/// writer without touching where Enter goes.
+#[test]
+fn a_command_that_never_prompts_leaves_the_composer_alone() {
+    let mut app = app();
+    let (gate, _host) = crate::agent::ConsoleGate::open();
+    app.handle_agent_event(AgentEvent::ConsoleOpened {
+        command: "ls -la".to_string(),
+        gate,
+    });
+    assert!(
+        app.console.is_none(),
+        "opening a console must not repoint the composer"
+    );
+    assert!(
+        app.console_pending.is_some(),
+        "but the writer is ours, ready for a question that may never come"
+    );
+
+    // Output alone is not a question: a command that writes whole lines and
+    // exits is working, not waiting.
+    app.handle_agent_event(AgentEvent::ConsoleOutput {
+        gate,
+        chunk: "total 8\n".to_string(),
+    });
+    assert!(app.console.is_none(), "output is not a prompt");
+
+    app.handle_agent_event(AgentEvent::ConsoleClosed { gate });
+    assert!(app.console_pending.is_none(), "the held writer goes too");
+}
+
+/// And the other half: once the command does ask, the composer changes hands
+/// and says so.
+#[test]
+fn a_command_that_prompts_takes_the_composer_and_announces_it() {
+    let mut app = app();
+    let (gate, _host) = crate::agent::ConsoleGate::open();
+    app.handle_agent_event(AgentEvent::ConsoleOpened {
+        command: "npm init".to_string(),
+        gate,
+    });
+    app.handle_agent_event(AgentEvent::ConsoleWaiting { gate });
+    assert!(app.console.is_some(), "the composer claimed the console");
+    assert!(
+        app.console_pending.is_none(),
+        "promoted, not duplicated: two writers for one child is the bug consoles fix"
+    );
+    assert!(
+        matches!(
+            app.transcript.last(),
+            Some(TranscriptItem::Notice(text)) if text.contains("Enter now types into this command")
+        ),
+        "a composer that quietly meant something else would be the worse bug"
+    );
+}
+
+/// A `ConsoleWaiting` for a command this composer never held must not hand it
+/// a composer. Same rule as `ConsoleClosed`, and the same reason.
+#[test]
+fn a_prompt_from_a_console_we_never_held_is_ignored() {
+    let mut app = app();
+    let (ours, _ours_host) = crate::agent::ConsoleGate::open();
+    let (theirs, _theirs_host) = crate::agent::ConsoleGate::open();
+    app.handle_agent_event(AgentEvent::ConsoleOpened {
+        command: "npm init".to_string(),
+        gate: ours,
+    });
+    app.handle_agent_event(AgentEvent::ConsoleWaiting { gate: theirs });
+    assert!(app.console.is_none(), "not our command, not our composer");
+    assert!(app.console_pending.is_some(), "and ours is still held");
 }
 
 /// The reported bug, at the surface: Enter reaches the command instead of

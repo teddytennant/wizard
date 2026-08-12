@@ -397,6 +397,7 @@ impl Translator {
             // opens one. Named rather than wildcarded so that the day ACP grows
             // a place to type, somebody has to decide here.
             AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
             | AgentEvent::ConsoleOutput { .. }
             | AgentEvent::ConsoleClosed { .. } => {}
         }

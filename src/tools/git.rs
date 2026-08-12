@@ -10,8 +10,8 @@ use tokio::process::Command;
 
 use super::shell::{CommandResult, render_command_result, run_command};
 use super::{
-    MAX_OUTPUT_BYTES, Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args,
-    truncate_output,
+    MAX_DIFF_BYTES, MAX_ERROR_BYTES, MAX_LISTING_BYTES, Tool, ToolAccess, ToolContext, ToolError,
+    ToolOutput, parse_args, truncate_output,
 };
 
 /// Timeout for git subprocesses. Status and diff are local operations, so
@@ -36,7 +36,7 @@ fn git_failure(result: &CommandResult, fallback: &str) -> ToolOutput {
     }
     let stderr = result.stderr.trim_end();
     let detail = if stderr.is_empty() { fallback } else { stderr };
-    ToolOutput::error(truncate_output(detail.to_string(), MAX_OUTPUT_BYTES))
+    ToolOutput::error(truncate_output(detail.to_string(), MAX_ERROR_BYTES))
 }
 
 /// `git_status` — working tree status (`git status --porcelain=v1 -b`).
@@ -76,7 +76,7 @@ impl Tool for GitStatusTool {
         } else {
             status.to_string()
         };
-        Ok(ToolOutput::ok(truncate_output(content, MAX_OUTPUT_BYTES)))
+        Ok(ToolOutput::ok(truncate_output(content, MAX_LISTING_BYTES)))
     }
 }
 
@@ -141,7 +141,7 @@ impl Tool for GitDiffTool {
         } else {
             Ok(ToolOutput::ok(truncate_output(
                 diff.to_string(),
-                MAX_OUTPUT_BYTES,
+                MAX_DIFF_BYTES,
             )))
         }
     }
@@ -327,5 +327,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(other.content, "No changes.");
+    }
+
+    /// A diff of a generated file used to be able to spend 30 KB of the
+    /// window, and then be re-sent on every following step. It gets a diff's
+    /// budget now, not the one an arbitrary command's stdout gets.
+    #[tokio::test]
+    async fn a_huge_diff_is_cut_to_the_diff_budget() {
+        let tmp = TempDir::new();
+        git(&tmp.0, &["init", "-q"]);
+        std::fs::write(tmp.0.join("f.txt"), "old\n").unwrap();
+        commit_all(&tmp.0, "init");
+        let generated: String = (0..20_000).map(|line| format!("line {line}\n")).collect();
+        assert!(generated.len() > super::super::MAX_OUTPUT_BYTES);
+        std::fs::write(tmp.0.join("f.txt"), generated).unwrap();
+
+        let out = GitDiffTool.execute(json!({}), &tmp.ctx()).await.unwrap();
+        assert!(
+            out.content.len() <= MAX_DIFF_BYTES,
+            "{} bytes",
+            out.content.len()
+        );
+        assert!(
+            out.content.contains("[output truncated]"),
+            "{}",
+            out.content
+        );
+        // Head and tail framing survives the smaller budget: the first hunk
+        // header and the last lines are both still there.
+        assert!(out.content.contains("--- a/f.txt"), "{}", out.content);
+        assert!(out.content.contains("line 19999"), "{}", out.content);
     }
 }

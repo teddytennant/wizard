@@ -1535,6 +1535,7 @@ impl ReplyCollector {
             // with no interactive user behind them, so its tool context leaves
             // `ConsoleAccess` at `None` and no command opens one.
             AgentEvent::ConsoleOpened { .. }
+            | AgentEvent::ConsoleWaiting { .. }
             | AgentEvent::ConsoleOutput { .. }
             | AgentEvent::ConsoleClosed { .. } => {}
         }

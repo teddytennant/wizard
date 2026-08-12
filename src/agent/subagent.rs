@@ -611,6 +611,10 @@ struct SubRun<'a> {
     dispatcher: Dispatcher,
     history: Vec<ChatMessage>,
     model: String,
+    /// Serialized-history ceiling compaction falls back to when the provider
+    /// names no context window, carried from the same config key the parent
+    /// reads ([`crate::config::Config::compact_threshold_bytes`]).
+    byte_threshold: usize,
     /// The sub-loop's own last reported prompt size, which is what decides
     /// when it compacts.
     ///
@@ -698,13 +702,31 @@ impl Host for SubRun<'_> {
     /// transcript the council reads back — which is exactly what [`Sink`] does
     /// with a notice on this arm.
     async fn compact(&mut self, sink: &Sink) {
+        let budget = context::Budget {
+            window: self.client.context_window(&self.model).await,
+            byte_threshold: self.byte_threshold,
+        };
         let compacted = context::compact(
             &mut self.history,
             context::Anchor::SubLoop,
+            budget,
             self.client,
             &self.model,
         )
         .await;
+        // The summarizer's tokens are the parent's, like every other token a
+        // sub-run spends: delegated, so they land on the totals without ever
+        // becoming anyone's `last_prompt`. A sub-run has no usage log of its
+        // own, so this rides the parent turn's record rather than writing a
+        // line the way `Agent::compact_now` does.
+        if compacted.usage.reported() {
+            if let Some(tracker) = &self.ctx.usage {
+                tracker.record_delegated(compacted.usage.prompt, compacted.usage.completion);
+                tracker.record_cache(compacted.usage.cache_read, compacted.usage.cache_write);
+            }
+            sink.usage(compacted.usage.prompt, compacted.usage.completion)
+                .await;
+        }
         if compacted.outcome == context::CompactOutcome::Nothing {
             return;
         }
@@ -843,6 +865,7 @@ async fn run_loop(
         ctx,
         history,
         model,
+        byte_threshold: loaded.compact_threshold_bytes,
         last_prompt: std::sync::Mutex::new(None),
     };
 
