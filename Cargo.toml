@@ -135,7 +135,7 @@ clap = { version = "4", features = ["derive"] }
 
 # TUI (crossterm pinned to the version ratatui re-exports)
 ratatui = "0.30"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 
 # Rendering helpers
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
@@ -146,13 +146,13 @@ unicodeit = "0.2"
 
 # Images in the TUI transcript (`src/image_view.rs`): terminal capability
 # detection plus the kitty / sixel / iTerm2 encoders, with unicode half-blocks
-# as the universal floor. Held on the 9.x line deliberately — 10+ moves to
-# ratatui 0.30, which would link a *second* copy of ratatui into the binary and
-# make its widgets untypeable against our 0.29 `Frame`. Default features are off
-# because they pull `chafa` in over pkg-config (a C library we will not require
-# to build wizard) and the whole of `image`'s codec set; we take exactly the
-# four formats `llm::Image` can carry.
-ratatui-image = { version = "9", default-features = false, features = ["crossterm"] }
+# as the universal floor. On the 10.x line to match ratatui 0.30 — 9.x still
+# pins ratatui 0.29 and would link a second copy, making its widgets untypeable
+# against our `Frame`. Default features are off because they pull `chafa` in
+# over pkg-config (a C library we will not require to build wizard) and the
+# whole of `image`'s codec set; we take exactly the four formats `llm::Image`
+# can carry.
+ratatui-image = { version = "10", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # Plain-terminal progress (headless turns, fleet, llama-server waits).
