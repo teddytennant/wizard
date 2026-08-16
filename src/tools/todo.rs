@@ -35,7 +35,7 @@ impl TodoStatus {
         match self {
             TodoStatus::Pending => "☐",
             TodoStatus::InProgress => "▸",
-            TodoStatus::Completed => "✓",
+            TodoStatus::Completed => "☒",
         }
     }
 }
@@ -232,7 +232,7 @@ mod tests {
             .execute(json!({ "action": "read" }), &ctx)
             .await
             .expect("read ok");
-        assert_eq!(out.content, "✓ first\n▸ second\n☐ third");
+        assert_eq!(out.content, "☒ first\n▸ second\n☐ third");
 
         // A second write replaces, never appends.
         tool.execute(

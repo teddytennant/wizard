@@ -393,6 +393,14 @@ pub trait CommandSurface {
         self.error(message);
     }
 
+    /// `/rail [dismiss [name-or-id]]`: list the subagent rail, or take finished
+    /// rows off it. Defaulted to "no rail here".
+    async fn rail(&mut self, action: crate::commands::RailAction) {
+        let _ = action;
+        let message = elsewhere("rail", self.surface());
+        self.error(message);
+    }
+
     /// `/vim`: modal editing of the composer.
     async fn toggle_vim(&mut self) {
         let message = elsewhere("vim", self.surface());
@@ -561,6 +569,7 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
             };
             surface.notice(text);
         }
+        SlashCommand::Rail(action) => surface.rail(action).await,
         SlashCommand::Memory(action) => {
             let text = crate::memory::report(&surface.project_root(), &action);
             surface.notice(text);
@@ -1128,6 +1137,9 @@ mod tests {
         async fn toggle_panel(&mut self, _panel: Panel) {
             self.verb("toggle_panel");
         }
+        async fn rail(&mut self, _action: crate::commands::RailAction) {
+            self.verb("rail");
+        }
         async fn toggle_vim(&mut self) {
             self.verb("toggle_vim");
         }
@@ -1562,7 +1574,15 @@ mod tests {
             Some(Execution::Agent),
             "/model <tag> is typeable in a chat, picker or no picker"
         );
-        for screen_only in ["diff", "todos", "dashboard", "vim", "ui", "settings"] {
+        for screen_only in [
+            "diff",
+            "todos",
+            "dashboard",
+            "vim",
+            "ui",
+            "settings",
+            "rail",
+        ] {
             assert_eq!(
                 spec(screen_only).map(|spec| spec.gateway),
                 Some(Execution::Unavailable),

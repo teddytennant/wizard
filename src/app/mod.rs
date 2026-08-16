@@ -59,7 +59,7 @@ use prompts::{
     PROVIDER_ADD_ROW, PROVIDER_TYPES, PromptField, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
     web_backend_label, web_backend_needs_key, xai_oauth_session_present,
 };
-use transcript::{PANE_LINGER, TASK_LINGER};
+use transcript::TASK_LINGER;
 
 /// How many user prompts may sit behind a running turn. Beyond this the next
 /// Enter is refused with a notice rather than growing without bound.
@@ -1491,9 +1491,6 @@ impl App {
             pane.unread = 0;
         }
         self.set_rail_focus(None);
-        // A run that finished while you were watching it has been sitting on
-        // the rail with its linger clock stopped; let it retire now.
-        self.retire_finished_panes();
     }
 
     /// Scroll the pane at `index` by `delta` lines, per [`scroll_step`].
@@ -1522,9 +1519,9 @@ impl App {
     ///
     /// A run's pane is closed by the `SubagentRunDone` its own loop emits. Abort
     /// the turn's task and that loop is dropped mid-poll, so the event never
-    /// comes: the pane keeps `finished: None`, [`App::retire_finished_panes`]
-    /// retains it forever (`None => true`), and the rail grows a permanent
-    /// pulsing row — one per in-flight run, every time a turn is aborted.
+    /// comes: the pane keeps `finished: None` and `status: Running`, and the
+    /// rail grows a permanent pulsing row, one per in-flight run, every time
+    /// a turn is aborted.
     ///
     /// The cooperative path ([`CancelHandle`](crate::agent::CancelHandle)) does not need this: every loop
     /// closes its own pane on the way out. This is for the fallback that does
@@ -1571,46 +1568,114 @@ impl App {
         self.turn_started = None;
     }
 
-    /// Drop finished runs off the rail once they have been resting long enough
-    /// to notice, so the rail shows live work instead of accumulating every
-    /// subagent the session ever ran.
-    ///
-    /// Nothing is lost: a foreground run's report is the output of its
-    /// `spawn_subagent` card in the main chat, a background run's report is
-    /// written back into that same card when it lands (see
-    /// [`App::record_subagent_report`]), and an `/ultra` candidate's draft is in
-    /// the collapsed guidance card that phase pushes
-    /// ([`AgentEvent::UltraGuidance`]).
-    ///
-    /// The pane you are *inside* never retires under you — its clock starts
-    /// when you leave it.
+    /// Finished subagent rows stay on the rail until someone dismisses them.
+    /// Background commands still age off on their own linger; this is only
+    /// here so the tick still has a place to keep the command selection
+    /// pointed at the same task as those rows drop.
     pub fn retire_finished_panes(&mut self) {
-        if self.panes.is_empty() {
-            return;
+        self.follow_rail_selection();
+    }
+
+    /// Take a finished pane off the rail. Running panes stay; stopping those
+    /// is Ctrl-X / interrupt, not dismiss.
+    ///
+    /// Returns whether a row actually left. Selections that pointed at the
+    /// removed run fall back to the next row, or to the composer if the rail
+    /// is empty.
+    pub fn dismiss_pane(&mut self, index: usize) -> bool {
+        let Some(pane) = self.panes.get(index) else {
+            return false;
+        };
+        if pane.status.is_live() && pane.finished.is_none() {
+            return false;
         }
-        // Selections are indices, and retiring shifts them — remember what they
-        // point *at*, then re-find it afterwards.
         let attached_run = self.attached.and_then(|i| self.panes.get(i)).map(|p| p.run);
         let focus_run = self
             .rail_focus
             .and_then(|i| self.panes.get(i))
             .map(|p| p.run);
+        let removed = self.panes[index].run;
+        self.panes.remove(index);
 
-        let now = Instant::now();
-        let before = self.panes.len();
-        self.panes.retain(|pane| match pane.finished {
-            _ if Some(pane.run) == attached_run => true,
-            Some(at) => now.duration_since(at) < PANE_LINGER,
-            None => true,
-        });
-        if self.panes.len() == before {
-            return;
+        if attached_run == Some(removed) {
+            self.attached = None;
+        } else {
+            self.attached = attached_run.and_then(|run| self.pane_index(run));
         }
+        if focus_run == Some(removed) {
+            if self.rail_len() == 0 {
+                self.set_rail_focus(None);
+            } else {
+                self.set_rail_focus(Some(index.min(self.rail_len() - 1)));
+            }
+        } else {
+            self.set_rail_focus(focus_run.and_then(|run| self.pane_index(run)));
+        }
+        true
+    }
 
-        self.attached = attached_run.and_then(|run| self.pane_index(run));
-        // If the run the rail was sitting on just retired, focus falls back to
-        // the composer rather than silently jumping to some other subagent.
-        self.set_rail_focus(focus_run.and_then(|run| self.pane_index(run)));
+    /// Drop every finished pane, or only those matching `filter` (a subagent
+    /// name or a run id). Running panes are never touched. Returns how many
+    /// rows left and how many still-running matches were refused.
+    pub fn dismiss_finished_panes(&mut self, filter: Option<&str>) -> (usize, usize) {
+        let mut removed = 0;
+        let mut refused = 0;
+        let mut i = 0;
+        while i < self.panes.len() {
+            let pane = &self.panes[i];
+            let matches = match filter {
+                None => true,
+                Some(want) => {
+                    pane.name.eq_ignore_ascii_case(want)
+                        || pane.run.to_string() == want
+                        || pane.bg.is_some_and(|id| id.to_string() == want)
+                }
+            };
+            if !matches {
+                i += 1;
+                continue;
+            }
+            if pane.status.is_live() && pane.finished.is_none() {
+                refused += 1;
+                i += 1;
+                continue;
+            }
+            if self.dismiss_pane(i) {
+                removed += 1;
+            } else {
+                i += 1;
+            }
+        }
+        (removed, refused)
+    }
+
+    /// Text for `/rail` and `/rail dismiss`: one line per row, then what
+    /// happened if this was a dismiss.
+    pub fn rail_report(&self, note: Option<&str>) -> String {
+        if self.panes.is_empty() {
+            let empty = "rail: no subagents";
+            return match note {
+                Some(note) => format!("{empty}\n{note}"),
+                None => empty.to_string(),
+            };
+        }
+        let mut text = String::from("rail:\n");
+        for pane in &self.panes {
+            let status = match pane.status {
+                PaneStatus::Running if pane.finished.is_some() => "done",
+                PaneStatus::Running => "running",
+                PaneStatus::Done => "done",
+                PaneStatus::Failed => "failed",
+            };
+            text.push_str(&format!("  #{} [{status}] {}\n", pane.run, pane.name));
+        }
+        if let Some(note) = note {
+            text.push_str(note);
+            if !note.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        text.trim_end().to_string()
     }
 
     /// Write a finished background run's report into the `spawn_subagent` card
@@ -1692,6 +1757,10 @@ impl App {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
+        if !pane.status.is_live() || pane.finished.is_some() {
+            self.dismiss_pane(index);
+            return;
+        }
         let (name, bg) = (pane.name.clone(), pane.bg);
         let Some(bg) = bg else {
             self.notice(format!(
@@ -2764,9 +2833,7 @@ impl App {
                         self.refresh_peek();
                     }
                 }
-                // Age finished runs off the rail (the tick is ~100ms, so this
-                // is a cheap retain over a handful of panes).
-                self.retire_finished_panes();
+                // Background commands still age off; finished subagent rows stay.
                 self.follow_rail_selection();
                 Ok(None)
             }
@@ -3117,6 +3184,12 @@ impl App {
                     match self.rail_task_at(index) {
                         Some(task) => self.kill_task(task.id),
                         None => self.kill_pane(index),
+                    }
+                    return Ok(None);
+                }
+                KeyCode::Backspace | KeyCode::Delete => {
+                    if self.rail_task_at(index).is_none() {
+                        self.dismiss_pane(index);
                     }
                     return Ok(None);
                 }

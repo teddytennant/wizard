@@ -224,6 +224,21 @@ impl Rail {
         self.open = None;
     }
 
+    /// Take a finished run off the rail. A still-running one is left alone.
+    pub fn dismiss(&mut self, id: u64) -> bool {
+        let Some(index) = self.runs.iter().position(|run| run.id == id) else {
+            return false;
+        };
+        if matches!(self.runs[index].status, Status::Running) {
+            return false;
+        }
+        if self.open == Some(id) {
+            self.open = None;
+        }
+        self.runs.remove(index);
+        true
+    }
+
     pub fn run(&self, id: u64) -> Option<&Run> {
         self.runs.iter().find(|run| run.id == id)
     }
@@ -416,6 +431,25 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(texts.len(), 1, "{texts:?}");
+    }
+
+    #[test]
+    fn dismiss_drops_a_finished_run_and_leaves_a_live_one() {
+        let mut rail = Rail::default();
+        rail.apply(&started(1, "scout"));
+        rail.apply(&started(2, "builder"));
+        rail.apply(&AgentEvent::SubagentRunDone {
+            run: 1,
+            completed: true,
+            output: "ok".to_string(),
+            steps_used: 1,
+            error: None,
+        });
+        assert!(!rail.dismiss(2), "a live run stays");
+        assert_eq!(rail.runs.len(), 2);
+        assert!(rail.dismiss(1));
+        assert_eq!(rail.runs.len(), 1);
+        assert_eq!(rail.runs[0].name, "builder");
     }
 
     /// An event for a run this window never saw start is dropped rather than

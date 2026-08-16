@@ -2198,9 +2198,9 @@ fn draw_plan_band(frame: &mut Frame, app: &App, area: Rect) {
             .take(visible)
             .map(|item| {
                 let (glyph, style) = match item.status {
-                    TodoStatus::Completed => ("✔ ", dim().add_modifier(Modifier::CROSSED_OUT)),
-                    TodoStatus::InProgress => ("□ ", accent().bold()),
-                    TodoStatus::Pending => ("□ ", dim()),
+                    TodoStatus::Completed => ("☒ ", dim()),
+                    TodoStatus::InProgress => ("▸ ", accent().bold()),
+                    TodoStatus::Pending => ("☐ ", dim()),
                 };
                 super::truncate_line(
                     Line::from(vec![

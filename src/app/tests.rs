@@ -3301,12 +3301,10 @@ fn an_aborted_turn_closes_out_the_panes_it_left_running() {
         assert!(pane.finished.is_some(), "so its linger clock can start");
     }
 
-    // And they retire like any other finished run, instead of sitting on the
-    // rail with a live clock for the rest of the session.
-    for pane in &mut app.panes {
-        pane.finished = Some(Instant::now() - PANE_LINGER - Duration::from_secs(1));
-    }
+    // They stay on the rail as Failed until someone dismisses them.
     app.retire_finished_panes();
+    assert_eq!(app.panes.len(), 3);
+    assert_eq!(app.dismiss_finished_panes(None), (3, 0));
     assert!(app.panes.is_empty());
 }
 
@@ -3344,7 +3342,7 @@ fn the_ultra_pre_phase_leaves_its_drafts_in_the_transcript() {
 }
 
 #[test]
-fn a_finished_run_retires_off_the_rail() {
+fn a_finished_run_stays_on_the_rail_until_dismissed() {
     let mut app = app_with_panes(2);
     app.handle_agent_event(AgentEvent::SubagentRunDone {
         run: 0,
@@ -3353,13 +3351,13 @@ fn a_finished_run_retires_off_the_rail() {
         steps_used: 1,
         error: None,
     });
-    // It lingers first, so you actually see it land.
     app.retire_finished_panes();
     assert_eq!(app.panes.len(), 2);
+    assert_eq!(app.panes[0].status, PaneStatus::Done);
+    assert_eq!(app.panes[0].glyph(0), "✔");
+    assert_eq!(app.panes[0].glyph(7), "✔", "a finished row does not pulse");
 
-    // Once its linger is up it drops off, leaving the rail showing live work.
-    app.panes[0].finished = Some(Instant::now() - PANE_LINGER - Duration::from_secs(1));
-    app.retire_finished_panes();
+    assert!(app.dismiss_pane(0));
     assert_eq!(app.panes.len(), 1);
     assert_eq!(app.panes[0].name, "agent1");
     assert_eq!(app.running_panes(), 1);
@@ -3376,24 +3374,17 @@ fn the_pane_you_are_watching_never_retires_under_you() {
         steps_used: 1,
         error: None,
     });
-    app.panes[0].finished = Some(Instant::now() - PANE_LINGER - Duration::from_secs(1));
-
-    // Long past its linger, but you are reading it.
-    app.retire_finished_panes();
-    assert_eq!(app.panes.len(), 1);
-    assert_eq!(app.attached, Some(0));
-
-    // Esc lets it go, and lands you back in the composer.
+    // Esc leaves the pane but the row stays on the rail, resting.
     press(&mut app, KeyCode::Esc);
-    assert!(app.panes.is_empty());
+    assert_eq!(app.panes.len(), 1);
     assert_eq!(app.attached, None);
     assert_eq!(app.rail_focus, None);
+    assert_eq!(app.panes[0].glyph(3), "✔");
 }
 
 #[test]
-fn retiring_keeps_the_selection_on_the_run_it_pointed_at() {
+fn dismissing_keeps_the_selection_on_the_run_it_pointed_at() {
     let mut app = app_with_panes(3);
-    // Focus the third run, then retire the first.
     app.rail_focus = Some(2);
     app.handle_agent_event(AgentEvent::SubagentRunDone {
         run: 0,
@@ -3402,8 +3393,7 @@ fn retiring_keeps_the_selection_on_the_run_it_pointed_at() {
         steps_used: 1,
         error: None,
     });
-    app.panes[0].finished = Some(Instant::now() - PANE_LINGER - Duration::from_secs(1));
-    app.retire_finished_panes();
+    assert!(app.dismiss_pane(0));
 
     // Indices shifted, but the selection still points at the same run.
     assert_eq!(app.panes.len(), 2);
@@ -3430,8 +3420,7 @@ fn a_background_report_survives_its_pane_retiring() {
         steps_used: 4,
         error: None,
     });
-    app.panes[0].finished = Some(Instant::now() - PANE_LINGER - Duration::from_secs(1));
-    app.retire_finished_panes();
+    assert!(app.dismiss_pane(0));
     assert!(app.panes.is_empty());
 
     // The pane is gone, but the run is still readable in the main chat.
@@ -3482,6 +3471,61 @@ fn activity_reports_the_tool_in_flight_then_the_last_message() {
 }
 
 #[test]
+fn a_stale_running_status_does_not_pulse_once_finished_is_set() {
+    let mut app = app_with_panes(1);
+    app.panes[0].finished = Some(std::time::Instant::now());
+    assert_eq!(app.panes[0].status, PaneStatus::Running);
+    assert_eq!(app.panes[0].glyph(0), "✔");
+    assert_eq!(app.panes[0].glyph(5), "✔");
+}
+
+#[test]
+fn backspace_dismisses_a_finished_row_and_leaves_a_running_one() {
+    let mut app = app_with_panes(2);
+    app.handle_agent_event(AgentEvent::SubagentRunDone {
+        run: 0,
+        completed: true,
+        output: "done".to_string(),
+        steps_used: 1,
+        error: None,
+    });
+    app.rail_focus = Some(0);
+    press(&mut app, KeyCode::Backspace);
+    assert_eq!(app.panes.len(), 1);
+    assert_eq!(app.panes[0].name, "agent1");
+
+    app.rail_focus = Some(0);
+    press(&mut app, KeyCode::Backspace);
+    assert_eq!(app.panes.len(), 1, "a running row is not dismissed");
+}
+
+#[test]
+fn rail_dismiss_is_selective_and_refuses_a_live_row() {
+    let mut app = app_with_panes(3);
+    app.handle_agent_event(AgentEvent::SubagentRunDone {
+        run: 0,
+        completed: true,
+        output: "a".to_string(),
+        steps_used: 1,
+        error: None,
+    });
+    app.handle_agent_event(AgentEvent::SubagentRunDone {
+        run: 1,
+        completed: false,
+        output: String::new(),
+        steps_used: 1,
+        error: Some("no".to_string()),
+    });
+    assert_eq!(app.dismiss_finished_panes(Some("agent0")), (1, 0));
+    assert_eq!(app.panes.len(), 2);
+    assert_eq!(app.dismiss_finished_panes(Some("agent2")), (0, 1));
+    assert_eq!(app.panes.len(), 2);
+    assert_eq!(app.dismiss_finished_panes(None), (1, 1));
+    assert_eq!(app.panes.len(), 1);
+    assert_eq!(app.panes[0].name, "agent2");
+}
+
+#[test]
 fn bare_commands_parse_to_their_variants() {
     for (input, expected) in [
         ("/plan", SlashCommand::Plan),
@@ -3490,6 +3534,20 @@ fn bare_commands_parse_to_their_variants() {
         ("/compact", SlashCommand::Compact),
         ("/dashboard", SlashCommand::Dashboard),
         ("/omakase", SlashCommand::Omakase),
+        (
+            "/rail",
+            SlashCommand::Rail(crate::commands::RailAction::List),
+        ),
+        (
+            "/rail dismiss",
+            SlashCommand::Rail(crate::commands::RailAction::Dismiss(None)),
+        ),
+        (
+            "/rail dismiss researcher",
+            SlashCommand::Rail(crate::commands::RailAction::Dismiss(Some(
+                "researcher".into(),
+            ))),
+        ),
     ] {
         assert_eq!(SlashCommand::parse(input), Some(Ok(expected)), "{input}");
     }
@@ -3745,7 +3803,7 @@ const TOKEN_SITES: &[(&str, u16, Token)] = &[
     ("plain notice", 0, Token::Faint),
     ("error: something broke", 0, Token::Error),
     ("sovereign", 0, Token::Warning),
-    ("≡", 0, Token::Accent),
+    ("▸", 0, Token::Accent),
     ("git diff", 0, Token::Muted),
     ("+++ b/file.txt", 0, Token::DiffMeta),
     ("@@ -1,2", 0, Token::DiffHunk),
@@ -3788,11 +3846,14 @@ fn minimal_theme_snapshot_over_the_fixture_transcript() {
             "rgb".to_string(),
         ]
     );
-    // Borders are theme data too, not only colors.
+    // The todo band used to be this fixture's boxed chrome. It is a
+    // checklist now, so the themed corners live on pickers and the
+    // dashboard, not on this frame. The checklist itself still has to
+    // be here.
     let rows: Vec<String> = (0..buf.area.height).map(|y| row_text(&buf, y)).collect();
     assert!(
-        rows.iter().any(|row| row.contains('╭')),
-        "minimal draws rounded borders"
+        rows.iter().any(|row| row.contains("todos")),
+        "minimal still draws the todo checklist"
     );
 }
 
@@ -3820,16 +3881,9 @@ fn a_skin_palette_snapshot_over_the_fixture_transcript() {
          out of this list rather than fail somewhere only the eye would catch it"
     );
     let rows: Vec<String> = (0..buf.area.height).map(|y| row_text(&buf, y)).collect();
-    // The palette carries the border style too, so this is the same claim as
-    // the colors above in a different medium: codex draws plain corners where
-    // minimal draws rounded ones, and neither renderer knows the difference.
     assert!(
-        rows.iter().any(|row| row.contains('┌')),
-        "codex draws plain borders"
-    );
-    assert!(
-        !rows.iter().any(|row| row.contains('╭')),
-        "and none of minimal's rounded ones survive the swap"
+        rows.iter().any(|row| row.contains("todos")),
+        "codex still draws the todo checklist"
     );
 }
 
@@ -3979,7 +4033,7 @@ fn a_theme_may_override_only_what_it_cares_about() {
     let _pinned = theme::pin(Arc::new(theme));
     let app = themed_fixture();
     let buf = screen(&app, 100, 40);
-    assert_eq!(fg_at(&buf, "≡", 0), Color::Blue);
+    assert_eq!(fg_at(&buf, "▸", 0), Color::Blue);
     assert_eq!(
         fg_at(&buf, "+added line", 0),
         theme::minimal().color(Token::DiffAdd),
@@ -4702,7 +4756,7 @@ fn a_borrowed_cell_carries_no_row_its_upstream_does_not_have() {
     // `▾ Group N` header belongs to the *tasks* pane, which is a different one.
     let grok = skinned_screen(crate::skin::Skin::Grok, 92, 60).join("\n");
     assert!(
-        grok.contains("✓ done item"),
+        grok.contains("☒ done item") || grok.contains("✓ done item"),
         "the grok todo pane still lists its items:\n{grok}"
     );
     assert!(

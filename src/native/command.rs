@@ -75,6 +75,9 @@ pub enum Action {
     /// `/diff [path]`.
     ShowDiff(Option<String>),
     TogglePanel(Panel),
+    /// `/rail dismiss [name-or-id]`: take finished runs off the rail.
+    /// `None` means every finished run.
+    DismissRail(Option<String>),
     /// `/clear`: a fresh chat in the same workspace. Not a truncation of this
     /// one — the browser GUI that this replaced made the same call, and it is
     /// the right one: the conversation you cleared is still on disk and still
@@ -295,6 +298,20 @@ impl CommandSurface for Native {
         match panel {
             Panel::Diff => self.actions.push(Action::ShowDiff(None)),
             other => self.actions.push(Action::TogglePanel(other)),
+        }
+    }
+
+    async fn rail(&mut self, action: crate::commands::RailAction) {
+        match action {
+            crate::commands::RailAction::List => {
+                let n = self.snapshot.background_tasks.unwrap_or(0);
+                self.actions.push(Action::Notice(format!(
+                    "rail: {n} background task(s) — finished runs dismiss from the rail"
+                )));
+            }
+            crate::commands::RailAction::Dismiss(filter) => {
+                self.actions.push(Action::DismissRail(filter));
+            }
         }
     }
 

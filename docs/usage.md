@@ -30,6 +30,7 @@ inline hints.
 | `/agents` | Browse the subagent roster; Enter pre-fills a delegation request |
 | `/dashboard` | Toggle the machine-wide session manager, same view as `wizard agents` (below) |
 | `/bashes` | List background tasks (`execute` with `run_in_background`), running and finished ([tasks.md](tasks.md)) |
+| `/rail [dismiss [name-or-id]]` | List the subagent rail, or take finished rows off it. Running rows stay |
 | `/goal [text]` | Show or set the standing mission goal (drives sovereign/continuous mode; persists to `.wizard/mission.toml`) |
 | `/diff` | Toggle the git diff sidebar |
 | `/todos` | Toggle the todo list above the input |
@@ -409,10 +410,12 @@ something has been delegated.
    ✔ tester       all 214 tests pass                   1:31
 ```
 
-A row is a status dot (pulsing while running, `✔` done, `✗` failed), the
-subagent's name, what it is doing right now (the tool in flight by name, else
-its latest message), the elapsed clock, and `+N`: how much it has done since
-you last looked at it. Five rows show at most, then a `+N more` marker.
+A row is a status dot (pulsing while running, still `✔` or `✗` once it
+finishes), the subagent's name, what it is doing right now (the tool in
+flight by name, else its latest message), the elapsed clock, and `+N`: how
+much it has done since you last looked at it. Five rows show at most, then a
+`+N more` marker. Finished rows sit still. They do not blink and they do not
+leave until you dismiss them.
 
 Enter opens the selected run: that subagent's own conversation replaces the
 main chat, its messages and its collapsible tool cards, drawn by the same
@@ -440,7 +443,8 @@ keep talking to the main agent while you watch one work.
 | ↑ / ↓ (in a pane) | Open the previous / next run, wrapping around; with only one run, scroll it |
 | Shift+↑ / Shift+↓ (in a pane) | Scroll the pane |
 | PageUp / PageDown (in a pane) | Scroll the pane by ten lines |
-| Ctrl-X | Kill the selected run (background runs only) or stop the selected command |
+| Ctrl-X | Kill the selected run (background runs only) or stop the selected command. On an already-finished pane, dismiss it |
+| Backspace / Delete | Dismiss a finished pane. A running row is left alone |
 | Any other key | Focus returns to the composer and the key is typed there |
 
 ## Background commands on the rail
@@ -463,11 +467,13 @@ done its job once you see it go green, while a command's output lives only in
 the registry and the row is the way back to it. The one you are watching does
 not retire under you.
 
-A finished run rests on the rail for a few seconds and then retires, so the rail
-stays a picture of live work rather than a log of every subagent the session
-ever ran. Nothing is lost: a run's report is the output of the `spawn_subagent`
-card in the main chat, which a background run writes back to when it lands. A
-run you are watching never retires under you, its clock starts when you leave.
+A finished run stays on the rail until you dismiss it (Backspace or Delete on
+the row, Ctrl-X on a finished pane, or `/rail dismiss`). The agent can run
+`/rail` and `/rail dismiss` the same way when you ask it to clear the rail.
+Nothing is lost either way: a run's report is the output of the
+`spawn_subagent` card in the main chat, which a background run writes back to
+when it lands. Esc from an open pane returns you to the composer and leaves
+the row where it is.
 
 ↓ only enters the rail when you are not part-way through input history, where
 it keeps walking history. Any key the rail does not use returns focus to the

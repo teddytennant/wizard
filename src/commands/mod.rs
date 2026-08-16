@@ -114,6 +114,9 @@ pub enum SlashCommand {
     /// `/bashes` — list background tasks (`execute` with
     /// `run_in_background`), running and finished, with id/status/command.
     Bashes,
+    /// `/rail [dismiss [name-or-id]]` — list the subagent rail, or take
+    /// finished rows off it. Running rows stay.
+    Rail(RailAction),
     /// `/btw <question>` — one-shot side question against the current
     /// conversation context. The exchange is *not* appended to history or
     /// the session file (token-cheap asides mid-task).
@@ -176,6 +179,16 @@ pub enum SlashCommand {
     /// why it carries the [`ImportSelection`].
     ImportClaude(ImportSelection),
     Quit,
+}
+
+/// What a `/rail` subcommand does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RailAction {
+    /// `/rail` (no args): list every row.
+    List,
+    /// `/rail dismiss` or `/rail dismiss <name-or-id>`: drop finished rows.
+    /// `None` means every finished pane; `Some` matches a name or a run id.
+    Dismiss(Option<String>),
 }
 
 /// What a `/fusion` subcommand does.
@@ -307,6 +320,20 @@ fn parse_memory(args: &[&str]) -> Result<SlashCommand, String> {
     Ok(SlashCommand::Memory(action))
 }
 
+/// Parse the arguments to `/rail` (everything after the command word).
+fn parse_rail(args: &[&str]) -> Result<SlashCommand, String> {
+    let action = match args.first().copied() {
+        None => RailAction::List,
+        Some("dismiss") => RailAction::Dismiss(args.get(1).map(|s| (*s).to_string())),
+        Some(other) => {
+            return Err(format!(
+                "unknown /rail subcommand '{other}' — use /rail or /rail dismiss [name-or-id]"
+            ));
+        }
+    };
+    Ok(SlashCommand::Rail(action))
+}
+
 /// What a `/server` subcommand does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerAction {
@@ -398,6 +425,7 @@ impl SlashCommand {
             "doctor" => Ok(Self::Doctor),
             "status" => Ok(Self::Status),
             "bashes" => Ok(Self::Bashes),
+            "rail" => parse_rail(&args),
             "btw" => {
                 // Keep the question intact (spaces, punctuation) rather than
                 // rejoining whitespace-split tokens — the whole rest of the
@@ -497,6 +525,7 @@ impl SlashCommand {
             | Doctor
             | Status
             | Bashes
+            | Rail(_)
             | Compact
             | Reload
             | Plan
@@ -594,6 +623,7 @@ impl SlashCommand {
             Doctor => "doctor",
             Status => "status",
             Bashes => "bashes",
+            Rail(_) => "rail",
             Btw(_) => "btw",
             Fork(_) => "fork",
             Goal(_) => "goal",
@@ -992,6 +1022,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         tui: Execution::Agent,
         gui: Execution::Agent,
         gateway: Execution::Agent,
+        agent_arg: "",
+    },
+    CommandSpec {
+        name: "rail",
+        args: "[dismiss [name-or-id]]",
+        description: "list the subagent rail, or dismiss finished rows",
+        takes_args: false,
+        tui: Execution::Ui,
+        gui: Execution::Ui,
+        gateway: Execution::Unavailable,
         agent_arg: "",
     },
     CommandSpec {
@@ -1568,6 +1608,7 @@ mod tests {
             SlashCommand::Doctor,
             SlashCommand::Status,
             SlashCommand::Bashes,
+            SlashCommand::Rail(RailAction::List),
             SlashCommand::Btw("x".into()),
             SlashCommand::Fork("x".into()),
             SlashCommand::Goal(None),

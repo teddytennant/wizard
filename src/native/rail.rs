@@ -48,6 +48,8 @@ pub enum Message {
     ShowDiff(String),
     /// A subagent row was clicked: show its run.
     ShowRun(u64),
+    /// A finished run's dismiss control was clicked.
+    DismissRun(u64),
     /// Fold the changed-file list.
     ToggleFiles,
     /// Fold the branch list under the branch chip.
@@ -361,12 +363,13 @@ impl Rail {
         // Most recent first: the run you are waiting on is the one you just
         // started. The model stores them the other way up.
         for run in self.subagents.runs.iter().rev() {
-            let dot = match &run.status {
-                subagent::Status::Running => Token::ToolRunning,
-                subagent::Status::Done => Token::ToolDone,
-                subagent::Status::Budget => Token::Warning,
-                subagent::Status::Failed(_) => Token::ToolFailed,
+            let (mark, dot) = match &run.status {
+                subagent::Status::Running => ("●", Token::ToolRunning),
+                subagent::Status::Done => ("✔", Token::ToolDone),
+                subagent::Status::Budget => ("✔", Token::Warning),
+                subagent::Status::Failed(_) => ("✗", Token::ToolFailed),
             };
+            let finished = !matches!(run.status, subagent::Status::Running);
             let badge = match run.unread {
                 0 => String::new(),
                 count => format!("{count}"),
@@ -382,7 +385,7 @@ impl Rail {
                     row![
                         container(
                             row![
-                                text("●").size(9.0).color(palette.color(dot)),
+                                text(mark).size(9.0).color(palette.color(dot)),
                                 chrome::body(run.name.clone(), palette)
                                     .wrapping(iced::widget::text::Wrapping::None),
                             ]
@@ -396,16 +399,28 @@ impl Rail {
                     .spacing(8)
                     .align_y(iced::Alignment::Center),
                     chrome::muted(run.activity(), palette),
-                    chrome::literal(
-                        format!(
-                            "{} step{} · {} · {}",
-                            run.steps,
-                            if run.steps == 1 { "" } else { "s" },
-                            duration(run.elapsed()),
-                            run.status.label(),
-                        ),
-                        palette,
-                    ),
+                    {
+                        let meta = chrome::literal(
+                            format!(
+                                "{} step{} · {} · {}",
+                                run.steps,
+                                if run.steps == 1 { "" } else { "s" },
+                                duration(run.elapsed()),
+                                run.status.label(),
+                            ),
+                            palette,
+                        );
+                        if finished {
+                            row![
+                                meta,
+                                chrome::action("dismiss", Message::DismissRun(run.id), palette),
+                            ]
+                            .spacing(8)
+                            .into()
+                        } else {
+                            meta.into()
+                        }
+                    },
                 ]
                 .spacing(2),
                 Message::ShowRun(run.id),
@@ -422,9 +437,9 @@ impl Rail {
             .iter()
             .map(|item| {
                 let (glyph, token) = match (item.done, item.active) {
-                    (true, _) => ("✓", Token::Success),
-                    (false, true) => ("◉", Token::Text),
-                    (false, false) => ("○", Token::Faint),
+                    (true, _) => ("☒", Token::Faint),
+                    (false, true) => ("▸", Token::Text),
+                    (false, false) => ("☐", Token::Faint),
                 };
                 let color = match item.done {
                     true => palette.color(Token::Faint),
@@ -438,7 +453,7 @@ impl Rail {
                 .into()
             })
             .collect();
-        chrome::block("progress", rows, palette)
+        chrome::block("todos", rows, palette)
     }
 }
 

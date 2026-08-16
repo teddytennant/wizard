@@ -2842,7 +2842,7 @@ fn todo_row(item: &TodoItem, width: usize) -> Line<'static> {
             theme::style(Token::Warning),
             theme::style(Token::Text).bold(),
         ),
-        TodoStatus::Completed => ("\u{2713}", theme::style(Token::Success), super::muted()),
+        TodoStatus::Completed => ("\u{2612}", theme::style(Token::Success), super::muted()),
     };
     super::truncate_line(
         Line::from(vec![

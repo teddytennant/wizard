@@ -10,6 +10,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 - **Ctrl-B backgrounds the running command.** The child keeps running as an ordinary background task, the `execute` call returns at once with the task id, and the turn carries on — the point being the quiet commands, the build and the test suite, which never take the composer and so had no key at all. The output already captured is seeded into the task's buffer, so `task_output` shows the whole command rather than only the part after the key; stdin closes, as it does for anything started with `run_in_background`, and the 30-minute background timeout runs from the handover. Under tmux the shortcuts bar reads `Ctrl+b Ctrl+b`, because tmux eats the first one. At an idle prompt the key is left to the line editor. See [docs/interactive-commands.md](docs/interactive-commands.md).
 - **Background commands are rail rows.** They sit below the subagents under the same index, so ↓ from the composer walks out of the last agent and into the first command. Enter opens a command's live output (↑/↓ and PageUp/PageDown scroll it, following the tail until you scroll up), Ctrl-X stops it, Esc goes back. A selection follows the command it was put on rather than the row number, so a finished command aging off the rail cannot slide the cursor onto a neighbour and have the next Ctrl-X stop the wrong one. All three skins draw the rows. See [docs/usage.md](docs/usage.md).
+- **`/rail` lists the subagent rail and dismisses finished rows.** `/rail dismiss` clears every finished pane; `/rail dismiss <name-or-id>` is selective. Running rows stay. The agent may run it.
+
+### Changed
+
+- **Finished subagents stay on the rail until dismissed.** They sit still (`✔` / `✗`) instead of pulsing or vanishing after a few seconds. Backspace or Delete on a finished row, Ctrl-X on a finished pane, or `/rail dismiss` takes them off. Esc from an open pane no longer wipes the row. See [docs/usage.md](docs/usage.md).
+- **The todo band is a quieter checklist.** `todos N/M`, then `☐` / `▸` / `☒`. Completed items are dim, not struck through. The house skin dropped the boxed chrome.
 
 ## [2.1.0] - 2026-08-16
 

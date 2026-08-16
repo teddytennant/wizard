@@ -1,0 +1,14 @@
+# Docker sends the whole build context up front, so an unignored target/ (tens
+# of gigabytes here) looks like a build that hangs before its first layer.
+#
+# Exclude by size, and only what the build cannot reach. Everything the crate
+# embeds has to stay: `assets/` (themes via include_str!, fonts via
+# include_bytes!), `WIZARD.md` (the charter, compiled into the system prompt),
+# `tests/fixtures/` (one recorded SSE stream a unit test embeds), and
+# `wizard-release.pub`. Dropping `assets/` here once cost a build that failed
+# 118 seconds in on `couldn't read src/../assets/themes/grok.toml`.
+target/
+target-glibc/
+.git/
+demo/
+jobs/

@@ -1780,6 +1780,24 @@ impl CommandSurface for CommandContext<'_> {
         }
     }
 
+    async fn rail(&mut self, action: crate::commands::RailAction) {
+        use crate::commands::RailAction;
+        let text = match action {
+            RailAction::List => self.app.rail_report(None),
+            RailAction::Dismiss(filter) => {
+                let (removed, refused) = self.app.dismiss_finished_panes(filter.as_deref());
+                let note = match (removed, refused, filter.as_deref()) {
+                    (0, 0, Some(want)) => format!("no finished row matching '{want}'"),
+                    (0, 0, None) => "no finished rows to dismiss".to_string(),
+                    (n, 0, _) => format!("dismissed {n}"),
+                    (n, r, _) => format!("dismissed {n}; left {r} still running"),
+                };
+                self.app.rail_report(Some(&note))
+            }
+        };
+        self.app.notice(text);
+    }
+
     async fn toggle_vim(&mut self) {
         self.app.toggle_vim();
     }

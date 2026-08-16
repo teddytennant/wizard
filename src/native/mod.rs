@@ -598,6 +598,49 @@ impl App {
                     }
                     crate::commands::surface::Panel::Diff => {}
                 },
+                Action::DismissRail(filter) => {
+                    let before = self.rail.subagents.runs.len();
+                    match filter.as_deref() {
+                        None => {
+                            let ids: Vec<u64> = self
+                                .rail
+                                .subagents
+                                .runs
+                                .iter()
+                                .filter(|run| {
+                                    !matches!(run.status, crate::native::subagent::Status::Running)
+                                })
+                                .map(|run| run.id)
+                                .collect();
+                            for id in ids {
+                                self.rail.subagents.dismiss(id);
+                            }
+                        }
+                        Some(want) => {
+                            let ids: Vec<u64> = self
+                                .rail
+                                .subagents
+                                .runs
+                                .iter()
+                                .filter(|run| {
+                                    !matches!(run.status, crate::native::subagent::Status::Running)
+                                        && (run.name.eq_ignore_ascii_case(want)
+                                            || run.id.to_string() == want)
+                                })
+                                .map(|run| run.id)
+                                .collect();
+                            for id in ids {
+                                self.rail.subagents.dismiss(id);
+                            }
+                        }
+                    }
+                    if matches!(self.pane, Pane::Run(id) if !self.rail.subagents.runs.iter().any(|run| run.id == id))
+                    {
+                        self.pane = Pane::Chat;
+                    }
+                    let gone = before.saturating_sub(self.rail.subagents.runs.len());
+                    self.transcript.notice(format!("dismissed {gone}"));
+                }
                 Action::NewChat => task = self.new_chat(),
                 Action::Resume(Some(id)) => task = self.open_chat(id),
                 Action::Resume(None) => self
@@ -982,6 +1025,13 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::Rail(rail::Message::ShowRun(id)) => {
             app.rail.subagents.open(id);
             app.pane = Pane::Run(id);
+            iced::Task::none()
+        }
+        Message::Rail(rail::Message::DismissRun(id)) => {
+            app.rail.subagents.dismiss(id);
+            if matches!(app.pane, Pane::Run(open) if open == id) {
+                app.pane = Pane::Chat;
+            }
             iced::Task::none()
         }
         Message::Rail(rail::Message::ToggleBranches) => {

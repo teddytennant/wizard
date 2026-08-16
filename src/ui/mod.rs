@@ -308,8 +308,8 @@ fn todo_height(app: &App, total_height: u16, input_rows: u16, rail_rows: u16) ->
     } else {
         app.todos.len() as u16
     };
-    // +2 for the rounded border. Floor of 3 keeps the title + one item row.
-    let desired = (item_rows + 2).max(3);
+    // +1 for the `todos N/M` header. Floor of 3 keeps the title + one item.
+    let desired = (item_rows + 1).max(3);
     // Keep at least 1 transcript row + composer + rail + status above the
     // hard floor so chat never disappears under the band.
     let reserved = 1u16
@@ -1059,30 +1059,34 @@ pub(super) fn prefix_rows(
 }
 
 /// Compact todo band just above the composer (`/todos`, auto-shown on the
-/// first todo update). A few rows tall, full input width — Claude Code style —
-/// reserved in the layout so the transcript shrinks above it instead of being
-/// painted over. Glyphs: ✓ completed (dim, struck-through), ▸ in progress
-/// (accent), ☐ pending.
+/// first todo update). A few rows tall, full input width, Claude Code style:
+/// a quiet `todos N/M` line and a checkbox list. Reserved in the layout so
+/// the transcript shrinks above it instead of being painted over. Glyphs:
+/// ☒ completed (dim), ▸ in progress (accent), ☐ pending (muted).
 pub(super) fn draw_todo_band(frame: &mut Frame, app: &App, area: Rect) {
     if area.height < 3 || area.width < 8 {
         return;
     }
     let (done, total) = crate::tools::todo::progress(&app.todos);
 
-    let block = Block::bordered()
-        .border_type(theme::border_type())
-        .border_style(theme::style(Token::Border))
-        .title(Line::from(vec![
-            Span::styled(" ≡ ", accent()),
-            Span::styled(format!("todos {done}/{total}"), muted()),
-            Span::styled(" · esc", dim()),
-        ]));
-    let inner = block.inner(area);
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y,
+        width: area.width.saturating_sub(1),
+        height: area.height,
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
     let inner_width = inner.width as usize;
-    let visible = inner.height as usize;
-    let lines: Vec<Line<'static>> = if app.todos.is_empty() {
-        vec![Line::from(Span::styled("(empty)", dim().italic()))]
-    } else {
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled(format!("todos {done}/{total}"), muted()),
+        Span::styled("  esc", dim()),
+    ])];
+    let visible = inner.height.saturating_sub(1) as usize;
+    if app.todos.is_empty() {
+        lines.push(Line::from(Span::styled("(empty)", dim().italic())));
+    } else if visible > 0 {
         // Prefer the in-progress item and its neighbors when the list is
         // taller than the band: scroll so the current work stays visible.
         let focus = app
@@ -1097,28 +1101,23 @@ pub(super) fn draw_todo_band(frame: &mut Frame, app: &App, area: Rect) {
                 .saturating_sub(visible.saturating_sub(1) / 2)
                 .min(app.todos.len().saturating_sub(visible))
         };
-        app.todos
-            .iter()
-            .skip(start)
-            .take(visible)
-            .map(|item| {
-                use crate::tools::todo::TodoStatus;
-                let (glyph_style, text_style) = match item.status {
-                    TodoStatus::Completed => (dim(), dim().add_modifier(Modifier::CROSSED_OUT)),
-                    TodoStatus::InProgress => (accent(), accent().bold()),
-                    TodoStatus::Pending => (dim(), muted()),
-                };
-                truncate_line(
-                    Line::from(vec![
-                        Span::styled(format!("{} ", item.status.glyph()), glyph_style),
-                        Span::styled(item.content.clone(), text_style),
-                    ]),
-                    inner_width,
-                )
-            })
-            .collect()
-    };
-    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
+        lines.extend(app.todos.iter().skip(start).take(visible).map(|item| {
+            use crate::tools::todo::TodoStatus;
+            let (glyph_style, text_style) = match item.status {
+                TodoStatus::Completed => (dim(), dim()),
+                TodoStatus::InProgress => (accent(), accent().bold()),
+                TodoStatus::Pending => (dim(), muted()),
+            };
+            truncate_line(
+                Line::from(vec![
+                    Span::styled(format!("{} ", item.status.glyph()), glyph_style),
+                    Span::styled(item.content.clone(), text_style),
+                ]),
+                inner_width,
+            )
+        }));
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 /// Git diff sidebar (`/diff`): separated from the chat by a single dim

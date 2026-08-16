@@ -859,14 +859,19 @@ pub enum PaneStatus {
 }
 
 impl PaneStatus {
-    /// The rail's status glyph. Running panes animate via
-    /// [`SubagentPane::glyph`]; these are the resting shapes.
+    /// The rail's resting glyph. Running panes animate via
+    /// [`SubagentPane::glyph`] until they finish; after that this is what stays.
     pub fn glyph(self) -> &'static str {
         match self {
             PaneStatus::Running => "●",
             PaneStatus::Done => "✔",
             PaneStatus::Failed => "✗",
         }
+    }
+
+    /// A finished row, even one still marked running, never pulses.
+    pub fn is_live(self) -> bool {
+        matches!(self, PaneStatus::Running)
     }
 }
 
@@ -881,17 +886,10 @@ pub fn rail_pulse(tick: u64) -> &'static str {
     PANE_SPINNER[(tick / 2) as usize % PANE_SPINNER.len()]
 }
 
-/// How long a finished run rests on the rail before it retires: long enough to
-/// see it land, short enough that the rail stays a picture of live work. Its
-/// report stays in the main chat either way.
-pub(super) const PANE_LINGER: Duration = Duration::from_secs(8);
-
-/// The same idea for a finished background command, and longer for the same
-/// reason it is short for a subagent: a run's report lands in the main chat, so
-/// its row has done its job the moment you see it go green, while a background
-/// command's output lives only in the registry — the row is the way back to it,
-/// and half a minute is how long it takes to notice a build finished and decide
-/// whether to look.
+/// How long a finished background command rests on the rail. A command's
+/// output lives only in the registry, so the row is the way back to it; half a
+/// minute is long enough to notice a build finished and decide whether to look.
+/// Finished subagent rows do not time out: they sit still until dismissed.
 pub(super) const TASK_LINGER: Duration = Duration::from_secs(30);
 
 /// One subagent run, surfaced on the rail below the composer and openable as
@@ -949,12 +947,17 @@ impl SubagentPane {
         self.finished.unwrap_or_else(Instant::now) - self.started
     }
 
-    /// The rail dot: a pulsing glyph while running, a resting one once done.
+    /// The rail dot: a pulsing glyph while the run is live, a resting one
+    /// the moment it has finished. `finished` wins over a stale Running
+    /// status, which is how an aborted turn used to leave a blinking row.
     pub fn glyph(&self, tick: u64) -> &'static str {
-        match self.status {
-            PaneStatus::Running => PANE_SPINNER[(tick / 2) as usize % PANE_SPINNER.len()],
-            other => other.glyph(),
+        if self.finished.is_some() || !self.status.is_live() {
+            return match self.status {
+                PaneStatus::Failed => PaneStatus::Failed.glyph(),
+                _ => PaneStatus::Done.glyph(),
+            };
         }
+        PANE_SPINNER[(tick / 2) as usize % PANE_SPINNER.len()]
     }
 
     /// One-line summary of what the subagent is doing right now: the tool it
