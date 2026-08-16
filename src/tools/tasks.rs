@@ -210,13 +210,62 @@ impl TaskRegistry {
         timeout: Duration,
     ) -> u32 {
         let id = self.add(command_line);
+        let readers = vec![
+            tokio::spawn(read_into(Arc::clone(self), id, child.stdout.take())),
+            tokio::spawn(read_into(Arc::clone(self), id, child.stderr.take())),
+        ];
+        self.monitor(id, child, timeout, readers);
+        id
+    }
+
+    /// Take over a command that has been running in the foreground: register
+    /// it, seed its buffer with the output already captured, and monitor it
+    /// from here as an ordinary background task. Returns the task id.
+    ///
+    /// This is the Ctrl-B path. The caller keeps its own readers — by the time
+    /// a command is backgrounded its pipes are already taken and pumped
+    /// somewhere else — so it hands over the task draining them, which the
+    /// monitor awaits before the task becomes drainable, exactly as
+    /// [`spawn_with_timeout`](Self::spawn_with_timeout) awaits its own.
+    ///
+    /// The [`BACKGROUND_TIMEOUT`] runs from adoption rather than from the
+    /// command's start: the foreground timeout the user just escaped is not the
+    /// one that should apply to a job they explicitly asked to keep running.
+    pub fn adopt(
+        self: &Arc<Self>,
+        command_line: &str,
+        child: tokio::process::Child,
+        seed: &[u8],
+        drain: impl FnOnce(u32) -> tokio::task::JoinHandle<()>,
+    ) -> u32 {
+        let id = self.add(command_line);
+        if !seed.is_empty() {
+            self.append_output(id, seed);
+        }
+        // The drain is started against the id it writes to, which is why it
+        // arrives as a closure rather than a handle: the caller cannot spawn it
+        // before the id exists, and the registry cannot spawn it at all without
+        // knowing how the caller's pipes are already plumbed.
+        let drain = drain(id);
+        self.monitor(id, child, BACKGROUND_TIMEOUT, vec![drain]);
+        id
+    }
+
+    /// Wait on a registered task's child: record the exit, honour a kill
+    /// request, and enforce `timeout`. `readers` are the tasks capturing the
+    /// child's output; they are awaited before the task is finished so nothing
+    /// they still hold is lost from the buffer.
+    fn monitor(
+        self: &Arc<Self>,
+        id: u32,
+        mut child: tokio::process::Child,
+        timeout: Duration,
+        readers: Vec<tokio::task::JoinHandle<()>>,
+    ) {
         let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
         if let Some(entry) = self.lock().get_mut(&id) {
             entry.kill = Some(kill_tx);
         }
-
-        let out_task = tokio::spawn(read_into(Arc::clone(self), id, child.stdout.take()));
-        let err_task = tokio::spawn(read_into(Arc::clone(self), id, child.stderr.take()));
 
         let registry = Arc::clone(self);
         tokio::spawn(async move {
@@ -249,11 +298,11 @@ impl TaskRegistry {
             };
             // Let the readers capture whatever output is still buffered
             // before the task becomes drainable.
-            let _ = out_task.await;
-            let _ = err_task.await;
+            for reader in readers {
+                let _ = reader.await;
+            }
             registry.finish(id, status);
         });
-        id
     }
 
     /// Record the final status of a task and drop its kill handle.
@@ -263,6 +312,19 @@ impl TaskRegistry {
                 entry.status = status;
                 entry.finished = Some(Instant::now());
             }
+            entry.kill = None;
+        }
+    }
+
+    /// Mark a task finished `ago` in the past, for surfaces tests that need a
+    /// row old enough to have aged off the rail. There is no other way to get
+    /// one: retirement is a comparison against `finished`, and a test cannot
+    /// wait out the linger.
+    #[cfg(test)]
+    pub fn finish_in_the_past(&self, id: u32, status: TaskStatus, ago: Duration) {
+        if let Some(entry) = self.lock().get_mut(&id) {
+            entry.status = status;
+            entry.finished = Some(Instant::now() - ago);
             entry.kill = None;
         }
     }

@@ -874,10 +874,25 @@ impl PaneStatus {
 /// subagent visibly pulses on the rail.
 const PANE_SPINNER: [&str; 4] = ["●", "◉", "○", "◉"];
 
+/// The pulsing dot itself, for rail rows that are not a subagent's — a running
+/// background command pulses in the same column, off the same tick, because on
+/// that rail the pulse means "this is alive" and not "this is an agent".
+pub fn rail_pulse(tick: u64) -> &'static str {
+    PANE_SPINNER[(tick / 2) as usize % PANE_SPINNER.len()]
+}
+
 /// How long a finished run rests on the rail before it retires: long enough to
 /// see it land, short enough that the rail stays a picture of live work. Its
 /// report stays in the main chat either way.
 pub(super) const PANE_LINGER: Duration = Duration::from_secs(8);
+
+/// The same idea for a finished background command, and longer for the same
+/// reason it is short for a subagent: a run's report lands in the main chat, so
+/// its row has done its job the moment you see it go green, while a background
+/// command's output lives only in the registry — the row is the way back to it,
+/// and half a minute is how long it takes to notice a build finished and decide
+/// whether to look.
+pub(super) const TASK_LINGER: Duration = Duration::from_secs(30);
 
 /// One subagent run, surfaced on the rail below the composer and openable as
 /// a full chat view.

@@ -16,13 +16,13 @@ mod tests;
 mod transcript;
 
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
-pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
+pub use prompts::{Console, Interview, PlanReview, ProviderPrompt, TaskWatch};
 pub use runtime::run_tui;
 pub use tee::MeshTee;
 pub use term::restore_terminal_best_effort;
 pub use transcript::{
     LOCAL_MARKER, PaneStatus, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
-    TranscriptView,
+    TranscriptView, rail_pulse,
 };
 
 use std::collections::VecDeque;
@@ -59,7 +59,7 @@ use prompts::{
     PROVIDER_ADD_ROW, PROVIDER_TYPES, PromptField, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
     web_backend_label, web_backend_needs_key, xai_oauth_session_present,
 };
-use transcript::PANE_LINGER;
+use transcript::{PANE_LINGER, TASK_LINGER};
 
 /// How many user prompts may sit behind a running turn. Beyond this the next
 /// Enter is refused with a notice rather than growing without bound.
@@ -183,9 +183,19 @@ pub struct App {
     /// composer). `None` means the composer has focus and the rail is just
     /// on display. Indexes [`App::panes`].
     pub rail_focus: Option<usize>,
+    /// Which background command [`App::rail_focus`] is sitting on, when it is
+    /// sitting on one. The index moves as finished rows retire; the id does
+    /// not, and [`App::follow_rail_selection`] uses it to keep the selection on
+    /// the command the user actually picked.
+    rail_focus_task: Option<u32>,
     /// The pane the user is *inside*: its transcript replaces the main chat
     /// until Esc. Indexes [`App::panes`].
     pub attached: Option<usize>,
+    /// The background command the user is *watching*: its live output replaces
+    /// the main chat until Esc. The task id, not an index — a task's row moves
+    /// as others finish and retire, and a stale index would show the wrong
+    /// command's output rather than nothing.
+    pub attached_task: Option<TaskWatch>,
     /// This session's id (heartbeat filename + dashboard identity).
     pub session_id: String,
     /// This session's display name (from the first prompt, or the id).
@@ -438,7 +448,9 @@ impl App {
             subagents: None,
             tasks: None,
             rail_focus: None,
+            rail_focus_task: None,
             attached: None,
+            attached_task: None,
             session_id: String::new(),
             session_name: String::new(),
             session_started_unix: 0,
@@ -1240,11 +1252,114 @@ impl App {
         format!("{}…", self.spinner_verb)
     }
 
-    // ---- Subagent rail -------------------------------------------------
+    // ---- The rail --------------------------------------------------------
     //
-    // The rail is the row of dots under the composer, one per subagent run.
-    // ↓ from the composer focuses it, ↑/↓ move between dots, Enter opens the
-    // selected one as a full chat view, Esc backs out.
+    // The rail is the band under the composer: one row per subagent run, then
+    // one per background command. ↓ from the composer focuses it, ↑/↓ move
+    // between rows, Enter opens the selected one, Ctrl-X stops it, Esc backs
+    // out.
+    //
+    // # One index over two lists
+    //
+    // `rail_focus` is a single index across both groups: rows `0..panes.len()`
+    // are subagents and everything after them is a background command. Two
+    // selections would need a third piece of state saying which of them the
+    // arrows are moving, and the user does not think of it as two lists — they
+    // press ↓ until they are on the thing they want.
+    //
+    // Panes come first because every existing `rail_focus = Some(index)` in
+    // this file is a pane index, and they stay correct only while pane rows
+    // start at zero.
+
+    /// Background commands the rail is showing: everything running, plus
+    /// anything that finished recently enough that its row has not been read
+    /// yet.
+    ///
+    /// Ordered by id, which is the order the registry lists them in and the
+    /// order they were started. The renderer and the key handler both walk
+    /// *this* — a rail whose rows and whose selection came from two different
+    /// snapshots would kill whichever command had scrolled into that slot.
+    pub fn rail_tasks(&self) -> Vec<crate::tools::tasks::Task> {
+        let Some(registry) = self.tasks.as_ref() else {
+            return Vec::new();
+        };
+        registry
+            .list()
+            .into_iter()
+            .filter(|task| {
+                task.status == crate::tools::tasks::TaskStatus::Running
+                    || task.finished.is_some_and(|at| at.elapsed() < TASK_LINGER)
+                    // The one you are watching does not vanish out from under
+                    // you when it exits, the same courtesy `retire_finished_panes`
+                    // gives an attached pane.
+                    || self.watched_task() == Some(task.id)
+            })
+            .collect()
+    }
+
+    /// Move the rail selection, remembering *which command* it landed on when
+    /// it landed on one. The only place `rail_focus` is written, so the id and
+    /// the index cannot drift apart.
+    fn set_rail_focus(&mut self, index: Option<usize>) {
+        self.rail_focus = index;
+        self.rail_focus_task = index
+            .and_then(|index| self.rail_task_at(index))
+            .map(|task| task.id);
+    }
+
+    /// Keep a selection that is sitting on a background command pointed at the
+    /// *same* command as rows retire around it.
+    ///
+    /// This is [`App::retire_finished_panes`]'s problem in the other group, and
+    /// it has to be solved the same way for the same reason: `rail_focus` is an
+    /// index, a finished command drops off the rail thirty seconds later, and
+    /// every row below it moves up one. Left alone, a selection parked on row 3
+    /// would quietly become a *different* command — and the next Ctrl-X would
+    /// stop that one. A stale selection here is not a cosmetic bug.
+    ///
+    /// The task the user is *watching* keeps its row either way: `rail_tasks`
+    /// holds it on the rail for as long as its output is on screen.
+    fn follow_rail_selection(&mut self) {
+        let Some(id) = self.rail_focus_task else {
+            return;
+        };
+        if self.rail_focus.is_none() {
+            self.rail_focus_task = None;
+            return;
+        }
+        match self
+            .rail_tasks()
+            .iter()
+            .position(|task| task.id == id)
+            .map(|offset| self.panes.len() + offset)
+        {
+            Some(index) => self.rail_focus = Some(index),
+            // Gone. Focus goes back to the composer rather than silently
+            // jumping to whichever command took the row — the same choice
+            // `retire_finished_panes` makes for a run.
+            None => {
+                self.rail_focus = None;
+                self.rail_focus_task = None;
+            }
+        }
+    }
+
+    /// Id of the background task whose output is on screen, if any.
+    pub fn watched_task(&self) -> Option<u32> {
+        self.attached_task.as_ref().map(|watch| watch.id)
+    }
+
+    /// Total rail rows: subagent panes, then background commands.
+    fn rail_len(&self) -> usize {
+        self.panes.len() + self.rail_tasks().len()
+    }
+
+    /// The background task at rail row `index`, or `None` when the row is a
+    /// subagent's (or past the end).
+    fn rail_task_at(&self, index: usize) -> Option<crate::tools::tasks::Task> {
+        let offset = index.checked_sub(self.panes.len())?;
+        self.rail_tasks().into_iter().nth(offset)
+    }
 
     /// Index of the pane for `run`, if it is still on the rail.
     fn pane_index(&self, run: u64) -> Option<usize> {
@@ -1306,25 +1421,30 @@ impl App {
         };
         let next = current as isize + delta;
         if next < 0 {
-            self.rail_focus = None;
+            self.set_rail_focus(None);
             return;
         }
-        self.rail_focus = Some((next as usize).min(self.panes.len().saturating_sub(1)));
+        self.set_rail_focus(Some((next as usize).min(self.rail_len().saturating_sub(1))));
     }
 
-    /// Give the rail keyboard focus, selecting the first running pane if there
-    /// is one (that is the one you almost always want) and the last pane
-    /// otherwise. No-op when nothing has been delegated yet.
+    /// Give the rail keyboard focus, selecting the first row that is still
+    /// going (that is the one you almost always want) and the last row
+    /// otherwise. No-op when the rail is empty.
     pub fn focus_rail(&mut self) -> bool {
-        if self.panes.is_empty() {
+        let tasks = self.rail_tasks();
+        if self.panes.is_empty() && tasks.is_empty() {
             return false;
         }
-        let target = self
+        let running_pane = self
             .panes
             .iter()
-            .position(|pane| pane.status == PaneStatus::Running)
-            .unwrap_or(self.panes.len() - 1);
-        self.rail_focus = Some(target);
+            .position(|pane| pane.status == PaneStatus::Running);
+        let running_task = tasks
+            .iter()
+            .position(|task| task.status == crate::tools::tasks::TaskStatus::Running)
+            .map(|offset| self.panes.len() + offset);
+        let target = running_pane.or(running_task).unwrap_or(self.rail_len() - 1);
+        self.set_rail_focus(Some(target));
         true
     }
 
@@ -1339,7 +1459,9 @@ impl App {
         pane.unread = 0;
         pane.transcript.scroll_to_bottom();
         self.attached = Some(index);
-        self.rail_focus = Some(index);
+        self.set_rail_focus(Some(index));
+        // A pane and a task view cannot both own the body.
+        self.attached_task = None;
     }
 
     /// Attach the pane `delta` rows away from `index`, wrapping around the
@@ -1368,7 +1490,7 @@ impl App {
         {
             pane.unread = 0;
         }
-        self.rail_focus = None;
+        self.set_rail_focus(None);
         // A run that finished while you were watching it has been sitting on
         // the rail with its linger clock stopped; let it retire now.
         self.retire_finished_panes();
@@ -1488,7 +1610,7 @@ impl App {
         self.attached = attached_run.and_then(|run| self.pane_index(run));
         // If the run the rail was sitting on just retired, focus falls back to
         // the composer rather than silently jumping to some other subagent.
-        self.rail_focus = focus_run.and_then(|run| self.pane_index(run));
+        self.set_rail_focus(focus_run.and_then(|run| self.pane_index(run)));
     }
 
     /// Write a finished background run's report into the `spawn_subagent` card
@@ -1507,6 +1629,60 @@ impl App {
                 is_error,
             },
         );
+    }
+
+    /// Open a background command's live output as the main view, the way Enter
+    /// opens a subagent's transcript. Following the tail, because a running
+    /// command's newest line is the one you opened it to read.
+    pub fn watch_task(&mut self, id: u32) {
+        self.attached_task = Some(TaskWatch {
+            id,
+            ..TaskWatch::default()
+        });
+        // A task view and a pane cannot both own the body.
+        self.attached = None;
+    }
+
+    /// Stop watching a background command (Esc). The command keeps running —
+    /// stopping it is Ctrl-X, exactly as on the rail.
+    pub fn unwatch_task(&mut self) {
+        self.attached_task = None;
+    }
+
+    /// Scroll the watched task's output by `delta` lines, positive being back
+    /// through the history. Clamped by the renderer, which is the only thing
+    /// that knows how many lines the output wrapped to.
+    fn scroll_task(&mut self, delta: i16) {
+        let Some(watch) = self.attached_task.as_mut() else {
+            return;
+        };
+        let ceiling = watch.max_scroll.get();
+        watch.scroll = watch.scroll.saturating_add_signed(delta).min(ceiling);
+    }
+
+    /// Kill the background command at rail row `index` (Ctrl-X).
+    ///
+    /// Unlike a subagent run there is no foreground/background distinction to
+    /// respect: every task in this registry is detached by definition, which is
+    /// what makes the key unconditional here and conditional in
+    /// [`App::kill_pane`].
+    fn kill_task(&mut self, id: u32) {
+        let Some(registry) = self.tasks.as_ref() else {
+            return;
+        };
+        let killed = registry.kill(id);
+        let status = registry.status(id);
+        self.notice(match (killed, status) {
+            (true, _) => format!("stopping background task #{id}…"),
+            (false, None) => format!("no background task #{id}"),
+            (false, Some(status)) if status.is_finished() => {
+                format!(
+                    "background task #{id} already finished ({})",
+                    status.describe()
+                )
+            }
+            (false, Some(_)) => format!("background task #{id} is already stopping"),
+        });
     }
 
     /// Kill the selected run. Only background runs can be killed — a
@@ -2591,6 +2767,7 @@ impl App {
                 // Age finished runs off the rail (the tick is ~100ms, so this
                 // is a cheap retain over a handful of panes).
                 self.retire_finished_panes();
+                self.follow_rail_selection();
                 Ok(None)
             }
             Event::Agent(agent_event) => {
@@ -2658,6 +2835,14 @@ impl App {
                         return Ok(Some(AppAction::Interrupt));
                     }
                     self.notice("press Ctrl-C again to exit");
+                    return Ok(None);
+                }
+                // Ctrl-B backgrounds the running command. The guard is the
+                // point: at an idle prompt the key belongs to readline's
+                // backward-char, and a binding that swallowed it there would
+                // break ordinary line editing for a feature with nothing to do.
+                KeyCode::Char('b') if self.foreground_command().is_some() => {
+                    self.background_command();
                     return Ok(None);
                 }
                 KeyCode::Char('d') => {
@@ -2854,8 +3039,45 @@ impl App {
             }
         }
 
-        // The rail has keyboard focus: ↑/↓ move between subagent dots, Enter
-        // opens the selected one, Esc drops back to the composer.
+        // Watching a background command's output. Narrower than an attached
+        // pane on purpose: there is no conversation to walk, so ↑/↓ scroll the
+        // output rather than stepping to the next row, and everything else
+        // falls through to the composer underneath — the point of backgrounding
+        // a command is to keep talking to the agent while it runs.
+        if self.attached_task.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.unwatch_task();
+                    return Ok(None);
+                }
+                KeyCode::Up => {
+                    self.scroll_task(1);
+                    return Ok(None);
+                }
+                KeyCode::Down => {
+                    self.scroll_task(-1);
+                    return Ok(None);
+                }
+                KeyCode::PageUp => {
+                    self.scroll_task(10);
+                    return Ok(None);
+                }
+                KeyCode::PageDown => {
+                    self.scroll_task(-10);
+                    return Ok(None);
+                }
+                KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(id) = self.watched_task() {
+                        self.kill_task(id);
+                    }
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+
+        // The rail has keyboard focus: ↑/↓ move between rows, Enter opens the
+        // selected one, Ctrl-X stops it, Esc drops back to the composer.
         if let Some(index) = self.rail_focus
             && self.attached.is_none()
         {
@@ -2885,21 +3107,27 @@ impl App {
                     return Ok(None);
                 }
                 KeyCode::Enter => {
-                    self.attach_pane(index);
+                    match self.rail_task_at(index) {
+                        Some(task) => self.watch_task(task.id),
+                        None => self.attach_pane(index),
+                    }
                     return Ok(None);
                 }
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.kill_pane(index);
+                    match self.rail_task_at(index) {
+                        Some(task) => self.kill_task(task.id),
+                        None => self.kill_pane(index),
+                    }
                     return Ok(None);
                 }
                 KeyCode::Esc => {
-                    self.rail_focus = None;
+                    self.set_rail_focus(None);
                     return Ok(None);
                 }
                 // Anything else means the user is done browsing and wants to
                 // type: hand focus back to the composer and let the key land
                 // there, so you never lose a keystroke to the rail.
-                _ => self.rail_focus = None,
+                _ => self.set_rail_focus(None),
             }
         }
 
@@ -3562,6 +3790,61 @@ impl App {
         if self.console.take().is_some() {
             self.notice("the command ended — Enter goes to the agent again");
         }
+    }
+
+    /// The foreground command this composer could background, if there is one.
+    ///
+    /// `console_pending` counts. See [`App::background_command`] for why: a
+    /// command only reaches `console` once it has asked a question, and the
+    /// ones worth backgrounding are the quiet ones.
+    pub fn foreground_command(&self) -> Option<&Console> {
+        self.console.as_ref().or(self.console_pending.as_ref())
+    }
+
+    /// How many background commands are still running, for the surfaces that
+    /// only need the count. Zero when the agent has not been built yet.
+    pub fn tasks_running(&self) -> usize {
+        self.tasks.as_ref().map_or(0, |registry| {
+            registry
+                .list()
+                .iter()
+                .filter(|task| task.status == crate::tools::tasks::TaskStatus::Running)
+                .count()
+        })
+    }
+
+    /// Ctrl-B: detach the running foreground command into a background task.
+    ///
+    /// Guarded by [`App::foreground_command`] at the binding rather than here,
+    /// so the key falls through to line editing when there is nothing to
+    /// background.
+    ///
+    /// The writer comes from `console_pending` as often as from `console`, and
+    /// that is the point: `console` only holds a command that has *asked*
+    /// something, and the commands worth backgrounding are the silent ones —
+    /// the build, the test suite, the sync that is going to take four minutes.
+    /// Reading only `console` would have bound the key to the one case where
+    /// nobody wants it.
+    ///
+    /// The notice is left to the tool result rather than written here: what
+    /// comes back names the task id, and a guess at it now that the id has to
+    /// be corrected a moment later is worse than a short wait.
+    pub(super) fn background_command(&mut self) {
+        let Some(console) = self.foreground_command() else {
+            return;
+        };
+        if !console.writer.background() {
+            // The command ended between the keypress and here, or the queue is
+            // full. Either way nothing was backgrounded, and the console is
+            // about to be closed by its own `ConsoleClosed`.
+            self.notice("nothing to background — the command already ended");
+            return;
+        }
+        self.notice(format!("backgrounding {}…", console.command));
+        // The composer goes back to the agent: whatever the child reads next,
+        // it will not be from here.
+        self.console = None;
+        self.console_pending = None;
     }
 
     /// Let go of a running command's console (Esc).

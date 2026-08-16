@@ -6,6 +6,11 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **Ctrl-B backgrounds the running command.** The child keeps running as an ordinary background task, the `execute` call returns at once with the task id, and the turn carries on — the point being the quiet commands, the build and the test suite, which never take the composer and so had no key at all. The output already captured is seeded into the task's buffer, so `task_output` shows the whole command rather than only the part after the key; stdin closes, as it does for anything started with `run_in_background`, and the 30-minute background timeout runs from the handover. Under tmux the shortcuts bar reads `Ctrl+b Ctrl+b`, because tmux eats the first one. At an idle prompt the key is left to the line editor. See [docs/interactive-commands.md](docs/interactive-commands.md).
+- **Background commands are rail rows.** They sit below the subagents under the same index, so ↓ from the composer walks out of the last agent and into the first command. Enter opens a command's live output (↑/↓ and PageUp/PageDown scroll it, following the tail until you scroll up), Ctrl-X stops it, Esc goes back. A selection follows the command it was put on rather than the row number, so a finished command aging off the rail cannot slide the cursor onto a neighbour and have the next Ctrl-X stop the wrong one. All three skins draw the rows. See [docs/usage.md](docs/usage.md).
+
 ## [2.1.0] - 2026-08-16
 
 Oversized tool output goes to a file instead of being thrown away, a sovereign run can be made to prove it finished, code mode lets one Lua program stand in for a fixed sequence of calls, and copying text out over SSH works.

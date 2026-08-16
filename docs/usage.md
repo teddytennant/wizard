@@ -433,15 +433,35 @@ keep talking to the main agent while you watch one work.
 
 | Key | What it does |
 |-----|--------------|
-| ↓ (in the composer) | Focus the rail, on the first running run (the last run if none is running) |
-| ↑ / ↓ (on the rail) | Move between runs; ↑ off the top row returns focus to the composer |
-| Enter | Open the selected run |
+| ↓ (in the composer) | Focus the rail, on the first row still going (the last row if nothing is) |
+| ↑ / ↓ (on the rail) | Move between rows; ↑ off the top row returns focus to the composer |
+| Enter | Open the selected row |
 | Esc (in a pane) | Back to the main chat, focus in the composer |
 | ↑ / ↓ (in a pane) | Open the previous / next run, wrapping around; with only one run, scroll it |
 | Shift+↑ / Shift+↓ (in a pane) | Scroll the pane |
 | PageUp / PageDown (in a pane) | Scroll the pane by ten lines |
-| Ctrl-X | Kill the selected run (background runs only) |
+| Ctrl-X | Kill the selected run (background runs only) or stop the selected command |
 | Any other key | Focus returns to the composer and the key is typed there |
+
+## Background commands on the rail
+
+Background commands share the rail with the subagents, below them and under the
+same index, so `↓` walks out of the last agent and into the first command
+without your having to know there are two lists. A command gets there two ways:
+the model started it with `run_in_background`, or you pressed **Ctrl-B** while
+it ran in the foreground (see `docs/interactive-commands.md`; under tmux, press
+it twice).
+
+Enter on a command opens its live output instead of a chat view — `↑`/`↓` and
+PageUp/PageDown scroll it, following the tail until you scroll up, Ctrl-X stops
+the command, and Esc puts the chat back. `/bashes` lists the same commands as
+text.
+
+A finished command rests on the rail for half a minute before retiring, longer
+than a finished run does: a run's report lands in the main chat, so its row has
+done its job once you see it go green, while a command's output lives only in
+the registry and the row is the way back to it. The one you are watching does
+not retire under you.
 
 A finished run rests on the rail for a few seconds and then retires, so the rail
 stays a picture of live work rather than a log of every subagent the session

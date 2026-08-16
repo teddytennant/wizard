@@ -101,6 +101,19 @@ pub(crate) struct CommandResult {
     pub timed_out: Option<u64>,
 }
 
+/// How an interactive foreground command ended.
+///
+/// Two endings rather than one, because Ctrl-B is not a result: the command has
+/// not produced stdout, an exit code or a timeout, it has simply stopped being
+/// this tool call's problem. Folding it into [`CommandResult`] would mean a
+/// result whose every field is a lie about a process that is still running.
+pub(crate) enum CommandOutcome {
+    /// The command ran to a conclusion (exit, signal, timeout, or Ctrl-C).
+    Finished(CommandResult),
+    /// The user pressed Ctrl-B: the child is now background task `.0`.
+    Backgrounded(u32),
+}
+
 /// Bytes of one output stream kept while the command runs: the first
 /// [`CAPTURE_HEAD_BYTES`] and the most recent [`CAPTURE_TAIL_BYTES`].
 ///
@@ -387,7 +400,8 @@ pub(crate) async fn run_command_interactive(
     label: &str,
     events: &mpsc::Sender<AgentEvent>,
     cancel: Option<&crate::agent::CancelHandle>,
-) -> Result<CommandResult, ToolError> {
+    tasks: &Arc<crate::tools::tasks::TaskRegistry>,
+) -> Result<CommandOutcome, ToolError> {
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -441,6 +455,8 @@ pub(crate) async fn run_command_interactive(
     let mut code = None;
     let mut timed_out = None;
     let mut exited = false;
+    // Ctrl-B: leave the loop without killing anything, and hand the child over.
+    let mut backgrounded = false;
 
     loop {
         let wake_in = running_since.map(|since| {
@@ -513,6 +529,13 @@ pub(crate) async fn run_command_interactive(
                         }
                     }
                     ConsoleInput::Eof => stdin = None,
+                    // Not a thing to write to the child — a thing to do to it.
+                    // Break out and let the handover below do the work, where
+                    // `child` is not borrowed by the select.
+                    ConsoleInput::Background => {
+                        backgrounded = true;
+                        break;
+                    }
                 }
                 // A human just acted, so the command is demonstrably alive and
                 // the budget starts over. Whatever prompt was on screen has
@@ -573,6 +596,40 @@ pub(crate) async fn run_command_interactive(
     // Close our end of stdin before draining: a child still reading it would
     // otherwise outlive the loop that was feeding it.
     drop(stdin);
+
+    // Ctrl-B. The child is left alive and handed to the background-task
+    // registry, which takes over waiting on it, killing it and capturing what
+    // it writes from here on. What it has already written is seeded into the
+    // task's buffer, so `task_output` shows the whole command rather than only
+    // the part that happened after the key was pressed.
+    //
+    // The pumps are neither aborted nor awaited: they are still attached to the
+    // child's pipes and keep feeding `chunks`, which the drain below forwards
+    // into the registry until the pipes close.
+    if backgrounded {
+        let mut seed = stdout.into_string().into_bytes();
+        let rest = stderr.into_string();
+        if !rest.is_empty() {
+            if !seed.is_empty() && !seed.ends_with(b"\n") {
+                seed.push(b'\n');
+            }
+            seed.extend_from_slice(rest.as_bytes());
+        }
+        let registry = Arc::clone(tasks);
+        let id = tasks.adopt(label, child, &seed, move |id| {
+            tokio::spawn(async move {
+                while let Some((_, bytes)) = chunks.recv().await {
+                    registry.append_output(id, &bytes);
+                }
+            })
+        });
+        drop(out_pump);
+        drop(err_pump);
+        gate.cancel();
+        let _ = events.send(AgentEvent::ConsoleClosed { gate }).await;
+        return Ok(CommandOutcome::Backgrounded(id));
+    }
+
     if !exited {
         kill_group(&mut child).await;
     }
@@ -603,12 +660,12 @@ pub(crate) async fn run_command_interactive(
     gate.cancel();
     let _ = events.send(AgentEvent::ConsoleClosed { gate }).await;
 
-    Ok(CommandResult {
+    Ok(CommandOutcome::Finished(CommandResult {
         stdout: stdout.into_string(),
         stderr: stderr.into_string(),
         code,
         timed_out,
-    })
+    }))
 }
 
 /// Render a [`CommandResult`] as the model-facing tool output: stdout, then a
@@ -754,21 +811,7 @@ Tips:
                 source: anyhow::Error::new(err).context("failed to spawn background process"),
             })?;
             let id = ctx.tasks.spawn(&args.command, child);
-            // Mirror the new task to the UI dashboard (TaskFinished follows
-            // when it ends). Surfaces that don't care just drop it.
-            if let Some(events) = &ctx.events {
-                let _ = events
-                    .send(crate::agent::AgentEvent::TaskStarted {
-                        id,
-                        command: args.command.clone(),
-                    })
-                    .await;
-            }
-            return Ok(ToolOutput::ok(format!(
-                "Background task #{id} started: {}\nYou will be notified when it finishes; \
-                 use task_output to inspect it or task_kill to stop it.",
-                args.command
-            )));
+            return Ok(announce_task(id, &args.command, None, ctx).await);
         }
 
         // A console is opened only when the surface said there is a human to
@@ -776,7 +819,7 @@ Tips:
         // the browser GUI, every subagent — takes the path below unchanged,
         // `/dev/null` on fd 0 included, because a child blocked on a pipe
         // nobody will ever write to is strictly worse than one that reads EOF.
-        let result = match (ctx.console, &ctx.events) {
+        let outcome = match (ctx.console, &ctx.events) {
             (ConsoleAccess::Interactive, Some(events)) => {
                 run_command_interactive(
                     self.name(),
@@ -785,13 +828,48 @@ Tips:
                     &args.command,
                     events,
                     ctx.cancel.as_ref(),
+                    &ctx.tasks,
                 )
                 .await?
             }
-            _ => run_command(self.name(), command, timeout).await?,
+            _ => CommandOutcome::Finished(run_command(self.name(), command, timeout).await?),
         };
-        Ok(render_command_result(&result))
+        match outcome {
+            CommandOutcome::Finished(result) => Ok(render_command_result(&result)),
+            // Ctrl-B mid-command. The model is told the same thing it would
+            // have been told had it asked for a background task in the first
+            // place, plus who moved it: a tool call that answers "still
+            // running, elsewhere" without saying why reads as a failure.
+            CommandOutcome::Backgrounded(id) => {
+                Ok(announce_task(id, &args.command, Some("the user pressed Ctrl-B"), ctx).await)
+            }
+        }
     }
+}
+
+/// Tell the surface a background task exists and the model how to reach it.
+///
+/// Both ways into the registry end here — `run_in_background` and Ctrl-B — so
+/// the model reads one sentence for one situation and the dashboard gets its
+/// [`TaskStarted`](crate::agent::AgentEvent::TaskStarted) either way.
+/// `TaskFinished` follows when it ends; surfaces that don't care drop both.
+async fn announce_task(id: u32, command: &str, why: Option<&str>, ctx: &ToolContext) -> ToolOutput {
+    if let Some(events) = &ctx.events {
+        let _ = events
+            .send(crate::agent::AgentEvent::TaskStarted {
+                id,
+                command: command.to_string(),
+            })
+            .await;
+    }
+    let moved = match why {
+        Some(why) => format!(" ({why})"),
+        None => String::new(),
+    };
+    ToolOutput::ok(format!(
+        "Background task #{id} started{moved}: {command}\nYou will be notified when it finishes; \
+         use task_output to inspect it or task_kill to stop it."
+    ))
 }
 
 #[cfg(test)]
@@ -1095,6 +1173,30 @@ mod tests {
     where
         Fut: std::future::Future<Output = T>,
     {
+        let tasks = Arc::new(crate::tools::tasks::TaskRegistry::new());
+        let (outcome, out) =
+            interactive_outcome(dir, script, timeout, cancel, &tasks, surface).await;
+        match outcome {
+            CommandOutcome::Finished(result) => (result, out),
+            CommandOutcome::Backgrounded(id) => {
+                panic!("the command was backgrounded as task #{id}, not finished")
+            }
+        }
+    }
+
+    /// [`interactive`] without the assertion that the command finished, for the
+    /// tests that are about Ctrl-B.
+    async fn interactive_outcome<T, Fut>(
+        dir: &std::path::Path,
+        script: &str,
+        timeout: Duration,
+        cancel: Option<crate::agent::CancelHandle>,
+        tasks: &Arc<crate::tools::tasks::TaskRegistry>,
+        surface: impl FnOnce(tokio::sync::mpsc::Receiver<crate::agent::AgentEvent>) -> Fut,
+    ) -> (CommandOutcome, T)
+    where
+        Fut: std::future::Future<Output = T>,
+    {
         let (events, stream) = tokio::sync::mpsc::channel(256);
         let run = run_command_interactive(
             "execute",
@@ -1103,9 +1205,10 @@ mod tests {
             script,
             &events,
             cancel.as_ref(),
+            tasks,
         );
-        let (result, out) = tokio::join!(run, surface(stream));
-        (result.expect("the command ran"), out)
+        let (outcome, out) = tokio::join!(run, surface(stream));
+        (outcome.expect("the command ran"), out)
     }
 
     /// A surface that claims the console and answers `reply` once it sees
@@ -1154,6 +1257,99 @@ mod tests {
                 break;
             }
         }
+    }
+
+    /// A surface that claims the console and presses Ctrl-B once it has seen
+    /// `cue` in the command's output.
+    async fn backgrounding(
+        mut stream: tokio::sync::mpsc::Receiver<crate::agent::AgentEvent>,
+        cue: &'static str,
+    ) {
+        let mut writer = None;
+        let mut pressed = false;
+        while let Some(event) = stream.recv().await {
+            match event {
+                AgentEvent::ConsoleOpened { gate, .. } => {
+                    writer = Some(gate.claim().expect("the surface claims the console"));
+                }
+                AgentEvent::ConsoleOutput { chunk, .. } if !pressed && chunk.contains(cue) => {
+                    pressed = true;
+                    assert!(
+                        writer.as_ref().expect("claimed").background(),
+                        "the command is still running"
+                    );
+                }
+                AgentEvent::ConsoleClosed { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(
+            pressed,
+            "the cue never arrived, so Ctrl-B was never pressed"
+        );
+    }
+
+    /// Ctrl-B hands the running child to the background registry instead of
+    /// killing it, and the task keeps both halves of the command's output: what
+    /// it had already written before the key, and what it writes after.
+    ///
+    /// The seam is the whole feature. A handover that dropped the first half
+    /// would give `task_output` a command that appears to start mid-sentence,
+    /// and one that dropped the second would be indistinguishable from a kill
+    /// that reported the wrong status.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ctrl_b_hands_the_running_command_to_the_background_registry() {
+        let tmp = TempDir::new();
+        let tasks = Arc::new(crate::tools::tasks::TaskRegistry::new());
+        let (outcome, ()) = interactive_outcome(
+            &tmp.0,
+            "echo before; sleep 0.4; echo after; sleep 30",
+            Duration::from_secs(20),
+            None,
+            &tasks,
+            |stream| backgrounding(stream, "before"),
+        )
+        .await;
+
+        let CommandOutcome::Backgrounded(id) = outcome else {
+            panic!("Ctrl-B was pressed, so the command was not allowed to finish");
+        };
+        assert_eq!(
+            tasks.status(id),
+            Some(crate::tools::tasks::TaskStatus::Running)
+        );
+
+        // The child is still alive and still being read: wait for the line it
+        // writes *after* the handover to reach the task's buffer.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (_, output) = tasks.output(id, 4096).expect("the task exists");
+            if output.contains("after") {
+                assert!(
+                    output.contains("before"),
+                    "the pre-handover output was seeded: {output}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no post-handover output: {output}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // And it is an ordinary task from here on, killable like any other.
+        assert!(tasks.kill(id), "a backgrounded command can be killed");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while tasks.status(id) == Some(crate::tools::tasks::TaskStatus::Running) {
+            assert!(Instant::now() < deadline, "the killed task never finished");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            tasks.status(id),
+            Some(crate::tools::tasks::TaskStatus::Killed)
+        );
     }
 
     /// The user's whole side of a prompt: the answer is only sent once the

@@ -92,6 +92,7 @@ use crate::image_view::{ImageBlock, ImageBox, ImageCache};
 use crate::skin::blend::{Tint, terminal_bg};
 use crate::skin::{self, motion};
 use crate::theme::{self, ColorDepth, Token};
+use crate::tools::tasks::TaskStatus;
 use crate::transcript::{ToolItem, TranscriptItem};
 
 use super::{RowTag, accent, dim, muted, warning};
@@ -429,14 +430,15 @@ fn footer_height(app: &App) -> u16 {
     }
 }
 
-/// Rows the rail occupies: a header, one row per subagent (capped), and a
-/// `+N more` marker when it is capped.
+/// Rows the rail occupies: a header, one row per subagent and per background
+/// command (capped together), and a `+N more` marker when it is capped.
 fn rail_height(app: &App) -> u16 {
-    if app.panes.is_empty() {
+    let total = app.panes.len() + app.rail_tasks().len();
+    if total == 0 {
         return 0;
     }
-    let shown = app.panes.len().min(MAX_RAIL_ROWS);
-    let overflow = usize::from(app.panes.len() > MAX_RAIL_ROWS);
+    let shown = total.min(MAX_RAIL_ROWS);
+    let overflow = usize::from(total > MAX_RAIL_ROWS);
     (1 + shown + overflow) as u16
 }
 
@@ -456,6 +458,8 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
         // the shared pane renderer so an attached run looks like the chat it
         // came out of whichever skin is on.
         super::draw_pane(frame, app, pane, body);
+    } else if let Some(watch) = app.attached_task.as_ref() {
+        super::draw_task_watch(frame, app, watch, body);
     } else if app.diff.is_some() {
         let [chat, side] =
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -2283,22 +2287,41 @@ fn agent_label_spans(name: &str, role: &str, selected: bool) -> Vec<Span<'static
 /// Enter opens a run — so the focused row is reversed rather than being given a
 /// marker column, which is how Codex's own selection lists mark a choice
 /// (`selection_popup_common.rs:334-350`, restyle rather than prefix).
+/// `""` for one, `"s"` for anything else — the rail says "1 command" and
+/// "2 commands", never "1 commands", which is the bug the header above this
+/// already carries a comment about.
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 || area.width < 8 {
         return;
     }
     let focused = app.rail_focus;
-    let selected = focused.or(app.attached);
-    let visible = app.panes.len().min(MAX_RAIL_ROWS);
+    let tasks = app.rail_tasks();
+    let watched = app.watched_task().and_then(|id| {
+        tasks
+            .iter()
+            .position(|task| task.id == id)
+            .map(|offset| app.panes.len() + offset)
+    });
+    let selected = focused.or(app.attached).or(watched);
+    let total = app.panes.len() + tasks.len();
+    let visible = total.min(MAX_RAIL_ROWS);
     let start = match selected {
         Some(index) if index >= visible => index + 1 - visible,
         _ => 0,
     };
-    let end = (start + visible).min(app.panes.len());
+    let end = (start + visible).min(total);
     let live = app
         .panes
         .iter()
         .filter(|pane| pane.status == PaneStatus::Running)
+        .count();
+    let live_tasks = tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Running)
         .count();
 
     // `waiting_begin`, `multi_agents.rs:385-393`, has three forms and picks by
@@ -2310,26 +2333,50 @@ fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     let verb = if live > 0 { "Waiting for" } else { "Spawned" };
     let counted = if live > 0 { live } else { app.panes.len() };
     let mut header = vec![Span::styled("• ", dim())];
-    match (
-        counted,
-        app.panes
-            .iter()
-            .find(|pane| live == 0 || pane.status == PaneStatus::Running),
-    ) {
-        (1, Some(pane)) => {
-            header.push(Span::styled(format!("{verb} "), text_style().bold()));
-            header.extend(agent_label_spans(&pane.name, "", false));
+    // A rail with no agents on it at all is a rail of background commands, and
+    // "Spawned 0 agents" is the wrong sentence for two running builds.
+    if app.panes.is_empty() {
+        let label = match live_tasks {
+            0 => format!("{} background command{}", tasks.len(), plural(tasks.len())),
+            n => format!("Running {n} command{}", plural(n)),
+        };
+        header.push(Span::styled(label, text_style().bold()));
+    } else {
+        match (
+            counted,
+            app.panes
+                .iter()
+                .find(|pane| live == 0 || pane.status == PaneStatus::Running),
+        ) {
+            (1, Some(pane)) => {
+                header.push(Span::styled(format!("{verb} "), text_style().bold()));
+                header.extend(agent_label_spans(&pane.name, "", false));
+            }
+            _ => header.push(Span::styled(
+                format!("{verb} {counted} agents"),
+                text_style().bold(),
+            )),
         }
-        _ => header.push(Span::styled(
-            format!("{verb} {counted} agents"),
-            text_style().bold(),
-        )),
+        // Commands alongside agents are a suffix rather than a second header: the
+        // rail is one list and it gets one sentence.
+        if live_tasks > 0 {
+            header.push(Span::styled(
+                format!(" · {live_tasks} command{}", plural(live_tasks)),
+                dim(),
+            ));
+        }
     }
     let mut lines = vec![Line::from(header)];
 
     let content_width = prefixed_block(area.width as usize, OUTPUT_ARM);
     let mut rows: Vec<Line<'static>> = Vec::new();
-    for (index, pane) in app.panes.iter().enumerate().take(end).skip(start) {
+    for (index, pane) in app
+        .panes
+        .iter()
+        .enumerate()
+        .take(end.min(app.panes.len()))
+        .skip(start)
+    {
         let is_selected = selected == Some(index) && focused.is_some();
         let elapsed = pane.elapsed();
         let mut spans = agent_label_spans(&pane.name, "", is_selected);
@@ -2349,9 +2396,45 @@ fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
         }
         rows.push(super::truncate_line(Line::from(spans), content_width));
     }
-    if app.panes.len() > MAX_RAIL_ROWS {
+    // Background commands continue the same list under the same index.
+    for (offset, task) in tasks
+        .iter()
+        .enumerate()
+        .take(end.saturating_sub(app.panes.len()))
+        .skip(start.saturating_sub(app.panes.len()))
+    {
+        let index = app.panes.len() + offset;
+        let is_selected = selected == Some(index) && focused.is_some();
+        let elapsed = task
+            .finished
+            .map_or_else(|| task.started.elapsed(), |at| at - task.started);
+        let mut spans = agent_label_spans("cmd", "", is_selected);
+        spans.push(Span::styled(": ", dim()));
+        spans.push(Span::styled(
+            super::truncate_width(task.command.trim(), 48),
+            match task.status {
+                TaskStatus::Running => text_style(),
+                _ => dim(),
+            },
+        ));
+        spans.push(Span::styled(
+            format!(
+                "  {}",
+                format_duration(elapsed.as_secs(), elapsed.as_millis())
+            ),
+            dim(),
+        ));
+        if task.status != TaskStatus::Running {
+            spans.push(Span::styled(
+                format!(" {}", task.status.describe()),
+                dim().italic(),
+            ));
+        }
+        rows.push(super::truncate_line(Line::from(spans), content_width));
+    }
+    if total > MAX_RAIL_ROWS {
         rows.push(Line::from(Span::styled(
-            format!("+{} more", app.panes.len() - visible),
+            format!("+{} more", total - visible),
             dim().italic(),
         )));
     }

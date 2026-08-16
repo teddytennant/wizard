@@ -139,8 +139,30 @@ While a command owns the composer:
 |---|---|
 | Enter | send the line to the command, newline included. **An empty line is sent** — that is how a person accepts `[Y/n]`. |
 | Ctrl-D | close the command's stdin, as in a terminal. Does *not* quit Wizard. |
+| Ctrl-B | background it. The child keeps running as a background task, the tool call returns at once with the task id, and the turn carries on. |
 | Esc | detach. The command keeps running and goes back on the wall clock; Enter talks to the agent again. |
 | Ctrl-C | stop the command — the turn's cancel handle reaches the parked call, which kills the whole process group. |
+
+Ctrl-B works whether or not the command has asked anything, which is the point:
+the commands worth backgrounding are the quiet ones — the build, the test suite,
+the sync that is going to take four minutes — and those never take the composer
+in the first place. The hint appears in the shortcuts bar for as long as a
+foreground command is running.
+
+**Under tmux, press it twice.** `Ctrl-B` is tmux's prefix key and never reaches
+the application; pressing it again sends a literal one through. The shortcuts
+bar detects `$TMUX` and says `Ctrl+b Ctrl+b` there so it names a key that
+actually works.
+
+What the task inherits: the output already captured is seeded into its buffer,
+so `task_output` shows the whole command and not just the part after the key.
+What it loses is stdin — a backgrounded command reads EOF, exactly as one
+started with `run_in_background` does. Its clock restarts at the background
+timeout (30 minutes) rather than the foreground one it just escaped.
+
+From there it is an ordinary background task: it appears on the rail under
+`Tasks`, `↓` reaches it, Enter opens its live output, Ctrl-X stops it, `/bashes`
+lists it, and the model is notified when it finishes.
 
 The line goes to the child **verbatim**: no trimming, no `/command` parsing, no
 `@file` expansion. An installer asking for a prefix wants `/usr/local`, and
@@ -161,7 +183,7 @@ something else would be a worse bug than the one this fixes:
 - the rule above the composer becomes a labelled band, `─ ▶ stdin → npm init ──`
 - the prompt glyph changes from `❯` to `▶`, in the warning colour
 - the status hints read `Enter → command · Ctrl-D end input · Esc detach ·
-  Ctrl-C stop`
+  Ctrl-C stop · Ctrl-B background`
 
 The command's card in the transcript fills in live, tailed rather than truncated
 from the top — the line you have to answer is the last one. What the user types

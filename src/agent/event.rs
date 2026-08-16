@@ -548,13 +548,19 @@ impl InterviewGate {
 /// reports the refusal rather than blocking the render loop.
 const CONSOLE_QUEUE: usize = 16;
 
-/// One thing a human can do to a running command's stdin.
+/// One thing a human can do to a running foreground command.
 ///
-/// Only two, and deliberately not "arbitrary bytes": a console is a line
-/// conversation with a program that asked a question, and the surface that
-/// relays it is a composer, not a terminal emulator. Anything needing raw byte
-/// control wants a real pty, which is a different feature with a different cost
-/// (see `docs/interactive-commands.md`).
+/// Deliberately not "arbitrary bytes": a console is a line conversation with a
+/// program that asked a question, and the surface that relays it is a composer,
+/// not a terminal emulator. Anything needing raw byte control wants a real pty,
+/// which is a different feature with a different cost (see
+/// `docs/interactive-commands.md`).
+///
+/// [`Self::Background`] is the odd one out — it is about the command rather
+/// than about its stdin. It travels this channel anyway because this channel is
+/// already the one thing wired end to end from a surface to a running child,
+/// and a second gate for one message is how the last attempt at Ctrl-B ended up
+/// present, green and doing nothing (see `agent::tests`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsoleInput {
     /// One line, without its terminator. The writer appends `\n` — a prompt
@@ -563,6 +569,10 @@ pub enum ConsoleInput {
     /// Close the child's stdin, which is what a terminal's Ctrl-D means: the
     /// program reading a list of lines is told there are no more.
     Eof,
+    /// Detach the command: the child keeps running as a background task and
+    /// the tool call returns at once with the task id. A terminal's Ctrl-Z
+    /// followed by `bg`, in one key.
+    Background,
 }
 
 /// What the desk holds for an open console: the flag that says a surface took
@@ -657,5 +667,11 @@ impl ConsoleWriter {
     /// Close the child's stdin (a terminal's Ctrl-D). See [`ConsoleInput::Eof`].
     pub fn eof(&self) -> bool {
         self.0.try_send(ConsoleInput::Eof).is_ok()
+    }
+
+    /// Detach the command into a background task (Ctrl-B). See
+    /// [`ConsoleInput::Background`].
+    pub fn background(&self) -> bool {
+        self.0.try_send(ConsoleInput::Background).is_ok()
     }
 }

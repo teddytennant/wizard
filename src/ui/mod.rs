@@ -52,12 +52,13 @@ use syntect::util::LinesWithEndings;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::agent::ImageSource;
-use crate::app::{App, InputMode, PaneStatus, Selection, SubagentPane, TranscriptView};
+use crate::app::{App, InputMode, PaneStatus, Selection, SubagentPane, TaskWatch, TranscriptView};
 use crate::config::Mode;
 use crate::image_view::{self, ImageBlock, ImageBox, ImageCache};
 use crate::images::ImageRef;
 use crate::session_registry::SessionState;
 use crate::skin::{self, BlockKind, BusyStyle, ComposerFrame, ToolLabel};
+use crate::tools::tasks::TaskStatus;
 use crate::transcript::{ToolItem, TranscriptItem};
 // An ordinary import: the theme layer is declared once, as `pub mod theme;` in
 // `src/lib.rs`. This line used to be `pub use crate::theme;` as well, a
@@ -160,6 +161,10 @@ fn draw_house(frame: &mut Frame, app: &App) {
         // Inside a subagent: its conversation takes over the main area and
         // renders exactly like the main chat.
         draw_pane(frame, app, pane, main_area);
+    } else if let Some(watch) = app.attached_task.as_ref() {
+        // Watching a background command: its live output takes the body, drawn
+        // by the shared renderer for the same reason a pane is.
+        draw_task_watch(frame, app, watch, main_area);
     } else if app.diff.is_some() {
         let [chat_area, side_area] =
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -2248,15 +2253,17 @@ fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
 /// selection rather than eating the transcript.
 const MAX_RAIL_ROWS: usize = 5;
 
-/// Rows the rail needs: one per subagent, capped, plus a row for the "+N more"
-/// marker when it is capped. Zero when nothing has been delegated — the rail
-/// costs no screen space until there is something to show.
+/// Rows the rail needs: one per subagent and one per background command,
+/// capped, plus a row for the "+N more" marker when it is capped. Zero when
+/// nothing is running — the rail costs no screen space until there is something
+/// to show.
 pub(super) fn rail_height(app: &App) -> u16 {
-    if app.panes.is_empty() {
+    let total = app.panes.len() + app.rail_tasks().len();
+    if total == 0 {
         return 0;
     }
-    let shown = app.panes.len().min(MAX_RAIL_ROWS);
-    let overflow = usize::from(app.panes.len() > MAX_RAIL_ROWS);
+    let shown = total.min(MAX_RAIL_ROWS);
+    let overflow = usize::from(total > MAX_RAIL_ROWS);
     (shown + overflow) as u16
 }
 
@@ -2268,27 +2275,52 @@ pub(super) fn rail_height(app: &App) -> u16 {
 ///   ✔ tester       214 passed                    1:31 +1
 /// ```
 ///
-/// ↓ from the composer focuses it, ↑/↓ move, Enter opens the selected run as a
-/// full chat view. `❯` marks the selection while the rail has focus. `+N` is
-/// the unread count: what that subagent did while you were looking elsewhere.
+/// Background commands follow the subagents on the same rail, under the same
+/// index — a detached `cargo build` and a delegated reviewer are both "work
+/// that is going on without me", and separating them would mean two selections
+/// and a third key to say which one the arrows mean:
+///
+/// ```text
+///   ◉ researcher   read_file                     0:12 +3
+/// ❯ ● cmd          cargo test --all              0:04
+/// ```
+///
+/// ↓ from the composer focuses it, ↑/↓ move, Enter opens the selected row (a
+/// run's chat view, a command's live output), Ctrl-X stops it. `❯` marks the
+/// selection while the rail has focus. `+N` is the unread count: what that
+/// subagent did while you were looking elsewhere.
 pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 || area.width < 8 {
         return;
     }
     let focused = app.rail_focus;
-    let selected = focused.or(app.attached);
+    let tasks = app.rail_tasks();
+    let watched = app.watched_task().and_then(|id| {
+        tasks
+            .iter()
+            .position(|task| task.id == id)
+            .map(|offset| app.panes.len() + offset)
+    });
+    let selected = focused.or(app.attached).or(watched);
+    let total = app.panes.len() + tasks.len();
 
     // Scroll the window so the selection stays visible once there are more
-    // runs than rows.
-    let visible = app.panes.len().min(MAX_RAIL_ROWS);
+    // rows than room for them.
+    let visible = total.min(MAX_RAIL_ROWS);
     let start = match selected {
         Some(index) if index >= visible => index + 1 - visible,
         _ => 0,
     };
-    let end = (start + visible).min(app.panes.len());
+    let end = (start + visible).min(total);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (index, pane) in app.panes.iter().enumerate().take(end).skip(start) {
+    for (index, pane) in app
+        .panes
+        .iter()
+        .enumerate()
+        .take(end.min(app.panes.len()))
+        .skip(start)
+    {
         let is_selected = selected == Some(index);
         // Only the *focused* rail shows a cursor; when focus is in the
         // composer the rail is just a status readout.
@@ -2336,8 +2368,66 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    if app.panes.len() > MAX_RAIL_ROWS {
-        let hidden = app.panes.len() - visible;
+    // The same row, in the same columns, for a detached command: the glyph
+    // carries the state (● running, ✔ exit 0, ✗ anything else), `cmd` sits
+    // where a subagent's name does, and the command line takes the activity
+    // column — which is what it is, the thing that row is doing.
+    for (offset, task) in tasks
+        .iter()
+        .enumerate()
+        .take(end.saturating_sub(app.panes.len()))
+        .skip(start.saturating_sub(app.panes.len()))
+    {
+        let index = app.panes.len() + offset;
+        let is_selected = selected == Some(index);
+        let cursor = if is_selected && focused.is_some() {
+            "❯"
+        } else {
+            " "
+        };
+        let (glyph, dot_style) = match task.status {
+            TaskStatus::Running => (
+                crate::app::rail_pulse(app.tick),
+                theme::style(Token::ToolRunning),
+            ),
+            TaskStatus::Done(0) => ("✔", theme::style(Token::ToolDone)),
+            _ => ("✗", theme::style(Token::ToolFailed).bold()),
+        };
+        let name_style = if is_selected { accent().bold() } else { dim() };
+
+        let elapsed = task
+            .finished
+            .map_or_else(|| task.started.elapsed(), |at| at - task.started)
+            .as_secs();
+        let clock = format!("{}:{:02}", elapsed / 60, elapsed % 60);
+        // Where a run's unread badge goes: for a command it is the exit code,
+        // which is the one thing about a finished command worth a column.
+        let outcome = match task.status {
+            TaskStatus::Running | TaskStatus::Done(0) => String::new(),
+            TaskStatus::Done(code) => format!(" {code}"),
+            TaskStatus::Killed => " ⊘".to_string(),
+            TaskStatus::TimedOut => " ⏱".to_string(),
+        };
+
+        let meta_width = clock.len() + outcome.width() + 4;
+        let activity_width = (area.width as usize).saturating_sub(18 + meta_width).max(8);
+        let command = truncate_width(
+            task.command.trim().lines().next().unwrap_or(""),
+            activity_width,
+        );
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {cursor} "), accent()),
+            Span::styled(format!("{glyph} "), dot_style),
+            Span::styled(format!("{:<12} ", "cmd"), name_style),
+            Span::styled(format!("{command:<activity_width$} "), dim()),
+            Span::styled(clock, dim()),
+            Span::styled(outcome, theme::style(Token::ToolFailed)),
+        ]));
+    }
+
+    if total > MAX_RAIL_ROWS {
+        let hidden = total - visible;
         lines.push(Line::from(Span::styled(
             format!("   +{hidden} more"),
             dim().italic(),
@@ -2345,6 +2435,153 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
+/// A background command's live output, under a header naming it. Esc goes back,
+/// Ctrl-X stops it.
+///
+/// Plain wrapped text rather than the transcript machinery `draw_pane` uses,
+/// because that is what this is: a command wrote bytes, and the pane's job is
+/// to show them. Reading the buffer fresh every frame is what makes it live —
+/// there is no copy here to go stale, and the registry is already keeping the
+/// output capped ([`crate::tools::tasks::OUTPUT_CAP_BYTES`]).
+pub(super) fn draw_task_watch(frame: &mut Frame, app: &App, watch: &TaskWatch, area: Rect) {
+    // The view owns the screen, so no main-transcript card is clickable.
+    app.card_hits.borrow_mut().clear();
+
+    let [header_area, body_area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+
+    let found = app
+        .tasks
+        .as_ref()
+        .and_then(|registry| registry.output_full(watch.id));
+    let Some((task, output, _)) = found else {
+        // The registry lost it — a rebuilt agent starts a fresh one. Say so
+        // rather than painting an empty pane that looks like a silent command.
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" ▌ ", accent()),
+                Span::styled(
+                    format!("background task #{} is gone", watch.id),
+                    dim().italic(),
+                ),
+            ])),
+            header_area,
+        );
+        return;
+    };
+
+    let (label, style) = match task.status {
+        TaskStatus::Running => ("running".to_string(), theme::style(Token::ToolRunning)),
+        TaskStatus::Done(0) => ("exit 0".to_string(), theme::style(Token::ToolDone)),
+        // Bold for the same reason the pane header's "failed" is: under a
+        // monochrome theme the token alone is one gray among others.
+        TaskStatus::Done(code) => (
+            format!("exit {code}"),
+            theme::style(Token::ToolFailed).bold(),
+        ),
+        TaskStatus::Killed => ("killed".to_string(), theme::style(Token::ToolFailed).bold()),
+        TaskStatus::TimedOut => (
+            "timed out".to_string(),
+            theme::style(Token::ToolFailed).bold(),
+        ),
+    };
+    let elapsed = task
+        .finished
+        .map_or_else(|| task.started.elapsed(), |at| at - task.started)
+        .as_secs();
+    let hint = match task.status {
+        TaskStatus::Running => "esc back to chat · ↑↓ scroll · ctrl+x stop",
+        _ => "esc back to chat · ↑↓ scroll",
+    };
+    frame.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(vec![
+                Span::styled(" ▌ ", accent()),
+                Span::styled(format!("task #{}", task.id), accent().bold()),
+                Span::styled(" · ", dim()),
+                Span::styled(label, style),
+                Span::styled(format!(" · {}:{:02}", elapsed / 60, elapsed % 60), dim()),
+            ]),
+            Line::from(vec![
+                Span::styled("   ", dim()),
+                Span::styled(
+                    truncate_width(task.command.trim(), area.width.saturating_sub(6) as usize),
+                    dim().italic(),
+                ),
+                Span::styled(format!("  {hint}"), dim()),
+            ]),
+        ])),
+        header_area,
+    );
+
+    let inner = body_area.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let width = inner.width as usize;
+    let height = inner.height as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for raw in output.lines() {
+        // A command's output is not markdown and must not be reflowed as
+        // prose: wrap it at the pane width, hard, so a table or a progress
+        // line keeps the columns the command wrote.
+        for chunk in wrap_hard(raw, width) {
+            lines.push(Line::from(Span::styled(chunk, theme::style(Token::Text))));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            match task.status {
+                TaskStatus::Running => "no output yet…",
+                _ => "no output",
+            },
+            dim().italic(),
+        )));
+    }
+
+    // Stick to the live tail, and hold a scrolled-up position while the command
+    // keeps writing — the same contract the transcript has.
+    let max_scroll = lines.len().saturating_sub(height);
+    watch
+        .max_scroll
+        .set(max_scroll.min(u16::MAX as usize) as u16);
+    let from_top = max_scroll.saturating_sub(watch.scroll as usize);
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(from_top).take(height).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// Split `text` into `width`-column pieces, breaking mid-word rather than
+/// reflowing: command output is laid out by the command, not by us.
+fn wrap_hard(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let text = text.trim_end_matches('\r');
+    if text.width() <= width {
+        return vec![text.to_string()];
+    }
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > width && !current.is_empty() {
+            pieces.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(ch);
+        used += w;
+    }
+    if !current.is_empty() {
+        pieces.push(current);
+    }
+    pieces
 }
 
 /// A subagent's pane: its own conversation, rendered with the same machinery as

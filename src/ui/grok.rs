@@ -1654,6 +1654,8 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
 
     if let Some(pane) = app.attached_pane() {
         super::draw_pane(frame, app, pane, layout.body);
+    } else if let Some(watch) = app.attached_task.as_ref() {
+        super::draw_task_watch(frame, app, watch, layout.body);
     } else if app.diff.is_some() {
         let [chat, side] =
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -2452,29 +2454,11 @@ fn tasks_height(app: &App) -> u16 {
         rows +=
             1 + app.panes.len().min(GROUP_MAX_ROWS) + usize::from(app.panes.len() > GROUP_MAX_ROWS);
     }
-    let tasks = background_tasks(app);
+    let tasks = app.rail_tasks();
     if !tasks.is_empty() {
         rows += 1 + tasks.len().min(GROUP_MAX_ROWS) + usize::from(tasks.len() > GROUP_MAX_ROWS);
     }
     rows as u16
-}
-
-/// Background commands still worth showing: everything running, and anything
-/// that finished recently enough that its row has not been read yet.
-fn background_tasks(app: &App) -> Vec<Task> {
-    let Some(registry) = app.tasks.as_ref() else {
-        return Vec::new();
-    };
-    registry
-        .list()
-        .into_iter()
-        .filter(|task| {
-            task.status == TaskStatus::Running
-                || task
-                    .finished
-                    .is_some_and(|at| at.elapsed() < Duration::from_secs(30))
-        })
-        .collect()
 }
 
 /// Grok Build's tasks pane: background commands *and* delegated subagents in
@@ -2508,7 +2492,16 @@ fn draw_tasks_pane(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let focused = app.rail_focus;
-    let selected = focused.or(app.attached);
+    // What is lit when the rail does *not* have focus is whatever is open: the
+    // pane you are inside, or the command you are watching. Both are rail rows,
+    // so both light the same row.
+    let watched = app.watched_task().and_then(|id| {
+        app.rail_tasks()
+            .iter()
+            .position(|task| task.id == id)
+            .map(|offset| app.panes.len() + offset)
+    });
+    let selected = focused.or(app.attached).or(watched);
     let width = inner.width as usize;
 
     let mut rows: Vec<Line<'static>> = Vec::new();
@@ -2539,14 +2532,32 @@ fn draw_tasks_pane(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let tasks = background_tasks(app);
+    // Background commands carry on where the subagents left off: one index
+    // across both groups, so ↓ walks out of the last agent and into the first
+    // command without the user having to know there are two lists.
+    let tasks = app.rail_tasks();
     if !tasks.is_empty() {
         rows.push(group_header("Tasks", tasks.len()));
-        for task in tasks.iter().take(GROUP_MAX_ROWS) {
-            rows.push(task_row(task, width));
+        let visible = tasks.len().min(GROUP_MAX_ROWS);
+        // Same window as the agents above: keep the selection on screen once
+        // there are more commands than rows for them.
+        let start = match selected.and_then(|index| index.checked_sub(app.panes.len())) {
+            Some(offset) if offset >= visible => offset + 1 - visible,
+            _ => 0,
+        };
+        for (offset, task) in tasks.iter().enumerate().skip(start).take(visible) {
+            let index = app.panes.len() + offset;
+            if selected == Some(index) {
+                selected_row = Some(rows.len());
+            }
+            rows.push(task_row(
+                task,
+                width,
+                focused.is_some() && selected == Some(index),
+            ));
         }
-        if tasks.len() > GROUP_MAX_ROWS {
-            rows.push(overflow_row(tasks.len() - GROUP_MAX_ROWS));
+        if tasks.len() > visible {
+            rows.push(overflow_row(tasks.len() - visible));
         }
     }
 
@@ -2673,7 +2684,7 @@ fn agent_row(pane: &SubagentPane, width: usize, cursor: bool, attached: bool) ->
 ///
 /// Ported from `P/src/views/tasks_pane.rs:267-330` (the bg-task arm) — the same
 /// row shape as an agent's, with the exit status standing in for the persona.
-fn task_row(task: &Task, width: usize) -> Line<'static> {
+fn task_row(task: &Task, width: usize, cursor: bool) -> Line<'static> {
     let (label, token) = match task.status {
         TaskStatus::Running => ("run".to_string(), Token::ToolRunning),
         TaskStatus::Done(0) => ("exit 0".to_string(), Token::ToolDone),
@@ -2694,12 +2705,16 @@ fn task_row(task: &Task, width: usize) -> Line<'static> {
                 .map_or_else(|| task.started.elapsed(), |at| at - task.started)
         )
     );
-    let head = format!("  {label} ");
-    let room = width.saturating_sub(head.width() + elapsed.width() + 1);
+    // The cursor mark takes the same two columns the indent does, so nothing
+    // shifts when the rail gains or loses focus — as on an agent row.
+    let mark = if cursor { "\u{203a} " } else { "  " };
+    let head = format!("{label} ");
+    let room = width.saturating_sub(2 + head.width() + elapsed.width() + 1);
     let command = super::truncate_width(task.command.trim(), room.max(8));
-    let gap = width.saturating_sub(head.width() + command.width() + elapsed.width());
+    let gap = width.saturating_sub(2 + head.width() + command.width() + elapsed.width());
     super::truncate_line(
         Line::from(vec![
+            Span::styled(mark, super::accent()),
             Span::styled(head, style),
             Span::styled(
                 command,
@@ -2842,6 +2857,25 @@ fn todo_row(item: &TodoItem, width: usize) -> Line<'static> {
 // The shortcuts bar
 // ---------------------------------------------------------------------------
 
+/// How to write the background key for the terminal this session is in.
+///
+/// `Ctrl+b` everywhere except tmux, where `Ctrl+b` is the prefix and never
+/// reaches us: pressing it twice is what sends a literal one through, so under
+/// tmux that is what the bar has to say. Printing the bare key there would name
+/// a shortcut that visibly does nothing, which is worse than naming none.
+///
+/// Read once — `$TMUX` cannot change under a running process, and this is
+/// called every frame.
+fn background_key() -> &'static str {
+    static KEY: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    KEY.get_or_init(
+        || match std::env::var_os("TMUX").is_some_and(|value| !value.is_empty()) {
+            true => "Ctrl+b Ctrl+b",
+            false => "Ctrl+b",
+        },
+    )
+}
+
 /// The row below the composer: `key:label` pairs separated by `"  │  "`.
 ///
 /// Ported from `P/src/views/shortcuts_bar.rs:212-320`: keys in
@@ -2898,6 +2932,16 @@ fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
             ("Ctrl+c", "stop"),
             ("PgUp/PgDn", "scroll"),
         ]
+    } else if app.tasks_running() > 0 {
+        // Nothing is running in the foreground, but something is running: the
+        // rail below has rows, and the keys that reach them are worth naming
+        // where every other contextual key is named.
+        &[
+            ("Enter", "send"),
+            ("\u{2193}", "tasks"),
+            ("/", "commands"),
+            ("Shift+Tab", "mode"),
+        ]
     } else {
         &[
             ("Enter", "send"),
@@ -2907,6 +2951,16 @@ fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
             ("Shift+Tab", "mode"),
         ]
     };
+
+    // Ctrl-B is contextual in a way the lists above cannot express: it belongs
+    // to whichever branch is drawn whenever a foreground command is running,
+    // and that is two of them — the console branch for a command that has asked
+    // something, the busy branch for the silent build that is the usual reason
+    // to reach for the key at all.
+    let mut pairs = pairs.to_vec();
+    if app.foreground_command().is_some() {
+        pairs.push((background_key(), "background"));
+    }
 
     let key = theme::style(Token::Muted).bold();
     let label = super::dim();

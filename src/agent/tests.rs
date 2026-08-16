@@ -3574,7 +3574,14 @@ fn a_dropped_claim_leaves_the_gate_unanswered() {
 /// accessor and three doc comments describing a Ctrl-B that backgrounds the
 /// running command were all present and green; `request` had no caller and no
 /// tool ever read the gate, so the key did nothing and no document mentioned
-/// it. It is gone rather than wired, because nobody asked for the feature.
+/// it. It was deleted rather than wired, because at the time nobody had asked
+/// for the feature.
+///
+/// Ctrl-B exists now, and it is worth saying why it is not back here: it rides
+/// [`ConsoleInput::Background`](crate::agent::ConsoleInput) down the console
+/// channel, which a surface already claims and a running command already reads.
+/// A second gate for one message is precisely the thing that went unwired the
+/// first time, and the way to keep it wired is to not build one.
 ///
 /// Grepping is the honest instrument, as it is for the console-ownership test
 /// in `trust.rs`: the failure is the *absence* of a call, and no runtime

@@ -173,6 +173,27 @@ impl Interview {
     }
 }
 
+/// A background command the user is watching: the live-output view Enter opens
+/// from the rail.
+///
+/// The id rather than a rail index, and no copy of the output: the registry is
+/// the one owner of both, and the view reads it fresh every frame the way the
+/// rail rows do. A cached copy here would be a second answer to "what has this
+/// command printed", and the two would disagree the moment the command wrote
+/// another line.
+#[derive(Debug, Clone, Default)]
+pub struct TaskWatch {
+    /// Which background task ([`crate::tools::tasks::Task::id`]).
+    pub id: u32,
+    /// Lines scrolled back from the live tail. Zero follows the output.
+    pub scroll: u16,
+    /// The furthest back there is to scroll, as of the last frame drawn.
+    /// Interior mutability for the same reason [`crate::app::App::card_hits`]
+    /// has it: draw takes `&App`, and the renderer is the only thing that knows
+    /// how many lines the output wrapped to at the current width.
+    pub max_scroll: std::cell::Cell<u16>,
+}
+
 /// A running foreground shell command whose stdin this composer is driving
 /// ([`AgentEvent::ConsoleOpened`](crate::agent::AgentEvent::ConsoleOpened)).
 ///

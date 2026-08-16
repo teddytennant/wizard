@@ -5085,3 +5085,208 @@ fn omakase_in_config_alone_lights_the_badge_and_the_mode() {
     assert!(app.omakase, "the badge is lit");
     assert!(app.plan_mode, "and plan mode with it");
 }
+
+// ---------------------------------------------------------------------------
+// Backgrounding a command (Ctrl-B) and the rail rows it produces
+// ---------------------------------------------------------------------------
+
+/// An app whose agent has been built far enough to have a task registry, with
+/// `n` background commands registered and still running.
+/// Finish task `id` long enough ago that the rail has stopped showing it.
+fn retire(registry: &crate::tools::tasks::TaskRegistry, id: u32) {
+    registry.finish_in_the_past(
+        id,
+        crate::tools::tasks::TaskStatus::Done(0),
+        std::time::Duration::from_secs(120),
+    );
+}
+
+fn app_with_tasks(n: usize) -> (App, std::sync::Arc<crate::tools::tasks::TaskRegistry>) {
+    let mut app = app();
+    let registry = std::sync::Arc::new(crate::tools::tasks::TaskRegistry::new());
+    for i in 0..n {
+        registry.add(format!("cargo build {i}"));
+    }
+    app.tasks = Some(std::sync::Arc::clone(&registry));
+    (app, registry)
+}
+
+/// Ctrl-B at an idle prompt is not ours. It has to fall through to line
+/// editing: a binding that swallowed it would break readline's backward-char
+/// for every session that never runs an interactive command, which is most of
+/// them.
+#[test]
+fn ctrl_b_with_nothing_running_is_left_to_the_line_editor() {
+    let mut app = app();
+    assert!(
+        app.foreground_command().is_none(),
+        "nothing is running to begin with"
+    );
+    let before = app.transcript.len();
+    press_ctrl(&mut app, 'b');
+    assert_eq!(
+        app.transcript.len(),
+        before,
+        "the key was not claimed, so it said nothing"
+    );
+}
+
+/// The whole point of the key: a command that has never prompted — the build,
+/// the test run — is the one worth backgrounding, and its writer lives in
+/// `console_pending`, not `console`. Reading only `console` would have bound
+/// Ctrl-B to the single case nobody wants it in.
+#[test]
+fn ctrl_b_backgrounds_a_command_that_never_prompted() {
+    let mut app = app();
+    let (gate, mut host) = crate::agent::ConsoleGate::open();
+    app.handle_agent_event(AgentEvent::ConsoleOpened {
+        command: "cargo build --release".to_string(),
+        gate,
+    });
+    assert!(app.console.is_none(), "it has asked nothing");
+    assert!(app.console_pending.is_some(), "but the writer is ours");
+
+    press_ctrl(&mut app, 'b');
+
+    assert_eq!(
+        host.receive.try_recv(),
+        Ok(crate::agent::ConsoleInput::Background),
+        "the running command was told to detach"
+    );
+    // The composer goes back to the agent at once rather than waiting for the
+    // tool result: whatever the child reads next, it is not from here.
+    assert!(app.console.is_none() && app.console_pending.is_none());
+    assert!(
+        matches!(
+            app.transcript.last(),
+            Some(TranscriptItem::Notice(text)) if text.contains("cargo build --release")
+        ),
+        "and it names what it backgrounded: {:?}",
+        app.transcript.last()
+    );
+}
+
+/// A command that *is* prompting can be backgrounded too — it just loses its
+/// stdin, which is what a background task has.
+#[test]
+fn ctrl_b_backgrounds_a_command_that_is_asking_something() {
+    let mut app = app();
+    let mut host = open_console(&mut app, "npm init");
+    assert!(app.console.is_some(), "the composer changed hands");
+
+    press_ctrl(&mut app, 'b');
+
+    assert_eq!(
+        host.receive.try_recv(),
+        Ok(crate::agent::ConsoleInput::Background)
+    );
+    assert!(app.console.is_none(), "and gave the composer back");
+}
+
+/// Background commands are rail rows after the subagents, under one index, so
+/// ↓ from the composer walks out of the last agent and into the first command
+/// without the user having to know there are two lists.
+#[test]
+fn the_rail_runs_from_the_subagents_into_the_background_commands() {
+    let (mut app, registry) = app_with_tasks(2);
+    app.handle_agent_event(AgentEvent::SubagentRunStarted {
+        run: 0,
+        bg: Some(0),
+        name: "reviewer".to_string(),
+        task: "read the diff".to_string(),
+    });
+    assert_eq!(app.panes.len(), 1);
+    assert_eq!(app.rail_tasks().len(), 2);
+
+    // ↓ lands on the running agent, then walks on into the commands.
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(0), "the subagent is row 0");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(1), "the first command follows it");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(2));
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(2), "and it stops at the last row");
+
+    // Enter opens the command's live output rather than a subagent's chat.
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.watched_task(), Some(2), "task ids are 1-based");
+    assert!(
+        app.attached.is_none(),
+        "a pane and a task view cannot share"
+    );
+
+    // Ctrl-X stops the one being watched, and Esc closes the view without
+    // stopping anything.
+    press_ctrl(&mut app, 'x');
+    assert!(
+        registry
+            .status(2)
+            .is_some_and(|status| status.is_finished())
+            || registry.status(2) == Some(crate::tools::tasks::TaskStatus::Running),
+        "a task with no child behind it cannot actually be signalled"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(app.watched_task().is_none(), "Esc puts the chat back");
+}
+
+/// With no subagents at all the rail is nothing but commands, and ↓ still
+/// reaches them — the first running one, which is what you almost always want.
+#[test]
+fn the_rail_focuses_a_command_when_there_are_no_subagents() {
+    let (mut app, _registry) = app_with_tasks(3);
+    assert!(app.panes.is_empty());
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(0), "the first command is row 0");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.watched_task(), Some(1));
+}
+
+/// Ctrl-X on a command that has already finished says so rather than pretending
+/// to stop it.
+#[test]
+fn stopping_a_finished_command_reports_that_it_already_finished() {
+    let (mut app, _registry) = app_with_tasks(1);
+    press(&mut app, KeyCode::Down);
+    press_ctrl(&mut app, 'x');
+    assert!(
+        matches!(
+            app.transcript.last(),
+            Some(TranscriptItem::Notice(text)) if text.contains("#1")
+        ),
+        "the notice names the task: {:?}",
+        app.transcript.last()
+    );
+}
+
+/// A finished command drops off the rail half a minute later and every row
+/// below it moves up one. A selection parked on an index would quietly become a
+/// *different* command, and the next Ctrl-X would stop that one — so the
+/// selection follows the command it was put on, and goes back to the composer
+/// when that command is gone rather than landing on a stranger.
+#[test]
+fn a_rail_selection_follows_its_command_rather_than_its_row() {
+    let (mut app, registry) = app_with_tasks(3);
+    // Sit on the middle one.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.rail_focus, Some(1));
+    assert_eq!(app.rail_task_at(1).map(|task| task.id), Some(2));
+
+    // The first command finishes and ages off the rail. Row 1 is now #3.
+    retire(&registry, 1);
+    app.handle_event(crate::event::Event::Tick).expect("tick");
+    assert_eq!(app.rail_tasks().len(), 2, "the finished one is gone");
+    assert_eq!(
+        app.rail_task_at(app.rail_focus.expect("still on the rail"))
+            .map(|task| task.id),
+        Some(2),
+        "the selection moved with its command, not with its row"
+    );
+
+    // And when the selected command itself goes, focus goes back to the
+    // composer instead of jumping to whichever command took the row.
+    retire(&registry, 2);
+    app.handle_event(crate::event::Event::Tick).expect("tick");
+    assert!(app.rail_focus.is_none(), "focus went back to the composer");
+}
