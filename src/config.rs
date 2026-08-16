@@ -1005,6 +1005,19 @@ pub struct Config {
     /// disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ultra: Option<UltraConfig>,
+    /// Whether the model may run Lua programs that call Wizard's own tools
+    /// (`run_code`).
+    ///
+    /// Off by default. A program is model-authored code running in-process with
+    /// the user's privileges and the full standard library, and a model that
+    /// cannot write Lua spends a turn debugging a language nobody asked about.
+    /// One flag and no knobs: the compute, memory and call budgets are
+    /// constants until there is evidence a user needs to move one. Never
+    /// registered on the JSON tool protocol whatever this says, because a
+    /// multi-line program inside a JSON string is a stalled turn rather than a
+    /// loud failure. See docs/code-mode.md.
+    #[serde(default)]
+    pub code_mode: bool,
 }
 
 /// Default port for the local llama.cpp `llama-server`. Deliberately not 8080:
@@ -1051,6 +1064,7 @@ impl Default for Config {
             mesh: MeshConfig::default(),
             fusion: None,
             ultra: None,
+            code_mode: false,
         }
     }
 }
@@ -1423,7 +1437,8 @@ impl Config {
     /// `WIZARD_OLLAMA_HOST` overrides `ollama_host` (used by explicitly
     /// configured Ollama providers); `WIZARD_LLAMACPP_HOST` overrides
     /// `llamacpp_host`; `WIZARD_GGUF_PATH` overrides `gguf_path` and, when
-    /// the active provider is llamacpp, its `gguf_path` too.
+    /// the active provider is llamacpp, its `gguf_path` too;
+    /// `WIZARD_CODE_MODE` turns `run_code` on or off for one process.
     fn apply_env_from(&mut self, lookup: impl Fn(&str) -> Option<String>) {
         if let Some(model) = lookup("WIZARD_MODEL")
             && !model.trim().is_empty()
@@ -1444,6 +1459,17 @@ impl Config {
             let host = host.trim().trim_end_matches('/');
             if !host.is_empty() {
                 self.llamacpp_host = host.to_string();
+            }
+        }
+        if let Some(raw) = lookup("WIZARD_CODE_MODE") {
+            // Both directions, and an unrecognised value changes nothing: an
+            // exported `WIZARD_CODE_MODE=maybe` must not silently arm a
+            // model-authored interpreter, and must not silently disarm one the
+            // user configured on either.
+            match raw.trim() {
+                "1" | "true" | "yes" => self.code_mode = true,
+                "0" | "false" | "no" => self.code_mode = false,
+                _ => {}
             }
         }
         if let Some(path) = lookup("WIZARD_GGUF_PATH") {
@@ -1687,6 +1713,29 @@ mod tests {
         assert!(format!("{err:#}").contains("host:port"), "{err:#}");
     }
 
+    /// `WIZARD_CODE_MODE` moves in both directions, and an unrecognised value
+    /// moves nothing.
+    ///
+    /// Both halves matter: an exported `WIZARD_CODE_MODE=maybe` must not
+    /// silently arm a model-authored interpreter, and must not silently disarm
+    /// one the user turned on in `config.toml` either.
+    #[test]
+    fn the_code_mode_env_override_moves_in_both_directions() {
+        let mut config = Config::default();
+        assert!(!config.code_mode, "off by default");
+
+        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "1".to_string()));
+        assert!(config.code_mode);
+        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| " no ".to_string()));
+        assert!(!config.code_mode);
+        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "true".to_string()));
+        assert!(config.code_mode);
+        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "maybe".to_string()));
+        assert!(config.code_mode, "an unrecognised value changes nothing");
+        config.apply_env_from(|_| None);
+        assert!(config.code_mode, "and an unset variable changes nothing");
+    }
+
     #[test]
     fn full_file_round_trips() {
         let original = Config {
@@ -1774,6 +1823,7 @@ mod tests {
                 timeout_secs: 120,
                 max_draft_chars: 4_000,
             }),
+            code_mode: true,
         };
         let raw = toml::to_string_pretty(&original).expect("serialize");
         let parsed: Config = toml::from_str(&raw).expect("parse back");
@@ -1797,6 +1847,7 @@ mod tests {
             parsed.compact_threshold_bytes,
             original.compact_threshold_bytes
         );
+        assert_eq!(parsed.code_mode, original.code_mode);
         assert_eq!(parsed.providers.len(), 1);
         assert_eq!(parsed.providers[0].name, "openai");
         assert_eq!(parsed.providers[0].kind, ProviderKind::Openai);

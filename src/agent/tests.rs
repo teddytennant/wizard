@@ -3615,6 +3615,53 @@ fn every_shared_registry_handle_is_held_by_a_surface() {
     }
 }
 
+/// Exactly one function composes a session's tool registry.
+///
+/// The TUI used to have a second copy of `build_tool_registry` — same native +
+/// scripted + MCP + spawner composition, a helper of its own for `evolve` and
+/// `publish` — and every tool added to the shared builder had to be remembered
+/// in it. `run_code` was not, so `code_mode = true` worked on `wizard -p`, ACP,
+/// the gateway and the GUI and did nothing at all on the default surface, with
+/// no refusal and no message, and `/reload` came back through the same copy.
+///
+/// A test that asserts a tool is registered can only ever check the composer it
+/// knows about. This one asserts there is exactly one composer to know about,
+/// which is the `contrib/find-unwired.py` defect class closed at the source
+/// rather than one tool at a time. `SpawnSubagentTool::new` is the marker: a
+/// registry that has the spawner on top is a session's registry.
+#[test]
+fn only_one_function_composes_a_sessions_tool_registry() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut composers: Vec<String> = Vec::new();
+    for path in rust_sources(&root) {
+        let rel = path
+            .strip_prefix(&root)
+            .expect("under src")
+            .display()
+            .to_string();
+        if rel.ends_with("tests.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read a source file");
+        // Cut the inline test module off first: those build fixture
+        // registries, not sessions.
+        let production = source
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .unwrap_or_default();
+        if production.contains("SpawnSubagentTool::new") {
+            composers.push(rel);
+        }
+    }
+    composers.sort();
+    assert_eq!(
+        composers,
+        vec!["agent/mod.rs".to_string()],
+        "a surface is composing its own registry again; every tool added to \
+         `build_tool_registry` now has to be remembered there too"
+    );
+}
+
 /// Every `.rs` file under `dir`, recursively.
 fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
@@ -3630,4 +3677,266 @@ fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     found
+}
+
+// -- code mode (`run_code`) -------------------------------------------------
+
+/// Build the registry the way a real session does, for a given config.
+async fn code_mode_registry(config: &Config) -> ToolRegistry {
+    let tmp = TempDir::new();
+    let client: Arc<dyn LlmProvider> = ScriptedProvider::new(Vec::new());
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        "code-mode-test".to_string(),
+    ));
+    let manager = crate::mcp::McpManager::empty();
+    let (registry, _model) = build_tool_registry(config, &client, &hooks, &manager)
+        .await
+        .expect("build the registry");
+    registry
+}
+
+fn advertises(registry: &ToolRegistry, name: &str) -> bool {
+    registry
+        .specs()
+        .iter()
+        .any(|spec| spec.function.name == name)
+}
+
+/// Off by default, and off means absent from *both* rosters.
+///
+/// `specs()` is the sole input to the native `tools` array and to
+/// `render_tool_protocol`, which is the JSON fallback's roster, so there is no
+/// second place to remember — but that is a property worth asserting rather
+/// than assuming, because a disabled code mode has to be byte-identical to a
+/// build without it.
+#[tokio::test]
+async fn code_mode_is_off_by_default_and_absent_from_every_roster() {
+    let config = Config::default();
+    assert!(!config.code_mode, "the default must stay off");
+
+    let registry = code_mode_registry(&config).await;
+    assert!(
+        registry
+            .get(crate::tools::code::RUN_CODE_TOOL_NAME)
+            .is_none(),
+        "not registered"
+    );
+    assert!(!advertises(&registry, "run_code"), "not in the tools array");
+    let protocol = prompts::render_tool_protocol(&registry.specs());
+    assert!(
+        !protocol.contains("run_code"),
+        "and not in the JSON protocol roster either"
+    );
+}
+
+/// The gate that is the whole requirement rather than belt and braces: a model
+/// with no native tool calling never sees `run_code`, whatever the config says.
+///
+/// `render_tool_protocol` is deliberately full fidelity because it is the only
+/// place such a model learns a tool exists, and the argument here is a
+/// multi-line Lua program with quotes and backslashes inside a JSON string,
+/// hand-emitted by a model `parse_json_tool_call` already assumes misformats
+/// two-field calls. The failure is not "the program errors", it is "the JSON
+/// does not parse and the turn stalls", on surfaces where nobody is watching.
+#[tokio::test]
+async fn code_mode_is_absent_on_the_json_protocol() {
+    let tmp = TempDir::new();
+    let config = Config {
+        code_mode: true,
+        ..Config::default()
+    };
+    // Asserted on the agent rather than on `build_tool_registry`, because the
+    // agent is where the gate is and the registry is deliberately built with
+    // the tool in it (see that function's doc: one gate, so a `/reload` on a
+    // fallback model cannot leave a stale snapshot behind).
+    let registry = code_mode_registry(&config).await;
+    assert!(
+        registry
+            .get(crate::tools::code::RUN_CODE_TOOL_NAME)
+            .is_some(),
+        "the builder registers it whenever the config asks for it"
+    );
+
+    let session = Session::create(&tmp.0).expect("create session");
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+    let agent = Agent::new(
+        ScriptedProvider::new(Vec::new()),
+        registry,
+        config,
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        false,
+        hooks,
+    )
+    .expect("build agent");
+    assert!(
+        agent
+            .dispatcher
+            .registry()
+            .get(crate::tools::code::RUN_CODE_TOOL_NAME)
+            .is_none(),
+        "a fallback model must not be offered a Lua program as an argument"
+    );
+    let protocol = prompts::render_tool_protocol(&agent.dispatcher.registry().specs());
+    assert!(!protocol.contains("run_code"), "{protocol:.400}");
+    assert!(
+        !agent.history[0].text().contains("run_code"),
+        "and the composed prompt must not name it either"
+    );
+}
+
+/// A `/reload` performed while on a fallback model must not leave the stash
+/// holding a snapshot of the tool set the reload replaced.
+///
+/// The sequence that used to do it: `/model <fallback>` takes `run_code` out of
+/// the registry but keeps the stash, `/reload` hands over a registry the old gate
+/// built *without* `run_code`, so the stash is not refreshed, and `/model
+/// <native>` puts the pre-reload tool back — `wizard.tools()` listing a roster
+/// that no longer exists and missing everything the reload added.
+#[test]
+fn a_reload_on_a_fallback_model_still_refreshes_the_code_mode_snapshot() {
+    let tmp = TempDir::new();
+    let config = Config {
+        code_mode: true,
+        ..Config::default()
+    };
+    let session = Session::create(&tmp.0).expect("create session");
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+
+    let stale = Arc::new(crate::tools::code::RunCodeTool::new(
+        Arc::new(ToolRegistry::new()),
+        Arc::clone(&hooks),
+    ));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::clone(&stale) as Arc<dyn crate::tools::Tool>);
+    let mut agent = Agent::new(
+        ScriptedProvider::new(Vec::new()),
+        registry,
+        config,
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        true,
+        hooks.clone(),
+    )
+    .expect("build agent");
+    agent.set_usage_log(Some(tmp.0.join("usage.jsonl")));
+
+    // `/model` to something that cannot carry it.
+    agent.set_model("a-small-local-model".to_string(), false);
+
+    // `/reload`, which now always composes the tool.
+    let fresh = Arc::new(crate::tools::code::RunCodeTool::new(
+        Arc::new(ToolRegistry::new()),
+        Arc::clone(&hooks),
+    ));
+    let mut reloaded = ToolRegistry::new();
+    reloaded.register(Arc::clone(&fresh) as Arc<dyn crate::tools::Tool>);
+    agent.set_registry(reloaded);
+    let name = crate::tools::code::RUN_CODE_TOOL_NAME;
+    assert!(
+        agent.dispatcher.registry().get(name).is_none(),
+        "still a fallback model, so still not advertised"
+    );
+
+    // ... and back.
+    agent.set_model("a-model-with-tools".to_string(), true);
+    let restored = agent
+        .dispatcher
+        .registry()
+        .get(name)
+        .expect("restored on the way back");
+    assert!(
+        Arc::ptr_eq(
+            restored,
+            &(Arc::clone(&fresh) as Arc<dyn crate::tools::Tool>)
+        ),
+        "the reload's tool, not the one it replaced"
+    );
+}
+
+/// The `contrib/find-unwired.py` defect class, closed: written, documented,
+/// green, and never actually registered.
+#[tokio::test]
+async fn code_mode_registers_when_enabled() {
+    let config = Config {
+        code_mode: true,
+        ..Config::default()
+    };
+    let registry = code_mode_registry(&config).await;
+    let tool = registry
+        .get(crate::tools::code::RUN_CODE_TOOL_NAME)
+        .expect("registered when the config asks for it and the model can carry it");
+    assert_eq!(tool.access(), crate::tools::ToolAccess::Execute);
+    assert_eq!(tool.kind(), crate::tools::ToolKind::Native);
+    assert!(advertises(&registry, "run_code"));
+}
+
+/// A mid-session `/model` switch takes it away and gives it back.
+///
+/// Without this, switching to a small local model leaves a tool whose argument
+/// is a multi-line Lua program advertised on the JSON fallback protocol, which
+/// does not fail loudly — it stalls the turn.
+#[test]
+fn switching_to_a_fallback_model_removes_run_code_and_switching_back_restores_it() {
+    let tmp = TempDir::new();
+    let config = Config {
+        code_mode: true,
+        ..Config::default()
+    };
+    let provider = ScriptedProvider::new(Vec::new());
+    let session = Session::create(&tmp.0).expect("create session");
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(crate::tools::code::RunCodeTool::new(
+        Arc::new(ToolRegistry::new()),
+        Arc::clone(&hooks),
+    )));
+    let mut agent = Agent::new(
+        provider,
+        registry,
+        config,
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        true,
+        hooks,
+    )
+    .expect("build agent");
+    agent.set_usage_log(Some(tmp.0.join("usage.jsonl")));
+
+    let name = crate::tools::code::RUN_CODE_TOOL_NAME;
+    assert!(agent.dispatcher.registry().get(name).is_some());
+
+    agent.set_model("a-small-local-model".to_string(), false);
+    assert!(
+        agent.dispatcher.registry().get(name).is_none(),
+        "a fallback model must not keep it"
+    );
+    let prompt = agent.history[0].text();
+    assert!(
+        !prompt.contains("run_code"),
+        "and the recomposed JSON protocol section must not name it: {prompt:.400}"
+    );
+
+    agent.set_model("a-model-with-tools".to_string(), true);
+    assert!(
+        agent.dispatcher.registry().get(name).is_some(),
+        "and switching back restores it, from the stash rather than a rebuild"
+    );
 }

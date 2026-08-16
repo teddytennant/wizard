@@ -39,6 +39,7 @@ trying to do.
 | Doc | What it covers |
 | --- | --- |
 | [Self-extension](evolve.md) | `/evolve`, scripted tools on embedded LuaJIT, deep evolve, AHE |
+| [Code mode](code-mode.md) | `run_code`: one Lua program per call, calling Wizard's own tools |
 | [MCP](mcp.md) | Runtime MCP clients, and `wizard mcp-serve` in the other direction |
 | [Hooks](hooks.md) | Lifecycle hooks, and the project trust gate |
 | [Loadout](loadout.md) | Shipping a preconfigured tool surface |

@@ -48,7 +48,7 @@ wizard/
 │   ├── server.rs            # llama-server lifecycle
 │   ├── llm/                 # LlmProvider + per-vendor clients (incl. fusion, oauth)
 │   ├── mcp/                 # MCP client and mcp-serve server
-│   ├── tools/               # native tools + registry + scripted
+│   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs)
 │   ├── evolve/              # tiered self-extension + publish
 │   ├── gui/                 # the window's agent half: tasks, config store, git, OAuth (`native`)
 │   ├── gateway/             # messaging bot (Telegram)
@@ -182,12 +182,15 @@ Base64 stays on the `ChatMessage` in history for vision models. A tool's images 
 | `run_command` | Queue a Wizard slash command for the attached surface ([usage.md](usage.md#agent-run-slash-commands)) |
 | `compact` | Summarize older history mid-turn on every surface ([usage.md](usage.md#agent-managed-context)) |
 | `spawn_subagent` | Fan out work to a named subagent (agent registry, not mcp-serve) |
+| `run_code` | Run a LuaJIT program that calls Wizard's own tools; off by default ([code-mode.md](code-mode.md)) |
 | `exit_plan` / `interview` | Plan-mode completion and clarifying questions |
 | `evolve` / `publish` | Self-extension and fork-and-distribute |
 
 There is no per-action y/n gate outside plan mode and hooks. Genie is conversational; sovereign/continuous run unattended. Plan mode keeps non-read-only tools blocked until `exit_plan` is approved (or omakase auto-approves).
 
 Beyond the built-ins, the registry also serves scripted tools (`~/.wizard/tools/`, default runtime **embedded LuaJIT**) and MCP tools. All three kinds present the same interface to the agent loop.
+
+`run_code` is the ad hoc form of the same idea: one Lua program per call, with a bridge back into `dispatch.rs` so every tool it calls is hooked, snapshotted and post-hooked exactly like a direct call. Nothing survives the call, and it is registered only when `code_mode = true` **and** the model calls tools natively. See [code-mode.md](code-mode.md).
 
 ### MCP (`mcp/`)
 

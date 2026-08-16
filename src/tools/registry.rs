@@ -114,6 +114,23 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
+    /// Unregister a tool, from both the lookup and the ordering.
+    ///
+    /// Both, or a removed tool would still be named by
+    /// [`specs`](Self::specs)'s iteration and then filtered out by the
+    /// `filter_map` — which happens to be correct today and would silently stop
+    /// being correct the day something else iterates `order`. Removing a name
+    /// that is not registered is a no-op.
+    ///
+    /// The caller is `Agent::sync_code_mode`: a mid-session `/model` switch to
+    /// a model with no native tool calling has to take `run_code` away again,
+    /// because the JSON tool protocol cannot carry a multi-line Lua program.
+    pub fn remove(&mut self, name: &str) {
+        if self.tools.remove(name).is_some() {
+            self.order.retain(|registered| registered != name);
+        }
+    }
+
     /// Number of registered tools.
     pub fn len(&self) -> usize {
         self.tools.len()

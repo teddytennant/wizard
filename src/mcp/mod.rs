@@ -73,9 +73,11 @@ const STDIO_ENV_DENYLIST: &[&str] = &[
 
 /// Native tool names an MCP tool must never shadow in the registry; a tool
 /// advertised under one of these is namespaced `server__tool`. Must cover
-/// everything `ToolRegistry::with_native_tools` registers plus
-/// `spawn_subagent` (registered at runtime by the agent) — a unit test
-/// enforces this.
+/// everything `ToolRegistry::with_native_tools` registers plus the names the
+/// agent registers at runtime over the top of an MCP tool that took them —
+/// `spawn_subagent` and `run_code` — because that registration *replaces* the
+/// server's tool rather than colliding with it, so the server's tool goes
+/// unreachable with no warning to anyone. A unit test enforces the list.
 const RESERVED_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
@@ -100,6 +102,7 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "compact",
     "computer",
     "spawn_subagent",
+    crate::tools::code::RUN_CODE_TOOL_NAME,
 ];
 
 /// Contents of `~/.wizard/mcp.toml`:
@@ -1247,9 +1250,12 @@ mod tests {
 
     #[test]
     fn reserved_tool_names_match_the_native_registry() {
-        let mut expected: HashSet<&str> = vec![crate::agent::subagent::SPAWN_SUBAGENT_TOOL_NAME]
-            .into_iter()
-            .collect();
+        let mut expected: HashSet<&str> = vec![
+            crate::agent::subagent::SPAWN_SUBAGENT_TOOL_NAME,
+            crate::tools::code::RUN_CODE_TOOL_NAME,
+        ]
+        .into_iter()
+        .collect();
         let registry = crate::tools::registry::ToolRegistry::with_native_tools();
         let specs = registry.specs();
         for spec in &specs {

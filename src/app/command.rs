@@ -851,7 +851,7 @@ impl CommandContext<'_> {
         else {
             return;
         };
-        match build_registry(&manager, self.client, &hooks).await {
+        match build_registry(&self.app.config, &manager, self.client, &hooks).await {
             Ok((registry, subagent_model)) => {
                 let tool_count = registry.len();
                 if let Some(agent) = self.agent_slot.as_mut() {
@@ -882,7 +882,7 @@ impl CommandContext<'_> {
             return;
         };
         let manager = self.manager.lock().await;
-        match build_registry(&manager, self.client, &hooks).await {
+        match build_registry(&self.app.config, &manager, self.client, &hooks).await {
             Ok((registry, subagent_model)) => {
                 // Success is silent: tools simply start working and the
                 // "connecting tools…" indicator disappears. A success notice
@@ -940,7 +940,7 @@ impl CommandContext<'_> {
             .as_ref()
             .map(|agent| Arc::clone(agent.hooks()))
             && let Ok((registry, subagent_model)) =
-                build_registry(&manager, self.client, &hooks).await
+                build_registry(&self.app.config, &manager, self.client, &hooks).await
             && let Some(agent) = self.agent_slot.as_mut()
         {
             agent.set_registry(registry);

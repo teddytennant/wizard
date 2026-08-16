@@ -775,6 +775,17 @@ async fn run_loop(
         scoped = read_only_registry(&scoped);
     }
     let native_tools = crate::llm::provider::probe_native_tools(client.as_ref(), &model).await;
+    if !native_tools {
+        // The same gate `Agent::sync_code_mode` applies to a session, applied to
+        // a run that has no `Agent` to apply it. A subagent re-probes against
+        // its own model and `probe_native_tools` answers `false` on any error,
+        // so a `/fork` of a code-mode session could hit a transient probe
+        // failure and then have `run_code` written into its system prompt by
+        // `render_tool_protocol` below — a multi-line Lua program as a
+        // hand-emitted JSON string field, which is the exact outcome
+        // `build_tool_registry` exists to prevent.
+        scoped.remove(crate::tools::code::RUN_CODE_TOOL_NAME);
+    }
 
     let history = match &options.inherited_history {
         // `/fork`: seed from the parent's conversation, then append the

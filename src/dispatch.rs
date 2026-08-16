@@ -40,7 +40,7 @@ use crate::tools::{ToolAccess, ToolContext, ToolOutput, registry::ToolRegistry};
 /// results, and the third one ended the turn — and [`crate::headless`] ends the
 /// whole run on a circuit breaker. Saying "stop doing that" is what was wanted;
 /// it just was not what happened.
-const IDENTICAL_FAILURE_NUDGE: u32 = 3;
+pub(crate) const IDENTICAL_FAILURE_NUDGE: u32 = 3;
 
 /// Identical repeats of one *faulted* call before the turn ends with
 /// [`DoneReason::CircuitBreaker`].
@@ -50,7 +50,7 @@ const IDENTICAL_FAILURE_NUDGE: u32 = 3;
 /// identically — same tool, same arguments, same message — six times with
 /// nothing whatsoever succeeding in between, which is not a model working on a
 /// hard problem, it is a model in a loop.
-const IDENTICAL_FAULT_TRIP: u32 = 6;
+pub(crate) const IDENTICAL_FAULT_TRIP: u32 = 6;
 
 /// Consecutive failures of one tool (any args, any grade) before the model is
 /// nudged to change approach.
@@ -65,7 +65,7 @@ const TOOL_FAILURE_NUDGE: u32 = 5;
 /// and the failures were `execute`'s and the two counters never met. Under this
 /// one, eight failures with not one success anywhere between them is the
 /// picture of an agent that has stopped being able to affect the machine.
-const TOOL_FAILURE_TRIP: u32 = 8;
+pub(crate) const TOOL_FAILURE_TRIP: u32 = 8;
 
 /// Which stages of the pipeline a dispatcher's calls pass through.
 ///
@@ -78,7 +78,13 @@ enum Pipeline {
     Turn,
     /// A delegated sub-run: the pre-hooks, the checkpoint, the call, and the
     /// post-hooks — the part that decides what actually happens on the
-    /// machine — and nothing that belongs to a session:
+    /// machine — and nothing that belongs to a session.
+    ///
+    /// Two callers, and everything below describes both: a subagent
+    /// ([`crate::agent::subagent::spawn`]) and one `run_code` program
+    /// ([`crate::tools::code`]), which re-enters through this pipeline so a
+    /// tool a Lua program calls is hooked, snapshotted and post-hooked exactly
+    /// like a tool the model called directly.
     ///
     /// - **No plan-mode gate.** A run spawned while planning was already
     ///   narrowed to the read-only tools before it started
@@ -121,6 +127,17 @@ pub struct Dispatcher {
 /// What [`Dispatcher::dispatch`] tells the agent loop to do after one call.
 #[derive(Debug)]
 pub struct DispatchOutcome {
+    /// How the call went, as the breakers read it (see [`Grade`]).
+    ///
+    /// Reported rather than kept private because `output.is_error` cannot
+    /// answer the question: a tool that ran and said no and a call that could
+    /// not be made at all are both a `ToolOutput` with the flag set, and the
+    /// difference between them is the whole reason [`Grade`] exists. The agent
+    /// loop does not read this; `crate::tools::code` does, because a program
+    /// has to hand a Lua caller `nil, message` for the first and a raise for
+    /// the second, and deciding that by matching on the message text would be
+    /// wrong in exactly the case the model can trigger.
+    pub grade: Grade,
     /// Tool result to feed back to the model. `None` when the turn ended
     /// before a result could be reported (event receiver gone).
     pub output: Option<ToolOutput>,
@@ -135,6 +152,9 @@ impl DispatchOutcome {
     /// The event receiver is gone: stop the turn without feedback.
     fn stopped() -> Self {
         Self {
+            // Nothing was reported and nothing is known about the call, which
+            // is the same standing a call that could not be made has.
+            grade: Grade::Fault,
             output: None,
             nudge: None,
             done: Some(DoneReason::Stopped),
@@ -240,6 +260,9 @@ impl Dispatcher {
                     return DispatchOutcome::stopped();
                 }
                 return DispatchOutcome {
+                    // The gate refused it, so the call did not happen. Named
+                    // here, but exempt from the breakers by the early return.
+                    grade: Grade::Fault,
                     output: Some(output),
                     nudge: None,
                     done: None,
@@ -375,6 +398,7 @@ impl Dispatcher {
         // reports the result and keeps going, bounded by its own budget.
         if self.pipeline == Pipeline::SubRun {
             return DispatchOutcome {
+                grade,
                 output: Some(output),
                 nudge: None,
                 done: None,
@@ -405,6 +429,7 @@ impl Dispatcher {
         if let Some(message) = trip {
             sink.error(message).await;
             return DispatchOutcome {
+                grade,
                 output: Some(output),
                 nudge: None,
                 done: Some(DoneReason::CircuitBreaker),
@@ -429,6 +454,7 @@ impl Dispatcher {
             None
         };
         DispatchOutcome {
+            grade,
             output: Some(output),
             nudge,
             done: None,
@@ -498,7 +524,7 @@ impl Dispatcher {
 /// model took that advice three times is a run that punished it for reading
 /// the manual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Grade {
+pub enum Grade {
     /// The tool ran and reported success.
     Fine,
     /// The tool ran, and what it has to report is unwelcome: a command exited

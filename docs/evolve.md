@@ -68,6 +68,12 @@ required = ["text"]
 type = "string"
 ```
 
+A program is the ad hoc form of the same rung. `run_code` runs one Lua program
+now, against Wizard's own tools, and throws it away — no file, no manifest, no
+`/reload`. Write a scripted tool when you will want it again; run a program when
+the answer is "do these forty things once". See [code-mode.md](code-mode.md);
+it is off by default.
+
 ```lua
 -- ~/.wizard/tools/slugify.lua
 local s = tostring(args.text or ""):lower()

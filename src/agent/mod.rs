@@ -708,6 +708,13 @@ pub struct Agent {
     /// Session state, not config: a rebuilt agent (`/model`, a provider switch,
     /// `/resume`) starts without it, so every rebuild path must re-arm it.
     ultra: Option<Arc<ultra::UltraEngine>>,
+    /// The registered `run_code` tool, stashed so a `/model` switch can take it
+    /// away and give it back without rebuilding the whole registry.
+    ///
+    /// Never cleared to `None` by a registry that lacks it: the stash has to
+    /// survive its own removal, or switching to a fallback model and back would
+    /// lose the tool for the rest of the session.
+    code: Option<Arc<dyn crate::tools::Tool>>,
 }
 
 /// One row of the `/rewind` picker: a turn, the prompt that started it, and
@@ -899,7 +906,21 @@ impl Agent {
             cancel,
             subagent_model: None,
             ultra: None,
+            code: None,
         };
+        agent.code = agent
+            .dispatcher
+            .registry()
+            .get(crate::tools::code::RUN_CODE_TOOL_NAME)
+            .cloned();
+        // Inline rather than `sync_code_mode`, which recomposes the system
+        // prompt — there is no prompt yet, and the one pushed two lines down is
+        // composed from the registry this leaves behind.
+        if agent.code.is_some() && !(agent.native_tools && agent.config.code_mode) {
+            let mut registry = agent.dispatcher.registry().snapshot();
+            registry.remove(crate::tools::code::RUN_CODE_TOOL_NAME);
+            agent.dispatcher.set_registry(registry);
+        }
         agent
             .history
             .push(ChatMessage::system(agent.compose_system_prompt()));
@@ -1158,7 +1179,22 @@ impl Agent {
         registry.register(Arc::new(crate::tools::interview::InterviewTool::new(
             Arc::clone(&self.omakase),
         )));
+        // Stash `run_code` if this registry has one, and keep the old stash if
+        // it does not: a registry built without code mode legitimately omits it,
+        // and forgetting it there would mean `/model` back to a native-tool
+        // model never restored it. `build_tool_registry` puts it in whenever the
+        // config asks for it, model capability included or not, so a rebuild
+        // always refreshes the stash rather than leaving a snapshot of a tool
+        // set the rebuild has already replaced.
+        if let Some(tool) = registry.get(crate::tools::code::RUN_CODE_TOOL_NAME) {
+            self.code = Some(Arc::clone(tool));
+        }
         self.dispatcher.set_registry(registry);
+        // The model's half of the gate, and the only place it is enforced: a
+        // fallback model must not be offered a tool whose argument is a Lua
+        // program. Runs before `refresh_system_prompt` composes the JSON
+        // protocol roster, which is what would otherwise name it.
+        self.sync_code_mode();
         self.refresh_system_prompt();
     }
 
@@ -1281,6 +1317,7 @@ impl Agent {
         // provider's failure history.
         self.llm_breaker = breaker::LlmBreaker::new();
         self.refresh_system_prompt();
+        self.sync_code_mode();
     }
 
     /// Shared handle on the background-subagent registry, so a surface can
@@ -1361,6 +1398,34 @@ impl Agent {
         }
     }
 
+    /// Add or remove `run_code` to match the current model and config.
+    ///
+    /// `/model` can flip `native_tools` mid-session, and without this a switch
+    /// to a small local model would leave a tool whose argument is a multi-line
+    /// Lua program advertised on the JSON fallback protocol — where it does not
+    /// fail loudly, it stalls the turn. In the shape of [`Self::sync_plan_prompt`]
+    /// and for the same reason: the flag it mirrors can change without the
+    /// registry being rebuilt.
+    fn sync_code_mode(&mut self) {
+        let Some(tool) = self.code.clone() else {
+            return;
+        };
+        let name = crate::tools::code::RUN_CODE_TOOL_NAME;
+        let present = self.dispatcher.registry().get(name).is_some();
+        let wanted = self.native_tools && self.config.code_mode;
+        if present == wanted {
+            return;
+        }
+        let mut registry = self.dispatcher.registry().snapshot();
+        if wanted {
+            registry.register(tool);
+        } else {
+            registry.remove(name);
+        }
+        self.dispatcher.set_registry(registry);
+        self.refresh_system_prompt();
+    }
+
     /// Switch models mid-session (`/model`) without resetting conversation
     /// context. `native_tools` is the new model's tool-calling capability
     /// (probe with [`OllamaClient::supports_native_tools`]); the system
@@ -1373,6 +1438,7 @@ impl Agent {
         self.model = model;
         self.native_tools = native_tools;
         self.refresh_system_prompt();
+        self.sync_code_mode();
     }
 
     /// Replace the skill set mid-session (`/reload`) and rebuild the system
@@ -1744,6 +1810,26 @@ pub async fn build_headless_agent_for_session(
 /// This is what a build composes and what `/reload` recomposes, so a reloaded
 /// session has exactly the tools a fresh one does — no more (a second copy of
 /// every MCP server) and no fewer (`evolve` and `publish` silently dropped).
+///
+/// `run_code` is registered whenever `config.code_mode` is on, and the *model's*
+/// half of the gate — it must never be advertised to a model without native tool
+/// calling — is [`Agent::sync_code_mode`]'s, which every path into an agent
+/// runs. That gate used to live here too, and having it in both places was the
+/// bug rather than the belt: a registry built for a fallback model omitted the
+/// tool, [`Agent::set_registry`] only refreshes its stash from a registry that
+/// has one, so a `/reload` performed while on a fallback model left the stash
+/// holding the *pre-reload* tool and its `Arc<ToolRegistry>` snapshot. Switching
+/// back to a native-tools model then restored a `run_code` whose `wizard.tools()`
+/// listed a roster the reload had already replaced. One gate, in the place that
+/// owns the flag it reads.
+///
+/// Why the gate exists at all: the JSON fallback protocol
+/// (`prompts::render_tool_protocol`) is the only place such a model learns a
+/// tool exists, and the argument would be a multi-line Lua program with quotes
+/// and backslashes inside a JSON string, hand-emitted by a model
+/// `parse_json_tool_call` already assumes misformats two-field calls. The
+/// failure there is not "the program errors", it is "the JSON does not parse
+/// and the turn stalls", on surfaces where nobody is watching.
 pub async fn build_tool_registry(
     config: &Config,
     client: &Arc<dyn LlmProvider>,
@@ -1782,6 +1868,17 @@ pub async fn build_tool_registry(
     registry.register(Arc::new(crate::tools::publish::PublishTool::new(
         config.clone(),
     )));
+    // Over `base`, which is composed before the spawn tool, `evolve` and
+    // `publish`, and before `exit_plan` and `interview` (which `Agent::new`
+    // adds later). So a program reaches every native, scripted and MCP tool,
+    // and reaches none of those five or `run_code` itself: programs cannot
+    // nest, and there is no recursion to bound because there is no recursion.
+    if config.code_mode {
+        registry.register(Arc::new(crate::tools::code::RunCodeTool::new(
+            Arc::clone(&base),
+            Arc::clone(hooks),
+        )));
+    }
     Ok((registry, subagent_model))
 }
 

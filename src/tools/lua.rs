@@ -30,8 +30,9 @@
 //! mlua's `StdLib::ALL_SAFE` never meant "cannot run commands".
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use mlua::{Lua, LuaOptions, LuaSerdeExt, StdLib, Value as LuaValue};
 use serde_json::Value as JsonValue;
@@ -103,6 +104,25 @@ const SANDBOX_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 /// script.
 const SANDBOX_HOOK_INSTRUCTIONS: u32 = 10_000;
 
+/// How much longer than the budget the *wrapper* waits before giving up on a
+/// bounded chunk.
+///
+/// The two stops are not equivalent and the better one has to win the race. The
+/// in-VM hook raises an ordinary Lua error, so the chunk unwinds, the thread
+/// ends, and the caller gets a message saying which bound was hit. The
+/// wrapper's timeout can do none of that: there is no way to abort a foreign
+/// Lua stack, so it reports and leaves the thread running for the life of the
+/// process, which is the exact outcome the bounds were added to prevent.
+///
+/// Both used to be armed for the same instant, and the wrapper won by a hair
+/// every time, because its clock starts before the worker thread does. A
+/// sandboxed chunk that ran out its budget was therefore reported as a plain
+/// timeout *and* abandoned, with the hook raising into a thread nobody was
+/// waiting on any more. The grace is small enough that a wedged C call is still
+/// caught promptly, and only applies to a bounded run: an unbounded one has no
+/// hook to wait for.
+const HOOK_GRACE: Duration = Duration::from_secs(2);
+
 /// Base-library globals blanked for a [`Stdlib::Sandboxed`] run.
 ///
 /// mlua opens `_G` unconditionally (it is not a `StdLib` flag), so leaving
@@ -123,6 +143,293 @@ const SANDBOX_HOOK_INSTRUCTIONS: u32 = 10_000;
 const BLANKED_GLOBALS: [&str; 9] = [
     "dofile", "loadfile", "require", "module", "package", "os", "io", "debug", "ffi",
 ];
+
+/// How much a chunk may *take*, as opposed to what it may *reach* ([`Stdlib`]).
+///
+/// These two questions used to be one `if stdlib == Stdlib::Sandboxed` block,
+/// which was an accident of the order the features were written in rather than
+/// a decision. The allowlist answers "whose code is this": a stranger's tool
+/// gets no `os` and no `io`. The hook answers "can this wedge the process":
+/// `while true do end` burns a core for the life of the process and holds one
+/// of tokio's blocking threads, the pool every native file tool shares, and it
+/// does that whoever wrote the loop.
+///
+/// Splitting them names the corner that had no name before: code mode
+/// (`crate::tools::code`) runs a model-authored program under
+/// [`Stdlib::Full`] — it can already call `tool.execute`, so removing
+/// `os.execute` from it would be decoration — and under [`Bounds::Bounded`],
+/// because nobody read it before it ran.
+///
+/// A locally authored scripted tool stays [`Bounds::Unbounded`]: a human wrote
+/// it, a human will notice, and it has been allowed to take as long as it likes
+/// since LuaJIT was embedded.
+pub enum Bounds {
+    /// No hook, no ceiling, and the JIT left on.
+    Unbounded,
+    /// Bounded in time, memory and (for a caller that counts them elsewhere)
+    /// whatever the [`BoundsHandle::stop`] flag is set to say.
+    Bounded(BoundsHandle),
+}
+
+/// The shared state a bounded chunk's hook reads, and the flag it writes.
+pub struct BoundsHandle {
+    /// Compute deadline. Behind a mutex because code mode pushes it forward
+    /// across time the chunk spends parked in a host call: the hook cannot fire
+    /// while the Lua thread is blocked on a channel, so a budget that counted
+    /// that time would punish a program for running a real build. A scripted
+    /// tool never moves it.
+    pub deadline: Arc<Mutex<Instant>>,
+    /// Hard wall clock, never extended. Without it, a program whose every tool
+    /// call is slow could push the deadline forever.
+    pub wall: Instant,
+    /// Bytes the VM may hold, read from the hook (see [`install_hook`]).
+    pub memory_limit: usize,
+    /// Set by the hook immediately before it raises, so the caller classifies
+    /// from the flag and never from the message text.
+    ///
+    /// This is the single most important field here. `mlua::Error::runtime`
+    /// looks identical for a timeout, a memory cap and an ordinary `error()`
+    /// call, and a program can `error("exceeded its time budget")` on purpose.
+    /// Message matching is wrong in exactly the case the model can trigger.
+    pub stop: Arc<AtomicU8>,
+    /// Checked by the hook so Ctrl-C reaches a chunk that is spinning rather
+    /// than parked. `None` for a scripted tool, which has no turn behind it.
+    pub cancel: Option<crate::agent::CancelHandle>,
+}
+
+impl BoundsHandle {
+    /// A fixed budget with no pushing and no cancel handle: what a sandboxed
+    /// scripted tool has always had.
+    pub fn fixed(timeout: Duration, memory_limit: usize) -> Self {
+        let deadline = Instant::now() + timeout;
+        Self {
+            deadline: Arc::new(Mutex::new(deadline)),
+            wall: deadline,
+            memory_limit,
+            stop: Arc::new(AtomicU8::new(StopReason::None.as_u8())),
+            cancel: None,
+        }
+    }
+}
+
+/// Why a bounded chunk was stopped, when it was stopped rather than having
+/// raised on its own.
+///
+/// A `u8` behind an atomic rather than a `Mutex<Option<..>>` because the hook
+/// writes it from inside the VM on a path that must not be able to block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// Nothing stopped it. Whatever it raised, it raised for its own reasons.
+    None,
+    /// The compute deadline or the wall ceiling passed.
+    Time,
+    /// The VM held more than [`BoundsHandle::memory_limit`].
+    Memory,
+    /// The caller's own budget — code mode's dispatched-call count. Set by the
+    /// bridge, never by the hook; it lives here so there is one flag to read.
+    Calls,
+    /// The user stopped the turn, or the host went away underneath the chunk.
+    Interrupted,
+}
+
+impl StopReason {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            StopReason::None => 0,
+            StopReason::Time => 1,
+            StopReason::Memory => 2,
+            StopReason::Calls => 3,
+            StopReason::Interrupted => 4,
+        }
+    }
+
+    pub fn from_u8(raw: u8) -> Self {
+        match raw {
+            1 => StopReason::Time,
+            2 => StopReason::Memory,
+            3 => StopReason::Calls,
+            4 => StopReason::Interrupted,
+            _ => StopReason::None,
+        }
+    }
+}
+
+/// Proof that the JIT was turned off on a particular state.
+///
+/// A token rather than a comment because the crashing configuration is easy to
+/// write and hard to see: see [`disable_jit`] for what a hook on a
+/// JIT-compiled state does. [`install_hook`] demands one of these, so "hook on,
+/// JIT on" is not a thing a caller can express.
+#[must_use]
+pub struct JitOff(());
+
+/// Turn LuaJIT's compiler off, flush any traces already recorded, and take the
+/// switch away so the chunk cannot turn it back on.
+///
+/// Must run before the chunk does, and it is the only thing that may hold the
+/// real `jit` table: turning the compiler off and leaving `jit.on` reachable is
+/// the bound written in eight characters of Lua the model can type. Neither
+/// profile removed it before — `blank_globals` never listed `jit` (its nine
+/// names are `dofile`, `loadfile`, `require`, `module`, `package`, `os`, `io`,
+/// `debug`, `ffi`), and [`sandboxed_libs`] deliberately opens `StdLib::JIT`
+/// because `jit.version` backs `wizard.version`. So both a sandboxed scripted
+/// tool and a code-mode program could write `jit.on()` and silence the hook
+/// below for the rest of the run. What replaces it is a frozen table carrying
+/// the three fields anyone had a reason to read (`version`, `os`, `arch`) plus
+/// a `status` that answers the truth, and `package.loaded.jit` is repointed at
+/// it so `require("jit")` cannot hand the real one back.
+///
+/// LuaJIT compiles hot paths into traces, and a trace does not check for a
+/// count hook the way the interpreter does: the hook a bounded run installs
+/// stops being called once a loop is compiled, so the deadline it enforces
+/// would silently stop applying to exactly the runaway loop it exists to catch.
+/// Worse than not firing, erroring out of a hook that fires *while a trace is
+/// running* unwinds through JIT-compiled frames, which is what SIGSEGVs the
+/// suite on Apple Silicon.
+///
+/// `jit.off()` with no argument is the *global* switch, and it has to be that
+/// one. `jit.off(true, true)` — which this used to run, on the reading that
+/// `true` meant "everything" — selects the function that *called* it, so it
+/// turned the compiler off for a one-line chunk that had already finished and
+/// left it on for the script. The bound looked installed and was not: an
+/// allocating loop still tripped, because `string.rep` is a C call the recorder
+/// will not trace, while `while true do end` compiled on its second pass and
+/// then ran forever with the hook silent. `jit.flush()` drops traces recorded
+/// before the switch, so nothing compiled earlier survives it.
+///
+/// This costs a bounded chunk the JIT and buys the bound being real. An
+/// unbounded chunk is not hooked at all and keeps the compiler.
+pub fn disable_jit(lua: &Lua) -> mlua::Result<JitOff> {
+    lua.load(
+        "jit.off(); jit.flush()\n\
+         local frozen = {\n\
+           version = jit.version, os = jit.os, arch = jit.arch,\n\
+           status = function() return false end,\n\
+         }\n\
+         jit = frozen\n\
+         if package and package.loaded then package.loaded.jit = frozen end",
+    )
+    .set_name("@wizard:disable_jit")
+    .exec()?;
+    Ok(JitOff(()))
+}
+
+/// Re-raise a bound's error out of any `pcall` that catches it.
+///
+/// The hook below signals a bound by returning [`mlua::Error::runtime`], which
+/// is an ordinary catchable Lua error, and nothing rechecked the flag
+/// afterwards. So `while true do pcall(function() while true do end end) end`
+/// turned every bound into a return value and ran forever — and code mode's own
+/// tool description and `docs/code-mode.md` both tell the model to wrap calls in
+/// `pcall`, so this is the idiom the feature exists to encourage rather than an
+/// exotic shape.
+///
+/// The wrappers only re-raise once [`BoundsHandle::stop`] is latched, which the
+/// hook and the bridge set and nothing else does. A program's own `error()`,
+/// and a tool call that was refused, are still caught the way Lua says they
+/// are — `tool.refuse{}` inside a `pcall` is a probe, not a bound.
+///
+/// `coroutine.resume` is wrapped for the same reason: an error inside a
+/// coroutine comes back as `false, message` rather than propagating.
+fn install_stop_guard(lua: &Lua, stop: &Arc<AtomicU8>) -> mlua::Result<()> {
+    let stop = Arc::clone(stop);
+    let stopped = lua.create_function(move |_, ()| {
+        Ok(StopReason::from_u8(stop.load(Ordering::SeqCst)) != StopReason::None)
+    })?;
+    lua.load(
+        "local stopped = ...\n\
+         local raw_pcall, raw_xpcall = pcall, xpcall\n\
+         local raw_resume = coroutine and coroutine.resume\n\
+         local function guard(ok, ...)\n\
+           if not ok and stopped() then error((...), 0) end\n\
+           return ok, ...\n\
+         end\n\
+         pcall = function(...) return guard(raw_pcall(...)) end\n\
+         xpcall = function(...) return guard(raw_xpcall(...)) end\n\
+         if raw_resume then\n\
+           coroutine.resume = function(...) return guard(raw_resume(...)) end\n\
+         end",
+    )
+    .set_name("@wizard:stop_guard")
+    .call::<()>(stopped)
+}
+
+/// Install the deadline / memory / cancel hook described by `bounds`.
+///
+/// Requires a [`JitOff`] because a hook on a JIT-compiled state is a hard crash
+/// of the whole process, not a slow path. See [`disable_jit`].
+///
+/// # Why a hook and not an allocator limit
+///
+/// A wall-clock timeout around the worker cannot stop a runaway chunk: there is
+/// no way to abort a foreign Lua stack, so it reports and leaves the thread
+/// running. `while true do end` burns a core for the life of the process and
+/// holds one of tokio's blocking threads; `t[#t+1] = string.rep("x", 1e6)` in a
+/// loop OOM-kills the whole agent.
+///
+/// `set_memory_limit` makes the next allocation past the limit fail, and
+/// handing LuaJIT an allocation failure is where this used to SIGSEGV on Apple
+/// Silicon: LuaJIT on 64-bit does not properly support the foreign allocator
+/// mlua installs to implement the limit, and its out-of-memory path is the part
+/// that does not survive. Reading `used_memory` from the hook reaches the same
+/// ceiling one step earlier, as an ordinary Lua error raised between
+/// instructions rather than an allocation the VM cannot satisfy.
+///
+/// # Why the *global* hook
+///
+/// [`Lua::set_hook`](mlua::Lua::set_hook) installs on one `lua_State` and mlua
+/// keys the callback by thread in a registry table. LuaJIT's hook mask lives in
+/// the *global* state, so a coroutine the chunk creates does fire mlua's
+/// trampoline — which looks the coroutine up, does not find it, and calls
+/// `lua_sethook(state, None, 0, 0)`. That does not skip the hook for the
+/// coroutine, it uninstalls it for the whole VM: after
+/// `coroutine.resume(coroutine.create(f))` the bounds were gone from the main
+/// chunk too. `set_global_hook` stores one callback for every thread of the
+/// state, so `coroutine.create(function() while true do end end)` is bounded
+/// like any other loop.
+pub fn install_hook(lua: &Lua, _proof: &JitOff, bounds: &BoundsHandle) -> mlua::Result<()> {
+    let deadline = Arc::clone(&bounds.deadline);
+    let wall = bounds.wall;
+    let memory_limit = bounds.memory_limit;
+    let stop = Arc::clone(&bounds.stop);
+    let cancel = bounds.cancel.clone();
+    install_stop_guard(lua, &bounds.stop)?;
+    lua.set_global_hook(
+        mlua::HookTriggers::new().every_nth_instruction(SANDBOX_HOOK_INSTRUCTIONS),
+        move |lua, _debug| {
+            if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
+                stop.store(StopReason::Interrupted.as_u8(), Ordering::SeqCst);
+                return Err(mlua::Error::runtime("the user stopped the turn"));
+            }
+            let now = Instant::now();
+            let budget = *deadline.lock().unwrap_or_else(PoisonError::into_inner);
+            if now >= budget || now >= wall {
+                stop.store(StopReason::Time.as_u8(), Ordering::SeqCst);
+                return Err(mlua::Error::runtime("exceeded its time budget"));
+            }
+            // `used_memory` is 0 when mlua could not install its allocator,
+            // which reads as "no reading available" rather than "nothing
+            // allocated": the bound is skipped instead of tripping at once.
+            let used = lua.used_memory();
+            if used > memory_limit {
+                stop.store(StopReason::Memory.as_u8(), Ordering::SeqCst);
+                return Err(mlua::Error::runtime(format!(
+                    "exceeded its memory budget ({} MB)",
+                    memory_limit / (1024 * 1024)
+                )));
+            }
+            Ok(mlua::VmState::Continue)
+        },
+    )
+}
+
+/// [`disable_jit`] then [`install_hook`], for a caller that does not blank
+/// globals in between. `run_lua_blocking` does, so it calls the two halves in
+/// its own order; code mode calls this.
+pub fn install_bounds(lua: &Lua, bounds: &BoundsHandle) -> mlua::Result<()> {
+    let proof = disable_jit(lua)?;
+    install_hook(lua, &proof, bounds)
+}
 
 /// The profile a script at `script_path` runs under.
 ///
@@ -199,7 +506,16 @@ pub fn run_scripted_with(
                 &args,
                 &cwd,
                 stdlib,
-                timeout,
+                // The bound is the profile's, today and byte for byte: a
+                // stranger's tool gets the clock and the ceiling, a locally
+                // authored one gets neither. See [`Bounds`] for why that is now
+                // two decisions rather than one.
+                match stdlib {
+                    Stdlib::Sandboxed => {
+                        Bounds::Bounded(BoundsHandle::fixed(timeout, SANDBOX_MEMORY_LIMIT))
+                    }
+                    Stdlib::Full => Bounds::Unbounded,
+                },
             )
         })
         .map_err(|err| ToolError::Execution {
@@ -208,6 +524,7 @@ pub fn run_scripted_with(
         })?;
 
     let start = std::time::Instant::now();
+    let give_up = timeout + hook_grace(stdlib);
     loop {
         if join.is_finished() {
             return join.join().unwrap_or_else(|_| {
@@ -217,10 +534,15 @@ pub fn run_scripted_with(
                 })
             });
         }
-        if start.elapsed() >= timeout {
+        if start.elapsed() >= give_up {
             // The worker cannot be safely aborted mid-Lua (no kill for a
             // foreign stack). Report timeout; the OS reaps the thread when the
             // chunk eventually returns. Tools should stay short.
+            //
+            // Reaching here at all means the in-VM hook could not stop the
+            // chunk — it is parked in a C call, where the hook does not fire —
+            // so this really is the last resort it was written to be, rather
+            // than the path every bounded overrun took (see [`HOOK_GRACE`]).
             return Err(ToolError::Timeout {
                 tool: tool.to_string(),
                 seconds: timeout.as_secs().max(1),
@@ -262,7 +584,7 @@ pub async fn run_scripted_async_with(
     let cwd = cwd.to_path_buf();
 
     match tokio::time::timeout(
-        timeout,
+        timeout + hook_grace(stdlib),
         tokio::task::spawn_blocking(move || {
             run_lua_blocking(
                 &tool_name,
@@ -271,7 +593,16 @@ pub async fn run_scripted_async_with(
                 &args,
                 &cwd,
                 stdlib,
-                timeout,
+                // The bound is the profile's, today and byte for byte: a
+                // stranger's tool gets the clock and the ceiling, a locally
+                // authored one gets neither. See [`Bounds`] for why that is now
+                // two decisions rather than one.
+                match stdlib {
+                    Stdlib::Sandboxed => {
+                        Bounds::Bounded(BoundsHandle::fixed(timeout, SANDBOX_MEMORY_LIMIT))
+                    }
+                    Stdlib::Full => Bounds::Unbounded,
+                },
             )
         }),
     )
@@ -289,6 +620,15 @@ pub async fn run_scripted_async_with(
     }
 }
 
+/// How long the wrapper waits past the budget for the in-VM hook to do the
+/// stopping. See [`HOOK_GRACE`]; an unbounded run has no hook, so it gets none.
+fn hook_grace(stdlib: Stdlib) -> Duration {
+    match stdlib {
+        Stdlib::Sandboxed => HOOK_GRACE,
+        Stdlib::Full => Duration::ZERO,
+    }
+}
+
 fn run_lua_blocking(
     tool: &str,
     script: &str,
@@ -296,7 +636,7 @@ fn run_lua_blocking(
     args: &JsonValue,
     cwd: &Path,
     stdlib: Stdlib,
-    timeout: Duration,
+    bounds: Bounds,
 ) -> Result<ToolOutput, ToolError> {
     let libs = match stdlib {
         Stdlib::Full => StdLib::ALL_SAFE,
@@ -307,127 +647,44 @@ fn run_lua_blocking(
         source: anyhow::anyhow!("failed to create LuaJIT state: {err}"),
     })?;
 
-    if stdlib == Stdlib::Sandboxed {
-        // Turn the JIT off before the instruction hook below is installed, and
-        // do it while `jit` is still reachable (`blank_globals` takes it away).
-        //
-        // LuaJIT compiles hot paths into traces, and a trace does not check for
-        // a count hook the way the interpreter does: the hook the sandbox
-        // installs stops being called once a loop is compiled, so the deadline
-        // it enforces would silently stop applying to exactly the runaway loop
-        // it exists to catch. Worse than not firing, erroring out of a hook
-        // that fires *while a trace is running* unwinds through JIT-compiled
-        // frames, which is what SIGSEGVs the suite on Apple Silicon.
-        //
-        // `jit.off(true, true)` disables compilation and flushes any traces
-        // already recorded, so every sandboxed chunk runs interpreted, where
-        // the hook is reliable. This costs a registry tool the JIT and buys the
-        // bound being real; a locally authored tool (`Stdlib::Full`) is not
-        // hooked at all and keeps the JIT.
-        lua.load("jit.off(true, true)")
-            .exec()
-            .map_err(|err| ToolError::Execution {
-                tool: tool.to_string(),
-                source: anyhow::anyhow!("disabling the JIT for a sandboxed run: {err}"),
-            })?;
+    // The JIT goes off first, because a hook on a compiled state is a hard
+    // crash rather than a slow path, and because `disable_jit` is what takes
+    // the switch away — `blank_globals` below never listed `jit`, so a
+    // sandboxed script could turn the compiler back on and silence the hook.
+    // [`JitOff`] is the token that makes the pairing checkable.
+    let jit_off = match &bounds {
+        Bounds::Bounded(_) => Some(disable_jit(&lua).map_err(|err| ToolError::Execution {
+            tool: tool.to_string(),
+            source: anyhow::anyhow!("disabling the JIT for a bounded run: {err}"),
+        })?),
+        Bounds::Unbounded => None,
+    };
 
+    if stdlib == Stdlib::Sandboxed {
         blank_globals(&lua).map_err(|err| ToolError::Execution {
             tool: tool.to_string(),
             source: anyhow::anyhow!("sandboxing the LuaJIT state: {err}"),
         })?;
+    }
 
-        // A bound on how much a stranger's tool can take, not just on what it
-        // can reach.
-        //
-        // The timeout above cannot stop a runaway chunk: there is no way to
-        // abort a foreign Lua stack, so it reports and leaves the thread
-        // running — `while true do end` burns a core for the life of the
-        // process and holds one of tokio's blocking threads, the same pool
-        // every native file tool uses. `t[#t+1] = string.rep("x", 1e6)` in a
-        // loop OOM-kills the whole agent. SECURITY.md is honest that a
-        // *locally authored* tool is bounded in time and not in capability; it
-        // says nothing about a registry tool being able to wedge the process,
-        // and a sandbox that stops `os.execute` but not `while true do end` is
-        // only half a boundary.
-        //
-        // A memory ceiling turns the OOM into a Lua error the tool reports,
-        // and an instruction hook turns the spin into one too. Both apply to
-        // sandboxed runs only: a locally authored tool is the user's own code
-        // and has always been allowed to take as long as it likes.
-        // The ceiling is enforced by *watching* allocation, not by starving the
-        // allocator.
-        //
-        // `set_memory_limit` makes the next allocation past the limit fail, and
-        // handing LuaJIT an allocation failure is where this used to SIGSEGV on
-        // Apple Silicon: LuaJIT on 64-bit does not properly support the foreign
-        // allocator mlua installs to implement the limit, and its out-of-memory
-        // path is the part that does not survive. It is a hard crash of the
-        // whole process, so it takes the agent with it — strictly worse than
-        // the OOM it was added to prevent.
-        //
-        // Reading `used_memory` from the hook below reaches the same ceiling
-        // one step earlier, as an ordinary Lua error raised between
-        // instructions rather than an allocation the VM cannot satisfy. The
-        // hook runs often enough that a script cannot get far past the line
-        // before it is stopped.
-        let deadline = std::time::Instant::now() + timeout;
-        lua.set_hook(
-            mlua::HookTriggers::new().every_nth_instruction(SANDBOX_HOOK_INSTRUCTIONS),
-            move |lua, _debug| {
-                if std::time::Instant::now() >= deadline {
-                    return Err(mlua::Error::runtime(
-                        "sandboxed tool exceeded its time budget",
-                    ));
-                }
-                // `used_memory` is 0 when mlua could not install its allocator,
-                // which reads as "no reading available" rather than "nothing
-                // allocated": the bound is skipped instead of tripping at once.
-                let used = lua.used_memory();
-                if used > SANDBOX_MEMORY_LIMIT {
-                    return Err(mlua::Error::runtime(format!(
-                        "sandboxed tool exceeded its memory budget ({} MB)",
-                        SANDBOX_MEMORY_LIMIT / (1024 * 1024)
-                    )));
-                }
-                Ok(mlua::VmState::Continue)
-            },
-        )
-        .map_err(|err| ToolError::Execution {
+    // A bound on how much a chunk can take, not just on what it can reach.
+    // Which chunks get one is [`Bounds`], and it is a separate question from
+    // the library profile above: a stranger's tool must not be able to wedge
+    // the process, and neither must a program the model wrote three seconds
+    // ago, while a tool the user wrote themselves has always been allowed to
+    // take as long as it likes.
+    if let (Bounds::Bounded(handle), Some(proof)) = (&bounds, &jit_off) {
+        install_hook(&lua, proof, handle).map_err(|err| ToolError::Execution {
             tool: tool.to_string(),
-            source: anyhow::anyhow!("installing the sandbox deadline hook: {err}"),
+            source: anyhow::anyhow!("installing the deadline hook: {err}"),
         })?;
     }
 
     // Capture print() into a shared buffer the host reads after the chunk.
-    let stdout: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    {
-        let buf = Arc::clone(&stdout);
-        let print_fn = lua
-            .create_function(move |lua, values: mlua::MultiValue| {
-                let mut line = String::new();
-                for (i, value) in values.into_iter().enumerate() {
-                    if i > 0 {
-                        line.push('\t');
-                    }
-                    line.push_str(&lua_value_to_string(lua, value)?);
-                }
-                line.push('\n');
-                if let Ok(mut guard) = buf.lock() {
-                    guard.push_str(&line);
-                }
-                Ok(())
-            })
-            .map_err(|err| ToolError::Execution {
-                tool: tool.to_string(),
-                source: anyhow::anyhow!("installing print(): {err}"),
-            })?;
-        lua.globals()
-            .set("print", print_fn)
-            .map_err(|err| ToolError::Execution {
-                tool: tool.to_string(),
-                source: anyhow::anyhow!("setting print: {err}"),
-            })?;
-    }
+    let stdout = install_print(&lua).map_err(|err| ToolError::Execution {
+        tool: tool.to_string(),
+        source: anyhow::anyhow!("installing print(): {err}"),
+    })?;
 
     // args / cwd globals.
     let args_lua = json_to_lua(&lua, args).map_err(|err| ToolError::Execution {
@@ -486,8 +743,67 @@ fn run_lua_blocking(
     }
 }
 
-fn cwd_string(cwd: &Path) -> String {
+pub(crate) fn cwd_string(cwd: &Path) -> String {
     cwd.to_string_lossy().into_owned()
+}
+
+/// Replace `print` with one that appends to a buffer the host reads after the
+/// chunk, and hand back the buffer.
+///
+/// Extracted so code mode gets the same `print` a scripted tool has, down to
+/// the tab between arguments: a program's printed output is the only thing that
+/// survives the call, so "print behaves differently in here" would be a
+/// difference the model has no way to discover.
+pub(crate) fn install_print(lua: &Lua) -> mlua::Result<Arc<Mutex<String>>> {
+    let stdout: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    install_print_into(lua, &stdout)?;
+    Ok(stdout)
+}
+
+/// Ceiling on the print buffer.
+///
+/// The buffer lives on the *Rust* heap, so `Lua::used_memory` cannot see it and
+/// the memory bound above never applies to it. Uncapped, a bounded chunk could
+/// hold gigabytes inside its time budget and still report success:
+/// `for i = 1, 8000 do print(string.rep('x', 65536)) end` peaked at over a
+/// gigabyte in under a second here, and `truncate_output` only runs after the
+/// chunk is already finished. Generous enough that no honest program notices —
+/// it is 270× what a call may return — and small enough that a runaway one
+/// cannot take the machine down with it.
+const MAX_PRINT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Note appended once, in place of the output that did not fit.
+const PRINT_BUFFER_FULL: &str = "\n[print buffer full; further output dropped]\n";
+
+/// [`install_print`] appending into a buffer the caller already holds, for a
+/// caller that has to read what was printed without waiting for the chunk to
+/// return.
+pub(crate) fn install_print_into(lua: &Lua, stdout: &Arc<Mutex<String>>) -> mlua::Result<()> {
+    let buf = Arc::clone(stdout);
+    let print_fn = lua.create_function(move |lua, values: mlua::MultiValue| {
+        let mut line = String::new();
+        for (i, value) in values.into_iter().enumerate() {
+            if i > 0 {
+                line.push('\t');
+            }
+            line.push_str(&lua_value_to_string(lua, value)?);
+        }
+        line.push('\n');
+        if let Ok(mut guard) = buf.lock() {
+            // Once the ceiling is reached the note goes on and nothing else
+            // does, so the check stays a single comparison however long the
+            // loop runs and the note is never repeated.
+            if guard.len() < MAX_PRINT_BYTES {
+                guard.push_str(&line);
+                if guard.len() >= MAX_PRINT_BYTES {
+                    guard.push_str(PRINT_BUFFER_FULL);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    lua.globals().set("print", print_fn)?;
+    Ok(())
 }
 
 /// Blank every [`BLANKED_GLOBALS`] name. Setting an already-absent global to
@@ -539,7 +855,7 @@ fn blank_globals(lua: &Lua) -> mlua::Result<()> {
 /// `wizard.write_file` pointed at `~/.ssh/authorized_keys` would be exactly
 /// the "shipping neither answer and calling it safe" this profile exists to
 /// avoid.
-fn install_wizard_lib(lua: &Lua, cwd: &Path, stdlib: Stdlib) -> mlua::Result<()> {
+pub(crate) fn install_wizard_lib(lua: &Lua, cwd: &Path, stdlib: Stdlib) -> mlua::Result<()> {
     let table = lua.create_table()?;
     let cwd_read = PathBuf::from(cwd);
     let cwd_write = PathBuf::from(cwd);
@@ -685,17 +1001,17 @@ fn confine_to(root: &Path, path: &str) -> Result<PathBuf, String> {
     Ok(joined)
 }
 
-fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<LuaValue> {
+pub(crate) fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<LuaValue> {
     // mlua's serde feature: Value implements Serialize/Deserialize via
     // Lua ser/de — use from_value on the JSON side through serde_json -> Lua.
     lua.to_value(value)
 }
 
-fn lua_to_json(lua: &Lua, value: LuaValue) -> mlua::Result<JsonValue> {
+pub(crate) fn lua_to_json(lua: &Lua, value: LuaValue) -> mlua::Result<JsonValue> {
     lua.from_value(value)
 }
 
-fn lua_value_to_string(lua: &Lua, value: LuaValue) -> mlua::Result<String> {
+pub(crate) fn lua_value_to_string(lua: &Lua, value: LuaValue) -> mlua::Result<String> {
     match value {
         LuaValue::Nil => Ok("nil".into()),
         LuaValue::Boolean(b) => Ok(b.to_string()),
@@ -710,7 +1026,7 @@ fn lua_value_to_string(lua: &Lua, value: LuaValue) -> mlua::Result<String> {
     }
 }
 
-fn lua_value_to_json_string(lua: &Lua, value: LuaValue) -> mlua::Result<String> {
+pub(crate) fn lua_value_to_json_string(lua: &Lua, value: LuaValue) -> mlua::Result<String> {
     match &value {
         LuaValue::String(s) => Ok(s.to_str()?.to_owned()),
         LuaValue::Nil => Ok(String::new()),
@@ -1337,6 +1653,315 @@ return "reachable:[" .. table.concat(reachable, ",") .. "]"
         });
         std::fs::write(&receipt_path, serde_json::to_vec(&granted).unwrap()).unwrap();
         assert_eq!(resolve_stdlib(&script), Stdlib::Full);
+    }
+
+    // -- bounds, which are not the profile ---------------------------------
+
+    /// Run `script` under an explicit profile *and* an explicit bound, which is
+    /// the combination `run_scripted_with` cannot express because it derives one
+    /// from the other.
+    fn run_bounded(
+        script: &str,
+        cwd: &Path,
+        stdlib: Stdlib,
+        bounds: Bounds,
+    ) -> Result<ToolOutput, ToolError> {
+        run_lua_blocking(
+            "t",
+            script,
+            &cwd.join("t.lua"),
+            &json!({}),
+            cwd,
+            stdlib,
+            bounds,
+        )
+    }
+
+    /// The two axes are independent, and this is the corner that had no name
+    /// before: the full standard library — because the author is trusted enough
+    /// to be given `os` — with a hook on it, because nobody read the chunk
+    /// before it ran. That is exactly what code mode needs, and the old code
+    /// could not express it: the hook lived inside `if stdlib == Sandboxed`.
+    #[test]
+    fn bounds_are_orthogonal_to_the_library_profile() {
+        let tmp = TempDir::new("orthogonal");
+
+        let bounds = BoundsHandle::fixed(Duration::from_millis(700), SANDBOX_MEMORY_LIMIT);
+        let start = std::time::Instant::now();
+        let err = run_bounded(
+            "while true do end",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Bounded(bounds),
+        )
+        .expect_err("a bounded chunk is bounded whoever wrote it");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the spin was not interrupted: {:?}",
+            start.elapsed()
+        );
+        assert!(
+            error_text(&err).contains("time budget"),
+            "{}",
+            error_text(&err)
+        );
+
+        // And it still has the full library. A bound is a bound on what a chunk
+        // may take, never a claim about what it may reach: `SECURITY.md` says
+        // embedding LuaJIT is not a sandbox, and this profile is not one here
+        // either.
+        let bounds = BoundsHandle::fixed(Duration::from_secs(10), SANDBOX_MEMORY_LIMIT);
+        let out = run_bounded(
+            "return type(os.execute) .. '/' .. type(io.open)",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Bounded(bounds),
+        )
+        .expect("runs");
+        assert!(out.content.contains("function/function"), "{}", out.content);
+    }
+
+    /// A bounded state has the JIT off, and it is not a performance note.
+    ///
+    /// LuaJIT compiles hot paths into traces, and a trace does not check for a
+    /// count hook the way the interpreter does, so the hook stops firing on
+    /// exactly the runaway loop it exists to catch. Worse, erroring out of a
+    /// hook that fires *while a trace is running* unwinds through JIT-compiled
+    /// frames, which SIGSEGVs the whole process on Apple Silicon — it kills the
+    /// agent, not the program, and it does it flakily and on one platform. The
+    /// [`JitOff`] token is what makes "hook on, JIT on" unrepresentable; this
+    /// is the backstop that catches somebody removing it.
+    #[test]
+    fn the_jit_is_off_on_a_bounded_state() {
+        let tmp = TempDir::new("jit");
+        let bounds = BoundsHandle::fixed(Duration::from_secs(10), SANDBOX_MEMORY_LIMIT);
+        let out = run_bounded(
+            "return tostring(jit.status())",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Bounded(bounds),
+        )
+        .expect("runs");
+        assert!(
+            out.content.contains("false"),
+            "a hooked state must not be JIT-compiled: {}",
+            out.content
+        );
+
+        // Unbounded is the other half: no hook, so no reason to pay for it.
+        let out = run_bounded(
+            "return tostring(jit.status())",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Unbounded,
+        )
+        .expect("runs");
+        assert!(
+            out.content.contains("true"),
+            "an unhooked chunk keeps the JIT: {}",
+            out.content
+        );
+    }
+
+    /// The compiler switch is gone with it.
+    ///
+    /// Turning the JIT off and leaving `jit.on` reachable made the bound a
+    /// suggestion: a registry-installed (stranger-authored) tool, or a
+    /// model-written program, re-enabled the compiler in eight characters and
+    /// the count hook went quiet for the rest of the run — the exact failure
+    /// `disable_jit` was written to close, reachable from inside. `jit.version`
+    /// stays, because `wizard.version` is built from it.
+    #[test]
+    fn a_bounded_chunk_cannot_turn_the_jit_back_on() {
+        let tmp = TempDir::new("jitswitch");
+        for stdlib in [Stdlib::Full, Stdlib::Sandboxed] {
+            let bounds = BoundsHandle::fixed(Duration::from_secs(10), SANDBOX_MEMORY_LIMIT);
+            let out = run_bounded(
+                "return tostring(jit.on) .. '/' .. tostring(jit.status()) .. '/' \
+                 .. tostring(jit.version ~= nil)",
+                &tmp.0,
+                stdlib,
+                Bounds::Bounded(bounds),
+            )
+            .expect("runs");
+            assert!(
+                out.content.contains("nil/false/true"),
+                "{stdlib:?}: the switch is still reachable: {}",
+                out.content
+            );
+        }
+
+        // And the bound really holds against a loop LuaJIT would otherwise
+        // compile: this used to run past its budget until the wrapper gave up
+        // and abandoned the thread.
+        let bounds = BoundsHandle::fixed(Duration::from_secs(1), SANDBOX_MEMORY_LIMIT);
+        let stop = Arc::clone(&bounds.stop);
+        let started = std::time::Instant::now();
+        let err = run_bounded(
+            "pcall(function() jit.on() end)\nlocal n = 0\nwhile true do n = n + 1 end",
+            &tmp.0,
+            Stdlib::Sandboxed,
+            Bounds::Bounded(bounds),
+        )
+        .expect_err("the chunk is stopped");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the hook never fired: {:?} ({})",
+            started.elapsed(),
+            error_text(&err)
+        );
+        assert_eq!(
+            StopReason::from_u8(stop.load(Ordering::SeqCst)),
+            StopReason::Time,
+            "and the in-VM stop is what did it, not the wrapper's timeout"
+        );
+    }
+
+    /// A bound raised through the hook is not something a chunk can catch and
+    /// carry on from. `pcall` is still `pcall` for everything else.
+    #[test]
+    fn a_bound_survives_pcall_and_ordinary_errors_do_not() {
+        let tmp = TempDir::new("stopguard");
+        let bounds = BoundsHandle::fixed(Duration::from_secs(1), SANDBOX_MEMORY_LIMIT);
+        let stop = Arc::clone(&bounds.stop);
+        let started = std::time::Instant::now();
+        let err = run_bounded(
+            "while true do pcall(function() while true do end end) end",
+            &tmp.0,
+            Stdlib::Sandboxed,
+            Bounds::Bounded(bounds),
+        )
+        .expect_err("the chunk is stopped");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the chunk swallowed its own bound: {:?} ({})",
+            started.elapsed(),
+            error_text(&err)
+        );
+        assert_eq!(
+            StopReason::from_u8(stop.load(Ordering::SeqCst)),
+            StopReason::Time
+        );
+
+        let bounds = BoundsHandle::fixed(Duration::from_secs(10), SANDBOX_MEMORY_LIMIT);
+        let out = run_bounded(
+            "local ok, err = pcall(function() error('mine') end)\n\
+             return tostring(ok) .. '/' .. tostring(err ~= nil)",
+            &tmp.0,
+            Stdlib::Sandboxed,
+            Bounds::Bounded(bounds),
+        )
+        .expect("an ordinary error is still catchable");
+        assert!(out.content.contains("false/true"), "{}", out.content);
+    }
+
+    /// A coroutine is bounded like the main chunk.
+    ///
+    /// mlua's per-thread hook is looked up by thread in a registry table, and
+    /// its trampoline calls `lua_sethook(state, None, 0, 0)` when the lookup
+    /// misses. On LuaJIT the hook mask is global state, so that did not skip
+    /// the coroutine — it uninstalled the bounds for the whole VM.
+    #[test]
+    fn a_coroutine_is_bounded_like_the_main_chunk() {
+        let tmp = TempDir::new("coro");
+        let bounds = BoundsHandle::fixed(Duration::from_secs(1), SANDBOX_MEMORY_LIMIT);
+        let stop = Arc::clone(&bounds.stop);
+        let started = std::time::Instant::now();
+        let err = run_bounded(
+            "local co = coroutine.create(function() while true do end end)\n\
+             coroutine.resume(co)",
+            &tmp.0,
+            Stdlib::Sandboxed,
+            Bounds::Bounded(bounds),
+        )
+        .expect_err("the chunk is stopped");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a coroutine ran unbounded: {:?} ({})",
+            started.elapsed(),
+            error_text(&err)
+        );
+        assert_eq!(
+            StopReason::from_u8(stop.load(Ordering::SeqCst)),
+            StopReason::Time
+        );
+    }
+
+    /// The print buffer has a ceiling, because it is on the Rust heap where
+    /// `used_memory` — and therefore the memory bound — cannot see it. Without
+    /// one, a chunk held gigabytes well inside its time budget and reported
+    /// success.
+    #[test]
+    fn the_print_buffer_has_a_ceiling() {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).expect("state");
+        let buffer = install_print(&lua).expect("print installed");
+        // 64 KiB a line, well past the ceiling. Measured on the buffer rather
+        // than on the tool output, which `truncate_output` caps afterwards
+        // anyway — the whole point is what the process holds *while* the chunk
+        // is running, which peaked at over a gigabyte in under a second.
+        let lines = (MAX_PRINT_BYTES / 65536) * 4;
+        lua.load(format!(
+            "local s = string.rep('x', 65536)\nfor i = 1, {lines} do print(s) end"
+        ))
+        .exec()
+        .expect("the chunk still runs to completion");
+
+        let held = buffer.lock().expect("buffer").clone();
+        assert!(
+            held.len() < MAX_PRINT_BYTES + 65536 + PRINT_BUFFER_FULL.len(),
+            "the buffer grew past its ceiling: {} bytes",
+            held.len()
+        );
+        assert!(
+            held.ends_with(PRINT_BUFFER_FULL),
+            "and says so where the output stops"
+        );
+    }
+
+    /// A stop is classified from the flag, never from the message.
+    ///
+    /// `mlua::Error::runtime` looks identical for a timeout, a memory cap and an
+    /// ordinary `error()` call, so the tempting implementation is
+    /// `contains("time budget")` — which a program can trigger deliberately,
+    /// which is exactly the case that matters, because the program is written
+    /// by the model.
+    #[test]
+    fn a_stop_is_classified_from_the_flag_not_the_message() {
+        let tmp = TempDir::new("flag");
+        let bounds = BoundsHandle::fixed(Duration::from_secs(10), SANDBOX_MEMORY_LIMIT);
+        let stop = Arc::clone(&bounds.stop);
+        let err = run_bounded(
+            "error('exceeded its time budget')",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Bounded(bounds),
+        )
+        .expect_err("the chunk raised");
+        assert!(
+            error_text(&err).contains("time budget"),
+            "the fixture has to say the misleading thing: {}",
+            error_text(&err)
+        );
+        assert_eq!(
+            StopReason::from_u8(stop.load(Ordering::SeqCst)),
+            StopReason::None,
+            "nothing stopped it; it raised on its own, and only the flag knows"
+        );
+
+        // The other direction: a real timeout sets the flag, and the message is
+        // display text either way.
+        let bounds = BoundsHandle::fixed(Duration::from_millis(400), SANDBOX_MEMORY_LIMIT);
+        let stop = Arc::clone(&bounds.stop);
+        let _ = run_bounded(
+            "while true do end",
+            &tmp.0,
+            Stdlib::Full,
+            Bounds::Bounded(bounds),
+        );
+        assert_eq!(
+            StopReason::from_u8(stop.load(Ordering::SeqCst)),
+            StopReason::Time
+        );
     }
 
     #[tokio::test]

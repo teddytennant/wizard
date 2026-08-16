@@ -2553,9 +2553,17 @@ mod tests {
     }
 
     /// And a second loop that runs tools has to go through the one dispatcher.
-    /// Only this module (the loop, and the turn's host) and the sub-run's host
-    /// may hand it a call; anything else is a caller quietly running a tool
-    /// with some pipeline stage missing — a hook, a checkpoint, a breaker.
+    /// Only this module (the loop, and the turn's host), the sub-run's host and
+    /// code mode's bridge may hand it a call; anything else is a caller quietly
+    /// running a tool with some pipeline stage missing — a hook, a checkpoint, a
+    /// breaker.
+    ///
+    /// `tools/code.rs` is on the list for the same reason `agent/subagent.rs`
+    /// is, and adding it is the point of the feature rather than an exception to
+    /// it: a Lua program calls Wizard's tools through `Dispatcher::sub_run`, so
+    /// every call it makes is hooked, snapshotted and post-hooked exactly like
+    /// one the model made itself. A fourth name appearing here without that
+    /// argument behind it is the defect this test exists to catch.
     #[test]
     fn only_the_hosts_dispatch_a_tool_call() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -2577,8 +2585,12 @@ mod tests {
         callers.sort();
         assert_eq!(
             callers,
-            vec!["agent/subagent.rs".to_string(), "agent/turn.rs".to_string()],
-            "the turn's host and the sub-run's host, and nothing else"
+            vec![
+                "agent/subagent.rs".to_string(),
+                "agent/turn.rs".to_string(),
+                "tools/code.rs".to_string(),
+            ],
+            "the turn's host, the sub-run's host and code mode's bridge, and nothing else"
         );
     }
 

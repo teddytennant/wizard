@@ -35,58 +35,24 @@ pub(super) fn load_skill_roots() -> Vec<Skill> {
     }
 }
 
-/// Native + scripted + MCP tools, freshly composed, with the subagent
-/// spawner layered on top. The spawn tool captures the base registry
-/// (without itself) so subagents cannot recurse, plus the lifecycle `hooks`
-/// so subagent tool calls fire the same hooks as the parent's.
-/// Returns the registry and the spawn tool's shared model slot, which the
-/// caller must hand to `Agent::bind_subagent_model` — otherwise subagents read
-/// the *configured* model and quietly ignore `/model`. Every registry rebuild
-/// mints a fresh spawn tool, so every rebuild has to rebind.
+/// The TUI's registry, which is [`crate::agent::build_tool_registry`] and
+/// nothing else.
+///
+/// It used to be a second copy of that function — same native/scripted/MCP
+/// composition, same subagent spawner — with `evolve` and `publish` bolted on
+/// afterwards by a helper of its own. Every tool added to the shared builder had
+/// to be remembered here too, and `run_code` was not: `code_mode = true` in
+/// `~/.wizard/config.toml` gave the tool to `wizard -p`, ACP, the gateway and the
+/// GUI, and silently gave the interactive TUI nothing — not refused, not
+/// explained, and `/reload` did not fix it, because `/reload` came back through
+/// the same copy. The duplication was the defect; deleting it is the fix.
 pub(super) async fn build_registry(
+    config: &Config,
     manager: &McpManager,
     client: &Arc<dyn LlmProvider>,
     hooks: &Arc<HookEngine>,
 ) -> Result<(ToolRegistry, subagent::SharedActiveModel)> {
-    let mut base = ToolRegistry::with_native_tools();
-    match Config::scripted_tools_dir() {
-        Ok(dir) => {
-            if let Err(err) = base.load_scripted(&dir) {
-                tracing::warn!("loading scripted tools: {err:#}");
-            }
-        }
-        Err(err) => tracing::warn!("resolving ~/.wizard/tools: {err:#}"),
-    }
-    if let Err(err) = base.attach_mcp(manager).await {
-        tracing::warn!("attaching MCP tools: {err:#}");
-    }
-    base.apply_harness_overrides();
-
-    let subagents_dir = Config::subagents_dir()?;
-    let subagent_configs = subagent::available_configs(&subagents_dir);
-    let base = Arc::new(base);
-    let mut registry = subagent::scoped_registry(&base, None);
-    let spawn_tool = Arc::new(subagent::SpawnSubagentTool::new(
-        subagent_configs,
-        Arc::clone(client),
-        Arc::clone(&base),
-        Arc::clone(hooks),
-    ));
-    let subagent_model = spawn_tool.model_handle();
-    registry.register(spawn_tool);
-    Ok((registry, subagent_model))
-}
-
-/// Attach the config-dependent tools (evolve, publish) to a registry built
-/// by [`build_registry`]. Called by [`build_agent`] after the base registry
-/// is assembled.
-fn attach_config_tools(registry: &mut crate::tools::registry::ToolRegistry, config: &Config) {
-    registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
-        config.clone(),
-    )));
-    registry.register(Arc::new(crate::tools::publish::PublishTool::new(
-        config.clone(),
-    )));
+    crate::agent::build_tool_registry(config, client, hooks, manager).await
 }
 
 /// Which session a freshly built [`Agent`] attaches to.
@@ -130,8 +96,7 @@ pub(super) async fn build_agent(
         project_root.to_path_buf(),
         session.id.clone(),
     ));
-    let (mut registry, subagent_model) = build_registry(manager, client, &hooks).await?;
-    attach_config_tools(&mut registry, config);
+    let (registry, subagent_model) = build_registry(config, manager, client, &hooks).await?;
     let model = config.active().model;
     let native_tools = crate::llm::provider::probe_native_tools(client.as_ref(), &model).await;
     let mut agent = Agent::new(
