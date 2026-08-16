@@ -854,9 +854,225 @@ impl TokenSource for XaiTokenSource {
     }
 }
 
+/// SuperGrok / Grok subscription usage from the CLI billing proxy.
+///
+/// This is the same weekly pool grok.com shows under Settings → Usage.
+/// Wizard's `/login xai` token is enough; no grok CLI login is required.
+const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+
+/// One product slice of the shared weekly pool (Chat, Build, Voice, …).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductUsage {
+    pub product: String,
+    pub usage_percent: Option<f64>,
+}
+
+/// A SuperGrok usage snapshot: how much of the weekly pool is gone, and when
+/// it resets. Amounts are percentages of the shared pool, not token counts.
+/// xAI does not publish the raw allowance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubscriptionUsage {
+    pub used_percent: f64,
+    pub period_kind: Option<String>,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub products: Vec<ProductUsage>,
+}
+
+/// Fetch SuperGrok weekly usage with the stored `/login xai` session.
+///
+/// Returns `Ok(None)` when there is no session on disk. Network and parse
+/// failures are `Err`.
+pub async fn fetch_subscription_usage() -> Result<Option<SubscriptionUsage>> {
+    let source = match XaiTokenSource::new() {
+        Ok(source) => source,
+        Err(_) => return Ok(None),
+    };
+    let Some(token) = source.bearer().await? else {
+        return Ok(None);
+    };
+    fetch_subscription_usage_with(&crate::llm::oauth_http_client(), BILLING_URL, &token).await
+}
+
+/// Same fetch, injectable client and URL for tests.
+pub async fn fetch_subscription_usage_with(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<Option<SubscriptionUsage>> {
+    let response = http
+        .get(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .with_context(|| format!("fetching SuperGrok usage from {url}"))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        bail!("SuperGrok usage returned HTTP {status}: {body}");
+    }
+    parse_subscription_usage(&body)
+        .map(Some)
+        .with_context(|| format!("parsing SuperGrok usage: {body}"))
+}
+
+/// Turn the billing-proxy JSON into a snapshot. Public so `/usage` tests
+/// can pin the shape without hitting the network.
+pub fn parse_subscription_usage(body: &str) -> Result<SubscriptionUsage> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).context("SuperGrok usage was not JSON")?;
+    let config = value
+        .get("config")
+        .ok_or_else(|| anyhow!("SuperGrok usage JSON has no config object"))?;
+    let used = config
+        .get("creditUsagePercent")
+        .and_then(|v| v.as_f64())
+        .or_else(|| {
+            let used = amount_val(config.get("onDemandUsed"))?;
+            let cap = amount_val(config.get("onDemandCap"))?;
+            (cap > 0.0).then_some((used / cap) * 100.0)
+        })
+        .unwrap_or(0.0);
+    let period = config.get("currentPeriod");
+    let period_kind = period
+        .and_then(|p| p.get("type"))
+        .and_then(|v| v.as_str())
+        .map(human_period);
+    let period_start = period
+        .and_then(|p| p.get("start"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let period_end = period
+        .and_then(|p| p.get("end"))
+        .and_then(|v| v.as_str())
+        .or_else(|| config.get("billingPeriodEnd").and_then(|v| v.as_str()))
+        .map(str::to_string);
+    let products = config
+        .get("productUsage")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let product = row.get("product")?.as_str()?.to_string();
+                    let usage_percent = row.get("usagePercent").and_then(|v| v.as_f64());
+                    Some(ProductUsage {
+                        product,
+                        usage_percent,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(SubscriptionUsage {
+        used_percent: used.clamp(0.0, 100.0),
+        period_kind,
+        period_start,
+        period_end,
+        products,
+    })
+}
+
+fn amount_val(value: Option<&serde_json::Value>) -> Option<f64> {
+    value?.get("val")?.as_f64()
+}
+
+fn human_period(raw: &str) -> String {
+    match raw {
+        "USAGE_PERIOD_TYPE_WEEKLY" => "weekly".into(),
+        "USAGE_PERIOD_TYPE_MONTHLY" => "monthly".into(),
+        other => other
+            .strip_prefix("USAGE_PERIOD_TYPE_")
+            .unwrap_or(other)
+            .to_ascii_lowercase(),
+    }
+}
+
+/// One line the TUI can print. Session tokens are appended by `/usage`.
+pub fn format_subscription_usage(usage: &SubscriptionUsage) -> String {
+    let remaining = (100.0 - usage.used_percent).clamp(0.0, 100.0);
+    let kind = usage.period_kind.as_deref().unwrap_or("usage");
+    let mut text = format!(
+        "SuperGrok {kind} pool: {used:.0}% used, {remaining:.0}% left",
+        used = usage.used_percent,
+    );
+    if let Some(end) = usage.period_end.as_deref() {
+        text.push_str(&format!(" · resets {end}"));
+    }
+    let slices: Vec<String> = usage
+        .products
+        .iter()
+        .filter_map(|p| {
+            p.usage_percent
+                .map(|pct| format!("{} {pct:.0}%", pretty_product(&p.product)))
+        })
+        .collect();
+    if !slices.is_empty() {
+        text.push_str(&format!("\n  {}", slices.join(" · ")));
+    }
+    text
+}
+
+fn pretty_product(name: &str) -> &str {
+    match name {
+        "GrokChat" => "Chat",
+        "GrokBuild" => "Build",
+        "GrokVoice" => "Voice",
+        "GrokImagine" => "Imagine",
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_usage_parses_the_weekly_pool() {
+        let body = r#"{
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-08-13T21:06:39Z",
+                    "end": "2026-08-20T21:06:39Z"
+                },
+                "creditUsagePercent": 6.0,
+                "productUsage": [
+                    {"product": "GrokBuild", "usagePercent": 4.0},
+                    {"product": "GrokChat", "usagePercent": 2.0},
+                    {"product": "GrokVoice"}
+                ]
+            }
+        }"#;
+        let usage = parse_subscription_usage(body).expect("parses");
+        assert_eq!(usage.used_percent, 6.0);
+        assert_eq!(usage.period_kind.as_deref(), Some("weekly"));
+        assert_eq!(usage.period_end.as_deref(), Some("2026-08-20T21:06:39Z"));
+        assert_eq!(usage.products.len(), 3);
+        let text = format_subscription_usage(&usage);
+        assert!(text.contains("weekly pool: 6% used, 94% left"), "{text}");
+        assert!(text.contains("Build 4%"), "{text}");
+        assert!(text.contains("Chat 2%"), "{text}");
+        assert!(
+            !text.contains("Voice"),
+            "a product with no percent stays off the line: {text}"
+        );
+    }
+
+    #[test]
+    fn subscription_usage_falls_back_to_on_demand_ratio() {
+        let body = r#"{
+            "config": {
+                "onDemandUsed": {"val": 25},
+                "onDemandCap": {"val": 100},
+                "billingPeriodEnd": "2026-09-01T00:00:00Z"
+            }
+        }"#;
+        let usage = parse_subscription_usage(body).expect("parses");
+        assert_eq!(usage.used_percent, 25.0);
+        assert_eq!(usage.period_end.as_deref(), Some("2026-09-01T00:00:00Z"));
+    }
 
     #[test]
     fn pkce_challenge_matches_rfc7636_vector() {

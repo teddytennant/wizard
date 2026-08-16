@@ -558,6 +558,10 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
             let text = cost_report(&surface.snapshot());
             surface.notice(text);
         }
+        SlashCommand::Usage => {
+            let text = usage_report(&surface.snapshot()).await;
+            surface.notice(text);
+        }
         SlashCommand::Status => {
             let text = status_report(&surface.snapshot());
             surface.notice(text);
@@ -829,6 +833,27 @@ fn status_report(session: &SessionSnapshot) -> String {
         text.push_str(&format!("\nultra: {ultra}"));
     }
     text
+}
+
+/// `/usage`: SuperGrok weekly pool when signed in, then this session's tokens
+/// (the same numbers `/cost` prints). The weekly line is the shared
+/// subscription allowance grok.com shows under Settings → Usage. It is a
+/// percentage of that pool, not a token count; xAI does not publish the raw
+/// allowance.
+async fn usage_report(session: &SessionSnapshot) -> String {
+    let session_line = cost_report(session);
+    match crate::llm::xai_oauth::fetch_subscription_usage().await {
+        Ok(Some(usage)) => {
+            format!(
+                "{}\n{session_line}",
+                crate::llm::xai_oauth::format_subscription_usage(&usage)
+            )
+        }
+        Ok(None) => {
+            format!("SuperGrok weekly pool: not signed in (run /login xai)\n{session_line}")
+        }
+        Err(err) => format!("SuperGrok weekly pool: {err:#}\n{session_line}"),
+    }
 }
 
 /// `/cost`: session token totals, with an estimate when the active provider

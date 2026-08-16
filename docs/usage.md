@@ -35,6 +35,7 @@ inline hints.
 | `/diff` | Toggle the git diff sidebar |
 | `/todos` | Toggle the todo list above the input |
 | `/cost` | Session token usage, with cost estimates when per-provider rates are configured |
+| `/usage` | SuperGrok weekly pool (needs `/login xai`) plus this session's tokens |
 | `/memory [read\|forget <name>]` | List the saved project memories, show one, or forget one ([memory.md](memory.md)) |
 | `/status` | Session status: model, provider, mode, effort, session id, usage, todo progress, background tasks, plan/omakase, ultra (GUI also prints current context tokens) |
 | `/doctor` | Environment diagnostics, same checks as `wizard doctor` ([doctor.md](doctor.md)) |
@@ -72,7 +73,7 @@ effect on the **next** turn.
 
 The agent's set is an **allowlist**, not "everything minus a few": it may run
 `/model <tag>`, `/mode <mode>`, `/effort <level>`, `/goal`, `/diff`, `/todos`,
-`/dashboard`, `/cost`, `/memory`, `/doctor`, `/status`, `/bashes`, `/compact`,
+`/dashboard`, `/cost`, `/usage`, `/memory`, `/doctor`, `/status`, `/bashes`, `/compact`,
 `/reload`, `/plan`, `/omakase`, `/settings`, `/vim`, `/help`, and `/fusion` and
 `/ultra` as bare toggles. Everything else is refused with a note the agent
 sees, and the refusals are broader than the obvious ones: anything that would
@@ -500,6 +501,12 @@ on its final stream chunk.
 - **Headless**: the final summary line includes the run's totals:
   `[run finished: Completed — 1234 prompt + 567 completion tokens]` (a run that
   reported no tokens at all prints just `[run finished: Completed]`).
+- **`/usage`**: SuperGrok weekly pool plus this session. The weekly number is
+  a percent of the shared SuperGrok / SuperGrok Heavy allowance (Chat, Build,
+  Voice, Imagine, API). It resets when grok.com says it does. Needs a live
+  `/login xai` session. A plain API key cannot see that pool. `/cost` is
+  session tokens only.
+
 - **Log**: every turn appends one JSON line to `~/.wizard/usage.jsonl`:
 
   ```json
