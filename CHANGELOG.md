@@ -8,6 +8,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Fixed
 
+- **`/login xai` no longer opens the browser when you are already signed in.** A second grant over a live one is what the other Wizard on the machine then treats as a revoked refresh and deletes, which is why the sign-in kept coming back. `/login xai force` still replaces the session. A rejected refresh now keeps the file if another process already wrote a newer grant, and refresh itself is locked across processes so two Wizards cannot spend the same single-use token.
 - **Docs and CI catch up to signed releases.** v2.1.0 (and every tag since v2.0.0) ships a `checksums.txt.minisig` that verifies against `wizard-release.pub`, so the install-script legs on ubuntu and debian block on push again, and Getting started no longer says the one-liner has to build from source.
 
 ## [2.1.0] - 2026-08-16

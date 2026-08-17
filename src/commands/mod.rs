@@ -157,9 +157,12 @@ pub enum SlashCommand {
     },
     /// `/server ...` — status / start / stop the local llama-server.
     Server(ServerAction),
-    /// `/login <provider>`: OAuth sign-in for providers that support it
-    /// (currently `xai`).
-    Login(String),
+    /// `/login <provider> [force]`: OAuth sign-in for providers that support it
+    /// (currently `xai`). `force` replaces a session already on disk.
+    Login {
+        provider: String,
+        force: bool,
+    },
     /// `/settings` — open the in-app settings menu (a reusable picker).
     Settings,
     /// `/vim` — toggle modal (vim-style) editing of the input composer.
@@ -456,9 +459,16 @@ impl SlashCommand {
                 )),
             },
             "server" => parse_server(&args),
-            "login" => match args.first() {
-                Some(provider) => Ok(Self::Login((*provider).to_string())),
-                None => Err("usage: /login xai".to_string()),
+            "login" => match args.as_slice() {
+                [provider] => Ok(Self::Login {
+                    provider: (*provider).to_string(),
+                    force: false,
+                }),
+                [provider, "force"] => Ok(Self::Login {
+                    provider: (*provider).to_string(),
+                    force: true,
+                }),
+                _ => Err("usage: /login xai [force]".to_string()),
             },
             "settings" => Ok(Self::Settings),
             "vim" => Ok(Self::Vim),
@@ -555,7 +565,7 @@ impl SlashCommand {
             Server(_) => {
                 Err("`/server` manages the local model server; leave it to the user".into())
             }
-            Login(_) => Err("`/login` is an interactive sign-in; leave it to the user".into()),
+            Login { .. } => Err("`/login` is an interactive sign-in; leave it to the user".into()),
             Ui(_) => Err("`/ui` restyles the user's terminal; leave it to them".into()),
             ImportClaude(_) => {
                 Err("`/settings` import is driven from a picker; leave it to the user".into())
@@ -602,7 +612,7 @@ impl SlashCommand {
             Ultra(_) => "ultra",
             Provider(_) | ProviderSetup { .. } => "provider",
             Server(_) => "server",
-            Login(_) => "login",
+            Login { .. } => "login",
             Settings | ImportClaude(_) => "settings",
             Vim => "vim",
             Ui(_) => "ui",
@@ -911,7 +921,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "login",
-        args: "<xai>",
+        args: "<xai> [force]",
         description: "sign in to a provider account (xAI OAuth)",
         takes_args: true,
         tui: Execution::Ui,
@@ -1583,7 +1593,10 @@ mod tests {
                 api_key: None,
             },
             SlashCommand::Server(ServerAction::Status),
-            SlashCommand::Login("xai".into()),
+            SlashCommand::Login {
+                provider: "xai".into(),
+                force: false,
+            },
             SlashCommand::Settings,
             SlashCommand::ImportClaude(ImportSelection::default()),
             SlashCommand::Vim,

@@ -41,7 +41,7 @@ inline hints.
 | `/fusion [config]` | Toggle model fusion, or configure the panel ([fusion.md](fusion.md)) |
 | `/ultra [config]` | Toggle mixture of agents, or configure the roster ([ultra.md](ultra.md)) |
 | `/server [status\|start\|stop]` | Manage the local llama-server |
-| `/login <provider>` | OAuth sign-in; the TUI command accepts `xai` only. ChatGPT OAuth is `wizard --login chatgpt` from the shell, or the GUI Settings flow |
+| `/login <provider> [force]` | OAuth sign-in; the TUI command accepts `xai` only. A live session is left alone unless you pass `force`. ChatGPT OAuth is `wizard --login chatgpt` from the shell, or the GUI Settings flow |
 | `/publish [branch]` | Fork Wizard to your GitHub and get a one-line installer ([market.md](market.md)) |
 | `/settings` | Open the in-app settings menu |
 | `/ui [name]` | List the available interfaces, or wear one: `wizard`, `codex`, `grok` ([The interface](#the-interface)) |

@@ -821,7 +821,17 @@ fn provider_no_args_opens_the_menu_and_list_still_lists() {
 fn login_parses_with_a_provider_argument() {
     assert_eq!(
         SlashCommand::parse("/login xai"),
-        Some(Ok(SlashCommand::Login("xai".to_string())))
+        Some(Ok(SlashCommand::Login {
+            provider: "xai".to_string(),
+            force: false,
+        }))
+    );
+    assert_eq!(
+        SlashCommand::parse("/login xai force"),
+        Some(Ok(SlashCommand::Login {
+            provider: "xai".to_string(),
+            force: true,
+        }))
     );
     let parsed = SlashCommand::parse("/login").expect("is a slash command");
     let message = parsed.expect_err("missing provider");

@@ -443,9 +443,9 @@ pub trait CommandSurface {
         self.error(message);
     }
 
-    /// `/login <provider>`: an OAuth sign-in.
-    async fn login(&mut self, provider: String) {
-        let _ = provider;
+    /// `/login <provider> [force]`: an OAuth sign-in.
+    async fn login(&mut self, provider: String, force: bool) {
+        let _ = (provider, force);
         let message = elsewhere("login", self.surface());
         self.error(message);
     }
@@ -637,12 +637,12 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
 
         // The one supported sign-in, checked here so both surfaces refuse an
         // unknown one in the same words.
-        SlashCommand::Login(provider) if provider != "xai" => {
+        SlashCommand::Login { provider, .. } if provider != "xai" => {
             surface.error(format!(
                 "unknown login provider '{provider}' (supported: xai)"
             ));
         }
-        SlashCommand::Login(provider) => surface.login(provider).await,
+        SlashCommand::Login { provider, force } => surface.login(provider, force).await,
 
         SlashCommand::Settings => choose(surface, Chooser::Settings, spec).await,
         SlashCommand::ImportClaude(selection) => surface.import_claude(selection).await,
@@ -1153,7 +1153,7 @@ mod tests {
         ) {
             self.verb("provider_setup");
         }
-        async fn login(&mut self, _provider: String) {
+        async fn login(&mut self, _provider: String, _force: bool) {
             self.verb("login");
         }
         async fn import_claude(&mut self, _selection: ImportSelection) {

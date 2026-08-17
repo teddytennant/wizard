@@ -336,7 +336,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             llm::oauth_callback::PasteChannel::Disabled
         };
         return match provider.as_str() {
-            "xai" => llm::xai_oauth::login(|line: &str| println!("{line}"), paste)
+            "xai" => llm::xai_oauth::login(|line: &str| println!("{line}"), paste, false)
                 .await
                 .map(|()| 0),
             "chatgpt" => llm::chatgpt_oauth::login(|line: &str| println!("{line}"), paste)
