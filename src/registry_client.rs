@@ -1,19 +1,19 @@
 //! Client for the Wizard skills and tools registry.
 //!
-//! The registry is a git-backed static site. One public repo holds
+//! The registry is a git-backed static site. This repo holds it under `registry/`:
 //!
 //! ```text
-//! registry.json                                     generated index
-//! skills/<author>/<name>/SKILL.md  + manifest.toml
-//! tools/<author>/<name>/tool.lua   + manifest.toml
+//! registry/registry.json                                     generated index
+//! registry/skills/<author>/<name>/SKILL.md  + manifest.toml
+//! registry/tools/<author>/<name>/tool.lua   + manifest.toml
 //! ```
 //!
 //! and nothing else: no backend, no database, no account system. Submission is
-//! a pull request; CI validates the manifest, smoke-tests the entry, and
-//! regenerates `registry.json` on merge. This module is the client half: fetch
-//! the index (cached locally, so search works offline), search it, install an
-//! entry after verifying its published checksum, update, and list what is
-//! installed and where each entry came from.
+//! a pull request to this repo; CI validates the manifest, checks checksums, and
+//! refuses a `registry.json` that has drifted from the tree.
+//! This module is the client half: fetch the index (cached locally, so search
+//! works offline), search it, install an entry after verifying its published
+//! checksum, update, and list what is installed and where each entry came from.
 //!
 //! Installed entries land next to the ones that ship today: skills in
 //! `~/.wizard/skills/<name>/SKILL.md`, tools in `~/.wizard/tools/<name>.lua`
@@ -78,16 +78,14 @@ use crate::update::sha256_hex;
 /// a fork can point at its own registry and the tests can point at a file the
 /// suite wrote.
 ///
-/// **This URL does not serve anything yet.** The client shipped before the
-/// registry did: `teddytennant/wizard-registry` is not a published repository,
-/// so a stock install fetching `registry.json` from here gets an HTTP 404, and
-/// that is the *expected* answer rather than a fault on the user's machine.
-/// [`RegistryClient::explain_index_failure`] is what turns it into a sentence
-/// that says so and names `WIZARD_REGISTRY_URL`, instead of a bare status code
-/// or advice to check the network. `docs/market.md` says the same thing to a
-/// reader who has not run the command yet.
+/// The default is the in-tree `registry/` directory of this repo, served as
+/// raw.githubusercontent.com. Stock `wizard skills search` fetches
+/// `{DEFAULT_BASE_URL}/registry.json`. A 404 there is no longer the expected
+/// "not published yet" answer; it means that file is missing on the ref, the
+/// path moved, or GitHub is not serving it. [`RegistryClient::explain_index_failure`]
+/// says so. `docs/market.md` describes the same tree.
 const DEFAULT_BASE_URL: &str =
-    "https://raw.githubusercontent.com/teddytennant/wizard-registry/main";
+    "https://raw.githubusercontent.com/teddytennant/wizard/main/registry";
 
 /// Index file name at the base URL, and the name of its local cached copy.
 const INDEX_FILE: &str = "registry.json";
@@ -956,8 +954,8 @@ impl RegistryClient {
     /// One status gets its own answer, and only one. A 404 on `registry.json`
     /// means the server was reached and said there is nothing published at this
     /// base URL — a fact about the registry, not about the user's connection —
-    /// and on a stock install it is what *always* happens, because
-    /// [`DEFAULT_BASE_URL`] points at a repository that does not exist yet.
+    /// and on the default URL it means the in-tree index is missing, because
+    /// [`DEFAULT_BASE_URL`] is supposed to serve `registry/` from this repo.
     /// Reporting that as `fetching <url> returned HTTP 404` sends people to
     /// check a URL they did not choose; reporting it as "unreachable, connect
     /// once" (which is what [`Self::index`] used to append) sends them to debug
@@ -972,11 +970,12 @@ impl RegistryClient {
         }
         if self.base == DEFAULT_BASE_URL {
             err.context(
-                "the default registry publishes no registry.json yet, so there is nothing to \
-                 search or install from it. This is not a fault on your machine and there is \
-                 nothing to retry. Set WIZARD_REGISTRY_URL to a registry you trust — any URL \
-                 that serves a registry.json, a fork's raw.githubusercontent.com URL \
-                 included — and `wizard skills` works against that one instead.",
+                "the default registry has no registry.json at this URL. Stock search reads the \
+                 in-tree index under registry/ on teddytennant/wizard. A 404 means that file \
+                 is gone from main, you are on a ref that does not have it, or GitHub is not \
+                 serving raw files. This is not a fault on your machine. Set WIZARD_REGISTRY_URL \
+                 to a registry you trust if you want a different index. Any URL that \
+                 serves a registry.json works, a fork's raw.githubusercontent.com URL included.",
             )
         } else {
             err.context(format!(
@@ -2759,10 +2758,7 @@ type = "string"
 
     #[test]
     fn a_missing_default_registry_names_the_override_not_the_status_code() {
-        // This is what every public user gets today: the default registry
-        // repository is not published, so `wizard skills search` 404s on its
-        // first request. The failure is expected, so the message has to be an
-        // instruction rather than a stack of HTTP.
+        // A 404 on the default URL is unusual once the in-tree index ships.
         let base = DEFAULT_BASE_URL;
         let err = index_404(base);
         assert!(is_not_found(&err));
@@ -2773,8 +2769,8 @@ type = "string"
             "the one thing a user can do about it has to be in the message: {explained}"
         );
         assert!(
-            explained.contains("nothing to retry"),
-            "a 404 is not a network blip and must not read as one: {explained}"
+            explained.contains("in-tree"),
+            "a default 404 has to name where the index lives: {explained}"
         );
         // The status is still in the chain, because "which URL, and what did it
         // say" is what a bug report needs. It is just no longer the whole
@@ -2827,5 +2823,79 @@ type = "string"
             ),
             format!("fetching {DEFAULT_BASE_URL}: dns error")
         );
+    }
+
+    #[test]
+    fn in_tree_registry_parses_and_checksums_match() {
+        use std::collections::BTreeSet;
+
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
+        let raw = std::fs::read(root.join("registry.json")).expect("registry/registry.json");
+        let index = RegistryIndex::parse(&raw).expect("in-tree index parses");
+        assert_eq!(index.version, INDEX_VERSION);
+        assert!(
+            !index.generated_at.is_empty(),
+            "generated_at must be present"
+        );
+
+        let mut tree_paths = BTreeSet::new();
+        for kind in [EntryKind::Skill, EntryKind::Tool] {
+            let kind_dir = root.join(kind.dir());
+            let Ok(authors) = std::fs::read_dir(&kind_dir) else {
+                continue;
+            };
+            for author in authors.flatten() {
+                let Ok(names) = std::fs::read_dir(author.path()) else {
+                    continue;
+                };
+                for entry_dir in names.flatten() {
+                    let manifest_path = entry_dir.path().join("manifest.toml");
+                    if !manifest_path.is_file() {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&manifest_path)
+                        .unwrap_or_else(|err| panic!("read {}: {err}", manifest_path.display()));
+                    let manifest: Manifest = toml::from_str(&text)
+                        .unwrap_or_else(|err| panic!("parse {}: {err}", manifest_path.display()));
+                    manifest.validate().expect("manifest validates");
+                    assert_eq!(manifest.kind, kind);
+                    assert!(
+                        !BUNDLED_SKILL_NAMES.contains(&manifest.name.as_str()),
+                        "{}",
+                        manifest.name
+                    );
+                    let rel = format!("{}/{}/{}", kind.dir(), manifest.author, manifest.name);
+                    let artifact = root.join(&rel).join(manifest.artifact_name());
+                    let bytes = std::fs::read(&artifact)
+                        .unwrap_or_else(|err| panic!("read {}: {err}", artifact.display()));
+                    assert!(manifest.matches(&bytes), "checksum mismatch for {rel}");
+                    assert!(tree_paths.insert(rel.clone()), "duplicate tree path {rel}");
+                }
+            }
+        }
+
+        let index_paths: BTreeSet<String> = index
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(
+            tree_paths, index_paths,
+            "registry.json drifted from the tree; run contrib/check-registry.py --write"
+        );
+        assert!(!tree_paths.is_empty(), "ship at least one skill");
+
+        for entry in &index.entries {
+            entry.validate().expect("index entry validates");
+            let artifact = root.join(&entry.path).join(entry.manifest.artifact_name());
+            let bytes = std::fs::read(&artifact)
+                .unwrap_or_else(|err| panic!("read {}: {err}", artifact.display()));
+            assert!(
+                entry.manifest.matches(&bytes),
+                "checksum mismatch for {} at {}",
+                entry.name(),
+                artifact.display()
+            );
+        }
     }
 }

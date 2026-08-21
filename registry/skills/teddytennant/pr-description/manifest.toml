@@ -1,0 +1,7 @@
+name = "pr-description"
+version = "1.0.0"
+author = "teddytennant"
+description = "Write a pull-request title and body from the current branch against its base. Why, what, how to test. No marketing."
+tags = ["git", "github", "pr"]
+kind = "skill"
+checksum = "f06852d445ff082c06613c4ce1224b084c614f774162bbd7793e5ba8c7d72fe8"

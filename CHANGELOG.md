@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **An in-tree skills registry.** `registry/` in this repo is now the default index `wizard skills search` / `install` reads (`https://raw.githubusercontent.com/teddytennant/wizard/main/registry`). Stock search no longer 404s on a `teddytennant/wizard-registry` that was never published. Submissions are pull requests to this repo; CI checks manifests, artifact checksums, and that `registry.json` matches the tree. See [market.md](docs/market.md).
+
 ### Fixed
 
 - **Docs and CI catch up to signed releases.** v2.1.0 (and every tag since v2.0.0) ships a `checksums.txt.minisig` that verifies against `wizard-release.pub`, so the install-script legs on ubuntu and debian block on push again, and Getting started no longer says the one-liner has to build from source.
@@ -130,7 +134,7 @@ The 2.0 line: the browser GUI is replaced by a window that links the agent core 
 - **The gateway runs the command table it advertises**, publishes it to Telegram's own `/` menu, and sends formatted replies (HTML, falling back to plain text on a parse refusal). A leading slash alone does not make a command: `/etc/hosts` is a prompt, because a chat is where people paste paths.
 - **`wizard doctor --bundle`.** A redacted bug-report bundle under `~/.wizard/bundles/doctor-<timestamp>/`: the check report, the allowlist-redacted config, the newest session transcript, the usage and evolution logs, and the most recent debug logs. Secrets are stripped; the transcript is your own text, so read it before attaching it to anything.
 - **Structured file logging.** Diagnostics go to `~/.wizard/logs/<timestamp>-<pid>.jsonl`, filtered by `WIZARD_LOG`. See [logging.md](docs/logging.md).
-- **The skills and tools registry client (`wizard skills search | install | update | list`).** Git-backed, no backend and no accounts. The public registry it points at is not published yet, so today it installs from any `registry.json` you point `WIZARD_REGISTRY_URL` at. See [market.md](docs/market.md).
+- **The skills and tools registry client (`wizard skills search | install | update | list`).** Git-backed, no backend and no accounts. The default index now lives in this repo under `registry/`. See [market.md](docs/market.md).
 - **`wizard resume`**, the subcommand spelling of `--resume`, and **`wizard resume --claude`**, which takes a conversation from Claude Code's own history (`~/.claude/projects/`), converts it into a Wizard session and continues it here. A Claude Code transcript is a DAG rather than a list, so `--leaf` picks which conversation inside a forked session to walk back from. The Claude Code side is strictly read-only.
 - **`/resume-claude`**, the same import as a slash command. It opens the picker `/resume` opens, with the same keys, over the conversations Claude Code recorded for the working directory; Enter imports the selected one and continues it, and everything after the import is the ordinary resume path. In the window it unfolds the sidebar's Claude Code section, which is where those rows already live. It is a separate command rather than a row inside `/resume` because opening one is a different act: a `/resume` row reopens a file Wizard owns, and this one copies a conversation out of another program. `wizard resume --claude` remains the shell spelling and is still what a script wants.
 - **Buzz rooms.** Join [Buzz](https://github.com/block/buzz) as an ACP member via `buzz-acp` or a Desktop custom harness. See [buzz.md](docs/buzz.md).
