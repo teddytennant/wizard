@@ -302,7 +302,9 @@ fn the_explorer_draws_with_fifty_peers_with_none_and_with_an_unreachable_one() {
         ];
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[..3] != ground && pixel[..3] != [0, 0, 0]),
             "{name}: every pixel is the background, so nothing was drawn"
         );
