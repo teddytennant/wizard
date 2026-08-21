@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "generated_at": "2026-08-21T14:04:59Z",
+  "entries": [
+    {
+      "name": "conventional-commit",
+      "version": "1.0.0",
+      "author": "teddytennant",
+      "description": "Write a conventional commit subject and body from the current diff. One change per commit. Do not invent a scope.",
+      "tags": [
+        "git",
+        "commit"
+      ],
+      "kind": "skill",
+      "checksum": "feeb0657e40631906ee86d3557d4df90695c9790d7f2720719620be56f4d47ae",
+      "capabilities": [],
+      "path": "skills/teddytennant/conventional-commit"
+    },
+    {
+      "name": "pr-description",
+      "version": "1.0.0",
+      "author": "teddytennant",
+      "description": "Write a pull-request title and body from the current branch against its base. Why, what, how to test. No marketing.",
+      "tags": [
+        "git",
+        "github",
+        "pr"
+      ],
+      "kind": "skill",
+      "checksum": "f06852d445ff082c06613c4ce1224b084c614f774162bbd7793e5ba8c7d72fe8",
+      "capabilities": [],
+      "path": "skills/teddytennant/pr-description"
+    }
+  ]
+}

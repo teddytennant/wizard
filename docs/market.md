@@ -100,9 +100,11 @@ Reach for `/publish` when the change is in `~/.wizard/src`: a new built-in tool,
 
 `/publish` shares a whole Wizard. `wizard skills` shares one piece of one: a skill (markdown listed in the system-prompt index, body read when it matches) or a tool (a LuaJIT script the model can call).
 
-The registry is a git-backed static site. One public repo holds `registry.json` plus a directory per entry, and nothing else: no backend, no database, no accounts. Submitting is a pull request; CI validates the manifest, smoke-tests the entry, and regenerates the index on merge.
+The registry is a git-backed static site. This repo holds it under `registry/`: `registry/registry.json` plus a directory per entry, and nothing else. No backend, no database, no accounts. Submitting is a pull request to this repo; CI validates the manifest, checks the artifact checksum, and refuses a `registry.json` that has drifted from the tree.
 
-**The client ships before the registry does.** `teddytennant/wizard-registry` is not published yet, so `wizard skills search` against the default URL reports that it could not fetch the index, and there is nothing to install by name. Everything below describes the client that is in this binary today; point `WIZARD_REGISTRY_URL` at your own `registry.json` (any URL that serves the index, a fork's raw URL included) and all of it works now.
+Stock `wizard skills search` fetches `https://raw.githubusercontent.com/teddytennant/wizard/main/registry/registry.json`. Point `WIZARD_REGISTRY_URL` at a different index (any URL that serves `registry.json`, a fork's raw URL included) to use that one instead. The env var names the directory that holds the file, not the file itself.
+
+A skill lives at `registry/skills/<author>/<name>/` (`SKILL.md` + `manifest.toml`); a tool at `registry/tools/<author>/<name>/`. After editing, run `contrib/check-registry.py --write` so `registry.json` matches the tree, then open the PR.
 
 ```bash
 wizard skills search todo list        # every term has to match; extra terms narrow

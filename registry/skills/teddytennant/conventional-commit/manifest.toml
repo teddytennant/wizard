@@ -1,0 +1,7 @@
+name = "conventional-commit"
+version = "1.0.0"
+author = "teddytennant"
+description = "Write a conventional commit subject and body from the current diff. One change per commit. Do not invent a scope."
+tags = ["git", "commit"]
+kind = "skill"
+checksum = "feeb0657e40631906ee86d3557d4df90695c9790d7f2720719620be56f4d47ae"
