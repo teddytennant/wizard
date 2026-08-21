@@ -2827,18 +2827,66 @@ type = "string"
 
     #[test]
     fn in_tree_registry_parses_and_checksums_match() {
+        use std::collections::BTreeSet;
+
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
         let raw = std::fs::read(root.join("registry.json")).expect("registry/registry.json");
         let index = RegistryIndex::parse(&raw).expect("in-tree index parses");
         assert_eq!(index.version, INDEX_VERSION);
-        assert!(!index.entries.is_empty(), "ship at least one skill");
+        assert!(
+            !index.generated_at.is_empty(),
+            "generated_at must be present"
+        );
+
+        let mut tree_paths = BTreeSet::new();
+        for kind in [EntryKind::Skill, EntryKind::Tool] {
+            let kind_dir = root.join(kind.dir());
+            let Ok(authors) = std::fs::read_dir(&kind_dir) else {
+                continue;
+            };
+            for author in authors.flatten() {
+                let Ok(names) = std::fs::read_dir(author.path()) else {
+                    continue;
+                };
+                for entry_dir in names.flatten() {
+                    let manifest_path = entry_dir.path().join("manifest.toml");
+                    if !manifest_path.is_file() {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&manifest_path)
+                        .unwrap_or_else(|err| panic!("read {}: {err}", manifest_path.display()));
+                    let manifest: Manifest = toml::from_str(&text)
+                        .unwrap_or_else(|err| panic!("parse {}: {err}", manifest_path.display()));
+                    manifest.validate().expect("manifest validates");
+                    assert_eq!(manifest.kind, kind);
+                    assert!(
+                        !BUNDLED_SKILL_NAMES.contains(&manifest.name.as_str()),
+                        "{}",
+                        manifest.name
+                    );
+                    let rel = format!("{}/{}/{}", kind.dir(), manifest.author, manifest.name);
+                    let artifact = root.join(&rel).join(manifest.artifact_name());
+                    let bytes = std::fs::read(&artifact)
+                        .unwrap_or_else(|err| panic!("read {}: {err}", artifact.display()));
+                    assert!(manifest.matches(&bytes), "checksum mismatch for {rel}");
+                    assert!(tree_paths.insert(rel.clone()), "duplicate tree path {rel}");
+                }
+            }
+        }
+
+        let index_paths: BTreeSet<String> = index
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(
+            tree_paths, index_paths,
+            "registry.json drifted from the tree; run contrib/check-registry.py --write"
+        );
+        assert!(!tree_paths.is_empty(), "ship at least one skill");
+
         for entry in &index.entries {
-            entry.validate().expect("entry validates");
-            assert!(
-                !BUNDLED_SKILL_NAMES.contains(&entry.name()),
-                "{}",
-                entry.name()
-            );
+            entry.validate().expect("index entry validates");
             let artifact = root.join(&entry.path).join(entry.manifest.artifact_name());
             let bytes = std::fs::read(&artifact)
                 .unwrap_or_else(|err| panic!("read {}: {err}", artifact.display()));
