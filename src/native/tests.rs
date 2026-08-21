@@ -1066,7 +1066,11 @@ fn the_fixture_session_draws_headlessly_with_a_selection_over_it() {
         "the software rasterizer produced a full frame"
     );
     assert!(
-        pixels.chunks_exact(4).any(|pixel| pixel[..3] != [0, 0, 0]),
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[..3] != [0, 0, 0]),
         "every pixel is black, so nothing was drawn"
     );
 }
@@ -1257,7 +1261,9 @@ fn the_bundled_fonts_rasterize_to_a_committed_digest() {
     // The frame really has glyphs in it, so a digest of an empty canvas cannot
     // pass for a rendering.
     let ink = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[..3] != [12, 12, 14])
         .count();
     assert!(
