@@ -517,7 +517,7 @@ jobs:
   # contrib/install-in-container.sh can be pointed at an artifact this commit
   # built rather than at releases/latest.
   install-script:
-    name: install.sh on ${{ matrix.image }}
+    name: install.sh on ${{ matrix.label || matrix.image }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -533,6 +533,17 @@ jobs:
           # binary on every run since.
           - image: ubuntu:22.04
             flavor: default
+          # The same image with its signature checkers taken away, leaving
+          # python3: the shape of a stock Mac, where `openssl` is LibreSSL and
+          # can do neither ed25519 over raw bytes nor blake2b, and minisign is
+          # a Homebrew install away. There is no macOS runner here, and this is
+          # the leg that keeps that path from rotting — it was missing, and
+          # macOS installs failed at the signature check with nothing to do
+          # about it but install Homebrew first.
+          - image: ubuntu:22.04
+            flavor: default
+            verifier: python
+            label: "ubuntu:22.04 (python3 as the only verifier)"
           # Oldest glibc the release binaries claim to support, and the leg
           # that covers WIZARD_MINIMAL (binary, no loadout).
           - image: debian:oldstable
@@ -581,10 +592,12 @@ jobs:
           IMAGE: ${{ matrix.image }}
           FLAVOR: ${{ matrix.flavor }}
           SIMULATE_NIXOS: ${{ matrix.nixos && '1' || '0' }}
+          VERIFIER: ${{ matrix.verifier || 'auto' }}
         run: |
           docker run --rm \
             -v "$PWD:/src:ro" \
             -e "SIMULATE_NIXOS=${SIMULATE_NIXOS}" \
+            -e "VERIFIER=${VERIFIER}" \
             "$IMAGE" \
             sh /src/contrib/install-in-container.sh "$FLAVOR"
 
@@ -594,7 +607,7 @@ jobs:
       - name: Report swallowed failure
         if: steps.install.outcome == 'failure'
         env:
-          IMAGE: ${{ matrix.image }}
+          IMAGE: ${{ matrix.label || matrix.image }}
         run: |
           set -eu
           echo "::warning::install.sh failed on ${IMAGE} and did not fail the run (non-blocking leg); open this job's log."

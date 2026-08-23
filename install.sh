@@ -1168,32 +1168,110 @@ download_release_asset() {
 
 # The tail of every refusal, so the message ends in something to do.
 verify_hint() {
-    printf 'install minisign (Debian/Ubuntu: sudo apt install minisign; macOS: brew install minisign; Alpine: apk add minisign; Nix: nix-shell -p minisign) and re-run, or build from source with WIZARD_BUILD_FROM_SOURCE=1'
+    printf 'install minisign (Debian/Ubuntu: sudo apt install minisign; macOS: brew install minisign; Alpine: apk add minisign; Nix: nix-shell -p minisign) or a python3, and re-run, or build from source with WIZARD_BUILD_FROM_SOURCE=1'
 }
 
-# True when this openssl can check an ed25519 signature over raw bytes and hash
-# with blake2b-512, which is what minisign's two algorithms need. Probed rather
-# than assumed: macOS ships LibreSSL as `openssl`, and it has neither, so
+# Where a verifier hides when it is installed but not on PATH, searched after
+# PATH and never instead of it. macOS is the whole reason this list exists:
+# Homebrew's openssl@3 is keg-only, so it is installed but deliberately never
+# linked onto PATH, and a `curl | bash` run inherits whatever PATH the terminal
+# had — which on a fresh machine can miss /opt/homebrew/bin entirely.
+VERIFIER_EXTRA_PATHS="/opt/homebrew/bin
+/usr/local/bin
+/opt/local/bin
+/home/linuxbrew/.linuxbrew/bin
+/opt/homebrew/opt/openssl@3/bin
+/usr/local/opt/openssl@3/bin
+/opt/homebrew/opt/openssl@1.1/bin
+/usr/local/opt/openssl@1.1/bin
+/opt/local/libexec/openssl3/bin"
+
+# Print the path to $1: PATH first, then the locations above. Prints nothing and
+# returns 1 when it is in none of them.
+find_tool() {
+    local name="$1" dir found
+    found="$(command -v "$name" 2>/dev/null || true)"
+    if [ -n "$found" ]; then
+        printf '%s\n' "$found"
+        return 0
+    fi
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        if [ -x "${dir}/${name}" ]; then
+            printf '%s\n' "${dir}/${name}"
+            return 0
+        fi
+    done <<EOF
+${VERIFIER_EXTRA_PATHS}
+EOF
+    return 1
+}
+
+# True when the openssl at $1 can check an ed25519 signature over raw bytes and
+# hash with blake2b-512, which is what minisign's two algorithms need. Probed
+# rather than assumed: macOS ships LibreSSL as `openssl`, and it has neither, so
 # without this a missing feature would be reported as a bad signature.
 openssl_can_verify() {
-    command -v openssl >/dev/null 2>&1 || return 1
-    openssl pkeyutl -help 2>&1 | grep -q -- '-rawin' || return 1
-    openssl dgst -blake2b512 </dev/null >/dev/null 2>&1
+    local bin="$1"
+    [ -n "$bin" ] && [ -x "$bin" ] || return 1
+    "$bin" pkeyutl -help 2>&1 | grep -q -- '-rawin' || return 1
+    "$bin" dgst -blake2b512 </dev/null >/dev/null 2>&1
 }
 
-# minisign verification with openssl, for hosts that have no minisign. A
+# Print the path to an openssl that passes the probe above, PATH first and then
+# the extra locations. On a Mac the one on PATH is Apple's LibreSSL and fails
+# the probe, while a Homebrew openssl@3 sitting off PATH passes it, so this
+# looks past the first openssl it finds rather than giving up on it.
+find_capable_openssl() {
+    local dir bin
+    bin="$(command -v openssl 2>/dev/null || true)"
+    if openssl_can_verify "$bin"; then
+        printf '%s\n' "$bin"
+        return 0
+    fi
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        if openssl_can_verify "${dir}/openssl"; then
+            printf '%s\n' "${dir}/openssl"
+            return 0
+        fi
+    done <<EOF
+${VERIFIER_EXTRA_PATHS}
+EOF
+    return 1
+}
+
+# Print the path to a python3 that can run verify_signature_python. Probed and
+# not just found, because /usr/bin/python3 on a Mac without the Command Line
+# Tools is a stub that runs nothing: it exits non-zero, and this notices.
+find_python() {
+    local bin
+    bin="$(find_tool python3 || true)"
+    [ -n "$bin" ] || return 1
+    # Apple's /usr/bin/python3 is a stub. Without the Command Line Tools it runs
+    # nothing, and running it is how a GUI installer prompt appears in front of
+    # somebody who typed a curl | bash. xcode-select answers the same question
+    # quietly, so it is asked first and only about that one path.
+    if [ "$bin" = "/usr/bin/python3" ] && command -v xcode-select >/dev/null 2>&1; then
+        xcode-select -p >/dev/null 2>&1 || return 1
+    fi
+    "$bin" -c 'import hashlib; hashlib.blake2b(b"").digest()' >/dev/null 2>&1 || return 1
+    printf '%s\n' "$bin"
+}
+
+# minisign verification with openssl ($3), for hosts that have no minisign. A
 # .minisig is four lines: an untrusted comment, base64(algorithm, key id and a
 # 64-byte ed25519 signature), a trusted comment, and base64 of a second
 # signature over (signature followed by trusted comment). "ED" signs a blake2b-512
 # prehash of the file, the legacy "Ed" signs the file itself.
 verify_signature_openssl() {
-    local file="$1" sig="$2" work="${TMP_DIR}/minisig" algorithm pub_id sig_id
+    local file="$1" sig="$2" openssl="$3" work="${TMP_DIR}/minisig" algorithm pub_id sig_id
     rm -rf "$work"
     mkdir -p "$work" || return 1
 
-    printf '%s\n' "$WIZARD_RELEASE_PUBKEY" | openssl base64 -d -A >"${work}/pub.bin" 2>/dev/null || return 1
+    printf '%s\n' "$WIZARD_RELEASE_PUBKEY" | "$openssl" base64 -d -A >"${work}/pub.bin" 2>/dev/null || return 1
     [ "$(wc -c <"${work}/pub.bin")" -eq 42 ] || return 1
-    sed -n 2p "$sig" | openssl base64 -d -A >"${work}/sig.bin" 2>/dev/null || return 1
+    sed -n 2p "$sig" | "$openssl" base64 -d -A >"${work}/sig.bin" 2>/dev/null || return 1
     [ "$(wc -c <"${work}/sig.bin")" -eq 74 ] || return 1
 
     # The key id is a hint about which key to reach for, never the check.
@@ -1209,11 +1287,11 @@ verify_signature_openssl() {
 
     algorithm="$(dd if="${work}/sig.bin" bs=1 count=2 2>/dev/null)"
     case "$algorithm" in
-        ED) openssl dgst -blake2b512 -binary "$file" >"${work}/message.bin" 2>/dev/null || return 1 ;;
+        ED) "$openssl" dgst -blake2b512 -binary "$file" >"${work}/message.bin" 2>/dev/null || return 1 ;;
         Ed) cp "$file" "${work}/message.bin" || return 1 ;;
         *)  return 1 ;;
     esac
-    openssl pkeyutl -verify -pubin -inkey "${work}/key.der" -keyform DER \
+    "$openssl" pkeyutl -verify -pubin -inkey "${work}/key.der" -keyform DER \
         -rawin -sigfile "${work}/sig.raw" -in "${work}/message.bin" >/dev/null 2>&1 || return 1
 
     # The trusted comment is inside the signed envelope; verifying it is what
@@ -1222,21 +1300,173 @@ verify_signature_openssl() {
         cat "${work}/sig.raw"
         sed -n 3p "$sig" | sed 's/^trusted comment: //' | tr -d '\n'
     } >"${work}/global.bin"
-    sed -n 4p "$sig" | openssl base64 -d -A >"${work}/global.sig" 2>/dev/null || return 1
-    openssl pkeyutl -verify -pubin -inkey "${work}/key.der" -keyform DER \
+    sed -n 4p "$sig" | "$openssl" base64 -d -A >"${work}/global.sig" 2>/dev/null || return 1
+    "$openssl" pkeyutl -verify -pubin -inkey "${work}/key.der" -keyform DER \
         -rawin -sigfile "${work}/global.sig" -in "${work}/global.bin" >/dev/null 2>&1
+}
+
+# The same check again with python3 ($3) and nothing else, for a host that has
+# neither minisign nor an openssl that can do this — which is a Mac as it comes
+# out of the box, and was an install that could not proceed at all.
+#
+# ed25519 verification is written out here rather than imported: `hashlib` is in
+# the standard library and gives us sha512 and blake2b, but nothing in it does
+# curve arithmetic, and `cryptography` is a third-party wheel this script cannot
+# assume. What follows is the verify half of RFC 8032 over the standard library,
+# checking the same two signatures over the same bytes as the two paths above.
+# There is no secret here and nothing to leak by timing: every input is a public
+# release file, and the only outcome is yes or no.
+verify_signature_python() {
+    local file="$1" sig="$2" python="$3"
+    "$python" - "$WIZARD_RELEASE_PUBKEY" "$sig" "$file" <<'PYTHON_VERIFY' >/dev/null 2>&1
+import base64, hashlib, sys
+
+P = 2**255 - 19
+Q = 2**252 + 27742317777372353535851937790883648493
+D = -121665 * pow(121666, P - 2, P) % P
+SQRT_M1 = pow(2, (P - 1) // 4, P)
+
+
+def recover_x(y, sign):
+    """The x that goes with a compressed y, or None if the point is not on the curve."""
+    if y >= P:
+        return None
+    x2 = (y * y - 1) * pow(D * y * y + 1, P - 2, P) % P
+    if x2 == 0:
+        return None if sign else 0
+    x = pow(x2, (P + 3) // 8, P)
+    if (x * x - x2) % P != 0:
+        x = x * SQRT_M1 % P
+    if (x * x - x2) % P != 0:
+        return None
+    if x % 2 != sign:
+        x = P - x
+    return x
+
+
+# Extended coordinates (X, Y, Z, T), which keep the addition below branch-free.
+G_Y = 4 * pow(5, P - 2, P) % P
+G_X = recover_x(G_Y, 0)
+G = (G_X, G_Y, 1, G_X * G_Y % P)
+
+
+def add(p1, p2):
+    a = (p1[1] - p1[0]) * (p2[1] - p2[0]) % P
+    b = (p1[1] + p1[0]) * (p2[1] + p2[0]) % P
+    c = 2 * p1[3] * p2[3] * D % P
+    dd = 2 * p1[2] * p2[2] % P
+    e, f, g, h = b - a, dd - c, dd + c, b + a
+    return (e * f % P, g * h % P, f * g % P, e * h % P)
+
+
+def mul(s, point):
+    out = (0, 1, 1, 0)
+    while s > 0:
+        if s & 1:
+            out = add(out, point)
+        point = add(point, point)
+        s >>= 1
+    return out
+
+
+def equal(p1, p2):
+    if (p1[0] * p2[2] - p2[0] * p1[2]) % P != 0:
+        return False
+    return (p1[1] * p2[2] - p2[1] * p1[2]) % P == 0
+
+
+def decompress(data):
+    if len(data) != 32:
+        return None
+    y = int.from_bytes(data, "little")
+    sign = y >> 255
+    y &= (1 << 255) - 1
+    x = recover_x(y, sign)
+    return None if x is None else (x, y, 1, x * y % P)
+
+
+def verify(public, message, signature):
+    if len(signature) != 64:
+        return False
+    key = decompress(public)
+    if key is None:
+        return False
+    r = decompress(signature[:32])
+    if r is None:
+        return False
+    s = int.from_bytes(signature[32:], "little")
+    if s >= Q:
+        return False
+    h = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little") % Q
+    return equal(mul(s, G), add(r, mul(h, key)))
+
+
+def decode(line, size):
+    raw = base64.b64decode(line.strip(), validate=True)
+    if len(raw) != size:
+        raise ValueError("wrong length")
+    return raw
+
+
+try:
+    public_key = decode(sys.argv[1], 42)
+    lines = open(sys.argv[2], "r").read().splitlines()
+    signature = decode(lines[1], 74)
+    global_signature = base64.b64decode(lines[3].strip(), validate=True)
+    payload = open(sys.argv[3], "rb").read()
+except Exception:
+    sys.exit(1)
+
+if public_key[:2] != b"Ed":
+    sys.exit(1)
+# The key id is a hint about which key to reach for, never the check.
+if signature[2:10] != public_key[2:10]:
+    sys.exit(1)
+
+if signature[:2] == b"ED":
+    message = hashlib.blake2b(payload).digest()
+elif signature[:2] == b"Ed":
+    message = payload
+else:
+    sys.exit(1)
+
+key, raw = public_key[10:], signature[10:]
+if not verify(key, message, raw):
+    sys.exit(1)
+
+# The trusted comment is inside the signed envelope; verifying it is what keeps
+# it from being an unauthenticated field riding along in a signed file.
+comment = lines[2]
+if not comment.startswith("trusted comment: "):
+    sys.exit(1)
+if not verify(key, raw + comment[len("trusted comment: "):].encode(), global_signature):
+    sys.exit(1)
+sys.exit(0)
+PYTHON_VERIFY
 }
 
 # Check $1 against the detached signature $2. Three outcomes, because the fixes
 # differ: 0 verified, 1 the signature is wrong, 2 this host has nothing that
 # can check one. Two and one are both fatal to the caller.
+#
+# Three ways to check the same two signatures, tried in order of how much of the
+# work is somebody else's audited code: minisign itself, then an openssl that
+# has ed25519 and blake2b, then the standard-library implementation above. The
+# third one exists because the first two are both absent from a stock Mac, which
+# made every macOS install fail here with nothing to install and no way to skip
+# the check — the refusal was correct and the host was simply unserved.
 verify_signature() {
-    if command -v minisign >/dev/null 2>&1; then
-        minisign -Vqm "$1" -x "$2" -P "$WIZARD_RELEASE_PUBKEY" >/dev/null 2>&1 || return 1
+    local bin
+    if bin="$(find_tool minisign)"; then
+        "$bin" -Vqm "$1" -x "$2" -P "$WIZARD_RELEASE_PUBKEY" >/dev/null 2>&1 || return 1
         return 0
     fi
-    if openssl_can_verify; then
-        verify_signature_openssl "$1" "$2" || return 1
+    if bin="$(find_capable_openssl)"; then
+        verify_signature_openssl "$1" "$2" "$bin" || return 1
+        return 0
+    fi
+    if bin="$(find_python)"; then
+        verify_signature_python "$1" "$2" "$bin" || return 1
         return 0
     fi
     return 2
@@ -1331,7 +1561,7 @@ verify_release_checksums() {
     verify_signature "$sums" "$sig" || rc=$?
     case "$rc" in
         0) ;;
-        2) die "no way to check the release signature on this host: neither minisign nor an openssl with ed25519 and blake2b (macOS ships LibreSSL, which has neither); $(verify_hint)" ;;
+        2) die "no way to check the release signature on this host: no minisign, no openssl with ed25519 and blake2b (macOS ships LibreSSL, which has neither), and no python3; $(verify_hint)" ;;
         *) die "release signature verification FAILED: checksums.txt does not match its signature under the wizard release key; the download is corrupted or tampered with, and nothing was installed" ;;
     esac
     # Signed by the release key *and* signed for this release; announced only

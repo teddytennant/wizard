@@ -12,6 +12,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Fixed
 
+- **macOS installs no longer stop at the signature check.** `install.sh` verifies `checksums.txt` before it unpacks anything and refuses when it can find nothing to verify with, and a stock Mac had nothing: Apple's `openssl` is LibreSSL, which does neither ed25519 over raw bytes nor blake2b, and minisign means installing Homebrew first. The installer now looks past PATH into the Homebrew and MacPorts prefixes (`openssl@3` is keg-only, so it is installed without ever being linked), and falls back to verifying with `python3`, which macOS ships. The check itself is unchanged: same key, same two signatures, same refusal when all three are missing. A CI leg installs on a container stripped down to python3 to keep that path covered.
 - **Docs and CI catch up to signed releases.** v2.1.0 (and every tag since v2.0.0) ships a `checksums.txt.minisig` that verifies against `wizard-release.pub`, so the install-script legs on ubuntu and debian block on push again, and Getting started no longer says the one-liner has to build from source.
 
 ## [2.1.0] - 2026-08-16

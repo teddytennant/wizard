@@ -16,9 +16,12 @@
 # Environment:
 #   SIMULATE_NIXOS=1  create /etc/NIXOS before running, so install.sh takes
 #                     its NixOS branch. See the note where it is handled.
+#   VERIFIER=python   leave python3 as the only signature checker in the
+#                     container. See the note where it is handled.
 set -eu
 
 FLAVOR="${1:-default}"
+VERIFIER="${VERIFIER:-auto}"
 INSTALLER="${INSTALLER:-/src/install.sh}"
 
 log() { printf '\033[1;35m[container]\033[0m %s\n' "$*"; }
@@ -46,10 +49,11 @@ die() {
 # branch this harness exists to exercise: it dies at the signature, one line
 # into the download. That is install.sh being right, and it tests nothing.
 #
-# Which of the two goes in is per-manager on purpose, so the matrix covers both
-# of install.sh's paths rather than one of them four times: minisign where it
-# packages cleanly (alpine, nix), and openssl on debian/ubuntu, where it drives
-# the fallback that hosts without minisign take. openssl is named there even
+# Which of the two goes in is per-manager on purpose, so the matrix covers more
+# than one of install.sh's paths four times: minisign where it packages cleanly
+# (alpine, nix), and openssl on debian/ubuntu, where it drives the fallback that
+# hosts without minisign take. The third path, python3, is what VERIFIER=python
+# below covers. openssl is named there even
 # though it is already present — ca-certificates depends on it, so those legs
 # were verifying through a package nothing asked for, and the day that
 # dependency goes they fail on a missing signature checker with nothing in the
@@ -77,6 +81,53 @@ elif command -v nix-env >/dev/null 2>&1; then
         || die "nix-env could not install the prerequisites"
 else
     die "no supported package manager (apk / apt-get / nix-env) in this image"
+fi
+
+# --- python-only host (VERIFIER=python) ---------------------------------
+#
+# install.sh looks for three signature checkers in turn: minisign, an openssl
+# that does ed25519 and blake2b, then python3. The third exists for macOS, and
+# there is no macOS runner in this matrix, so this leg builds the same shape in
+# a container: no minisign, an `openssl` earlier on PATH that answers the way
+# Apple's LibreSSL does, and a python3. Nothing else about the install changes,
+# which is the point — the release it verifies and the binary it lands are the
+# ones every other leg gets.
+if [ "$VERIFIER" = "python" ]; then
+    log "leaving python3 as the only signature checker in this container"
+    if command -v apk >/dev/null 2>&1; then
+        apk add --no-cache python3 >/dev/null
+    elif command -v apt-get >/dev/null 2>&1; then
+        apt-get install -y -qq --no-install-recommends python3 >/dev/null
+    elif command -v nix-env >/dev/null 2>&1; then
+        nix-env -iA nixpkgs.python3 >/dev/null 2>&1 || die "nix-env could not install python3"
+    fi
+
+    found="$(command -v minisign 2>/dev/null || true)"
+    [ -n "$found" ] && mv "$found" "${found}.hidden"
+
+    # /usr/local/bin comes before /usr/bin on every image here, and install.sh
+    # searches it as one of the Homebrew/MacPorts-shaped prefixes too, so this
+    # is the openssl it finds by both routes.
+    mkdir -p /usr/local/bin
+    cat >/usr/local/bin/openssl <<'STUB'
+#!/bin/sh
+# Stands in for Apple's /usr/bin/openssl: LibreSSL, which has neither ed25519
+# over raw bytes nor blake2b-512, and says so the way LibreSSL says it.
+case "$1" in
+    pkeyutl) echo "pkeyutl: Usage: pkeyutl [-in file] [-out file] [-verify]" >&2 ;;
+    dgst) echo "dgst: Unknown message digest" >&2 ;;
+esac
+exit 1
+STUB
+    chmod +x /usr/local/bin/openssl
+
+    # Assert the shape rather than assume it: an image that still has a working
+    # minisign or openssl would pass this leg without ever running the code it
+    # exists to cover.
+    command -v minisign >/dev/null 2>&1 && die "minisign is still on PATH; this leg would test nothing"
+    openssl dgst -blake2b512 </dev/null >/dev/null 2>&1 \
+        && die "the openssl on PATH can still hash blake2b; this leg would test nothing"
+    command -v python3 >/dev/null 2>&1 || die "no python3 in this image, so nothing here can verify a signature"
 fi
 
 # --- NixOS simulation ---------------------------------------------------

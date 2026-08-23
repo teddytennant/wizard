@@ -3298,6 +3298,231 @@ done
         );
     }
 
+    // -- install.sh, on a host that has almost nothing ------------------------
+    //
+    // The installer has to find *some* way to check a signature, and which ways
+    // exist is a property of the host, not of the release. These tests take the
+    // machine's PATH away and hand back exactly one tool at a time, which is
+    // how a stock Mac (no minisign, and an /usr/bin/openssl that is LibreSSL)
+    // gets tested from Linux CI.
+
+    /// The tools install.sh needs before it can do anything at all, whichever
+    /// verifier it ends up using. Everything past this list is the test's
+    /// subject rather than its scaffolding.
+    const HOST_BASELINE: &[&str] = &[
+        "bash", "curl", "tar", "mktemp", "sed", "grep", "awk", "tr", "od", "dd", "cat", "cp", "rm",
+        "mkdir", "wc", "tail", "head", "uname", "sort",
+    ];
+
+    /// The absolute path to `tool` on the current PATH, or None.
+    fn which(tool: &str) -> Option<PathBuf> {
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|dir| dir.join(tool))
+            .find(|candidate| candidate.is_file())
+    }
+
+    /// Build a bin directory holding symlinks to exactly `tools`, so a script
+    /// run with it as its whole PATH sees that host and no other.
+    fn host_with(dir: &Path, tools: &[&str]) -> PathBuf {
+        let bin = dir.join("host-bin");
+        std::fs::create_dir_all(&bin).expect("host bin dir");
+        for tool in HOST_BASELINE.iter().chain(tools) {
+            if let Some(path) = which(tool) {
+                let link = bin.join(tool);
+                let _ = std::fs::remove_file(&link);
+                std::os::unix::fs::symlink(path, link).expect("symlink tool");
+            }
+        }
+        bin
+    }
+
+    /// Source install.sh on a host holding only `tools` and run its
+    /// `verify_signature` over `file` and `sig`, returning its three-way status:
+    /// 0 verified, 1 the signature is wrong, 2 nothing here can check one.
+    ///
+    /// `VERIFIER_EXTRA_PATHS` is emptied rather than left alone: it exists to
+    /// find a verifier the machine running this test may well have installed,
+    /// and a test that says "python3 and nothing else" has to mean it.
+    fn verify_signature_status(
+        dir: &Path,
+        tools: &[&str],
+        key_line: &str,
+        file: &Path,
+        sig: &Path,
+    ) -> i32 {
+        let bin = host_with(dir, tools);
+        let script = format!(
+            r#"set -u
+source '{installer}'
+set +e
+VERIFIER_EXTRA_PATHS=''
+WIZARD_RELEASE_PUBKEY='{key_line}'
+verify_signature '{file}' '{sig}'
+printf 'STATUS=%s\n' "$?"
+"#,
+            installer = install_sh().display(),
+            file = file.display(),
+            sig = sig.display(),
+        );
+        let out = std::process::Command::new(bin.join("bash"))
+            .arg("-c")
+            .arg(&script)
+            .env("PATH", &bin)
+            .env("HOME", dir)
+            .env("WIZARD_SELFTEST", "1")
+            .current_dir(dir)
+            .output()
+            .expect("run bash");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("STATUS="))
+            .unwrap_or_else(|| panic!("verify_signature printed no status:\n{stdout}\n{stderr}"))
+            .trim()
+            .parse()
+            .expect("a numeric status")
+    }
+
+    /// A minted release: the public key line install.sh should carry, the
+    /// signed `checksums.txt`, and its `.minisig`, written into `dir`.
+    fn minted_release(dir: &Path, seed: u8) -> (String, PathBuf, PathBuf) {
+        let (signing, id, public) = test_key(seed);
+        let key_line = public.lines().nth(1).expect("key line").to_string();
+        let checksums = b"d3adbeef  wizard-x86_64-unknown-linux-gnu.tar.gz\n";
+        let signature = sign_release(
+            &signing,
+            id,
+            b"ED",
+            checksums,
+            "wizard v9.9.9 checksums, signed by the wizard release key",
+        );
+        let file = dir.join("checksums.txt");
+        let sig = dir.join("checksums.txt.minisig");
+        std::fs::write(&file, checksums).expect("write checksums");
+        std::fs::write(&sig, signature).expect("write signature");
+        (key_line, file, sig)
+    }
+
+    #[test]
+    fn install_sh_verifies_a_release_with_python_and_nothing_else() {
+        // The macOS case, and the reason this path exists: a host with no
+        // minisign and no openssl that can do ed25519 and blake2b used to have
+        // no way to install at all — install.sh refused, correctly, and left
+        // the user with a Homebrew detour before they could run one command.
+        // Nothing about the check is relaxed here: the same two signatures over
+        // the same bytes, and every doctored release below is still refused.
+        let Some(_) = which("python3") else {
+            eprintln!("no python3 on PATH; skipping the python-only verifier test");
+            return;
+        };
+        let tmp = TempDir::new();
+        let dir = tmp.0.as_path();
+        let (key_line, file, sig) = minted_release(dir, 61);
+
+        assert_eq!(
+            verify_signature_status(dir, &["python3"], &key_line, &file, &sig),
+            0,
+            "a genuine signature must verify with python3 alone"
+        );
+
+        // The payload edited after signing.
+        let tampered = dir.join("tampered.txt");
+        std::fs::write(
+            &tampered,
+            b"eeeeeeee  wizard-x86_64-unknown-linux-gnu.tar.gz\n",
+        )
+        .expect("write tampered");
+        assert_eq!(
+            verify_signature_status(dir, &["python3"], &key_line, &tampered, &sig),
+            1
+        );
+
+        // A signature by another key, which is what a release signed by anyone
+        // else looks like from here.
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).expect("scratch dir for a second key");
+        let (other_line, _, _) = minted_release(&other, 62);
+        assert_eq!(
+            verify_signature_status(dir, &["python3"], &other_line, &file, &sig),
+            1
+        );
+
+        // The trusted comment rewritten after signing: it is inside the signed
+        // envelope, and require_signature_names_tag reads it to decide which
+        // release these bytes are, so an unchecked one is a signed downgrade.
+        let doctored = dir.join("doctored.minisig");
+        let original = std::fs::read_to_string(&sig).expect("read signature");
+        let mut lines: Vec<&str> = original.lines().collect();
+        lines[2] = "trusted comment: wizard v1.0.0 checksums, signed by the wizard release key";
+        std::fs::write(&doctored, lines.join("\n") + "\n").expect("write doctored");
+        assert_eq!(
+            verify_signature_status(dir, &["python3"], &key_line, &file, &doctored),
+            1,
+            "the trusted comment is signed data and has to be checked"
+        );
+    }
+
+    #[test]
+    fn install_sh_refuses_when_the_host_can_check_nothing() {
+        // The remaining honest outcome. A host with no checker must still get
+        // status 2 — the one the caller turns into "no way to check the release
+        // signature on this host", rather than a silent install.
+        let tmp = TempDir::new();
+        let dir = tmp.0.as_path();
+        let (key_line, file, sig) = minted_release(dir, 63);
+        assert_eq!(
+            verify_signature_status(dir, &[], &key_line, &file, &sig),
+            2,
+            "a host with nothing to verify with must refuse, not install"
+        );
+    }
+
+    #[test]
+    fn install_sh_uses_openssl_only_when_that_openssl_can_actually_verify() {
+        // Whether this asserts 0 or 2 depends on the machine, and both are the
+        // property under test: an openssl that has ed25519 and blake2b verifies
+        // the release, and one that does not (LibreSSL, which is what a Mac
+        // calls `openssl`) is passed over rather than reported as a bad
+        // signature. The probe decides, so this test runs everywhere.
+        let Some(openssl) = which("openssl") else {
+            eprintln!("no openssl on PATH; skipping the openssl verifier test");
+            return;
+        };
+        let tmp = TempDir::new();
+        let dir = tmp.0.as_path();
+        let (key_line, file, sig) = minted_release(dir, 64);
+
+        let capable = std::process::Command::new(&openssl)
+            .args(["dgst", "-blake2b512"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success())
+            && std::process::Command::new(&openssl)
+                .args(["pkeyutl", "-help"])
+                .output()
+                .is_ok_and(|out| {
+                    String::from_utf8_lossy(&out.stdout).contains("-rawin")
+                        || String::from_utf8_lossy(&out.stderr).contains("-rawin")
+                });
+
+        let status = verify_signature_status(dir, &["openssl"], &key_line, &file, &sig);
+        if capable {
+            assert_eq!(status, 0, "a capable openssl must verify the release");
+            let tampered = dir.join("tampered.txt");
+            std::fs::write(&tampered, b"eeeeeeee  wizard.tar.gz\n").expect("write tampered");
+            assert_eq!(
+                verify_signature_status(dir, &["openssl"], &key_line, &tampered, &sig),
+                1
+            );
+        } else {
+            assert_eq!(
+                status, 2,
+                "an openssl that cannot do this must be passed over, not trusted"
+            );
+        }
+    }
+
     /// File names directly inside `dir`, for leftover-scratch assertions.
     fn leftovers(dir: &Path) -> Vec<String> {
         std::fs::read_dir(dir)
