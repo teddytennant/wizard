@@ -821,6 +821,7 @@ impl Agent {
         // (auto-approve) and interview (decline to ask).
         let omakase = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let web = config.web.clone();
+        let shell = config.shell.clone();
 
         // Checkpoints: per-file snapshots of everything this agent edits.
         // Old turns are garbage-collected once per session, here.
@@ -860,6 +861,7 @@ impl Agent {
         let cancel = CancelHandle::default();
         let mut ctx = ToolContext::new(project_root)
             .with_web(web)
+            .with_shell(shell)
             .with_checkpoints(Arc::clone(&checkpoints))
             .with_usage(Arc::clone(&usage))
             .with_cancel(cancel.clone());

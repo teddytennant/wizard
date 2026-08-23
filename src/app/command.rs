@@ -7,6 +7,7 @@
 //! through, so the terminal and the window cannot answer `/goal` differently
 //! again.
 
+use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -63,9 +64,14 @@ async fn git_output(root: &Path, args: &[&str]) -> Result<String> {
 /// diff`, so without the third section a tree whose only changes are new
 /// files reads as "clean" — the diff sidebar looks broken.
 pub(super) async fn git_diff_text(root: &Path) -> Result<String> {
-    let unstaged = git_output(root, &["diff"]).await?;
-    let staged = git_output(root, &["diff", "--staged"]).await?;
-    let untracked = git_output(root, &["ls-files", "--others", "--exclude-standard"]).await?;
+    // Three independent reads of the same tree, so they run as one round of
+    // three processes rather than three rounds of one. `/diff` is a keypress
+    // with a person waiting on the pane it opens.
+    let (unstaged, staged, untracked) = tokio::try_join!(
+        git_output(root, &["diff"]),
+        git_output(root, &["diff", "--staged"]),
+        git_output(root, &["ls-files", "--others", "--exclude-standard"]),
+    )?;
     let mut text = String::new();
     if !unstaged.trim().is_empty() {
         text.push_str(&unstaged);
@@ -77,16 +83,34 @@ pub(super) async fn git_diff_text(root: &Path) -> Result<String> {
         text.push_str("# --- staged ---\n");
         text.push_str(&staged);
     }
-    let mut untracked_text = String::new();
-    for file in untracked.lines().filter(|l| !l.trim().is_empty()) {
+    // One `git diff --no-index` per untracked file, and they used to be run
+    // one after another: a tree with a hundred new files in it was a hundred
+    // sequential process spawns before the pane could paint. They are
+    // independent, so they go out together and the results are concatenated in
+    // the order git listed them — which is the order the old loop produced, so
+    // the pane reads the same.
+    let new_files: Vec<&str> = untracked
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
         // Skip Wizard's own session state (.wizard/checkpoints, snapshots,
         // etc.) — it's an implementation detail, not the user's work, and
         // dumping it here makes the diff sidebar look broken.
-        if is_wizard_state_path(file) {
-            continue;
-        }
-        untracked_text.push_str(&git_diff_untracked(root, file).await);
-    }
+        .filter(|file| !is_wizard_state_path(file))
+        .collect();
+    // Bounded: a tree can hold thousands of untracked files, and answering a
+    // keypress by forking one git per file all at once is a worse failure than
+    // the one being fixed.
+    const DIFF_CONCURRENCY: usize = 16;
+    let pending: Vec<_> = new_files
+        .iter()
+        .map(|file| git_diff_untracked(root, file))
+        .collect();
+    let untracked_text: String = futures_util::stream::iter(pending)
+        .buffered(DIFF_CONCURRENCY)
+        .collect::<Vec<String>>()
+        .await
+        .concat();
     if !untracked_text.trim().is_empty() {
         if !text.is_empty() {
             text.push('\n');

@@ -214,6 +214,7 @@ mod tests {
             stderr: "fatal: boom\n".to_string(),
             code: Some(128),
             timed_out: None,
+            detached: None,
         };
         assert_eq!(git_failure(&result, "fallback").content, "fatal: boom");
 
@@ -222,6 +223,7 @@ mod tests {
             stderr: String::new(),
             code: Some(1),
             timed_out: None,
+            detached: None,
         };
         let out = git_failure(&silent, "git status failed");
         assert!(out.is_error);
@@ -235,6 +237,7 @@ mod tests {
             stderr: String::new(),
             code: None,
             timed_out: Some(30),
+            detached: None,
         };
         let out = git_failure(&result, "git diff failed");
         assert!(out.is_error);

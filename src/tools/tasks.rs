@@ -210,13 +210,44 @@ impl TaskRegistry {
         timeout: Duration,
     ) -> u32 {
         let id = self.add(command_line);
+        let readers = vec![
+            tokio::spawn(read_into(Arc::clone(self), id, child.stdout.take())),
+            tokio::spawn(read_into(Arc::clone(self), id, child.stderr.take())),
+        ];
+        self.attach(id, child, readers, timeout);
+        id
+    }
+
+    /// Put an already-registered id in charge of a running child: install its
+    /// kill handle, enforce `timeout`, and record the exit once `readers` have
+    /// drained.
+    ///
+    /// [`spawn_with_timeout`](Self::spawn_with_timeout) is this plus the two
+    /// readers it takes off the child itself. The split exists for the
+    /// *handover* case: `execute` runs a foreground command with its own
+    /// capture already attached to those pipes, and when the command outlives
+    /// its foreground budget the child is handed here rather than killed (see
+    /// [`crate::tools::shell::run_command`]). Its readers cannot be recreated —
+    /// the pipe handles moved into them when the command started — so they come
+    /// along as `readers`, already re-aimed at this task's buffer, and this
+    /// function never touches `child.stdout`/`child.stderr`.
+    ///
+    /// The caller owns the seeding: [`add`](Self::add) for the id, then
+    /// [`append_output`](Self::append_output) for whatever the command said
+    /// before the handover, then this. Doing it in that order is what makes
+    /// `task_output` show the whole command rather than the tail after the
+    /// switch.
+    pub fn attach(
+        self: &Arc<Self>,
+        id: u32,
+        mut child: tokio::process::Child,
+        readers: Vec<tokio::task::JoinHandle<()>>,
+        timeout: Duration,
+    ) {
         let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
         if let Some(entry) = self.lock().get_mut(&id) {
             entry.kill = Some(kill_tx);
         }
-
-        let out_task = tokio::spawn(read_into(Arc::clone(self), id, child.stdout.take()));
-        let err_task = tokio::spawn(read_into(Arc::clone(self), id, child.stderr.take()));
 
         let registry = Arc::clone(self);
         tokio::spawn(async move {
@@ -249,11 +280,11 @@ impl TaskRegistry {
             };
             // Let the readers capture whatever output is still buffered
             // before the task becomes drainable.
-            let _ = out_task.await;
-            let _ = err_task.await;
+            for reader in readers {
+                let _ = reader.await;
+            }
             registry.finish(id, status);
         });
-        id
     }
 
     /// Record the final status of a task and drop its kill handle.
@@ -382,6 +413,15 @@ async fn read_into(
     }
 }
 
+/// Longest a `task_output` call will block waiting for a task to finish.
+/// Matches the `execute` ceiling: this is the same "wait for a command" the
+/// foreground path caps there, just asked after the fact.
+const MAX_WAIT: Duration = Duration::from_secs(600);
+
+/// How often a blocking `task_output` re-reads the status. Short enough that
+/// the call returns promptly after the exit, long enough to be free.
+const WAIT_POLL: Duration = Duration::from_millis(200);
+
 /// Arguments for [`TaskOutputTool`].
 #[derive(Debug, Deserialize)]
 struct TaskOutputArgs {
@@ -389,6 +429,10 @@ struct TaskOutputArgs {
     /// How many bytes of the output tail to return (default 20000).
     #[serde(default)]
     tail_bytes: Option<usize>,
+    /// Block up to this many seconds for the task to finish before answering
+    /// (default 0: answer with whatever it has right now).
+    #[serde(default)]
+    wait_secs: Option<u64>,
 }
 
 /// `task_output` — buffered output and status of a background task.
@@ -402,8 +446,10 @@ impl Tool for TaskOutputTool {
 
     fn description(&self) -> &str {
         "Return the status and buffered output (stdout+stderr tail) of a background \
-         task started with execute run_in_background. For services that must outlive \
-         the agent, use `nohup ... &` and ordinary shell log checks instead."
+         task — one you started with execute run_in_background, or one execute moved \
+         to the background when it outran its foreground timeout. Pass wait_secs to \
+         block until it finishes instead of answering immediately. For services that \
+         must outlive the agent, use `nohup ... &` and ordinary shell log checks."
     }
 
     fn parameters(&self) -> Value {
@@ -411,7 +457,8 @@ impl Tool for TaskOutputTool {
             "type": "object",
             "properties": {
                 "id": { "type": "integer", "description": "Background task id" },
-                "tail_bytes": { "type": "integer", "description": "How many bytes of the output tail to return (default 20000)" }
+                "tail_bytes": { "type": "integer", "description": "How many bytes of the output tail to return (default 20000)" },
+                "wait_secs": { "type": "integer", "description": "Block up to this many seconds for the task to finish (default 0, max 600). Use it when you genuinely need the result before going on" }
             },
             "required": ["id"]
         })
@@ -427,6 +474,35 @@ impl Tool for TaskOutputTool {
             .tail_bytes
             .unwrap_or(DEFAULT_TAIL_BYTES)
             .min(MAX_TAIL_BYTES);
+        if ctx.tasks.status(args.id).is_none() {
+            return Ok(ToolOutput::error(format!(
+                "no background task #{}",
+                args.id
+            )));
+        }
+
+        // The deliberate wait. `execute` hands a long command over rather than
+        // killing it, which is right when the turn has something else to do
+        // and wrong when it does not — this is how the model says it does not,
+        // without re-running the command under a bigger budget. Cancellation
+        // is observed here for the same reason `execute` observes it: the run
+        // loop only checks between tool calls, which is too late for a call
+        // that is deliberately parked.
+        if let Some(secs) = args.wait_secs.filter(|secs| *secs > 0) {
+            let deadline = Instant::now() + Duration::from_secs(secs).min(MAX_WAIT);
+            while Instant::now() < deadline {
+                match ctx.tasks.status(args.id) {
+                    Some(status) if status.is_finished() => break,
+                    None => break,
+                    Some(_) => {}
+                }
+                tokio::select! {
+                    () = crate::agent::cancelled(ctx.cancel.as_ref()) => break,
+                    () = tokio::time::sleep(WAIT_POLL.min(deadline - Instant::now())) => {}
+                }
+            }
+        }
+
         let Some((task, output)) = ctx.tasks.output(args.id, tail_bytes) else {
             return Ok(ToolOutput::error(format!(
                 "no background task #{}",
@@ -657,6 +733,49 @@ mod tests {
         let drained = registry.drain_completed();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].status, TaskStatus::TimedOut);
+    }
+
+    /// The override on the other side of the handover. `execute` gives the
+    /// turn back after a short budget, which is right when there is something
+    /// else to do and wrong when there is not — `wait_secs` is how the model
+    /// says there is not, without re-running the command under a bigger
+    /// number and paying for the first attempt twice.
+    #[tokio::test]
+    async fn task_output_can_wait_for_the_task_to_finish() {
+        let registry = Arc::new(TaskRegistry::new());
+        let id = registry.spawn("sleep", spawn_sh("sleep 1; echo landed"));
+        let ctx = ctx_with(&registry);
+
+        // Without the wait it answers with what it has, which is "running".
+        let now = TaskOutputTool
+            .execute(json!({ "id": id }), &ctx)
+            .await
+            .unwrap();
+        assert!(now.content.contains("[running]"), "{}", now.content);
+
+        let waited = TaskOutputTool
+            .execute(json!({ "id": id, "wait_secs": 30 }), &ctx)
+            .await
+            .unwrap();
+        assert!(waited.content.contains("[exit 0]"), "{}", waited.content);
+        assert!(waited.content.contains("landed"), "{}", waited.content);
+    }
+
+    /// A wait that runs out reports the task as it stands rather than failing:
+    /// "still running" is an answer, and the task is still there to ask again.
+    #[tokio::test]
+    async fn a_wait_that_expires_reports_the_task_still_running() {
+        let registry = Arc::new(TaskRegistry::new());
+        let id = registry.spawn("sleep", spawn_sh("sleep 30"));
+        let ctx = ctx_with(&registry);
+
+        let out = TaskOutputTool
+            .execute(json!({ "id": id, "wait_secs": 1 }), &ctx)
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("[running]"), "{}", out.content);
+        registry.kill_all();
     }
 
     #[tokio::test]

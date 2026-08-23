@@ -404,6 +404,41 @@ impl Default for WebConfig {
     }
 }
 
+/// Shell tool settings (`[shell]` in `config.toml`).
+///
+/// These govern `execute` only. The git tools, `search_files` and scripted
+/// tools run short commands whose *result* is the whole point of the call, so
+/// they keep their own fixed budgets and are not configurable here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShellConfig {
+    /// How long an `execute` call that does not name its own `timeout_secs`
+    /// waits in the foreground before the command becomes a background task
+    /// (default 30 seconds).
+    ///
+    /// This is short on purpose, and it is short *because* the command is no
+    /// longer killed when it runs out. The old budget was two minutes and its
+    /// end was a death sentence, so the number had to cover the longest
+    /// command anybody might reasonably run — which meant every wedged command
+    /// cost two minutes of a turn doing nothing, and every genuinely long one
+    /// cost two minutes and then died anyway. With the handover in place the
+    /// two questions come apart: this one is only "how long is it worth
+    /// blocking the turn for an answer", and half a minute is a generous
+    /// answer to that. The command itself gets [`BACKGROUND_TIMEOUT`] either
+    /// way.
+    ///
+    /// [`BACKGROUND_TIMEOUT`]: crate::tools::tasks::BACKGROUND_TIMEOUT
+    pub timeout_secs: u64,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: crate::tools::shell::DEFAULT_FOREGROUND_SECS,
+        }
+    }
+}
+
 /// Per-file checkpoint settings (`[checkpoints]` in `config.toml`).
 /// Snapshots of files edited by Wizard land under
 /// `<project>/.wizard/checkpoints/` and power `/rewind` and the perpetual
@@ -980,6 +1015,10 @@ pub struct Config {
     /// Native web tool settings (`web_fetch` / `web_search`).
     #[serde(default)]
     pub web: WebConfig,
+    /// `execute` budgets: how long a command runs in the foreground before it
+    /// is handed to the background task registry.
+    #[serde(default)]
+    pub shell: ShellConfig,
     /// Per-file checkpoint settings (snapshots powering `/rewind`).
     #[serde(default)]
     pub checkpoints: CheckpointConfig,
@@ -1057,6 +1096,7 @@ impl Default for Config {
             gateway: GatewayConfig::default(),
             ui: UiConfig::default(),
             web: WebConfig::default(),
+            shell: ShellConfig::default(),
             checkpoints: CheckpointConfig::default(),
             fleet: FleetConfig::default(),
             update: UpdateConfig::default(),
@@ -1787,6 +1827,7 @@ mod tests {
                 search_api_key_env: Some("BRAVE_API_KEY".to_string()),
                 search_model: Some("grok-4.6".to_string()),
             },
+            shell: ShellConfig { timeout_secs: 45 },
             checkpoints: CheckpointConfig { keep_turns: 12 },
             fleet: FleetConfig {
                 max_minutes: 45,

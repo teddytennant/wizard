@@ -27,8 +27,21 @@ const MAX_LIST_ENTRIES: usize = 500;
 /// glob over a huge tree cannot spin forever.
 const MAX_WALK_VISITS: usize = 100_000;
 
+/// Timeout for `git ls-files` when `list_files` uses it to honour
+/// `.gitignore`; the manual walk takes over when it elapses.
+const LS_FILES_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Timeout for the external search process (`rg`/`grep`).
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
+///
+/// Twenty seconds, not the minute it used to be. `rg` walks a large
+/// repository in well under a second and the fallback `grep` in a few, so a
+/// search still going after twenty is not a slow search — it is a pattern
+/// with catastrophic backtracking, or a path that wandered into a network
+/// mount or `/proc`. None of those get better with another forty seconds, and
+/// the matches found so far come back either way (the `timed_out` branch in
+/// [`SearchFilesTool::execute`]), so the only thing the longer budget bought
+/// was a longer stall.
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Arguments for [`ReadFileTool`].
 #[derive(Debug, Deserialize)]
@@ -474,12 +487,18 @@ async fn list_recursive(
 
 /// `git ls-files --cached --others --exclude-standard` relative to `dir`.
 /// Returns `None` when git is unavailable or `dir` is not in a repository.
+///
+/// The budget is short on purpose: this is an index read, which is fast even
+/// on a huge repository, and the fallback when it does not answer is a manual
+/// walk that produces the same listing. Waiting half a minute to find out that
+/// git is wedged, when there is a working answer on the other side of giving
+/// up, is time spent for nothing.
 async fn git_tracked_files(tool: &str, dir: &Path) -> Option<Vec<String>> {
     let mut command = Command::new("git");
     command
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(dir);
-    match run_command(tool, command, Duration::from_secs(30)).await {
+    match run_command(tool, command, LS_FILES_TIMEOUT).await {
         Ok(result) if result.code == Some(0) => Some(
             result
                 .stdout

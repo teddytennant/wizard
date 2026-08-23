@@ -146,6 +146,11 @@ pub struct ToolContext {
     /// Settings for the native web tools (`[web]` in `config.toml`), set by
     /// the agent at construction; defaults elsewhere.
     pub web: Arc<crate::config::WebConfig>,
+    /// Settings for the `execute` tool (`[shell]` in `config.toml`): the
+    /// default foreground budget and when a silent command is handed off to
+    /// the background task registry. Set by the agent at construction;
+    /// defaults elsewhere.
+    pub shell: Arc<crate::config::ShellConfig>,
     /// Per-file checkpoint store, set by the agent at construction. The
     /// dispatcher and the subagent loop snapshot `Edit`-class targets into
     /// it before execution. `None` outside an agent (direct registry
@@ -181,6 +186,7 @@ impl ToolContext {
             cancel: None,
             console: ConsoleAccess::None,
             web: Arc::new(crate::config::WebConfig::default()),
+            shell: Arc::new(crate::config::ShellConfig::default()),
             checkpoints: None,
             images: None,
             command_dispatch: CommandDispatch::None,
@@ -205,6 +211,12 @@ impl ToolContext {
     /// This context with `web` tool settings applied (agent construction).
     pub fn with_web(mut self, web: crate::config::WebConfig) -> Self {
         self.web = Arc::new(web);
+        self
+    }
+
+    /// This context with `execute` settings applied (agent construction).
+    pub fn with_shell(mut self, shell: crate::config::ShellConfig) -> Self {
+        self.shell = Arc::new(shell);
         self
     }
 

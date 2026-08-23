@@ -59,7 +59,20 @@ use crate::agent::{AgentEvent, ConsoleGate, ConsoleInput};
 use crate::platform::process::ProcessGroupExt;
 use crate::platform::shell;
 
-/// Default command timeout when the model does not specify one.
+/// Default `execute` foreground budget, in seconds — the value
+/// [`ShellConfig`](crate::config::ShellConfig) defaults to, kept here so the
+/// tool's own description cannot drift from it.
+///
+/// Short because reaching it is a handover, not a kill: see [`OnTimeout`].
+pub const DEFAULT_FOREGROUND_SECS: u64 = 30;
+
+/// Default budget for a command whose caller names none.
+///
+/// No longer `execute`'s: that one takes
+/// [`ShellConfig::timeout_secs`](crate::config::ShellConfig) and hands the
+/// command over at the end of it. What is left are the scripted-tool and Lua
+/// paths, where the end of the budget is still a kill — so the number still
+/// has to cover the longest run anybody legitimately makes.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Hard upper bound a model-supplied timeout is clamped to.
@@ -99,6 +112,20 @@ pub(crate) struct CommandResult {
     /// Set (to the budget in seconds) when the command was killed at the
     /// timeout. `stdout`/`stderr` then carry whatever was produced first.
     pub timed_out: Option<u64>,
+    /// Set when the command outlived its foreground budget and was handed to
+    /// the background task registry instead of being killed
+    /// ([`OnTimeout::Detach`]). `stdout`/`stderr` carry what it had said by
+    /// then; the rest lands in the task's buffer.
+    pub detached: Option<Detached>,
+}
+
+/// A foreground command that became a background task rather than a corpse.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Detached {
+    /// Task id, for `task_output` and `task_kill`.
+    pub id: u32,
+    /// Seconds of foreground time it had before the handover.
+    pub after: u64,
 }
 
 /// Bytes of one output stream kept while the command runs: the first
@@ -176,30 +203,66 @@ impl CappedBuffer {
     }
 }
 
-/// One piped output stream read incrementally into a shared buffer, so a
-/// timeout can still report what the command produced before it was killed.
+/// Where a [`Pipe`]'s reader puts what it reads.
+///
+/// It is `Local` for the whole life of a command that finishes inside its
+/// budget, which is nearly all of them. A command that outlives its budget is
+/// handed to the background task registry rather than killed
+/// ([`OnTimeout::Detach`]), and from that moment the same reader has to append
+/// somewhere else: `task_output` reads the registry's buffer, not this one.
+///
+/// Swapping the sink out from under the reader is what makes that handover
+/// possible at all. The pipe handle moved *into* the reader task when the
+/// command started and cannot be taken back out, so the alternatives were to
+/// kill the reader (losing the rest of the output) or to give it a destination
+/// that can change.
+enum Capture {
+    Local(CappedBuffer),
+    Task(Arc<super::tasks::TaskRegistry>, u32),
+}
+
+impl Capture {
+    fn append(&mut self, data: &[u8]) {
+        match self {
+            Capture::Local(buf) => buf.append(data),
+            Capture::Task(tasks, id) => tasks.append_output(*id, data),
+        }
+    }
+
+    /// Everything captured locally so far, leaving an empty buffer behind.
+    fn take(&mut self) -> String {
+        match self {
+            Capture::Local(buf) => std::mem::take(buf).into_string(),
+            Capture::Task(..) => String::new(),
+        }
+    }
+}
+
+/// One piped output stream read incrementally into a shared sink, so a
+/// timeout can still report what the command produced before it was killed —
+/// or hand the rest of it to a background task.
 struct Pipe {
-    buf: Arc<Mutex<CappedBuffer>>,
+    sink: Arc<Mutex<Capture>>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Pipe {
     fn new(stream: Option<impl tokio::io::AsyncRead + Unpin + Send + 'static>) -> Self {
-        let buf = Arc::new(Mutex::new(CappedBuffer::default()));
+        let sink = Arc::new(Mutex::new(Capture::Local(CappedBuffer::default())));
         let task = tokio::spawn({
-            let buf = Arc::clone(&buf);
+            let sink = Arc::clone(&sink);
             async move {
                 let Some(mut stream) = stream else { return };
                 let mut chunk = [0u8; 8192];
                 loop {
                     match stream.read(&mut chunk).await {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => buf.lock().unwrap().append(&chunk[..n]),
+                        Ok(n) => sink.lock().unwrap().append(&chunk[..n]),
                     }
                 }
             }
         });
-        Self { buf, task }
+        Self { sink, task }
     }
 
     /// Wait up to `grace` for the reader to hit EOF, then take whatever is
@@ -209,8 +272,31 @@ impl Pipe {
         if tokio::time::timeout(grace, &mut task).await.is_err() {
             task.abort();
         }
-        let taken = std::mem::take(&mut *self.buf.lock().unwrap());
-        taken.into_string()
+        self.sink.lock().unwrap().take()
+    }
+
+    /// Re-aim this pipe at background task `id`: seed the task's buffer with
+    /// what has been read so far and leave the reader running against it.
+    /// Returns that seed (for the tool result) and the reader, which the
+    /// registry awaits before recording the exit.
+    fn hand_over(
+        self,
+        tasks: &Arc<super::tasks::TaskRegistry>,
+        id: u32,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let Pipe { sink, task } = self;
+        let mut sink = sink.lock().unwrap();
+        let taken = std::mem::replace(&mut *sink, Capture::Task(Arc::clone(tasks), id));
+        let text = match taken {
+            Capture::Local(buf) => buf.into_string(),
+            Capture::Task(..) => String::new(),
+        };
+        // Seeded while the lock is held. Releasing it first would let a chunk
+        // the command wrote in between reach the task's buffer ahead of the
+        // output that preceded it, and `task_output` would read out of order.
+        tasks.append_output(id, text.as_bytes());
+        drop(sink);
+        (text, task)
     }
 }
 
@@ -224,14 +310,54 @@ async fn kill_group(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
 }
 
+/// What becomes of a foreground command that outlives its budget.
+pub(crate) enum OnTimeout<'a> {
+    /// Kill the process group and return the partial output with `timed_out`
+    /// set.
+    ///
+    /// What every internal caller wants. The git tools, `search_files` and
+    /// scripted tools run short commands whose *result* is the entire point of
+    /// the call — a `git diff` still running after thirty seconds has nothing
+    /// useful left to give — and there is nobody to hand a task id to.
+    Kill,
+    /// Hand the still-running child to the background task registry instead,
+    /// and return with `detached` set.
+    ///
+    /// Killing a command at its budget throws away everything it was about to
+    /// do, and leaves the model one move: run it again with a bigger number,
+    /// paying for the first attempt twice. Detaching keeps the work, keeps the
+    /// output (`task_output`), keeps the ability to stop it (`task_kill`), and
+    /// announces the exit when it comes — so the turn moves on at the budget
+    /// rather than stalling at it. `execute` is the only caller, because it is
+    /// the only tool whose commands are worth continuing without an answer.
+    ///
+    /// This is what lets the budget itself be short. See
+    /// [`ShellConfig::timeout_secs`](crate::config::ShellConfig).
+    Detach {
+        tasks: &'a Arc<super::tasks::TaskRegistry>,
+        /// Command line, as the task registry should label it.
+        label: &'a str,
+    },
+}
+
 /// Spawn `command` with piped stdio, wait for it under `timeout`, and capture
 /// its output. On timeout the whole process group is killed and the partial
 /// output is returned with `timed_out` set. Shared by `execute`, the git
 /// tools, `search_files`, and scripted tools.
 pub(crate) async fn run_command(
     tool: &str,
+    command: Command,
+    timeout: Duration,
+) -> Result<CommandResult, ToolError> {
+    run_command_with(tool, command, timeout, OnTimeout::Kill).await
+}
+
+/// [`run_command`] with an explicit policy for outliving the budget.
+pub(crate) async fn run_command_with(
+    tool: &str,
     mut command: Command,
     timeout: Duration,
+    on_timeout: OnTimeout<'_>,
 ) -> Result<CommandResult, ToolError> {
     command
         .stdin(Stdio::null())
@@ -250,29 +376,66 @@ pub(crate) async fn run_command(
     let stdout = Pipe::new(child.stdout.take());
     let stderr = Pipe::new(child.stderr.take());
 
-    let mut timed_out = None;
-    let code = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => status.code(),
+    let started = Instant::now();
+    let exited = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => Some(status.code()),
         Ok(Err(err)) => {
             return Err(ToolError::Execution {
                 tool: tool.to_string(),
                 source: anyhow::Error::new(err).context("failed to wait for process"),
             });
         }
-        Err(_) => {
-            kill_group(&mut child).await;
-            timed_out = Some(timeout.as_secs());
-            None
-        }
+        Err(_) => None,
     };
 
-    let (stdout, stderr) = tokio::join!(stdout.finish(DRAIN_GRACE), stderr.finish(DRAIN_GRACE));
-    Ok(CommandResult {
-        stdout,
-        stderr,
-        code,
-        timed_out,
-    })
+    if let Some(code) = exited {
+        let (stdout, stderr) = tokio::join!(stdout.finish(DRAIN_GRACE), stderr.finish(DRAIN_GRACE));
+        return Ok(CommandResult {
+            stdout,
+            stderr,
+            code,
+            timed_out: None,
+            detached: None,
+        });
+    }
+
+    match on_timeout {
+        OnTimeout::Detach { tasks, label, .. } => {
+            // Registered before either pipe is re-aimed, because the id is
+            // what they are re-aimed at.
+            let id = tasks.add(label);
+            let (stdout, out_reader) = stdout.hand_over(tasks, id);
+            let (stderr, err_reader) = stderr.hand_over(tasks, id);
+            tasks.attach(
+                id,
+                child,
+                vec![out_reader, err_reader],
+                super::tasks::BACKGROUND_TIMEOUT,
+            );
+            Ok(CommandResult {
+                stdout,
+                stderr,
+                code: None,
+                timed_out: None,
+                detached: Some(Detached {
+                    id,
+                    after: started.elapsed().as_secs(),
+                }),
+            })
+        }
+        OnTimeout::Kill => {
+            kill_group(&mut child).await;
+            let (stdout, stderr) =
+                tokio::join!(stdout.finish(DRAIN_GRACE), stderr.finish(DRAIN_GRACE));
+            Ok(CommandResult {
+                stdout,
+                stderr,
+                code: None,
+                timed_out: Some(timeout.as_secs()),
+                detached: None,
+            })
+        }
+    }
 }
 
 /// Which of a child's two output streams a chunk arrived on.
@@ -387,6 +550,7 @@ pub(crate) async fn run_command_interactive(
     label: &str,
     events: &mpsc::Sender<AgentEvent>,
     cancel: Option<&crate::agent::CancelHandle>,
+    on_timeout: OnTimeout<'_>,
 ) -> Result<CommandResult, ToolError> {
     command
         .stdin(Stdio::piped())
@@ -439,8 +603,12 @@ pub(crate) async fn run_command_interactive(
     let mut chunks_open = true;
 
     let mut code = None;
-    let mut timed_out = None;
     let mut exited = false;
+    // Set when the loop ended because the unattended budget ran out. That is a
+    // handover when there is a registry to hand to and a kill otherwise, which
+    // is a decision the code after the loop makes.
+    let mut over_budget = false;
+    let started = Instant::now();
 
     loop {
         let wake_in = running_since.map(|since| {
@@ -546,7 +714,7 @@ pub(crate) async fn run_command_interactive(
                 // reached with a stopped clock.
                 let Some(since) = running_since else { continue };
                 if spent + since.elapsed() >= timeout {
-                    timed_out = Some(timeout.as_secs());
+                    over_budget = true;
                     break;
                 }
                 // Not the budget, so it was the prompt threshold: the child's
@@ -573,6 +741,49 @@ pub(crate) async fn run_command_interactive(
     // Close our end of stdin before draining: a child still reading it would
     // otherwise outlive the loop that was feeding it.
     drop(stdin);
+
+    // The command outlived its budget (or went quiet past the early point) and
+    // there is a registry to hand it to: it becomes a background task rather
+    // than a corpse. Nothing is killed and nothing is drained here — the two
+    // pumps keep feeding the channel, and a drain task appends what arrives to
+    // the task's buffer for `task_output` to read. The console closes either
+    // way: the command is no longer this turn's, and a writer into a child
+    // nobody is watching is not a console.
+    if !exited
+        && over_budget
+        && let OnTimeout::Detach { tasks, label } = &on_timeout
+    {
+        let id = tasks.add(*label);
+        let stdout = stdout.into_string();
+        let stderr = stderr.into_string();
+        // Seeded before the drain starts, so the task's buffer reads in the
+        // order the command wrote: everything up to the handover, then
+        // everything after it.
+        tasks.append_output(id, stdout.as_bytes());
+        tasks.append_output(id, stderr.as_bytes());
+        let drain = {
+            let tasks = Arc::clone(tasks);
+            tokio::spawn(async move {
+                while let Some((_, bytes)) = chunks.recv().await {
+                    tasks.append_output(id, &bytes);
+                }
+            })
+        };
+        tasks.attach(id, child, vec![drain], super::tasks::BACKGROUND_TIMEOUT);
+        gate.cancel();
+        let _ = events.send(AgentEvent::ConsoleClosed { gate }).await;
+        return Ok(CommandResult {
+            stdout,
+            stderr,
+            code: None,
+            timed_out: None,
+            detached: Some(Detached {
+                id,
+                after: started.elapsed().as_secs(),
+            }),
+        });
+    }
+
     if !exited {
         kill_group(&mut child).await;
     }
@@ -607,7 +818,8 @@ pub(crate) async fn run_command_interactive(
         stdout: stdout.into_string(),
         stderr: stderr.into_string(),
         code,
-        timed_out,
+        timed_out: over_budget.then_some(timeout.as_secs()),
+        detached: None,
     })
 }
 
@@ -629,6 +841,27 @@ pub(crate) fn render_command_result(result: &CommandResult) -> ToolOutput {
         }
         content.push_str("stderr:\n");
         content.push_str(stderr);
+    }
+
+    // A handover is not a failure. Rendering it as one would teach the model
+    // that the way out is a bigger `timeout_secs`, when the point of the
+    // handover is that it does not need one: the command is still running, its
+    // output is still coming, and the turn is free in the meantime. So it is
+    // `ok`, with the id and the three things that can be done with it.
+    if let Some(detached) = result.detached {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str(&format!(
+            "[still running after {}s; moved to background task #{}. Output above is \
+             what it had produced by then, and you will be notified when it exits — \
+             but background tasks do not outlive the turn, so do not finish on an \
+             answer this one still owes you. task_output({}, wait_secs=N) blocks \
+             until it lands; task_output({}) reads the tail now; task_kill({}) \
+             stops it.]",
+            detached.after, detached.id, detached.id, detached.id, detached.id
+        ));
+        return ToolOutput::ok(truncate_output(content, MAX_OUTPUT_BYTES));
     }
 
     if let Some(secs) = result.timed_out {
@@ -671,8 +904,13 @@ pub(crate) fn render_command_result(result: &CommandResult) -> ToolOutput {
 pub struct ExecuteArgs {
     /// Shell command line, run through the platform shell in the project root.
     pub command: String,
-    /// Timeout in seconds (default 120, clamped to 600). Ignored for
+    /// Foreground budget in seconds, clamped to [`MAX_TIMEOUT`]. Unset takes
+    /// [`ShellConfig::timeout_secs`](crate::config::ShellConfig). Ignored for
     /// background tasks, which use the fixed background timeout.
+    ///
+    /// Naming one also opts out of the early silent handover: a caller that
+    /// has said how long it is prepared to wait has answered the question the
+    /// silence test exists to guess at.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
     /// Run detached as a background task: returns immediately with a task
@@ -691,12 +929,13 @@ impl Tool for ExecuteTool {
     }
 
     fn description(&self) -> &str {
-        r#"Run a shell command in the project root and return its stdout, stderr, and exit code. Killed on timeout. With run_in_background, detaches as an agent-managed background task (task_output / task_kill); you are notified when it finishes.
+        r#"Run a shell command in the project root and return its stdout, stderr, and exit code. A command that outlives its timeout is moved to a background task rather than killed, and you are notified when it finishes — so a long or wedged command costs you one tool call, not the whole budget. With run_in_background, it starts detached instead (task_output / task_kill).
 
 Tips:
 - Prefer compact output: summaries, `head`/`tail`/`wc`; put bulky intermediates in `/tmp`.
 - Non-zero exit is diagnostic signal — read stderr and adapt.
 - A command that prompts on stdin is answered by the **user**, not by you, and only in an interactive session; elsewhere stdin is /dev/null and the prompt reads EOF. Prefer non-interactive flags (`-y`, `--yes`, `--non-interactive`) when the run may be unattended.
+- The foreground wait is short (30s by default). Past it the command keeps running as a background task and you get its id — carry on with something else and read the notification, or `task_output(id, wait_secs=N)` when you need the result before your next move. Pass `timeout_secs` up front when you would rather wait inline.
 - Durable services (HTTP, QEMU, anything a later verifier must reach): `nohup <cmd> > log 2>&1 &`, then `curl`/`ss`/`pgrep`. Do **not** use `run_in_background=true` for those — that mode does not outlive the agent.
 - Use `run_in_background=true` only for agent-scoped jobs you will poll or cancel (long builds).
 - After system-installing a package with native extensions, verify from `cd /tmp` so a local checkout cannot mask a bad install; reinstall after later source edits.
@@ -708,7 +947,7 @@ Tips:
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command line (run via sh -c)" },
-                "timeout_secs": { "type": "integer", "description": "Timeout in seconds (default 120, max 600); ignored for background tasks" },
+                "timeout_secs": { "type": "integer", "description": "Foreground budget in seconds (default 30, max 600). Past it the command moves to a background task instead of being killed; raise it when you would rather wait inline. Ignored for background tasks" },
                 "run_in_background": { "type": "boolean", "description": "Detach as a background task and return immediately (default false)" }
             },
             "required": ["command"]
@@ -732,7 +971,7 @@ Tips:
                 });
             }
             Some(secs) => Duration::from_secs(secs).min(MAX_TIMEOUT),
-            None => DEFAULT_TIMEOUT,
+            None => Duration::from_secs(ctx.shell.timeout_secs.max(1)).min(MAX_TIMEOUT),
         };
 
         let mut command = shell::tokio_command(&args.command);
@@ -776,6 +1015,13 @@ Tips:
         // the browser GUI, every subagent — takes the path below unchanged,
         // `/dev/null` on fd 0 included, because a child blocked on a pipe
         // nobody will ever write to is strictly worse than one that reads EOF.
+        // Every foreground `execute` runs under the handover policy: the
+        // command is the model's, so there is somebody to hand a task id to,
+        // and the alternative — killing it — throws the work away.
+        let on_timeout = OnTimeout::Detach {
+            tasks: &ctx.tasks,
+            label: &args.command,
+        };
         let result = match (ctx.console, &ctx.events) {
             (ConsoleAccess::Interactive, Some(events)) => {
                 run_command_interactive(
@@ -785,11 +1031,23 @@ Tips:
                     &args.command,
                     events,
                     ctx.cancel.as_ref(),
+                    on_timeout,
                 )
                 .await?
             }
-            _ => run_command(self.name(), command, timeout).await?,
+            _ => run_command_with(self.name(), command, timeout, on_timeout).await?,
         };
+        // A handover creates a task the same way `run_in_background` does, so
+        // the rail hears about it the same way. Without this the bash pane
+        // would only learn of the task when it finished.
+        if let (Some(detached), Some(events)) = (result.detached, &ctx.events) {
+            let _ = events
+                .send(crate::agent::AgentEvent::TaskStarted {
+                    id: detached.id,
+                    command: args.command.clone(),
+                })
+                .await;
+        }
         Ok(render_command_result(&result))
     }
 }
@@ -890,62 +1148,143 @@ mod tests {
         assert_eq!(reported, expected);
     }
 
+    /// Poll `id` until it stops running, or give up after `limit`.
+    async fn settle(tasks: &Arc<super::super::tasks::TaskRegistry>, id: u32, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if tasks.status(id).is_some_and(|status| status.is_finished()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("background task #{id} never finished");
+    }
+
+    /// The budget is how long the *turn* waits, not how long the command is
+    /// allowed to live. Reaching it hands the command to the background task
+    /// registry, and the result says so as a success: there is a task id, the
+    /// command is still running, and the model has something to do next
+    /// besides re-run it under a bigger number.
     #[tokio::test]
-    async fn execute_times_out_and_reports_seconds() {
+    async fn a_command_that_outlives_its_budget_becomes_a_background_task() {
         let tmp = TempDir::new();
+        let ctx = tmp.ctx();
         let out = ExecuteTool
-            .execute(
-                json!({ "command": "sleep 5", "timeout_secs": 1 }),
-                &tmp.ctx(),
-            )
+            .execute(json!({ "command": "sleep 5", "timeout_secs": 1 }), &ctx)
             .await
             .unwrap();
-        assert!(out.is_error);
         assert!(
-            out.content.contains("timed out after 1s"),
+            !out.is_error,
+            "a handover is not a failure: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("background task #1"),
             "{}",
             out.content
         );
+        assert_eq!(
+            ctx.tasks.status(1),
+            Some(super::super::tasks::TaskStatus::Running)
+        );
+        ctx.tasks.kill_all();
     }
 
+    /// What the command said before the handover comes back with it, and what
+    /// it says *after* keeps landing in the task's buffer. The reader survives
+    /// the switch — it has to, because the pipe handle moved into it when the
+    /// command started and cannot be handed over separately.
     #[tokio::test]
-    async fn execute_timeout_returns_partial_output() {
+    async fn a_handed_over_command_keeps_capturing_where_it_left_off() {
         let tmp = TempDir::new();
+        let ctx = tmp.ctx();
         let out = ExecuteTool
             .execute(
-                json!({ "command": "echo started; echo warn >&2; sleep 5", "timeout_secs": 1 }),
-                &tmp.ctx(),
+                json!({
+                    "command": "echo started; echo warn >&2; sleep 2; echo finished",
+                    "timeout_secs": 1
+                }),
+                &ctx,
             )
             .await
             .unwrap();
-        assert!(out.is_error);
+        assert!(!out.is_error, "{}", out.content);
         assert!(out.content.contains("started"), "{}", out.content);
         assert!(out.content.contains("stderr:\nwarn"), "{}", out.content);
         assert!(
-            out.content.contains("output above is partial"),
-            "{}",
+            !out.content.contains("finished"),
+            "the last line had not been written yet: {}",
             out.content
         );
+
+        settle(&ctx.tasks, 1, Duration::from_secs(10)).await;
+        let (task, output) = ctx.tasks.output(1, 20_000).expect("the task exists");
+        assert_eq!(task.status, super::super::tasks::TaskStatus::Done(0));
+        for expected in ["started", "warn", "finished"] {
+            assert!(
+                output.contains(expected),
+                "{expected:?} missing from the task buffer: {output}"
+            );
+        }
     }
 
+    /// The handover carries the whole process group with it, so `task_kill`
+    /// reaches a grandchild the shell forked — the same guarantee the timeout
+    /// kill used to give, now given by the thing that replaced it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn execute_timeout_kills_the_whole_process_group() {
+    async fn task_kill_reaches_a_handed_over_process_group() {
         let tmp = TempDir::new();
+        let ctx = tmp.ctx();
         // The subshell is a grandchild of the shell we spawned; without the
-        // group kill it would survive the timeout and write the marker file.
+        // group kill it would survive and write the marker file.
         let out = ExecuteTool
             .execute(
                 json!({
                     "command": "(sleep 2 && touch grandchild-survived) & echo spawned; sleep 30",
                     "timeout_secs": 1
                 }),
-                &tmp.ctx(),
+                &ctx,
             )
             .await
             .unwrap();
-        assert!(out.is_error);
         assert!(out.content.contains("spawned"), "{}", out.content);
+        assert!(ctx.tasks.kill(1), "the handed-over task is killable");
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        assert!(
+            !tmp.0.join("grandchild-survived").exists(),
+            "grandchild must be killed with the group"
+        );
+    }
+
+    /// Every caller that is not `execute` still gets the old contract: the
+    /// budget ends the command, the partial output comes back, and the whole
+    /// process group goes with it. A `git diff` or an `rg` that outlives its
+    /// budget has nothing left to give and nobody to hand a task id to.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_internal_command_is_still_killed_at_its_budget() {
+        let tmp = TempDir::new();
+        let result = run_command(
+            "search_files",
+            sh(
+                "(sleep 2 && touch grandchild-survived) & echo spawned; sleep 30",
+                &tmp.0,
+            ),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("the command ran");
+        assert_eq!(result.timed_out, Some(1));
+        assert!(result.detached.is_none());
+        assert!(result.stdout.contains("spawned"), "{}", result.stdout);
+        let out = render_command_result(&result);
+        assert!(out.is_error);
+        assert!(
+            out.content.contains("output above is partial"),
+            "{}",
+            out.content
+        );
         tokio::time::sleep(Duration::from_millis(2_500)).await;
         assert!(
             !tmp.0.join("grandchild-survived").exists(),
@@ -1049,6 +1388,7 @@ mod tests {
             stderr: "err line\n".to_string(),
             code: Some(0),
             timed_out: None,
+            detached: None,
         };
         let out = render_command_result(&result);
         assert!(!out.is_error);
@@ -1062,6 +1402,7 @@ mod tests {
             stderr: String::new(),
             code: None,
             timed_out: None,
+            detached: None,
         };
         let out = render_command_result(&result);
         assert!(out.is_error);
@@ -1103,9 +1444,52 @@ mod tests {
             script,
             &events,
             cancel.as_ref(),
+            // These tests are about the console, not the handover: the budget
+            // ending has to stay a kill here so the assertions can read
+            // `timed_out` and the partial output off the result.
+            OnTimeout::Kill,
         );
         let (result, out) = tokio::join!(run, surface(stream));
         (result.expect("the command ran"), out)
+    }
+
+    /// The console path hands over too. It is the surface a person is
+    /// actually sitting in front of, so it is the one where a turn stuck
+    /// behind a command is most visible — and the handover has to carry the
+    /// live output stream with it, which is a different mechanism there (a
+    /// channel both pumps feed) than on the plain path (two buffers).
+    #[tokio::test]
+    async fn the_console_path_hands_over_at_its_budget_too() {
+        let tmp = TempDir::new();
+        let tasks = Arc::new(super::super::tasks::TaskRegistry::new());
+        let (events, mut stream) = tokio::sync::mpsc::channel(256);
+        let drain = tokio::spawn(async move { while stream.recv().await.is_some() {} });
+        let result = run_command_interactive(
+            "execute",
+            sh("echo started; sleep 2; echo finished", &tmp.0),
+            Duration::from_secs(1),
+            "echo started; sleep 2; echo finished",
+            &events,
+            None,
+            OnTimeout::Detach {
+                tasks: &tasks,
+                label: "echo started; sleep 2; echo finished",
+            },
+        )
+        .await
+        .expect("the command ran");
+
+        let detached = result.detached.expect("handed over at the budget");
+        assert!(result.timed_out.is_none());
+        assert!(result.stdout.contains("started"), "{}", result.stdout);
+
+        settle(&tasks, detached.id, Duration::from_secs(10)).await;
+        let (task, output) = tasks.output(detached.id, 20_000).expect("the task exists");
+        assert_eq!(task.status, super::super::tasks::TaskStatus::Done(0));
+        assert!(output.contains("started"), "{output}");
+        assert!(output.contains("finished"), "{output}");
+        drop(events);
+        let _ = drain.await;
     }
 
     /// A surface that claims the console and answers `reply` once it sees
@@ -1536,6 +1920,7 @@ mod tests {
             stderr: String::new(),
             code: None,
             timed_out: Some(30),
+            detached: None,
         };
         let out = render_command_result(&result);
         assert!(out.is_error);

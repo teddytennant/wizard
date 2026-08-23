@@ -1078,9 +1078,24 @@ pub struct McpManager {
 impl McpManager {
     /// Connect to every configured server. Servers that fail to connect are
     /// skipped with a warning so one bad server doesn't take down startup.
+    ///
+    /// The handshakes run **concurrently**. Each one spawns a process and waits
+    /// on `initialize` — `npx -y @playwright/mcp@latest` is a couple of seconds
+    /// of npm resolution before it says a word — and doing them one after
+    /// another made startup the *sum* of every server's cold start, with a
+    /// single unreachable one contributing the whole [`CONNECT_TIMEOUT`] to
+    /// that sum. Concurrently it is the slowest one instead. Nothing about a
+    /// connect depends on another connect having finished, so there is no
+    /// ordering to preserve here beyond the one the results come back in, and
+    /// `join_all` preserves that: `connections` stays in `mcp.toml` order, which
+    /// is what decides which server wins an un-namespaced tool name in
+    /// [`Self::tools`].
     pub async fn connect_all(config: &McpConfig) -> Result<Self> {
-        let mut connections = Vec::with_capacity(config.servers.len());
+        // The duplicate check stays sequential and stays first: it is a pass
+        // over names, and a second entry for a name is dropped without being
+        // dialed at all.
         let mut seen_names: HashSet<&str> = HashSet::new();
+        let mut wanted = Vec::with_capacity(config.servers.len());
         for server in &config.servers {
             if !seen_names.insert(server.name.as_str()) {
                 warn!(
@@ -1089,16 +1104,24 @@ impl McpManager {
                 );
                 continue;
             }
-            match McpConnection::connect(server.clone()).await {
+            wanted.push(server.clone());
+        }
+
+        let dialed = futures_util::future::join_all(wanted.into_iter().map(|server| async move {
+            let name = server.name.clone();
+            (name, McpConnection::connect(server).await)
+        }))
+        .await;
+
+        let mut connections = Vec::with_capacity(dialed.len());
+        for (name, outcome) in dialed {
+            match outcome {
                 Ok(connection) => {
-                    debug!(server = %server.name, "connected to MCP server");
+                    debug!(server = %name, "connected to MCP server");
                     connections.push(Arc::new(connection));
                 }
                 Err(err) => {
-                    warn!(
-                        server = %server.name,
-                        "skipping MCP server (failed to connect): {err:#}"
-                    );
+                    warn!(server = %name, "skipping MCP server (failed to connect): {err:#}");
                 }
             }
         }
@@ -1121,10 +1144,26 @@ impl McpManager {
     /// objects. Tool names colliding across servers (or with native tools)
     /// are namespaced `server__tool`.
     pub async fn tools(&self) -> Result<Vec<Arc<dyn Tool>>> {
-        let mut listings: Vec<(Arc<McpConnection>, Vec<McpToolInfo>)> = Vec::new();
-        for connection in &self.connections {
-            match connection.list_tools().await {
-                Ok(infos) => listings.push((Arc::clone(connection), infos)),
+        // Concurrent for the same reason `connect_all` is: `tools/list` is a
+        // round trip per server (paginated, up to [`MAX_LIST_PAGES`] of them,
+        // each with its own [`LIST_TIMEOUT`]), and asking one server costs
+        // nothing that asking another needs. `join_all` keeps the results in
+        // connection order, which the namespacing below depends on being
+        // stable.
+        let listed = futures_util::future::join_all(self.connections.iter().map(|connection| {
+            let connection = Arc::clone(connection);
+            async move {
+                let listing = connection.list_tools().await;
+                (connection, listing)
+            }
+        }))
+        .await;
+
+        let mut listings: Vec<(Arc<McpConnection>, Vec<McpToolInfo>)> =
+            Vec::with_capacity(listed.len());
+        for (connection, listing) in listed {
+            match listing {
+                Ok(infos) => listings.push((connection, infos)),
                 Err(err) => {
                     warn!(
                         server = %connection.name(),

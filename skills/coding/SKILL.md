@@ -91,7 +91,10 @@ Critical path (timeouts fail — avoid inventory greps after green):
 ## Shell usage
 
 - `execute` is `sh -c` in the project root. Non-interactive flags; no commands
-  that wait for input. Default timeout 120s (`timeout_secs` up to 600).
+  that wait for input. It waits 30s by default, then moves the command to a
+  background task instead of killing it — carry on and read the notification,
+  or `task_output(id, wait_secs=N)` when you need the result now. Pass
+  `timeout_secs` (up to 600) when you would rather wait inline.
 - Prefer summaries over megabyte dumps; large intermediates go under `/tmp`.
 - No destructive commands (`rm -rf`, hard reset, force push, drop DB) unless
   explicitly asked — except routine cleanup of your own build byproducts.
