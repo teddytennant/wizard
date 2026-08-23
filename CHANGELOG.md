@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-08-23
+
+### Fixed
+
+- **`install.sh` works on Alpine and on NixOS again.** The published `wizard-x86_64-unknown-linux-musl` binary was never static: it requested `/lib/ld-musl-x86_64.so.1` and segfaulted under Alpine's own loader, so the installer's post-download check rejected it and fell through to a source build. Alpine had no working install path at all, and NixOS had none either, since the glibc asset cannot run there by design. Every release from v2.0.1 to v2.1.1 shipped it that way. The cause was one line of release CI: `musl-gcc` was pointed at the *link* as well as the compile, and it is a specs wrapper around the host gcc whose specs inject that interpreter into any link not spelled `-static`. It still compiles the C that `ring` and LuaJIT need; the link is rustc's again, against its own bundled musl CRT. Both musl assets are now measured static before they are uploaded, and that check can fail a release rather than warn about one.
+
 ## [2.1.1] - 2026-08-23
 
 A command that outruns its timeout keeps running as a background task instead of being killed, startup stops waiting on MCP servers one at a time, and a stock Mac can verify a release without installing anything first.
@@ -229,6 +235,7 @@ An adversarial audit ran against 2.0.0 before release. Its findings, all fixed h
 
   What is *not* affected: `wizard peers` and the mesh itself are unchanged, and the model and layout under the explorer (`src/graph/`) keep building and keep running their tests. The code is wired out, not deleted — `src/native/graph/mod.rs` lists the four seams that put it back, and `the_window_has_no_route_into_the_graph_explorer` fails the build if one of them returns by accident.
 
+[2.1.2]: https://github.com/teddytennant/wizard/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/teddytennant/wizard/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/teddytennant/wizard/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/teddytennant/wizard/compare/v2.0.0...v2.0.1

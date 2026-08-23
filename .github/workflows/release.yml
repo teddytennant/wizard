@@ -193,14 +193,32 @@ jobs:
           # carries no dynamic loader dependency (runs on NixOS/Alpine/old glibc).
           RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
           # Each musl runner is native (x86_64 runner / arm runner), so musl-tools'
-          # `musl-gcc` targets the runner's own arch. Point cc-rs (ring's C build) and
-          # the cargo linker at it explicitly; otherwise they look for a triple-prefixed
-          # `<arch>-linux-musl-gcc` that musl-tools doesn't install. These vars are
-          # target-scoped, so they're inert on the glibc/darwin jobs.
+          # `musl-gcc` targets the runner's own arch. Point cc-rs (ring's and
+          # LuaJIT's C builds) at it; without this they look for a
+          # triple-prefixed `<arch>-linux-musl-gcc` that musl-tools does not
+          # install, and the build stops at "failed to find tool". These vars
+          # are target-scoped, so they're inert on the glibc/darwin jobs.
+          #
+          # `musl-gcc` compiles the C and does NOT link the binary. It is a
+          # specs wrapper around the host gcc, and its specs inject
+          # `-dynamic-linker /lib/ld-musl-x86_64.so.1` on any link that is not
+          # spelled `-static`. Pointing
+          # CARGO_TARGET_<TRIPLE>_LINKER at it, which this used to do, is what
+          # put a PT_INTERP into a binary the same job then advertised as
+          # static: every published wizard-x86_64-unknown-linux-musl asset up
+          # to and including v2.1.1 requests that interpreter and segfaults
+          # under Alpine's loader. Leave the link to rustc and it uses its own
+          # bundled musl CRT and libc.a, which is what `+crt-static` above is
+          # asking for.
+          #
+          # Measured on hosted runners rather than reasoned about, because the
+          # previous three attempts at this were reasoned about: with the
+          # override, x86_64 came back `NOT static, requests
+          # /lib/ld-musl-x86_64.so.1`; without it, `static-pie linked`, no
+          # PT_INTERP, and `wizard --version` runs under alpine:3.20. aarch64
+          # was already static with the override and stays static without it.
           CC_x86_64_unknown_linux_musl: musl-gcc
           CC_aarch64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
@@ -214,50 +232,20 @@ jobs:
       # is how a broken asset reaches users through install.sh instead of here.
       # `--version` is enough: it links, loads, and reaches main.
       #
-      # Non-blocking on the two musl targets, and only there. They fail today
-      # on a defect this gate did not cause and cannot fix: the published
-      # wizard-x86_64-unknown-linux-musl asset is not statically linked (it
-      # requests the interpreter /lib/ld-musl-x86_64.so.1) and segfaults under
-      # Alpine's loader, which is also why the Alpine and NixOS legs of CI's
-      # install-script job are marked experimental. Blocking here would take
-      # `build` red, and `release` needs `build`, so the next tag push would
-      # publish nothing at all rather than the eight assets that do work plus
-      # the two that are already broken on the download page. The step still
-      # runs and still reports.
+      # Blocking, as of the linker fix above. It was non-blocking for six
+      # releases while the x86_64 musl asset shipped with a PT_INTERP nobody
+      # could explain, on the reasoning that a red `build` takes `release` with
+      # it and a tag would then publish nothing at all rather than eight good
+      # assets and two broken ones. That trade is over: both musl targets are
+      # measured static, so a failure here now means a regression, and a
+      # regression is exactly what should stop a release.
       #
-      # Remove this `continue-on-error` (and this paragraph) on the first real
-      # CI run that reports "genuinely static", so the asset can never regress
-      # silently again. That is now the only thing standing in the way, and it
-      # is worth knowing why:
-      #
-      # **The tree is not the problem.** Built locally on 2026-08-08 at
-      # `75d8b45` for x86_64-unknown-linux-musl with these exact RUSTFLAGS, the
-      # binary has no PT_INTERP, `file` calls it "static-pie linked", `ldd`
-      # says "statically linked", and the packaged tarball's binary runs
-      # `--version` successfully under Alpine 3.20 (musl), busybox:uclibc (not
-      # musl at all) and debian:12 (glibc). So the source and the flags produce
-      # exactly the portable static binary this asset is supposed to be.
-      #
-      # What is still unverified is *this runner's* toolchain: that build used
-      # nixpkgs' `pkgsCross.musl64` cross toolchain, not Ubuntu's `musl-tools`,
-      # and musl-tools plus the host GCC is the combination that has never been
-      # observed producing a static binary here. A plain `musl-gcc` on a GCC-15
-      # host cannot even link LuaJIT — it pulls the host `libgcc_eh.a`, which
-      # needs glibc's `_dl_find_object`.
-      #
-      # So: this step is the measurement, and one green run retires the marker.
-      # Name the musl defect precisely instead of leaving it to present as a
-      # segfault in the smoke test below. A genuinely static binary has no
-      # PT_INTERP program header at all; the published
-      # wizard-x86_64-unknown-linux-musl asset requests
-      # /lib/ld-musl-x86_64.so.1, which is what makes it die under Alpine's
-      # loader. Non-blocking on the same reasoning as the smoke test, and for
-      # the same limited time: this reports, so that whoever removes the
-      # continue-on-error has a log line saying whether it is safe to.
+      # A genuinely static binary has no PT_INTERP program header. Checking for
+      # that rather than leaving it to the smoke test below names the defect
+      # instead of letting it present as a segfault, and it catches the case
+      # where the runner happens to have a loader the user will not.
       - name: Check the musl binary is actually static
-        id: static
         if: contains(matrix.target, '-musl')
-        continue-on-error: true
         run: |
           set -eu
           bin="target/${{ matrix.target }}/release/wizard"
@@ -269,36 +257,14 @@ jobs:
           echo "${{ matrix.target }} has no PT_INTERP: genuinely static."
 
       - name: Smoke test the packaged binary
-        id: smoke
         if: matrix.native
-        continue-on-error: ${{ contains(matrix.target, '-musl') }}
+        # The musl legs used to be exempt here too; see the static check above.
         run: |
           set -eu
           rm -rf smoke && mkdir smoke
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/wizard --version
           rm -rf smoke
-
-      # A `continue-on-error` step reports `conclusion: success` to the jobs
-      # API no matter what happened — only `outcome` carries the truth, and
-      # `outcome` is not exposed per-step to anyone reading run status. So the
-      # two swallowed steps above are, without this, indistinguishable from
-      # passing. That is exactly how the musl asset stayed broken across
-      # releases. ci.yml carries the same reporter for the same reason.
-      - name: Report swallowed musl failures
-        if: always() && (steps.static.outcome == 'failure' || steps.smoke.outcome == 'failure')
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -eu
-          if [ "${{ steps.static.outcome }}" = "failure" ]; then
-            echo "::warning::${TARGET} is not statically linked and did not fail the run (non-blocking); open this job's log."
-            echo "### ${TARGET}: NOT STATIC, non-blocking" >>"$GITHUB_STEP_SUMMARY"
-          fi
-          if [ "${{ steps.smoke.outcome }}" = "failure" ]; then
-            echo "::warning::${TARGET} did not start and did not fail the run (non-blocking); this asset is being published broken."
-            echo "### ${TARGET}: SMOKE TEST FAILED, non-blocking — asset published anyway" >>"$GITHUB_STEP_SUMMARY"
-          fi
 
       - uses: actions/upload-artifact@v7
         with:
