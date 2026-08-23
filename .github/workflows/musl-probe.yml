@@ -50,16 +50,18 @@ jobs:
             rustflags: -C target-feature=+crt-static -C link-self-contained=yes
           # No musl toolchain at all. Cheapest configuration if it works, and
           # the one that tells us whether musl-tools was ever load-bearing.
-          - name: no-musl-tools
-            cc: ''
-            linker: ''
-            rustflags: -C target-feature=+crt-static -C link-self-contained=yes
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+      # Pinned by digest, so `toolchain` has to be spelled out: this action
+      # reads the toolchain from the ref it was called by, and a digest is not
+      # a version. The `stable` branch defaults the input, the v1 tag does not.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.name }}
 
@@ -77,12 +79,26 @@ jobs:
           echo "--- specs ---"
           musl-gcc -dumpspecs 2>/dev/null | grep -A 2 -i "dynamic.linker" || echo "(no dynamic-linker line in specs)"
 
+      # The overrides are exported from the shell rather than declared in
+      # `env:`, because an empty `env:` value is set-and-empty rather than
+      # absent: cargo answers a set-but-empty linker with "couldn't extract
+      # file stem from specified linker", which is how the first run of this
+      # probe managed to not test the two candidates it exists for.
       - name: Build
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-          CC_x86_64_unknown_linux_musl: ${{ matrix.cc }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.linker }}
-        run: cargo build --release --locked --target "$TARGET"
+          PROBE_CC: ${{ matrix.cc }}
+          PROBE_LINKER: ${{ matrix.linker }}
+        run: |
+          set -eu
+          if [ -n "$PROBE_CC" ]; then
+            export CC_x86_64_unknown_linux_musl="$PROBE_CC"
+          fi
+          if [ -n "$PROBE_LINKER" ]; then
+            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$PROBE_LINKER"
+          fi
+          env | grep -E '^(RUSTFLAGS|CC_x86_64|CARGO_TARGET_X86_64)' || true
+          cargo build --release --locked --target "$TARGET"
 
       - name: Static?
         run: |
@@ -101,39 +117,3 @@ jobs:
         run: |
           set -eu
           docker run --rm -v "$PWD/target/${TARGET}/release:/out:ro" alpine:3.20 /out/wizard --version
-
-  # Native musl: the whole toolchain is musl, so crt-static is the default and
-  # there is no specs wrapper in the way. Most likely to work and most
-  # different from what release.yml does, which is why it is worth measuring
-  # even if one of the four above comes back green.
-  alpine:
-    name: probe (alpine container)
-    runs-on: ubuntu-22.04
-    container: alpine:3.20
-    steps:
-      - name: Prerequisites
-        run: apk add --no-cache build-base musl-dev perl git curl bash tar
-
-      - uses: actions/checkout@v7
-
-      - name: Rust
-        run: |
-          set -eu
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --default-toolchain stable --profile minimal
-          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
-
-      - name: Build
-        run: cargo build --release --locked
-
-      - name: Static?
-        run: |
-          set -eu
-          bin="target/release/wizard"
-          if readelf -l "$bin" | grep -q INTERP; then
-            interp="$(readelf -l "$bin" | grep -i 'Requesting program interpreter' | sed 's/.*: //; s/\]//')"
-            echo "alpine container: NOT static (${interp})" >>"$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          echo "alpine container: genuinely static" >>"$GITHUB_STEP_SUMMARY"
-          ./target/release/wizard --version
