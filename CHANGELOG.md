@@ -6,16 +6,21 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-23
+
+A command that outruns its timeout keeps running as a background task instead of being killed, startup stops waiting on MCP servers one at a time, and a stock Mac can verify a release without installing anything first.
+
+### Added
+
+- **An in-tree skills registry.** `registry/` in this repo is now the default index `wizard skills search` / `install` reads (`https://raw.githubusercontent.com/teddytennant/wizard/main/registry`). Stock search no longer 404s on a `teddytennant/wizard-registry` that was never published. Submissions are pull requests to this repo; CI checks manifests, artifact checksums, and that `registry.json` matches the tree. See [market.md](docs/market.md).
+- **`task_output` takes `wait_secs`.** Block up to N seconds (max 600) for a background task to finish instead of answering with whatever it has right now. A wait that expires reports the task as it stands rather than failing, and Ctrl-C reaches it while it is parked. It is the other half of the handover below: `timeout_secs` says "I would rather wait inline for this one" before the fact, and this says "it turns out I do need it" after.
+
 ### Changed
 
 - **A command that outruns `execute`'s timeout is moved to the background instead of being killed, and the timeout is 30 seconds.** The two are one decision. While the end of the budget was a death sentence the number had to cover the longest command anybody might reasonably run, so a wedged command cost two minutes of a turn doing nothing and a genuinely long one cost two minutes and then died anyway. Now the budget only answers "how long is it worth blocking the turn for an answer": past it the child is handed to the background task registry, still running, with whatever it has said so far returned to the model and its exit reported like any other background task. The process group, the output capture and `task_kill` all follow it across. Two overrides: `timeout_secs` on the call to wait longer inline, and the new `task_output(id, wait_secs=N)` to block on a task after the fact. Configurable as `[shell] timeout_secs`. Everything else that shells out — the git tools, `search_files`, scripted tools — is still killed at its budget, because there is nobody to hand a task id to. See [docs/tasks.md](docs/tasks.md).
 - **MCP servers connect concurrently at startup, and their tools are listed concurrently.** Both loops were sequential, so startup cost the *sum* of every server's cold start — `npx -y @playwright/mcp@latest` is a couple of seconds before it says a word — and one unreachable server added its whole 20-second connect timeout to that sum. It is now the slowest server rather than all of them; the order servers are declared in still decides who wins an un-namespaced tool name.
 - **Shorter budgets for the two searches that block a turn.** `search_files` gets 20 seconds instead of 60, and the `git ls-files` behind `list_files` 10 instead of 30. Neither number was reachable by a search that was merely large: ripgrep walks a big repository in well under a second, and `git ls-files` is an index read with a working fallback on the other side of giving up. What used to wait out the old budget was a pathological pattern or a wedged path, and neither improves with more time.
 - **`/diff` runs its git commands concurrently.** The three tree reads go out together, and so do the per-file `git diff --no-index` calls for untracked files, sixteen at a time — a tree with a hundred new files used to be a hundred sequential process spawns before the pane could paint.
-
-### Added
-
-- **An in-tree skills registry.** `registry/` in this repo is now the default index `wizard skills search` / `install` reads (`https://raw.githubusercontent.com/teddytennant/wizard/main/registry`). Stock search no longer 404s on a `teddytennant/wizard-registry` that was never published. Submissions are pull requests to this repo; CI checks manifests, artifact checksums, and that `registry.json` matches the tree. See [market.md](docs/market.md).
 
 ### Fixed
 
@@ -224,6 +229,7 @@ An adversarial audit ran against 2.0.0 before release. Its findings, all fixed h
 
   What is *not* affected: `wizard peers` and the mesh itself are unchanged, and the model and layout under the explorer (`src/graph/`) keep building and keep running their tests. The code is wired out, not deleted — `src/native/graph/mod.rs` lists the four seams that put it back, and `the_window_has_no_route_into_the_graph_explorer` fails the build if one of them returns by accident.
 
+[2.1.1]: https://github.com/teddytennant/wizard/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/teddytennant/wizard/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/teddytennant/wizard/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/teddytennant/wizard/compare/v1.8.0...v2.0.0

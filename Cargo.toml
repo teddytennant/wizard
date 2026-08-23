@@ -1,6 +1,6 @@
 [package]
 name = "wizard"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2024"
 # `AND`, not `OR`. This is not a dual-licensed crate offering the recipient a
 # choice: Wizard's own code is MIT, and the terminal-UI ports listed in NOTICE
