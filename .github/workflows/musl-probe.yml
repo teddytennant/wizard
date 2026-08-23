@@ -17,39 +17,23 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TARGET: x86_64-unknown-linux-musl
 
 jobs:
   ubuntu:
     name: probe (${{ matrix.name }})
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # What release.yml does today. Expected to come back NOT static; it
-          # is here so a run where everything reports static is recognisable as
-          # a broken probe rather than a fix.
-          - name: baseline
-            cc: musl-gcc
-            linker: musl-gcc
-            rustflags: -C target-feature=+crt-static
-          # musl-gcc still compiles the C (LuaJIT, ring), but rustc drives the
-          # link itself. musl-gcc is a specs wrapper around the host gcc, and
-          # the specs inject a -dynamic-linker; this takes them out of the link
-          # without taking musl's headers out of the compile.
-          - name: no-linker-override
+          - name: aarch64-no-linker-override
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
             cc: musl-gcc
             linker: ''
             rustflags: -C target-feature=+crt-static
-          # The same, said explicitly: rustc's own bundled musl CRT objects
-          # and libc.a rather than whatever the driver finds.
-          - name: self-contained
-            cc: musl-gcc
-            linker: ''
-            rustflags: -C target-feature=+crt-static -C link-self-contained=yes
-          # No musl toolchain at all. Cheapest configuration if it works, and
-          # the one that tells us whether musl-tools was ever load-bearing.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -60,7 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.name }}
@@ -92,12 +76,12 @@ jobs:
         run: |
           set -eu
           if [ -n "$PROBE_CC" ]; then
-            export CC_x86_64_unknown_linux_musl="$PROBE_CC"
+            export CC_aarch64_unknown_linux_musl="$PROBE_CC"
           fi
           if [ -n "$PROBE_LINKER" ]; then
-            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$PROBE_LINKER"
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$PROBE_LINKER"
           fi
-          env | grep -E '^(RUSTFLAGS|CC_x86_64|CARGO_TARGET_X86_64)' || true
+          env | grep -E '^(RUSTFLAGS|CC_aarch64|CARGO_TARGET_AARCH64)' || true
           cargo build --release --locked --target "$TARGET"
 
       - name: Static?
@@ -112,8 +96,3 @@ jobs:
             exit 1
           fi
           echo "${{ matrix.name }}: genuinely static" >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Does it start under Alpine's loader?
-        run: |
-          set -eu
-          docker run --rm -v "$PWD/target/${TARGET}/release:/out:ro" alpine:3.20 /out/wizard --version
