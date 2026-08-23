@@ -10,6 +10,10 @@ on:
 # repository is the one that creates the release. A token that can write
 # releases is handed to every `cargo build` in the matrix otherwise, including
 # the ones that run third-party build scripts from the dependency tree.
+#
+# The same argument one layer down: every checkout sets `persist-credentials:
+# false`, so the token is not sitting in `.git/config` while those build
+# scripts run in that directory. Nothing here runs git after the checkout.
 permissions:
   contents: read
 
@@ -26,6 +30,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# No `Swatinem/rust-cache` in this file, deliberately. The Actions cache is
+# writable by any run on any branch of this repo, and a restored entry lands in
+# `target/` and `~/.cargo` before rustc reads them, so a cache written by an
+# ordinary push to main is an input to the binaries this workflow signs. CI
+# throws its build products away and keeps its caches; here it is the other way
+# round. A tag builds cold, which costs a few minutes per release and takes a
+# mutable shared input out of the path to a signed asset.
+
 jobs:
   # A tag that disagrees with Cargo.toml is cheap to catch and expensive to
   # discover after ten uploads. Its own job, on one runner, needing nothing but
@@ -37,7 +49,9 @@ jobs:
     name: Verify tag matches Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Verify tag matches Cargo.toml version
         shell: bash
@@ -107,11 +121,16 @@ jobs:
         runner: [ubuntu-22.04, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      # Pinned by digest, so `toolchain` has to be spelled out: this action
+      # reads the toolchain from the ref it was called by, and a digest is not
+      # a version. The `stable` branch defaults the input, the v1 tag does not.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
 
       - name: Test
         run: cargo test --locked
@@ -152,13 +171,14 @@ jobs:
             native: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          targets: ${{ matrix.target }}
+          persist-credentials: false
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
 
       # musl-tools ships exactly two binaries, musl-gcc and musl-ldd. That was
       # enough until this tree grew a vendored LuaJIT (mlua's `luajit` +
@@ -300,7 +320,7 @@ jobs:
             echo "### ${TARGET}: SMOKE TEST FAILED, non-blocking — asset published anyway" >>"$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wizard-${{ matrix.target }}
           path: wizard-${{ matrix.target }}.tar.gz
@@ -346,13 +366,14 @@ jobs:
             runnable: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          targets: ${{ matrix.target }}
+          persist-credentials: false
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
 
       # No `apt-get` step, and that is the point of the toolkit choice rather
       # than an omission. `default-features = false` + `tiny-skia` links no
@@ -390,7 +411,7 @@ jobs:
           ./smoke/wizard --version
           rm -rf smoke
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wizard-native-${{ matrix.target }}
           path: wizard-native-${{ matrix.target }}.tar.gz
@@ -410,9 +431,11 @@ jobs:
       # anything is published, so a secret that has drifted from the key users
       # actually carry fails the release instead of shipping ten assets nobody
       # can install.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           merge-multiple: true
 
@@ -505,7 +528,7 @@ jobs:
       # from this page by hand gets none of that enforcement — they are the one
       # reader who has to run the check themselves, and this is the page they
       # are standing on when they need it.
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           draft: false
           prerelease: false

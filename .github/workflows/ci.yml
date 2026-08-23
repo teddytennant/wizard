@@ -12,6 +12,11 @@ on:
 # Stated rather than inherited — the repo default happens to be `read` today,
 # and a workflow whose safety depends on a setting in another system is one
 # settings change away from being wrong.
+#
+# Every checkout below sets `persist-credentials: false` for the same reason.
+# actions/checkout otherwise leaves the run's token in `.git/config`, inside
+# the directory the build then writes into and the artifact steps upload from.
+# Nothing here runs git after the checkout, so it costs nothing.
 permissions:
   contents: read
 
@@ -28,7 +33,9 @@ jobs:
     name: Rust checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # Needs only the checkout, so it runs before toolchain setup.
       - name: File-size ratchet
@@ -121,14 +128,18 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned by digest, so `toolchain` has to be spelled out: this action
+      # reads the toolchain from the ref it was called by, and a digest is not
+      # a version. The `stable` branch defaults the input, the v1 tag does not.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # Prebuilt binary, no cargo-install-from-source in CI.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
         with:
           tool: cargo-machete
 
@@ -261,11 +272,15 @@ jobs:
             experimental: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # Blocking, and the whole reason this job can still go red on a code
       # defect. It is the gate this leg carried before it grew a suite, kept
@@ -345,7 +360,9 @@ jobs:
     name: Coverage ratchet self-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # GITHUB_STEP_SUMMARY is blanked so the fixture's invented numbers cannot
       # land in the run summary and be mistaken for a measurement.
@@ -426,17 +443,20 @@ jobs:
     needs: [coverage-selfcheck]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
           # cargo-llvm-cov reads the instrumentation with llvm-profdata/llvm-cov
           # from this component rather than a system LLVM.
           components: llvm-tools-preview
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
         with:
           tool: cargo-llvm-cov
 
@@ -454,7 +474,7 @@ jobs:
       # the figure that failed it — that is exactly the run someone needs it on.
       - name: Publish the coverage summary
         if: always() && hashFiles('coverage-summary.json') != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-summary
           path: coverage-summary.json
@@ -480,9 +500,11 @@ jobs:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
         with:
           tool: cargo-deny
 
@@ -571,7 +593,9 @@ jobs:
             nixos: true
             experimental: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # Read-only mount: install.sh writes to its own mktemp dir, to $HOME and
       # to the install dir, never into the checkout, and this proves it.
@@ -617,7 +641,9 @@ jobs:
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: shellcheck
         run: |
@@ -625,6 +651,41 @@ jobs:
             contrib/check-file-size.sh \
             contrib/check-coverage.sh \
             contrib/install-in-container.sh
+
+  # shellcheck for the workflow files. The two failure modes it exists for are
+  # the ones nobody reviews for: an expression like `github.event.*`
+  # interpolated straight into a `run:` block, where the shell sees whatever
+  # the title of a pull request says, and a job holding more token scope than
+  # its steps use. Neither is present today, which is the point of adding it
+  # now rather than after one of them lands.
+  #
+  # Pinned to a version, not `latest`: a new audit landing upstream would
+  # otherwise turn an unrelated pull request red, and a check that goes red for
+  # reasons the author did not cause is a check people learn to ignore.
+  # Dependabot does not watch this, so it moves when someone moves it.
+  workflows:
+    name: Workflow lint (zizmor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
+        with:
+          tool: zizmor@1.29.0
+
+      # No token. `--offline` keeps this to the static audits: the online ones
+      # ask the GitHub API whether each action's ref is a real tag, which needs
+      # a credential and makes the job fail when the API is having a bad day.
+      #
+      # `--min-severity=low` drops the informational tier, which is style
+      # advice rather than a finding. The one it currently emits says to
+      # replace softprops/action-gh-release with `gh release create`, and
+      # rewriting the step that publishes every asset is not a thing to do
+      # because a linter mentioned it.
+      - name: zizmor
+        run: zizmor --offline --min-severity=low .github/workflows/
 
   # Evaluation only, and that is the point. `nix build` here would compile the
   # whole crate a second time for no new information, but nothing evaluated
@@ -637,9 +698,11 @@ jobs:
     name: Nix flake check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
 
       - name: nix flake check
         run: nix flake check --all-systems --no-update-lock-file
