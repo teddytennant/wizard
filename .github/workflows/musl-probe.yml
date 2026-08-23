@@ -1,0 +1,139 @@
+# Temporary. Finds a toolchain configuration that produces a genuinely static
+# x86_64-unknown-linux-musl binary, which release.yml has never managed on a
+# hosted runner (see the long note on its `Check the musl binary is actually
+# static` step). Four candidates, one control, all reporting the same fact:
+# does the binary have a PT_INTERP program header.
+#
+# Delete this file once release.yml has been moved onto the winner.
+name: musl probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [musl-static-probe]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  ubuntu:
+    name: probe (${{ matrix.name }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # What release.yml does today. Expected to come back NOT static; it
+          # is here so a run where everything reports static is recognisable as
+          # a broken probe rather than a fix.
+          - name: baseline
+            cc: musl-gcc
+            linker: musl-gcc
+            rustflags: -C target-feature=+crt-static
+          # musl-gcc still compiles the C (LuaJIT, ring), but rustc drives the
+          # link itself. musl-gcc is a specs wrapper around the host gcc, and
+          # the specs inject a -dynamic-linker; this takes them out of the link
+          # without taking musl's headers out of the compile.
+          - name: no-linker-override
+            cc: musl-gcc
+            linker: ''
+            rustflags: -C target-feature=+crt-static
+          # The same, said explicitly: rustc's own bundled musl CRT objects
+          # and libc.a rather than whatever the driver finds.
+          - name: self-contained
+            cc: musl-gcc
+            linker: ''
+            rustflags: -C target-feature=+crt-static -C link-self-contained=yes
+          # No musl toolchain at all. Cheapest configuration if it works, and
+          # the one that tells us whether musl-tools was ever load-bearing.
+          - name: no-musl-tools
+            cc: ''
+            linker: ''
+            rustflags: -C target-feature=+crt-static -C link-self-contained=yes
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Install musl tooling
+        if: matrix.cc != ''
+        run: |
+          set -eu
+          sudo apt-get update && sudo apt-get install -y musl-tools binutils
+          for tool in ar strip ranlib; do
+            if ! command -v "musl-$tool" >/dev/null 2>&1; then
+              sudo ln -sf "$(command -v "$tool")" "/usr/local/bin/musl-$tool"
+            fi
+          done
+          musl-gcc --version
+          echo "--- specs ---"
+          musl-gcc -dumpspecs 2>/dev/null | grep -A 2 -i "dynamic.linker" || echo "(no dynamic-linker line in specs)"
+
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          CC_x86_64_unknown_linux_musl: ${{ matrix.cc }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Static?
+        run: |
+          set -eu
+          bin="target/${TARGET}/release/wizard"
+          file "$bin"
+          if readelf -l "$bin" | grep -q INTERP; then
+            interp="$(readelf -l "$bin" | grep -i 'Requesting program interpreter' | sed 's/.*: //; s/\]//')"
+            echo "::warning::${{ matrix.name }}: NOT static, requests ${interp}"
+            echo "${{ matrix.name }}: NOT static (${interp})" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "${{ matrix.name }}: genuinely static" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Does it start under Alpine's loader?
+        run: |
+          set -eu
+          docker run --rm -v "$PWD/target/${TARGET}/release:/out:ro" alpine:3.20 /out/wizard --version
+
+  # Native musl: the whole toolchain is musl, so crt-static is the default and
+  # there is no specs wrapper in the way. Most likely to work and most
+  # different from what release.yml does, which is why it is worth measuring
+  # even if one of the four above comes back green.
+  alpine:
+    name: probe (alpine container)
+    runs-on: ubuntu-22.04
+    container: alpine:3.20
+    steps:
+      - name: Prerequisites
+        run: apk add --no-cache build-base musl-dev perl git curl bash tar
+
+      - uses: actions/checkout@v7
+
+      - name: Rust
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Static?
+        run: |
+          set -eu
+          bin="target/release/wizard"
+          if readelf -l "$bin" | grep -q INTERP; then
+            interp="$(readelf -l "$bin" | grep -i 'Requesting program interpreter' | sed 's/.*: //; s/\]//')"
+            echo "alpine container: NOT static (${interp})" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "alpine container: genuinely static" >>"$GITHUB_STEP_SUMMARY"
+          ./target/release/wizard --version
