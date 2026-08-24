@@ -39,6 +39,7 @@ pub mod image_view;
 pub mod images;
 pub mod import_claude;
 pub mod instructions;
+pub mod kernel;
 pub mod llm;
 pub mod local_setup;
 pub mod logging;
