@@ -298,7 +298,7 @@ impl CommandSurface for Native {
         }
     }
 
-    async fn login(&mut self, _provider: String) {
+    async fn login(&mut self, _provider: String, _force: bool) {
         self.actions.push(Action::OpenSettings { picker: true });
     }
 }

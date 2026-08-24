@@ -3115,9 +3115,10 @@ impl App {
                                 // xAI sign-in: run the OAuth flow; login()
                                 // auto-adds the provider on success.
                                 0 => {
-                                    return Ok(Some(AppAction::Command(SlashCommand::Login(
-                                        "xai".to_string(),
-                                    ))));
+                                    return Ok(Some(AppAction::Command(SlashCommand::Login {
+                                        provider: "xai".to_string(),
+                                        force: false,
+                                    })));
                                 }
                                 // xAI API key.
                                 1 => {

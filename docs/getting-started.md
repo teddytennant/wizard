@@ -381,7 +381,7 @@ You can use xAI without an API key by signing in with your xAI account (OAuth 2.
 wizard --login xai     # or /login xai from inside the TUI
 ```
 
-Wizard opens your browser, captures the callback on localhost, and stores the tokens in `~/.wizard/xai_oauth.json` (file mode 0600); the access token is refreshed automatically. On success it adds the `xai-oauth` provider and switches the live agent to it; no `/provider add` needed. The window can start the same flow from its settings sheet (see [Native GUI](native-gui.md)).
+Wizard opens your browser, captures the callback on localhost, and stores the tokens in `~/.wizard/xai_oauth.json` (file mode 0600); the access token is refreshed automatically. A second `/login xai` (or `wizard --login xai`) with a live session is a no-op: it does not open the browser again. `/login xai force` replaces the session. On success it adds the `xai-oauth` provider and switches the live agent to it; no `/provider add` needed. The window can start the same flow from its settings sheet (see [Native GUI](native-gui.md)).
 
 Note: xAI gates OAuth API access to certain SuperGrok plans. If requests come back with HTTP 403, use the API-key flavor (`kind = "xai"` with `XAI_API_KEY`) instead.
 

@@ -120,7 +120,8 @@ pub struct Cli {
 
     /// Sign in to a provider account instead of starting the TUI: `xai`
     /// (SuperGrok) or `chatgpt` (Plus/Pro/Team). OAuth in the browser; tokens
-    /// are stored under ~/.wizard/.
+    /// are stored under ~/.wizard/. A live xAI session is left alone; delete
+    /// `~/.wizard/xai_oauth.json` (or run `/login xai force`) to replace it.
     #[arg(long, value_name = "PROVIDER")]
     pub login: Option<String>,
 

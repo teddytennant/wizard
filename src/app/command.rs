@@ -1539,13 +1539,19 @@ impl CommandContext<'_> {
         self.app.notice(message);
     }
 
-    /// `/login <provider>`: run an OAuth sign-in in the background, streaming
-    /// progress (including the URL to open) into the transcript as notices.
-    fn start_login(&mut self, provider: String) {
+    /// `/login <provider> [force]`: run an OAuth sign-in in the background,
+    /// streaming progress (including the URL to open) into the transcript as
+    /// notices. A live session is left alone unless `force` is set.
+    fn start_login(&mut self, provider: String, force: bool) {
         let _ = provider;
         let notify = self.events.sender();
-        self.app
-            .notice("starting the xAI sign-in; your browser should open shortly");
+        if !force && crate::llm::xai_oauth::signed_in() {
+            self.app
+                .notice("already signed in to xAI; run `/login xai force` to replace the session");
+        } else {
+            self.app
+                .notice("starting the xAI sign-in; your browser should open shortly");
+        }
         tokio::spawn(async move {
             let progress = {
                 let notify = notify.clone();
@@ -1563,7 +1569,7 @@ impl CommandContext<'_> {
             // has no channel here; `login` still reports how to forward the
             // callback port, which is the way through from a remote session.
             let paste = crate::llm::oauth_callback::PasteChannel::Disabled;
-            match crate::llm::xai_oauth::login(progress, paste).await {
+            match crate::llm::xai_oauth::login(progress, paste, force).await {
                 Ok(()) => {
                     // Auto-add the OAuth provider and switch to it; the main
                     // loop owns the config + agent slot.
@@ -1837,8 +1843,8 @@ impl CommandSurface for CommandContext<'_> {
             .await;
     }
 
-    async fn login(&mut self, provider: String) {
-        self.start_login(provider);
+    async fn login(&mut self, provider: String, force: bool) {
+        self.start_login(provider, force);
     }
 
     async fn import_claude(&mut self, selection: ImportSelection) {

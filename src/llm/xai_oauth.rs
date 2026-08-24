@@ -6,10 +6,14 @@
 //! module only supplies the credentials:
 //! - [`login`] runs the interactive browser flow (`wizard --login xai` or the
 //!   `/login xai` slash command) and stores the tokens in
-//!   `~/.wizard/xai_oauth.json` (file 0600, directory 0700).
+//!   `~/.wizard/xai_oauth.json` (file 0600, directory 0700). A session already
+//!   on disk is left alone; `/login xai force` (or deleting the file) starts a
+//!   new one.
 //! - [`XaiTokenSource`] implements [`TokenSource`]: it reads the stored
 //!   tokens, proactively refreshes the access token when its JWT `exp` is
-//!   within 120 s, and force-refreshes once after an API 401.
+//!   within 120 s, and force-refreshes once after an API 401. Refresh is
+//!   locked across processes so a second Wizard cannot spend a grant the first
+//!   one just rotated and then delete the file.
 //!
 //! Tokens never go into `config.toml`; keys live in env vars or dedicated
 //! files only.
@@ -270,6 +274,82 @@ pub fn clear_tokens(path: &Path) -> Result<()> {
     }
 }
 
+/// True when `~/.wizard/xai_oauth.json` holds an access token. The access
+/// token may already be stale; a refresh token on the same file is what
+/// keeps the session alive, and a missing one is the refresh path's problem
+/// rather than a reason to open the browser again.
+pub fn signed_in() -> bool {
+    matches!(
+        token_path()
+            .ok()
+            .and_then(|path| load_tokens(&path).ok().flatten()),
+        Some(tokens) if !tokens.access_token.is_empty()
+    )
+}
+
+/// Sidecar the refresh lock is taken on. The token file itself is replaced
+/// by `rename`, so a lock on that inode would not survive the write it is
+/// there to serialize.
+fn lock_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// How long a refresh waits for another Wizard that is already rotating the
+/// grant. Past this we proceed unlocked and rely on [`forget_spent_grant`]
+/// to keep a file the other process already rewrote.
+const REFRESH_LOCK_WAIT: Duration = Duration::from_secs(10);
+
+fn lock_tokens(path: &Path) -> Option<crate::platform::lockfile::Guard> {
+    crate::platform::lockfile::exclusive(&lock_path(path), REFRESH_LOCK_WAIT)
+}
+
+/// If the file no longer holds the refresh token we have in memory, another
+/// Wizard already rotated (or replaced) the grant. Take that session and
+/// skip spending ours. Returns true when the cache is now a grant we must
+/// not refresh.
+fn take_disk_if_rotated(cache: &mut TokenCache, path: &Path) -> bool {
+    let Ok(Some(on_disk)) = load_tokens(path) else {
+        return false;
+    };
+    let had_cache = cache.tokens.is_some();
+    let cached = cache
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.refresh_token.as_deref());
+    let disk = on_disk.refresh_token.as_deref();
+    // Only a *different* grant on disk is a rotation. An empty cache just
+    // means this process has not loaded the file yet; treating that as
+    // rotated would skip the expiry check on every first call.
+    let rotated = had_cache && disk.is_some() && disk != cached;
+    cache.tokens = Some(on_disk);
+    if rotated {
+        cache.refreshed_at = Some(Instant::now());
+    }
+    rotated
+}
+
+/// After the token endpoint refused the grant we just sent: keep the file
+/// if it is no longer that grant (another Wizard wrote a new session while
+/// we were in flight), otherwise delete it. Returns true when the cache
+/// now holds the surviving session.
+fn forget_spent_grant(cache: &mut TokenCache, path: &Path, spent: &str) -> bool {
+    if let Ok(Some(on_disk)) = load_tokens(path)
+        && on_disk
+            .refresh_token
+            .as_deref()
+            .is_some_and(|token| token != spent)
+    {
+        cache.tokens = Some(on_disk);
+        cache.refreshed_at = Some(Instant::now());
+        return true;
+    }
+    let _ = clear_tokens(path);
+    cache.tokens = None;
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Login flow
 // ---------------------------------------------------------------------------
@@ -457,12 +537,24 @@ pub async fn wait_and_complete_with_paste(
 /// the browser, wait, exchange. `report` receives human-readable progress lines
 /// (stdout for the CLI flag, transcript notices for the slash command).
 ///
+/// A session already on disk is left alone unless `force` is set. Opening the
+/// browser every time is how a user who is already signed in gets asked again,
+/// and a second grant written over a live one is what a sibling Wizard then
+/// treats as a revoked refresh and deletes.
+///
 /// `paste` says whether this caller owns stdin and can therefore offer the
 /// remote-session fallback; see [`PasteChannel`].
-pub async fn login<F>(report: F, paste: PasteChannel) -> Result<()>
+pub async fn login<F>(report: F, paste: PasteChannel, force: bool) -> Result<()>
 where
     F: Fn(&str) + Send + Sync,
 {
+    if !force && signed_in() {
+        report(&format!(
+            "already signed in to xAI ({}); run `/login xai force` to replace the session",
+            token_path()?.display()
+        ));
+        return Ok(());
+    }
     let pending = begin_browser_login().await?;
     report(&format!(
         "open this URL to sign in with your xAI account:\n{}",
@@ -710,8 +802,14 @@ impl XaiTokenSource {
 
     /// Refresh the access token via the stored refresh token. On a 400/401
     /// from the token endpoint the stored tokens are cleared (the grant is
-    /// gone for good) and the user is told to log in again.
+    /// gone for good) and the user is told to log in again — unless the file
+    /// on disk is already a different grant, which is a sibling Wizard that
+    /// signed in or refreshed while this one was holding a spent token.
     async fn refresh(&self, cache: &mut TokenCache) -> Result<()> {
+        let _lock = lock_tokens(&self.path);
+        if take_disk_if_rotated(cache, &self.path) {
+            return Ok(());
+        }
         let tokens = self.ensure_loaded(cache)?;
         let refresh_token = tokens.refresh_token.clone().ok_or_else(|| {
             refresh_error(
@@ -751,8 +849,9 @@ impl XaiTokenSource {
         if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::UNAUTHORIZED
         {
             let body = response.text().await.unwrap_or_default();
-            let _ = clear_tokens(&self.path);
-            cache.tokens = None;
+            if forget_spent_grant(cache, &self.path, &refresh_token) {
+                return Ok(());
+            }
             return Err(refresh_error(
                 Some(401),
                 format!(
@@ -1275,5 +1374,72 @@ mod tests {
             .refresh_after_unauthorized()
             .await
             .expect_err("the refresh ran, and this store cannot satisfy it");
+    }
+
+    fn sample_tokens(access: &str, refresh: Option<&str>) -> StoredTokens {
+        StoredTokens {
+            access_token: access.to_string(),
+            refresh_token: refresh.map(str::to_string),
+            token_type: "Bearer".to_string(),
+            token_endpoint: "https://auth.x.ai/oauth/token".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_spent_refresh_does_not_delete_a_newer_session_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("xai_oauth.json");
+        save_tokens(&path, &sample_tokens("new-at", Some("new-rt"))).expect("save");
+        let mut cache = TokenCache {
+            tokens: Some(sample_tokens("old-at", Some("old-rt"))),
+            refreshed_at: None,
+        };
+        assert!(
+            forget_spent_grant(&mut cache, &path, "old-rt"),
+            "the file is a different grant and must survive"
+        );
+        assert_eq!(
+            cache.tokens.as_ref().map(|t| t.access_token.as_str()),
+            Some("new-at")
+        );
+        assert!(path.exists(), "the surviving session stays on disk");
+
+        save_tokens(&path, &sample_tokens("same-at", Some("old-rt"))).expect("save");
+        cache.tokens = Some(sample_tokens("old-at", Some("old-rt")));
+        assert!(
+            !forget_spent_grant(&mut cache, &path, "old-rt"),
+            "the file still holds the grant that was refused"
+        );
+        assert!(!path.exists(), "a truly spent grant is forgotten");
+        assert!(cache.tokens.is_none());
+    }
+
+    #[test]
+    fn a_refresh_adopts_a_grant_another_wizard_already_wrote() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("xai_oauth.json");
+        save_tokens(&path, &sample_tokens("new-at", Some("new-rt"))).expect("save");
+        let mut cache = TokenCache {
+            tokens: Some(sample_tokens("old-at", Some("old-rt"))),
+            refreshed_at: None,
+        };
+        assert!(take_disk_if_rotated(&mut cache, &path));
+        assert_eq!(
+            cache
+                .tokens
+                .as_ref()
+                .and_then(|t| t.refresh_token.as_deref()),
+            Some("new-rt")
+        );
+
+        // First load of a matching file is not a rotation: refresh still has
+        // to run if the access token is stale.
+        cache.tokens = None;
+        cache.refreshed_at = None;
+        assert!(!take_disk_if_rotated(&mut cache, &path));
+        assert_eq!(
+            cache.tokens.as_ref().map(|t| t.access_token.as_str()),
+            Some("new-at")
+        );
     }
 }

@@ -11,6 +11,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 ### Fixed
 
 - **`install.sh` works on Alpine and on NixOS again.** The published `wizard-x86_64-unknown-linux-musl` binary was never static: it requested `/lib/ld-musl-x86_64.so.1` and segfaulted under Alpine's own loader, so the installer's post-download check rejected it and fell through to a source build. Alpine had no working install path at all, and NixOS had none either, since the glibc asset cannot run there by design. Every release from v2.0.1 to v2.1.1 shipped it that way. The cause was one line of release CI: `musl-gcc` was pointed at the *link* as well as the compile, and it is a specs wrapper around the host gcc whose specs inject that interpreter into any link not spelled `-static`. It still compiles the C that `ring` and LuaJIT need; the link is rustc's again, against its own bundled musl CRT. Both musl assets are now measured static before they are uploaded, and that check can fail a release rather than warn about one.
+- **`/login xai` no longer opens the browser when you are already signed in.** A second grant over a live one is what the other Wizard on the machine then treats as a revoked refresh and deletes, which is why the sign-in kept coming back. `/login xai force` still replaces the session. A rejected refresh now keeps the file if another process already wrote a newer grant, and refresh itself is locked across processes so two Wizards cannot spend the same single-use token.
 
 ## [2.1.1] - 2026-08-23
 
