@@ -62,6 +62,9 @@ failed=$(grep -oE '[0-9]+ failed' "$test_log" | grep -oE '^[0-9]+' \
          | awk '{n += $1} END {print n + 0}')
 printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TESTS"
 
+if [ "${passed:-0}" -lt 1 ]; then
+    bad "the test run reported no results at all (truncated log? build failure?)"
+fi
 if [ "${failed:-1}" -ne 0 ]; then
     # The one known flake, so a busy machine does not read as a regression.
     if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$test_log" \
@@ -97,6 +100,12 @@ nd_failed=$(grep -oE '[0-9]+ failed' "$nd_log" | grep -oE '^[0-9]+' \
 nd_passed=$(grep -oE '[0-9]+ passed' "$nd_log" | grep -oE '^[0-9]+' \
             | awk '{n += $1} END {print n + 0}')
 printf '\nno-default-features: passed=%s failed=%s\n' "$nd_passed" "$nd_failed"
+# A run that reported nothing is not a pass. This leg once printed
+# `passed=0 failed=0` and scored green because the disk filled and the log it
+# parses was truncated to nothing -- the exact shape of a gate that lies.
+if [ "${nd_passed:-0}" -lt 1 ]; then
+    bad "--no-default-features reported no test results at all (truncated log? build failure?)"
+fi
 if [ "${nd_failed:-1}" -ne 0 ]; then
     if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$nd_log" \
        && [ "$nd_failed" -eq 1 ]; then
