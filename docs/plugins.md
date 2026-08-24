@@ -189,6 +189,14 @@ are the ones that cost money and leak data. Both are metered: a plugin's model
 calls are attributed to it in `/cost`, and a plugin's HTTP goes through the same
 allowlist `[web]` already applies.
 
+Two corrections to that last sentence, made when the bridge was built.
+`[web]` has no allowlist — it has an SSRF guard (`check_url`, which resolves
+the host and refuses every private range) plus `allow_local` and
+`fetch_max_bytes`. That is what a plugin's HTTP goes through, and it is a
+tighter check than an allowlist would be, but it is not the one this paragraph
+named. And "attributed to it in `/cost`" is half true: the spend is counted,
+and `UsageTracker` has no dimension to say whose it was. See "Still open".
+
 ## The async problem
 
 Today Lua runs one throwaway VM per tool call on `spawn_blocking`
@@ -534,7 +542,81 @@ problem `src/llm/registry.rs` already flags as its own change.
   rather than an entry that was never offered. Building both from
   `registry::kinds()` is the fix and is the same change `src/llm/registry.rs`
   has been asking for.
-- **The host bridge is still `UnwiredHost`.** A Lua plugin that calls
-  `wizard.http` or `wizard.model` gets an error naming the reason. Attaching a
-  real bridge is its own piece of work.
 - **Eight providers to go**, plus everything that is not a provider.
+- **A plugin's spend is in `/cost`'s total and nowhere else.** `UsageTracker`
+  is nine bare atomics with no keyed dimension in it, so `wizard.model` bills
+  through `record_delegated` exactly as a subagent does and is then
+  indistinguishable from the turn's own tokens. `docs/plugins.md` promised "a
+  plugin's model calls are attributed to it in `/cost`"; half of that is true
+  (the money is counted) and half is not (it does not say whose). The honest
+  fix is a keyed bucket on the tracker and a `source` on `UsageRecord`, and it
+  is a usage change rather than a plugin one.
+
+## As built: the host bridge
+
+`src/plugins/host.rs` is the `HostBridge` the section above left open, and
+every namespace on it resolves to code that already existed:
+
+| Namespace | Reached through |
+| --- | --- |
+| `wizard.fs` | `install_wizard_lib`, confined to the project root without `filesystem` |
+| `wizard.http` | `web_client` + `check_url` + `get_following_redirects` + `read_capped` |
+| `wizard.process` | `shell::run_command_cancellable` |
+| `wizard.model` | the agent's live `LlmProvider`, drained through `collect_text_billed` |
+| `wizard.ui` | `AgentEvent::Notice` on the turn's channel |
+| `wizard.agent` | the registered `spawn_subagent` tool |
+
+Nothing here is a second implementation. That is the whole design, and the two
+places it was tempting to write one are worth naming: a second HTTP client is a
+second place to forget that reqwest's redirect policy is synchronous and
+therefore cannot re-resolve a hop — which is the entire SSRF guard bypassed —
+and a second subagent spawner is a second place to get the pane events, the
+read-only gate, the shared breaker and the foreground/background cancellation
+split wrong. Three functions in `src/tools/web.rs` widened to `pub(crate)` and
+one new entry point beside `run_command`; that was the whole cost.
+
+**The live agent arrives through a slot, and that is a real limitation.** Four
+of the six namespaces need something only a running agent has — a provider, a
+token tracker, a cancel handle, an event channel, a tool registry — and the
+kernel is built long before any of them exist, from `llm::registry`, from
+`wizard doctor`, from a unit test. So `WizardHost` holds a slot an agent fills
+through `host::bind`, called from `Agent::new`, from `set_model`, from
+`set_client` and from the top of every turn (which is when the event channel is
+known). Binding from the agent rather than from each surface is the same
+argument `boot` makes about `crate::run`: every agent-bearing surface builds an
+`Agent`, and the surfaces that get forgotten are the headless ones. **Last
+binder wins**, so two agents in one process — a fleet run, a gateway serving two
+sessions — share the slot and a plugin bills whichever bound most recently.
+
+**Unbound, four namespaces still answer and two refuse.** `wizard.http` has the
+`[web]` defaults and `wizard.process` has the kernel's project root, which is
+exactly right for a plugin-only process. `wizard.ui.notify` writes to the log
+and returns `Ok`: a notice's failure mode is nobody hearing it, and the log is
+somewhere it can be heard. `wizard.model` and `wizard.agent` **refuse**, and
+the alternative — building a provider from `Config::active()` on the side — is
+specifically wrong, because that provider has no tracker behind it and the
+spend would never reach `/cost`. Unmetered spend on the user's key is worse
+than a clear error.
+
+**Everything that can block observes the turn's cancel handle.** HTTP and the
+model call are a `tokio::select!` against `agent::cancelled`, because dropping
+a reqwest future or a `ChatStream` is a clean abort. A child process is not —
+dropping it reaps the shell and orphans whatever it forked — so
+`run_command_cancellable` was added beside `run_command`, selecting on the
+handle *inside* the runner where `kill_group` is. The existing capture callers
+kept their signatures and pass no handle. The subagent path hands the handle
+down as `SpawnOptions::cancel`, which is what a foreground `spawn_subagent`
+already did.
+
+**A plugin's HTTP body comes back as text, not as markdown.** `web_fetch`
+converts HTML because it is feeding a model prose; a plugin calling an endpoint
+wants the endpoint's answer. Everything else is the web tool's: `allow_local`
+decides whether loopback is reachable, `fetch_max_bytes` caps the body while it
+streams, and the result is defanged. Redirects are followed for `GET` and
+refused for `POST`/`PUT`, because following one with a body means replaying
+that body — very possibly a credential — to a host the plugin never named.
+
+**Host errors reach Lua flattened.** `external` formatted with `to_string()`,
+which prints only the outermost layer, and a host call's reason is almost
+always underneath one. `{:#}` now, so `wizard.process.run` fails as "tool '...'
+failed: exited 3" rather than as "tool '...' failed".

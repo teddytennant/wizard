@@ -295,7 +295,13 @@ pub(crate) fn no_redirect_client_builder(timeout: Duration) -> reqwest::ClientBu
 /// HTTP client for the web tools: desktop UA and a 30s timeout. Redirects are
 /// **not** followed here — see [`get_following_redirects`]. It used to take
 /// `allow_local`, for a redirect policy that no longer lives here.
-fn web_client() -> Result<reqwest::Client, reqwest::Error> {
+///
+/// `pub(crate)` because a Lua plugin's `wizard.http` is the web tool's policy
+/// reached from another caller, not a second web tool: same UA, same budget,
+/// same refusal to follow a redirect without re-resolving it. A private client
+/// here would have meant a second one over there, and the second one is always
+/// the one that forgets the redirect rule.
+pub(crate) fn web_client() -> Result<reqwest::Client, reqwest::Error> {
     no_redirect_client_builder(FETCH_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
@@ -652,7 +658,7 @@ impl Tool for WebFetchTool {
 /// [`crate::mesh::is_invisible`] already defines — reused rather than
 /// re-listed, so there is one audited answer to "what is invisible" instead of
 /// two that can drift.
-fn defang(text: &str) -> String {
+pub(crate) fn defang(text: &str) -> String {
     text.chars()
         .filter(|ch| !crate::mesh::is_invisible(*ch))
         .map(|ch| match ch {
@@ -678,7 +684,11 @@ fn is_texty(content_type: &str) -> bool {
 
 /// Stream a response body, stopping after `cap` bytes. Returns the (possibly
 /// capped) body and whether the cap cut anything off.
-async fn read_capped(
+///
+/// `pub(crate)` for the same reason as [`web_client`]: `fetch_max_bytes` is a
+/// `[web]` setting, and a caller that reads the body some other way is a
+/// caller that does not honour it.
+pub(crate) async fn read_capped(
     response: reqwest::Response,
     cap: usize,
 ) -> Result<(Vec<u8>, bool), reqwest::Error> {

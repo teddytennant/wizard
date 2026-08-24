@@ -984,10 +984,44 @@ fn refine(outcome: CandidateOutcome) -> CandidateOutcome {
 
 /// Drain a [`ChatStream`] to the concatenated answer text, skipping `thinking`
 /// (reasoning) deltas.
-pub(crate) async fn collect_text(mut stream: ChatStream) -> Result<String> {
+pub(crate) async fn collect_text(stream: ChatStream) -> Result<String> {
+    collect_text_billed(stream, None).await
+}
+
+/// [`collect_text`], with the tokens the backend reported billed to `usage`.
+///
+/// Two entry points over one body rather than a `usage` argument at every call
+/// site, because the council's own candidates are already billed by the
+/// subagent loop underneath them and passing `None` sixty times would be a
+/// worse lie than passing nothing.
+///
+/// The caller that needs the metered spelling is a Lua plugin's
+/// `wizard.model.complete`: that call spends the user's money on the user's
+/// key, and spend that reaches no tracker is spend `/cost` cannot show. It
+/// bills through `record_delegated` for the same reason a subagent does — the
+/// prompt was not this turn's prompt, so it must not drive compaction — and
+/// through `record_cache` so a cached plugin prompt is not counted as fresh
+/// input.
+pub(crate) async fn collect_text_billed(
+    mut stream: ChatStream,
+    usage: Option<&crate::usage::UsageTracker>,
+) -> Result<String> {
     let mut out = String::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
+        if let Some(tracker) = usage {
+            // Counts arrive on the final chunk only, but reading them on every
+            // chunk costs two `Option` checks and survives a provider that
+            // reports incrementally.
+            let prompt = chunk.prompt_eval_count.unwrap_or(0);
+            let completion = chunk.eval_count.unwrap_or(0);
+            if prompt > 0 || completion > 0 {
+                tracker.record_delegated(prompt, completion);
+            }
+            if chunk.cache.read > 0 || chunk.cache.write > 0 {
+                tracker.record_cache(chunk.cache.read, chunk.cache.write);
+            }
+        }
         if chunk.thinking {
             continue;
         }

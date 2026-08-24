@@ -54,15 +54,18 @@
 //! mutexes it recovers from poisoning, so a panic mid-`apply` leaves a
 //! half-registered plugin's ledger unloaded rather than a wedged kernel.
 //!
-//! # What is not wired yet
+//! # The host bridge
 //!
-//! The host bridge is still [`crate::kernel::UnwiredHost`], so a Lua plugin
-//! that calls `wizard.http` or `wizard.model` gets an error naming the reason
-//! rather than a silent no-op. Attaching a real bridge is its own change; see
-//! `docs/plugins.md`.
+//! [`host::WizardHost`] is installed into the kernel below, so `wizard.http`,
+//! `wizard.process`, `wizard.model`, `wizard.ui` and `wizard.agent` reach the
+//! real thing rather than an error. Four of the five need a running agent, and
+//! an agent binds itself through [`host::bind`] when it is built; see
+//! [`host`] for what each namespace resolves to and what an unbound process
+//! still answers.
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+pub mod host;
 
 use std::cell::Cell;
 use std::panic::AssertUnwindSafe;
@@ -94,6 +97,10 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
 }
 
 static KERNEL: OnceLock<Kernel> = OnceLock::new();
+/// The bridge behind this process's `wizard.*`, kept beside the kernel so
+/// [`host::bind`] can reach it as a `WizardHost` rather than as the
+/// `dyn HostBridge` the kernel stores.
+static HOST: OnceLock<Arc<host::WizardHost>> = OnceLock::new();
 /// Set by [`boot`] before the kernel is built, so `--cwd` reaches the sandbox
 /// confinement. Absent when something touched the kernel first, in which case
 /// the process's working directory is the honest answer.
@@ -113,6 +120,12 @@ pub fn kernel() -> &'static Kernel {
         if let Some(root) = PROJECT_ROOT.get() {
             options.project_root = root.clone();
         }
+        // The host is built from the same root the kernel confines file
+        // helpers to, so a `wizard.process.run` with no agent bound runs where
+        // a sandboxed plugin can already read and write.
+        let host = Arc::new(host::WizardHost::new(options.project_root.clone()));
+        let _ = HOST.set(Arc::clone(&host));
+        options.host = host;
         let kernel = Kernel::new(options);
         LOADING.set(true);
         for plugin in compiled_in() {
@@ -227,6 +240,20 @@ async fn load_user_plugins(kernel: &Kernel) {
 /// goes through, and from `mcp serve`, which builds its own.
 pub fn install_tools_into(registry: &mut ToolRegistry) -> usize {
     kernel().install_tools_into(registry)
+}
+
+/// This process's host bridge, once the kernel exists.
+///
+/// Ensures the kernel first, for the same reason `llm::registry` does: a
+/// binding made before anything had looked the kernel up would land in a
+/// `OnceLock` nobody had filled. `None` only on the thread that is inside the
+/// initializer, which cannot be an agent binding itself.
+pub(crate) fn host_bridge() -> Option<Arc<host::WizardHost>> {
+    if LOADING.get() {
+        return None;
+    }
+    let _ = kernel();
+    HOST.get().cloned()
 }
 
 /// Make sure the compiled-in plugins have registered before a provider kind is

@@ -927,7 +927,38 @@ impl Agent {
             .history
             .push(ChatMessage::system(agent.compose_system_prompt()));
         agent.history.extend(prior);
+        agent.bind_host(None);
         Ok(agent)
+    }
+
+    /// Publish this agent to the process's plugin host bridge, so a Lua
+    /// plugin's `wizard.model`, `wizard.agent` and `wizard.ui` have something
+    /// to reach.
+    ///
+    /// Here rather than in each surface for the same reason
+    /// [`crate::plugins::boot`] is called from `crate::run`: every
+    /// agent-bearing surface builds an `Agent`, and the surfaces that would be
+    /// forgotten are the headless ones nobody watches start up. Called again
+    /// whenever the published half changes — `/model`, `/fusion`, and the top
+    /// of every turn, which is when the event channel is known.
+    ///
+    /// A no-op in a process whose kernel carries some other bridge, which is
+    /// every kernel a test builds for itself.
+    fn bind_host(&self, events: Option<&mpsc::Sender<AgentEvent>>) {
+        let mut ctx = self.ctx.clone();
+        if let Some(events) = events {
+            ctx.events = Some(events.clone());
+        }
+        crate::plugins::host::bind(crate::plugins::host::Binding {
+            ctx,
+            client: Arc::clone(&self.client),
+            model: self.model.clone(),
+            spawn: self
+                .dispatcher
+                .registry()
+                .get(subagent::SPAWN_SUBAGENT_TOOL_NAME)
+                .cloned(),
+        });
     }
 
     /// Current personality mode.
@@ -1320,6 +1351,7 @@ impl Agent {
         self.llm_breaker = breaker::LlmBreaker::new();
         self.refresh_system_prompt();
         self.sync_code_mode();
+        self.bind_host(None);
     }
 
     /// Shared handle on the background-subagent registry, so a surface can
@@ -1441,6 +1473,7 @@ impl Agent {
         self.native_tools = native_tools;
         self.refresh_system_prompt();
         self.sync_code_mode();
+        self.bind_host(None);
     }
 
     /// Replace the skill set mid-session (`/reload`) and rebuild the system

@@ -328,10 +328,17 @@ fn install_host(lua: &Lua, ctx: &Ctx, caps: &CapabilitySet) -> mlua::Result<()> 
     Ok(())
 }
 
+/// Carry a host error into Lua as a plain string.
+///
+/// Flattened with `{:#}` rather than `to_string()`, which prints only the
+/// outermost layer. A host call's *reason* is almost always underneath one:
+/// `wizard.process.run` fails as "tool '...' failed" with "interrupted" or
+/// "exited 3" beneath it, and a plugin author handed the top half alone has
+/// nothing to act on.
 fn external(err: anyhow::Error) -> mlua::Error {
-    mlua::Error::external(Box::<dyn std::error::Error + Send + Sync>::from(
-        err.to_string(),
-    ))
+    mlua::Error::external(Box::<dyn std::error::Error + Send + Sync>::from(format!(
+        "{err:#}"
+    )))
 }
 
 /// Build the `ctx` table the plugin's `apply` is handed.
