@@ -990,7 +990,7 @@ mod tests {
     /// as the answer to the other read.
     #[tokio::test]
     async fn a_parallel_batch_reaches_ollama_in_call_order() {
-        use crate::llm::openai::testing::{Recorded, parallel_batch_request};
+        use crate::llm::test_support::{Recorded, parallel_batch_request};
 
         let recorded = Recorded::replay(PARALLEL_TOOL_BATCH_NDJSON).await;
         let client = OllamaClient::new(recorded.root.as_str());
@@ -1596,7 +1596,7 @@ mod tests {
         // three classifications have to survive on the one chain: the legacy
         // `OllamaError` path, the shared `ProviderError` contract, and the
         // wait itself.
-        let host = crate::llm::testing::one_shot_http_server(
+        let host = crate::llm::test_support::one_shot_http_server(
             "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 12\r\nContent-Length: \
              9\r\nConnection: close\r\n\r\nslow down",
         )

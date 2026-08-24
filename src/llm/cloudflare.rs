@@ -2,7 +2,7 @@
 //! Qwen, ...) behind an OpenAI-compatible Chat Completions endpoint scoped to a
 //! Cloudflare account and authenticated with an API token.
 //!
-//! Chat uses the OpenAI wire shape, handled by [`super::openai::OpenAiProvider`].
+//! Chat uses the OpenAI wire shape, handled by [`super::wire::OpenAiProvider`].
 //! This module wraps that client to override the health probe and model listing:
 //! Workers AI's OpenAI-compatible surface exposes only `/v1/chat/completions`
 //! (there is no `/v1/models`), so reachability/auth and model discovery instead
@@ -15,7 +15,8 @@
 //! the body. The one OpenAI feature that does not survive the trip is prompt
 //! caching: it is keyed by a `prompt_cache_key` request field that Workers AI
 //! does not implement (it has no prompt cache to key into), so the field is
-//! not sent. `openai::is_openai_api` is what decides that.
+//! not sent. Nothing has to decide that: the shared client sends the field
+//! only for an endpoint that installed a key function, and only `openai` does.
 
 use std::sync::Arc;
 
@@ -23,8 +24,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::openai::{OpenAiProvider, StaticToken};
 use super::provider::LlmProvider;
+use super::wire::{OpenAiProvider, StaticToken};
 use super::{ChatRequest, ChatStream, ProviderError};
 
 /// Default model: GLM 5.2 (Z.ai), the most capable text model in the Workers
@@ -356,7 +357,7 @@ mod tests {
     async fn a_parallel_batch_reaches_workers_ai_in_the_shared_shape() {
         use futures_util::StreamExt as _;
 
-        use crate::llm::openai::testing::{
+        use crate::llm::test_support::{
             PARALLEL_TOOL_BATCH_SSE, Recorded, assert_batch_is_answerable, parallel_batch_request,
         };
 

@@ -15,9 +15,9 @@ use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::cloudflare::{self, CloudflareProvider};
 use crate::llm::llamacpp::LlamaCppProvider;
 use crate::llm::ollama::OllamaClient;
-use crate::llm::openai::{OpenAiProvider, StaticToken};
 use crate::llm::openrouter;
 use crate::llm::provider::LlmProvider;
+use crate::llm::wire::{OpenAiProvider, StaticToken};
 use crate::llm::xai_oauth;
 // Every directory under `~/.wizard` is private state: session JSONLs carry
 // full tool output, `logs/` carries traces, `credentials.toml` carries API
@@ -812,7 +812,7 @@ impl ProviderConfig {
                         self.api_key_env.as_deref().unwrap_or("an env var")
                     );
                 }
-                Ok(Arc::new(OpenAiProvider::new(
+                Ok(Arc::new(crate::llm::openai::provider(
                     self.base_url.clone(),
                     self.model.clone(),
                     key,
