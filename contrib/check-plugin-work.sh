@@ -12,9 +12,11 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-# The baseline this migration must not regress. Captured on `main` @ 1ffd988
-# with `cargo test --no-fail-fast`.
-BASELINE_TESTS=2422
+# The baseline this migration must not regress. Captured with
+# `cargo test --no-fail-fast` on the branch as it stood after the kernel landed
+# (2536); it was 2422 on `main` @ 1ffd988 before that. Raise it when a phase
+# adds tests, so the ratchet keeps ratcheting.
+BASELINE_TESTS=2536
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -73,6 +75,37 @@ if [ "${passed:-0}" -lt "$BASELINE_TESTS" ]; then
     bad "test count went backwards: $passed < $BASELINE_TESTS (did tests get deleted rather than moved?)"
 fi
 rm -f "$test_log"
+
+# The "delete any one plugin" rule from docs/plugins.md, as something that can
+# fail. A plugin whose removal breaks the build is not a plugin, and the only
+# way to know is to remove it: `--no-default-features` drops
+# `provider-anthropic`, and the tree still has to compile, still has to pass,
+# and `kind = "anthropic"` still has to degrade to a named error rather than a
+# panic. `src/plugins/mod.rs` carries the assertion for the second half.
+#
+# Cheap enough to run every time (one extra feature-set build) and worth it:
+# this is the leg that catches a core module reaching into a plugin, which is
+# the failure the whole architecture exists to prevent and which the
+# default-features build cannot see.
+step "no-default-features (a build with the anthropic plugin deleted)"
+cargo build --no-default-features --locked || bad "cargo build --no-default-features"
+nd_log=$(mktemp)
+cargo test --no-default-features --locked --no-fail-fast 2>&1 | tee "$nd_log" \
+    | grep -E '^test result' || true
+nd_failed=$(grep -oE '[0-9]+ failed' "$nd_log" | grep -oE '^[0-9]+' \
+            | awk '{n += $1} END {print n + 0}')
+nd_passed=$(grep -oE '[0-9]+ passed' "$nd_log" | grep -oE '^[0-9]+' \
+            | awk '{n += $1} END {print n + 0}')
+printf '\nno-default-features: passed=%s failed=%s\n' "$nd_passed" "$nd_failed"
+if [ "${nd_failed:-1}" -ne 0 ]; then
+    if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$nd_log" \
+       && [ "$nd_failed" -eq 1 ]; then
+        printf 'note: only the known lockfile flake failed\n'
+    else
+        bad "$nd_failed test(s) failed with --no-default-features"
+    fi
+fi
+rm -f "$nd_log"
 
 step "result"
 if [ "$fail" -ne 0 ]; then

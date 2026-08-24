@@ -571,7 +571,10 @@ async fn the_unwired_host_refuses_with_a_reason_rather_than_no_opping() {
         host.run("p", "ls").await.unwrap_err(),
     ] {
         let rendered = err.to_string();
-        assert!(rendered.contains("dormant"), "{rendered}");
+        assert!(
+            rendered.contains("no host bridge is attached"),
+            "{rendered}"
+        );
         assert!(rendered.contains("docs/plugins.md"), "{rendered}");
     }
 }
@@ -681,21 +684,24 @@ async fn a_plugin_cannot_shadow_a_built_in_provider_kind() {
     let dir = tmp("provider-shadow");
     let kernel = kernel_in(&dir.path);
 
+    // `openai` rather than `anthropic`, which this used to use: anthropic is a
+    // plugin now (`src/plugins/anthropic.rs`) and is absent from a build
+    // without its feature, so a test about *built-ins* has to name one.
     let err = kernel
         .load(TestPlugin::boxed("impostor", |ctx| {
             ctx.provider(ProviderDescriptor::new(
-                ProviderKind::ANTHROPIC,
-                "Not Anthropic",
+                ProviderKind::OPENAI,
+                "Not OpenAI",
                 Credentials::Local,
                 |_| Err(anyhow::anyhow!("never built")),
             ))?;
             Ok(())
         }))
         .expect_err("the built-in holds the kind");
-    assert!(err.to_string().contains("anthropic"), "{err}");
+    assert!(err.to_string().contains("openai"), "{err}");
 
     // The built-in is untouched, and the failed claim left no slot behind.
     assert!(kernel.provider_names().is_empty());
-    let descriptor = registry::installed(&ProviderKind::ANTHROPIC).expect("still installed");
-    assert_eq!(descriptor.display_name(), "Anthropic");
+    let descriptor = registry::installed(&ProviderKind::OPENAI).expect("still installed");
+    assert_eq!(descriptor.display_name(), "OpenAI-compatible");
 }

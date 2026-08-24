@@ -4,19 +4,23 @@
 //! "`src/plugins/mod.rs` holds the one table mapping feature to constructor;
 //! it is the only file that names every Rust plugin". It exists so that the
 //! rest of core does not: `config.rs` used to import nine concrete provider
-//! types to construct them, and now imports none. This is the only file left
-//! that names all nine, and it names them to ask each for its descriptor —
-//! never to construct one.
+//! types to construct them, and now imports none. This file names the ones
+//! that are not plugins yet, and it names them to ask each for its descriptor
+//! — never to construct one.
 //!
 //! Keeping it as a separate module from [`super::registry`] is the point. The
 //! registry is core and knows nothing about which providers exist; this table
-//! is the seam the next phase deletes, one line at a time, as each provider
-//! becomes a plugin that calls `Ctx::provider` for itself. When the last line
-//! goes, so does the file.
+//! is the seam that gets deleted one line at a time, as each provider becomes
+//! a plugin that calls `Ctx::provider` for itself. When the last line goes, so
+//! does the file.
 //!
-//! No cargo features here yet, deliberately. Every provider is compiled in and
-//! registered eagerly, exactly as before this change — the enum is open now,
-//! and nothing has moved through the door.
+//! One line has gone. Anthropic is [`crate::plugins::anthropic`] — behind
+//! `--features provider-anthropic`, registered through `Ctx::provider` at
+//! kernel boot, and absent from a build that leaves the feature out. The eight
+//! below are still compiled in unconditionally and registered eagerly, which
+//! is why [`SHIPPED`] is the *floor* a build answers to rather than the whole
+//! of it: what a build actually installs is this table plus whichever plugins
+//! it was compiled with, and only [`super::registry::kinds`] knows that.
 
 use super::registry::{ProviderKind, ProviderRegistry};
 
@@ -33,7 +37,6 @@ pub(super) fn registry() -> ProviderRegistry {
         super::llamacpp::descriptor(),
         super::ollama::descriptor(),
         super::openai::descriptor(),
-        super::anthropic::descriptor(),
         super::openrouter::descriptor(),
         super::xai_oauth::key_descriptor(),
         super::xai_oauth::oauth_descriptor(),
@@ -51,13 +54,16 @@ pub(super) fn registry() -> ProviderRegistry {
     registry
 }
 
-/// The kinds this build ships. Named as data so tests can assert the table is
-/// complete without repeating it.
-pub const SHIPPED: [ProviderKind; 9] = [
+/// The kinds compiled in unconditionally, whatever features a build carries.
+///
+/// Named as data so tests can assert the table is complete without repeating
+/// it. Deliberately not "the kinds this build ships": a provider plugin adds
+/// to that set and is not listed here, because listing it here is exactly the
+/// naming this file exists to stop doing.
+pub const SHIPPED: [ProviderKind; 8] = [
     ProviderKind::LLAMACPP,
     ProviderKind::OLLAMA,
     ProviderKind::OPENAI,
-    ProviderKind::ANTHROPIC,
     ProviderKind::OPENROUTER,
     ProviderKind::XAI,
     ProviderKind::XAI_OAUTH,
@@ -70,14 +76,17 @@ mod tests {
     use super::*;
     use crate::llm::registry;
 
-    /// The nine kinds that were enum variants are still the nine kinds a
-    /// stock build answers to. This is the whole back-compat claim in one
-    /// assertion.
+    /// Every kind in the table is installed and usable. A subset assertion
+    /// rather than an equality one, because a plugin provider is installed too
+    /// and is not in the table — `plugins::anthropic_is_present_exactly_when_its_feature_is`
+    /// is the other half, and between them they cover the nine kinds a stock
+    /// build answers to, which is the whole back-compat claim.
     #[test]
     fn every_shipped_provider_is_installed() {
-        let mut expected = SHIPPED.to_vec();
-        expected.sort();
-        assert_eq!(registry::kinds(), expected);
+        let installed = registry::kinds();
+        for kind in SHIPPED {
+            assert!(installed.contains(&kind), "{kind}");
+        }
         for kind in SHIPPED {
             let descriptor = registry::installed(&kind).expect("installed");
             assert_eq!(descriptor.kind(), &kind);

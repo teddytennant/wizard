@@ -877,14 +877,30 @@ model = "@cf/zai-org/glm-5.2"
         ]
     );
 
-    // Every one of them resolves to a registered backend, and every one of
-    // them builds. This is the "all nine keep working" assertion: a
-    // constructor that moved to the wrong module, or a descriptor that was
-    // never added to the table, fails right here.
+    // Every kind this build installs resolves to a registered backend, and
+    // every one of them builds. This is the "all nine keep working"
+    // assertion: a constructor that moved to the wrong module, or a
+    // descriptor that was never added to the table, fails right here.
+    //
+    // Counted rather than asserted straight through the loop, because a kind
+    // whose provider is a plugin the build left out resolves to nothing *on
+    // purpose* — see `plugins::anthropic_is_present_exactly_when_its_feature_is`.
+    // The count is what stops the skip from swallowing a real regression: a
+    // kind that stops resolving for any other reason takes it below the floor.
+    let mut resolved = 0;
     for provider in &config.providers {
+        if registry::installed(&provider.kind).is_none() {
+            continue;
+        }
         assert!(provider.descriptor().is_some(), "{}", provider.kind);
         assert!(provider.build().is_ok(), "{} did not build", provider.kind);
+        resolved += 1;
     }
+    assert_eq!(
+        resolved,
+        crate::llm::builtin::SHIPPED.len() + usize::from(cfg!(feature = "provider-anthropic")),
+        "every compiled-in kind in the file must resolve"
+    );
 
     // The rest of the entry survives the trip, and the selection resolves.
     assert_eq!(config.active().name, "claude");
@@ -926,10 +942,10 @@ base_url = "https://example.test/v1"
 model = "m"
 
 [[providers]]
-name = "claude"
-kind = "anthropic"
-base_url = "https://api.anthropic.com"
-model = "claude-fable-5"
+name = "oai"
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o"
 "#;
     let config = Config::from_toml(raw).expect("an absent plugin must not break the file");
     assert_eq!(config.providers.len(), 2);
@@ -943,7 +959,10 @@ model = "claude-fable-5"
         Err(err) => err.to_string(),
     };
     assert!(message.contains("some-provider-plugin"), "{message}");
-    assert!(message.contains("anthropic"), "{message}");
+    // The valid list is generated from what is installed, so it names the
+    // built-ins. `openai` rather than `anthropic`: the latter is a plugin and
+    // is absent from a build compiled without it.
+    assert!(message.contains("openai"), "{message}");
 }
 
 /// Preparation is best effort by construction — every hosted backend has
@@ -993,6 +1012,7 @@ fn a_kinds_default_key_env_is_what_its_build_arm_used_to_pass() {
     // and LM Studio are reached, and `anthropic`'s variable is picked up
     // by the BYOP fallback rather than here.
     assert_eq!(env_for(ProviderKind::OPENAI), None);
+    #[cfg(feature = "provider-anthropic")]
     assert_eq!(env_for(ProviderKind::ANTHROPIC), None);
     // Backends with no key at all.
     assert_eq!(env_for(ProviderKind::LLAMACPP), None);

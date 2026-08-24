@@ -321,6 +321,14 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
         if !std::env::var(key_env).is_ok_and(|v| !v.trim().is_empty()) {
             continue;
         }
+        // The kind is a name, and a name is not a backend: a provider that
+        // lives in a plugin this build was compiled without has nothing to
+        // build. Synthesizing an entry for it would replace a real failure
+        // ("llama.cpp is not running") with a confusing one ("unknown provider
+        // kind 'anthropic'") about a provider the user never configured.
+        if crate::llm::registry::installed(kind).is_none() {
+            continue;
+        }
         let provider = ProviderConfig {
             name: name.to_string(),
             kind: kind.clone(),

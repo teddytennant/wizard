@@ -229,9 +229,11 @@ impl Ctx {
     /// config side has always needed.
     ///
     /// Registering here records the descriptor against this plugin so an
-    /// unload withdraws it. It becomes visible to `config.toml` when the
-    /// kernel publishes it with
-    /// [`Kernel::install_providers`](super::Kernel::install_providers).
+    /// unload withdraws it, and writes it into the process-wide
+    /// [`crate::llm::registry`] in the same step, so a `kind = "..."` can
+    /// select it immediately. The two are written and swept together rather
+    /// than through a separate publish step; `Slots::insert_provider` has the
+    /// argument.
     pub fn provider(&self, descriptor: ProviderDescriptor) -> Result<(), KernelError> {
         let name = self
             .kernel

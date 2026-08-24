@@ -2,7 +2,6 @@
 //! (not the OpenAI-compatible shim). Shared by the agent loop, the tool
 //! registry, and the TUI.
 
-pub mod anthropic;
 pub mod builtin;
 pub mod chatgpt;
 pub mod chatgpt_oauth;
@@ -30,7 +29,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
 /// Boxed stream of [`ChatChunk`]s yielded by every provider's `chat_stream`.
-/// Shared across [`llamacpp`], [`ollama`], [`wire`], and [`anthropic`].
+/// Shared across [`llamacpp`], [`ollama`], [`wire`], and the provider plugins.
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatChunk>> + Send>>;
 
 /// How long to wait for a TCP connection before giving up. Reaching the peer

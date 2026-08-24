@@ -1,6 +1,6 @@
 //! Fixture-driven tests for the streaming provider adapters.
 //!
-//! Every SSE test inside `src/llm/anthropic.rs` and `src/llm/openai.rs` builds
+//! Every SSE test inside `src/plugins/anthropic.rs` and `src/llm/openai.rs` builds
 //! its input as an inline Rust string literal and feeds it straight to
 //! `decode_sse`. That asserts what the author believed the wire format was, and
 //! it keeps asserting it forever: when a provider renames a field, adds a
@@ -46,11 +46,17 @@ use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use wizard::llm::anthropic::AnthropicProvider;
+// Anthropic is a plugin (`src/plugins/anthropic.rs`), so a build compiled
+// without `provider-anthropic` has no transport to replay a recording into.
+// Everything in this file that names it is gated; the fixture guards at the
+// bottom are not, because they only read bytes off disk and a build that
+// dropped the plugin must not drop its recordings.
 use wizard::llm::chatgpt::ChatgptProvider;
 use wizard::llm::provider::LlmProvider;
 use wizard::llm::wire::OpenAiProvider;
 use wizard::llm::{CacheTokens, ChatChunk, ChatMessage, ChatRequest, ToolCall};
+#[cfg(feature = "provider-anthropic")]
+use wizard::plugins::anthropic::AnthropicProvider;
 
 /// How many bytes of the fixture go into each HTTP chunked frame.
 ///
@@ -140,6 +146,7 @@ impl RecordedProvider {
     }
 
     /// The Anthropic client, pointed here. It appends `/v1/messages` itself.
+    #[cfg(feature = "provider-anthropic")]
     fn anthropic(&self, model: &str) -> AnthropicProvider {
         AnthropicProvider::new(&self.root, model, "test-key")
     }
@@ -357,6 +364,7 @@ fn streamed_text(chunks: &[ChatChunk]) -> Vec<(bool, String)> {
         .collect()
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_text_then_tool_use_replays_from_the_recorded_stream() {
     let recorded = RecordedProvider::replay("anthropic/text_then_tool_use.sse").await;
@@ -394,6 +402,7 @@ async fn anthropic_text_then_tool_use_replays_from_the_recorded_stream() {
     assert!(sent.contains("\"max_tokens\""), "{sent}");
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_thinking_deltas_stay_flagged_through_the_transport() {
     let recorded = RecordedProvider::replay("anthropic/thinking_then_text.sse").await;
@@ -410,6 +419,7 @@ async fn anthropic_thinking_deltas_stay_flagged_through_the_transport() {
     assert!(chunks.last().expect("a final chunk").done);
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_degenerate_tool_input_survives_the_recorded_stream() {
     let recorded = RecordedProvider::replay("anthropic/tool_input_not_json.sse").await;
@@ -526,6 +536,7 @@ async fn openai_generated_image_streams_live_from_the_recorded_stream() {
 /// that are not bound to their calls by id. All three were true of the
 /// pre-content-block adapter, which pushed each result as its own `user`
 /// message and matched them by tool name plus FIFO.
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_answers_a_recorded_parallel_batch_in_one_message() {
     let recorded = RecordedProvider::replay("anthropic/parallel_tool_calls.sse").await;

@@ -51,6 +51,9 @@ pub mod native;
 pub mod onboarding;
 pub mod output;
 pub mod platform;
+// Compiled-in plugins and the process kernel they load into. The one module
+// core is allowed to name, because it is the table rather than a plugin.
+pub mod plugins;
 pub mod progress;
 pub mod registry_client;
 pub mod schedule;
@@ -82,6 +85,21 @@ use crate::config::Mode;
 /// limit); every other mode exits 0 on success. Hard errors surface as `Err`
 /// and exit 1 from `main`.
 pub async fn run(mut cli: cli::Cli) -> Result<i32> {
+    // Bring the plugin kernel up before anything can dispatch. It is here,
+    // above the chain rather than inside a surface, because the seventeen arms
+    // below are every way into Wizard there is — the TUI, `wizard -p`, the
+    // gateway, ACP, `mcp serve`, fleet, doctor, the scheduler — and they must
+    // all get the same plugin set. Wiring each one separately would be
+    // seventeen places to forget, and the forgotten ones are the headless
+    // surfaces nobody watches.
+    //
+    // `--cwd` is passed rather than applied: each arm does its own chdir
+    // further down, and the kernel needs the project root now, to confine a
+    // sandboxed plugin's file helpers to the directory the user actually
+    // meant. Nothing here can fail — a plugin that will not load is a warning
+    // in the log; see `plugins::boot`.
+    plugins::boot(cli.cwd.as_deref()).await;
+
     // Top-level flags are not global: the self-contained subcommands below
     // read none of them (only --cwd). Reject the combination loudly instead
     // of silently dropping the flags (`wizard --plan fleet run` must not run

@@ -300,11 +300,10 @@ window in which an unloaded plugin's provider was still selectable, and exact
 unload is the reason there is a kernel
 (`a_plugin_registered_provider_is_selectable_from_config`).
 
-**One file still names every shipped provider.** `src/llm/builtin.rs` is the
-provider half of the `src/plugins/mod.rs` this document describes, and it is the
-only file left with a `use crate::llm::anthropic::…`. `config.rs` has none. No
-provider is a plugin yet and none is behind a cargo feature: the door is open
-and nothing has gone through it.
+**One file still names the providers that are not plugins yet.**
+`src/llm/builtin.rs` is the provider half of the `src/plugins/mod.rs` this
+document describes. Eight of the nine shipped providers are still in it. The
+ninth went through the door; see below.
 
 **Capabilities are finer-grained than `Stdlib` is.** `Stdlib::Sandboxed` drops
 `os` and `io` wholesale, so `filesystem` and `process` would both have to open
@@ -336,3 +335,139 @@ accidental widening is a supply-chain hole.
 **Handler priority: lower runs first.** `DEFAULT_PRIORITY` is 0 and the type is
 signed, so a plugin can order itself ahead of everything without knowing how many
 others exist.
+
+## As built: the kernel is live, and anthropic is a plugin
+
+The section above described a kernel nothing called. It is called now, and one
+provider has come out of `src/llm/builtin.rs` and into it. What follows is what
+that took and what it cost.
+
+### `src/plugins/mod.rs` is the table, and the process kernel
+
+The file this document predicted exists. It holds `compiled_in()` — one line
+per Rust plugin, each behind its cargo feature, and the only place in the tree
+that names one — and the `OnceLock<Kernel>` they load into. There is one kernel
+per process for the same reason `llm::registry`'s `INSTALLED` is a global:
+there is one set of installed plugins per process, by construction. `Kernel`
+itself stays instantiable more than once, because every kernel test makes its
+own.
+
+### Where startup calls it, and why there
+
+`crate::run` — the top of it, above the dispatch chain rather than inside any
+arm. `src/lib.rs` has seventeen entrypoints and every surface is one of them:
+the TUI, `wizard -p`, `--gateway`, `acp`, `mcp serve`, `fleet run`, `doctor`,
+the scheduler, `evolve`, `publish`, `sync`, `update`, `skills`, `peers`,
+`harness`, `desktop-setup`, `agents`. Subagents and `run_code` programs are not
+separate entrypoints: they compose from the same registry the agent got. One
+call above the chain gives all of them the same plugin set; a call per surface
+would be seventeen places to forget, and the ones that get forgotten are the
+headless surfaces nobody watches start up.
+
+`--cwd` is passed to `boot` rather than applied by it, because each arm does
+its own chdir further down and the kernel needs the project root *now* — it is
+what confines a sandboxed plugin's file helpers, and a confinement computed
+from the wrong directory is worse than none because it looks like it is
+working.
+
+### Loading is in two halves, at two different times
+
+Rust plugins load **lazily, synchronously, inside the `OnceLock`**. Their
+`apply` is a handful of map inserts, so there is nothing to defer, and being
+synchronous is what lets `llm::registry` reach them from `ProviderConfig::build`
+— which runs in unit tests, in `wizard doctor`, and in the settings sheet's
+probe, none of which hold a kernel handle and some of which have no tokio
+runtime.
+
+Lua plugins load **once, from `boot`, asynchronously**. They are files: a
+`read_dir` of `~/.wizard/plugins`, then a VM and a script per plugin. On a
+machine with no plugins installed the whole of startup's plugin cost is one
+`read_dir` that returns `ENOENT`. With plugins installed it is one LuaJIT VM
+each, which is the cost the user asked for by installing them. Nothing is
+deferred beyond that, and nothing needed to be.
+
+A user plugin loads as `PluginSource::Registry`, i.e. bounded and interpreted.
+First-party status is a property of shipping *in the binary*, and the binary is
+`compiled_in()`.
+
+### Failure is a warning, at every step
+
+A plugin that will not load costs its own registrations and nothing else. Every
+load site logs and continues, and the Rust half additionally wraps `apply` in
+`catch_unwind`: a compiled-in plugin is still third-party code from the
+kernel's point of view, and "wizard will not start" is not an acceptable
+outcome for a broken one. The `AssertUnwindSafe` is sound because every kernel
+registry recovers from lock poisoning already, so an interrupted `apply` leaves
+a partially-filled map that reads normally rather than a torn one.
+
+### `install_tools_into` is used, in exactly two places
+
+`crate::agent::build_tool_registry` is the funnel every agent-bearing surface
+goes through, and plugin tools go into its `base` registry — the one subagents
+are scoped from and the one a `run_code` program reaches — after the scripted
+and MCP tools and before the harness overrides. That ordering is the
+precedence: plugin beats MCP beats scripted beats native, which is what lets a
+plugin deliberately replace a builtin, and being ahead of the overrides means a
+harness bundle rewrites a plugin's tool descriptions exactly as it rewrites
+everyone else's.
+
+`mcp serve` is the one surface that composes its own registry instead, so it
+has its own line. Without it, an MCP client would see a different tool set than
+the agent does from the same install.
+
+### Anthropic is a plugin
+
+`src/plugins/anthropic.rs`, behind `--features provider-anthropic`, on by
+default. It registers through `Ctx::provider` at kernel boot and `builtin.rs`
+does not name it. `kind = "anthropic"` in an existing `config.toml` resolves to
+the same descriptor, builds the same client and puts the same bytes on the
+wire; the only thing that changed is who registered it.
+
+It was chosen because a dependency audit found it the only truly free split:
+nothing in `src/llm/` reaches into it, and it reaches back only for the
+streaming helpers every adapter shares. Everything Anthropic-shaped — the block
+translation, the SSE decoder, the cache-breakpoint arithmetic — was already in
+that one file.
+
+**`--no-default-features` builds, tests and runs**, with no Anthropic transport
+linked at all. `kind = "anthropic"` then resolves to nothing and the error says
+so and lists what is installed, which is the degrade-when-missing rule this
+document already required of an absent plugin's kind.
+`contrib/check-plugin-work.sh` has a leg that builds and tests that
+configuration, and `plugins::anthropic_is_present_exactly_when_its_feature_is`
+asserts both sides of the feature.
+
+### Two corrections this half forced
+
+**The registry ensures on read, not at startup.** `llm::registry::installed`
+and `kinds` call `plugins::ensure_providers()` before answering. They have to:
+a provider plugin's registration must be visible to `ProviderConfig::build` no
+matter who calls it, and in a test binary nobody calls `run`. `install` ensures
+too, so a plugin loaded into some *other* kernel cannot take a kind merely
+because nothing had looked one up yet — which would otherwise make
+`a_plugin_cannot_shadow_a_built_in_provider_kind` depend on test ordering. The
+re-entrancy that creates (a loading plugin's own `install` calling back into
+the `OnceLock` it is inside) is closed by a thread-local `LOADING` flag rather
+than by rule, because a rule is a thing the next provider conversion forgets.
+
+**`ProviderKind::ANTHROPIC` stays in core.** A `kind` is a string a user writes
+in a file, and core is allowed to hold the string — to offer it in the
+onboarding menu, to compare against one somebody typed — as long as it never
+names the type behind it or constructs one. Every use is already guarded by a
+registry lookup that returns `None` when the plugin is absent. Gating the
+constant would have pushed `#[cfg]` into onboarding's numbered menu, the TUI's
+provider picker and the settings presets, which is the hand-written-menu
+problem `src/llm/registry.rs` already flags as its own change.
+
+### Still open
+
+- **The onboarding menu and the TUI provider picker are still hand-written.**
+  On a build without `provider-anthropic` they still offer Anthropic, and
+  picking it produces a config that fails at `build()` with a clear message
+  rather than an entry that was never offered. Building both from
+  `registry::kinds()` is the fix and is the same change `src/llm/registry.rs`
+  has been asking for.
+- **The host bridge is still `UnwiredHost`.** A Lua plugin that calls
+  `wizard.http` or `wizard.model` gets an error naming the reason. Attaching a
+  real bridge is its own piece of work.
+- **Eight providers to go**, plus everything that is not a provider.

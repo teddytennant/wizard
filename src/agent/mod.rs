@@ -1850,6 +1850,17 @@ pub async fn build_tool_registry(
     if let Err(err) = base.attach_mcp(manager).await {
         tracing::warn!("attaching MCP tools failed: {err}");
     }
+    // Plugin tools last of the three sources, so a plugin can deliberately take
+    // over a name — the same precedence a scripted tool already has over a
+    // native one, and the reason `docs/plugins.md` can call replacing a builtin
+    // a supported thing to do rather than a hack. Before the harness overrides
+    // rather than after, so a bundle's description rewrites apply to a plugin's
+    // tools exactly as they do to everything else.
+    //
+    // `base` rather than the scoped registry below: it is what subagents are
+    // scoped from and what a `run_code` program reaches, so putting them here
+    // is what gives every one of those surfaces the same tool set.
+    crate::plugins::install_tools_into(&mut base);
     base.apply_harness_overrides();
 
     let subagents_dir = Config::subagents_dir()?;

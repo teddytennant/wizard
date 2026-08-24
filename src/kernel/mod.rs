@@ -1,11 +1,14 @@
 //! The plugin kernel: the registries, the event bus, and the plugin graph.
 //!
-//! Wizard is a plugin host. `docs/plugins.md` is the design; this is Phase 1 of
-//! it — the kernel itself, built and proven alone before anything is ported
-//! into it. **Nothing in the tree calls into here yet, and that is deliberate.**
-//! The rule the migration runs under is that the kernel is additive and
-//! dormant: it can be wrong without breaking a session, and it gets a phase of
-//! its own to be wrong in.
+//! Wizard is a plugin host. `docs/plugins.md` is the design; this is the kernel
+//! itself, built and proven alone before anything was ported into it.
+//!
+//! It is no longer dormant. [`crate::plugins`] owns the one kernel a running
+//! Wizard has, loads the compiled-in Rust plugins into it and the user's Lua
+//! plugins from `~/.wizard/plugins`, and `crate::run` boots it above the
+//! dispatch chain so every surface gets the same set. Nothing in here reaches
+//! back out: the kernel still has no idea which plugins exist, and that is
+//! what keeps a bug in a plugin from being a bug in a session.
 //!
 //! What it is, in one paragraph. A plugin — Rust or Lua, the kernel cannot tell
 //! them apart — is handed a [`Ctx`] and registers against it: tools, slash
@@ -38,9 +41,9 @@
 //!
 //! **The kernel owns its own registries.** It does not reach into
 //! [`crate::tools::registry::ToolRegistry`]; it holds plugin tools separately
-//! and [`Kernel::install_tools_into`] is the one-way bridge a later phase will
-//! use. That keeps this module additive: a bug in here cannot deregister a
-//! native tool, because it never had one.
+//! and [`Kernel::install_tools_into`] is the one-way bridge that copies them
+//! out, called from `agent::build_tool_registry` and from `mcp serve`. A bug
+//! in here cannot deregister a native tool, because it never had one.
 
 pub mod bus;
 pub mod ctx;
@@ -83,13 +86,15 @@ pub trait Plugin: Send + Sync {
 /// Host facilities a plugin reaches through `wizard.*`, behind the capability
 /// that names each one.
 ///
-/// A trait rather than direct calls into `crate::tools::web` and friends
-/// because of the dormancy rule at the top of this file: the kernel must be
-/// wireable without being wired. [`UnwiredHost`] is the default and refuses
-/// everything with a message that says why, which is the honest behaviour for
-/// Phase 1 — a plugin that calls `wizard.http.get` today gets a clear error
-/// rather than a silent success, and the day the transport is attached the
-/// plugin does not change.
+/// A trait rather than direct calls into `crate::tools::web` and friends,
+/// because the kernel has to be wireable without being wired: it is
+/// instantiated in unit tests, in `wizard doctor`, and by
+/// [`crate::plugins::kernel`] long before any surface exists to answer a
+/// `wizard.ui` write. [`UnwiredHost`] is the default and refuses everything
+/// with a message that says why, which is the honest behaviour until a bridge
+/// is attached — a plugin that calls `wizard.http.get` gets a clear error
+/// rather than a silent success, and the day the transport lands the plugin
+/// does not change.
 ///
 /// Every method is `async` because every one of them is I/O, and because the
 /// whole reason `mlua`'s `async` feature is on is that a plugin has to be able
@@ -147,7 +152,8 @@ impl HostBridge for UnwiredHost {
 fn unwired(table: &str, what: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{table} is not wired to a host in this build, so {what} cannot be carried out. \
-         The plugin kernel is present but dormant; see docs/plugins.md."
+         The plugin kernel is running but no host bridge is attached to it; \
+         see docs/plugins.md."
     )
 }
 
@@ -799,8 +805,10 @@ impl Kernel {
 
     /// Copy every plugin tool into a [`ToolRegistry`], and say how many went.
     ///
-    /// The one-way bridge between the kernel's registries and the agent's. A
-    /// copy rather than a shared handle on purpose: the agent's registry is
+    /// The one-way bridge between the kernel's registries and the agent's,
+    /// called from `agent::build_tool_registry` (every agent-bearing surface)
+    /// and from `mcp serve` (the one that composes its own). A copy rather
+    /// than a shared handle on purpose: the agent's registry is
     /// snapshotted per turn, and a kernel that could deregister a tool
     /// mid-turn would be a source of "unknown tool" errors that only reproduce
     /// under a concurrent unload.

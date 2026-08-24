@@ -67,7 +67,18 @@ exclude = [
 build = "build.rs"
 
 [features]
-default = []
+# `provider-anthropic` is on because a stock build has always answered to
+# `kind = "anthropic"` and must keep doing so. It is *a feature* because the
+# provider is a plugin (`src/plugins/anthropic.rs`), and the test that a plugin
+# is really a plugin is that the build still works without it: `cargo build
+# --no-default-features` links no Anthropic transport at all, `kind =
+# "anthropic"` then resolves to nothing, and the error says so and lists what
+# is installed. See `docs/plugins.md` and `src/plugins/mod.rs`.
+default = ["provider-anthropic"]
+
+# Anthropic Messages API, as a plugin. Registers `kind = "anthropic"` through
+# `Ctx::provider` at kernel boot; nothing in core names the type.
+provider-anthropic = []
 
 # The GUI (`wizard gui`): an iced window over the agent core, with no webview,
 # no loopback HTTP and no JSON round-trip per streaming token. It is the only

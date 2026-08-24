@@ -104,7 +104,14 @@ impl ProviderKind {
     pub const OLLAMA: Self = Self::known("ollama");
     /// Any OpenAI-compatible Chat Completions endpoint.
     pub const OPENAI: Self = Self::known("openai");
-    /// Anthropic Messages API.
+    /// Anthropic Messages API. Registered by [`crate::plugins::anthropic`],
+    /// so on a build without `provider-anthropic` this constant names a kind
+    /// nothing answers to — which is a supported state, not a bug. A `kind`
+    /// is a string a user writes in a file; core may hold the string (to
+    /// offer it in a menu, to compare against one that was typed) as long as
+    /// it never names the type behind it or constructs one. Every use is
+    /// guarded by a registry lookup that returns `None` when the plugin is
+    /// absent.
     pub const ANTHROPIC: Self = Self::known("anthropic");
     /// OpenRouter, with a plain API key.
     pub const OPENROUTER: Self = Self::known("openrouter");
@@ -436,22 +443,49 @@ fn write() -> RwLockWriteGuard<'static, ProviderRegistry> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Bring the compiled-in plugins up, so a provider one of them registers is
+/// visible here.
+///
+/// Every read below goes through this and no write does, which is the whole
+/// of the re-entrancy rule: `ensure` loads plugins, a loading plugin calls
+/// [`install`], and if `install` ensured too the process would be waiting on
+/// its own `OnceLock`.
+///
+/// It is on the read side rather than at startup because `ProviderConfig::build`
+/// is reachable from twenty places, several of which run before any `main` —
+/// unit tests, `wizard doctor`, the settings sheet's probe. "Eagerly at
+/// startup" and "on the first lookup" are the same thing when the first lookup
+/// is the first thing startup does, and only the second one is true in a test
+/// binary. See [`crate::plugins`].
+fn ensure() {
+    crate::plugins::ensure_providers();
+}
+
 /// The descriptor for `kind`, or `None` when nothing is registered under it.
 ///
 /// Cloned out rather than handed back behind the lock: a descriptor holds
 /// `Arc`s, so the clone is cheap, and a caller that held a guard across
 /// `build` would be holding a read lock across a `llama-server` spawn.
 pub fn installed(kind: &ProviderKind) -> Option<ProviderDescriptor> {
+    ensure();
     read().get(kind).cloned()
 }
 
 /// Every installed kind, sorted.
 pub fn kinds() -> Vec<ProviderKind> {
+    ensure();
     read().kinds()
 }
 
 /// Register a descriptor process-wide, or refuse because its kind is taken.
+///
+/// Ensures first, so the refusal is decided against the full set: a plugin
+/// loaded into some other kernel — a test's, a `/plugin load` — must not be
+/// able to take `anthropic` merely because nothing had looked a kind up yet in
+/// this process. [`crate::plugins::ensure_providers`] short-circuits when the
+/// caller *is* the plugin boot, which is the only way this could re-enter.
 pub fn install(descriptor: ProviderDescriptor) -> Result<(), KindTaken> {
+    ensure();
     write().insert(descriptor)
 }
 
@@ -524,8 +558,10 @@ mod tests {
         assert!(installed(&probe.kind).is_none());
         let message = unknown(&probe.kind).to_string();
         assert!(message.contains("a-plugin-that-is-not-loaded"), "{message}");
-        // The valid list is generated, so it names the builtins.
-        assert!(message.contains("anthropic"), "{message}");
+        // The valid list is generated, so it names the builtins. `openai`
+        // rather than `anthropic`: the latter is a plugin now and is absent
+        // from a build compiled without it.
+        assert!(message.contains("openai"), "{message}");
     }
 
     #[test]

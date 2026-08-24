@@ -1,5 +1,21 @@
-//! Streaming HTTP client for the Anthropic **Messages** API
-//! (`POST {base_url}/v1/messages`).
+//! Anthropic, as a plugin: a streaming HTTP client for the **Messages** API
+//! (`POST {base_url}/v1/messages`), registered through [`Ctx::provider`] and
+//! compiled behind `--features provider-anthropic`.
+//!
+//! This is the first provider to come out of `src/llm/builtin.rs`'s hardcoded
+//! table, and it was picked because it is the only one with no dependency edge
+//! in either direction: nothing in `src/llm/` reaches into it, and it reaches
+//! back only for the streaming helpers every adapter shares
+//! (`chat_http_builder`, `retry_after_from_headers`, `ensure_tool_call_ids`).
+//! Everything Anthropic-shaped — the block translation, the SSE decoder, the
+//! cache-breakpoint arithmetic — is in this file and nowhere else, which is
+//! what makes `--no-default-features` a build that simply does not have
+//! Anthropic rather than a build with a hole in it.
+//!
+//! Nothing about the transport changed in the move. `kind = "anthropic"` in an
+//! existing `config.toml` resolves to the same descriptor, builds the same
+//! client and puts the same bytes on the wire; the only difference is *who*
+//! registered it, and the day it is registered — see [`crate::plugins`].
 //!
 //! Thin `reqwest` wrapper with manual SSE parsing. Wizard's native
 //! [`ChatRequest`] is translated to the Messages request shape (block-array
@@ -66,9 +82,10 @@ use futures_util::{Stream, StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::provider::LlmProvider;
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::{
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::provider::LlmProvider;
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use crate::llm::{
     CacheTokens, ChatChunk, ChatMessage, ChatOptions, ChatRequest, ChatStream, ContentBlock,
     FunctionCall, ProviderError, Role, ThinkingBlock, ToolCall,
 };
@@ -572,7 +589,7 @@ fn build_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<Value>) {
                 }
                 // An assistant turn takes no image blocks here either: images
                 // the model generated are named in its text instead.
-                let text = super::assistant_content(message);
+                let text = crate::llm::assistant_content(message);
                 if !text.is_empty() {
                     blocks.push(json!({ "type": "text", "text": text }));
                 }
@@ -1105,7 +1122,7 @@ fn build_final<S>(state: &SseState<S>) -> ChatChunk {
             !accum.text.is_empty() || accum.data.is_some() || !accum.signature.is_empty()
         })
         .map(|accum| {
-            ContentBlock::Thinking(super::ThinkingBlock {
+            ContentBlock::Thinking(crate::llm::ThinkingBlock {
                 thinking: accum.text.clone(),
                 signature: (!accum.signature.is_empty()).then(|| accum.signature.clone()),
                 data: accum.data.clone(),
@@ -1335,6 +1352,10 @@ where
 }
 
 /// How `kind = "anthropic"` is registered.
+///
+/// Public because the plugin below is the only caller and a descriptor is
+/// worth asserting on directly from a test: it is the whole of what core
+/// learns about this backend.
 pub fn descriptor() -> ProviderDescriptor {
     ProviderDescriptor::new(
         ProviderKind::ANTHROPIC,
@@ -1355,6 +1376,54 @@ pub fn descriptor() -> ProviderDescriptor {
             )))
         },
     )
+}
+
+/// Anthropic as a kernel plugin.
+///
+/// Two methods and no state, which is the shape a provider plugin has: a
+/// [`ProviderDescriptor`] is *how to build a client from a config*, so the
+/// plugin registers the recipe and the clients themselves are built later, one
+/// per configured provider entry, by `ProviderConfig::build`.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it, and a Rust plugin that quietly opens sockets while
+/// declaring nothing teaches users the prompt is decorative.
+pub struct AnthropicPlugin {
+    manifest: PluginManifest,
+}
+
+impl AnthropicPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "anthropic".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Anthropic Messages API".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for AnthropicPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for AnthropicPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(descriptor())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
