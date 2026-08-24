@@ -47,7 +47,6 @@ use crate::agent::{
     Agent, AgentEvent, CancelHandle, PlanVerdict, build_headless_agent_for_session,
 };
 use crate::cli::Cli;
-use crate::commands::Execution;
 use crate::config::{Config, GatewayKind, Mode};
 
 /// Telegram's hard cap is 4096 UTF-16 code units; stay well under it.
@@ -228,13 +227,13 @@ pub(crate) fn native_help() -> String {
     text
 }
 
-/// The commands this surface will actually run, in table order, plus the
-/// gateway-native controls ([`GATEWAY_NATIVE`]).
+/// The commands this surface will actually run, in table order and then plugin
+/// order, plus the gateway-native controls ([`GATEWAY_NATIVE`]).
 ///
-/// Derived from [`crate::commands::COMMANDS`] rather than listed here, so the
+/// Derived from [`crate::commands::available`] rather than listed here, so the
 /// menu a chat sees cannot advertise something the gateway would refuse, and a
-/// command added to the table arrives in Telegram without anybody remembering
-/// to add it twice. `Unavailable` rows are filtered out for the same reason: an
+/// command added to the table — or registered by a plugin — arrives in Telegram
+/// without anybody remembering to add it twice. `Unavailable` rows are filtered out for the same reason: an
 /// autocomplete entry that answers "not available in this chat" is worse than
 /// no entry at all.
 ///
@@ -244,24 +243,22 @@ pub(crate) fn native_help() -> String {
 /// is defensive, so a future command with a hyphen is dropped from the menu
 /// rather than making `setMyCommands` reject the whole batch.
 pub fn advertised_commands() -> Vec<AdvertisedCommand> {
-    let mut offered: Vec<AdvertisedCommand> = crate::commands::COMMANDS
-        .iter()
-        .filter(|spec| {
-            spec.execution(crate::commands::surface::Surface::Gateway) != Execution::Unavailable
-        })
-        .filter(|spec| {
-            !spec.name.is_empty()
-                && spec.name.len() <= 32
-                && spec
-                    .name
-                    .chars()
-                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-        })
-        .map(|spec| AdvertisedCommand {
-            name: spec.name.to_string(),
-            description: spec.description.chars().take(256).collect(),
-        })
-        .collect();
+    let mut offered: Vec<AdvertisedCommand> =
+        crate::commands::available(crate::commands::surface::Surface::Gateway)
+            .into_iter()
+            .filter(|row| {
+                !row.name.is_empty()
+                    && row.name.len() <= 32
+                    && row
+                        .name
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+            })
+            .map(|row| AdvertisedCommand {
+                description: row.description.chars().take(256).collect(),
+                name: row.name,
+            })
+            .collect();
     // The controls that are this surface's own. A menu derived purely from the
     // table would leave the chat with no way to interrupt a turn *and* no way
     // to find out that there is one.
@@ -1661,6 +1658,7 @@ mod tests {
     /// that command away from the chat.
     #[test]
     fn the_advertised_menu_matches_what_the_gateway_will_actually_run() {
+        use crate::commands::Execution;
         use crate::commands::surface::Surface;
 
         let advertised = advertised_commands();
@@ -1679,14 +1677,22 @@ mod tests {
             );
         }
 
-        // And nothing is offered that is neither.
+        // And nothing is offered that is none of the three sources. A plugin's
+        // registration is the third: it is neither a table row nor a control
+        // this file declares, and it is still something the gateway will run.
+        // Told apart by the *word*, not by a registry read — the registry is
+        // process-wide and another test in this binary may withdraw its own
+        // probe between the two lines.
         for command in &advertised {
+            let native = is_gateway_native(&command.name);
+            if !crate::commands::plugin::is_builtin(&command.name) && !native {
+                continue;
+            }
             let row = crate::commands::spec(&command.name)
                 .is_some_and(|spec| spec.execution(Surface::Gateway) != Execution::Unavailable);
-            let native = is_gateway_native(&command.name);
             assert!(
                 row ^ native,
-                "/{} is advertised but is row={row} native={native} — every entry must be \
+                "/{} is advertised but is row={row} native={native} — a built-in word must be \
                  exactly one of the two",
                 command.name
             );

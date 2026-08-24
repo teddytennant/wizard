@@ -21,7 +21,7 @@ fn tmp(tag: &str) -> TempDir {
 fn kitchen_sink(name: &'static str, ran: Arc<AtomicUsize>) -> Arc<dyn Plugin> {
     TestPlugin::boxed(name, move |ctx| {
         ctx.tool(EchoTool::arc(&format!("{name}_tool")))?;
-        ctx.command(Command::new(
+        ctx.command(PluginCommand::new(
             format!("{name}_cmd"),
             "a command",
             Arc::new(|args: String| async move { Ok(format!("ran with {args}")) }),
@@ -186,7 +186,7 @@ async fn a_command_and_a_provider_name_belong_to_one_plugin_too() {
     let dir = tmp("collide2");
     let kernel = kernel_in(&dir.path);
     let command = || {
-        Command::new(
+        PluginCommand::new(
             "dupe",
             "",
             Arc::new(|_: String| async { Ok(String::new()) }),
@@ -214,7 +214,7 @@ async fn a_registered_command_runs() {
     let kernel = kernel_in(&dir.path);
     kernel
         .load(TestPlugin::boxed("greeter", |ctx| {
-            ctx.command(Command::new(
+            ctx.command(PluginCommand::new(
                 "greet",
                 "says hello",
                 Arc::new(|args: String| async move { Ok(format!("hello {args}")) }),
@@ -704,4 +704,139 @@ async fn a_plugin_cannot_shadow_a_built_in_provider_kind() {
     assert!(kernel.provider_names().is_empty());
     let descriptor = registry::installed(&ProviderKind::OPENAI).expect("still installed");
     assert_eq!(descriptor.display_name(), "OpenAI-compatible");
+}
+
+/// A plugin's slash command is a first-class command the moment it registers:
+/// the one parser resolves it, the one dispatcher runs it, and the palette
+/// lists it. And it leaves with the plugin — the same exactness the provider
+/// bridge has, on the other side of the same rule.
+#[tokio::test]
+async fn a_plugin_registered_command_reaches_the_palette_and_leaves_with_the_plugin() {
+    use crate::commands::{SlashCommand, Surface, listing, plugin};
+
+    let dir = tmp("command-palette");
+    let kernel = kernel_in(&dir.path);
+
+    let id = kernel
+        .load(TestPlugin::boxed("deployer", |ctx| {
+            ctx.command(
+                PluginCommand::new(
+                    "zzdeploy",
+                    "ship it",
+                    Arc::new(|args: String| async move { Ok(format!("deploying {args}")) }),
+                )
+                .args("[env]"),
+            )?;
+            Ok(())
+        }))
+        .expect("loads");
+
+    assert_eq!(
+        SlashCommand::parse("/zzdeploy staging"),
+        Some(Ok(SlashCommand::Plugin {
+            name: "zzdeploy".to_string(),
+            args: "staging".to_string(),
+        }))
+    );
+    let row = listing(Surface::Tui)
+        .into_iter()
+        .find(|row| row.name == "zzdeploy")
+        .expect("in the palette");
+    assert_eq!(row.description, "ship it");
+    assert!(row.from_plugin);
+    assert_eq!(
+        kernel
+            .command("zzdeploy")
+            .expect("in the kernel's slot too")
+            .run("staging")
+            .await
+            .expect("runs"),
+        "deploying staging"
+    );
+
+    kernel.unload(&id).await.expect("unload");
+
+    // Exact disposal reaches across the bridge: the word is an unknown command
+    // again, in the parser and in the palette, not only in the kernel.
+    assert!(kernel.command_names().is_empty());
+    assert_eq!(kernel.residue().commands, 0);
+    assert!(plugin::get("zzdeploy").is_none());
+    assert!(matches!(SlashCommand::parse("/zzdeploy"), Some(Err(_))));
+}
+
+/// A plugin cannot take a name a built-in already answers to, and a refused
+/// claim leaves nothing behind in either registry. The policy itself, and why
+/// it is a refusal rather than a shadow, is in `crate::commands::plugin`.
+#[tokio::test]
+async fn a_plugin_cannot_shadow_a_built_in_slash_command() {
+    use crate::commands::{SlashCommand, plugin};
+
+    let dir = tmp("command-shadow");
+    let kernel = kernel_in(&dir.path);
+
+    let err = kernel
+        .load(TestPlugin::boxed("impostor", |ctx| {
+            ctx.command(PluginCommand::new(
+                "clear",
+                "not the real one",
+                Arc::new(|_: String| async move { Ok(String::new()) }),
+            ))?;
+            Ok(())
+        }))
+        .expect_err("the built-in holds the name");
+    assert!(err.to_string().contains("clear"), "{err}");
+
+    assert!(kernel.command_names().is_empty());
+    assert!(plugin::get("clear").is_none());
+    assert_eq!(SlashCommand::parse("/clear"), Some(Ok(SlashCommand::Clear)));
+}
+
+/// A failed claim does not disarm the plugin that holds the name. Two kernels
+/// share one process registry, so the rollback in `insert_command` has to leave
+/// the first kernel's slot and the global agreeing.
+#[tokio::test]
+async fn a_second_kernels_plugin_cannot_take_a_name_the_first_one_registered() {
+    use crate::commands::plugin;
+
+    let first_dir = tmp("command-first");
+    let second_dir = tmp("command-second");
+    let first = kernel_in(&first_dir.path);
+    let second = kernel_in(&second_dir.path);
+
+    let command = || {
+        PluginCommand::new(
+            "zzshared",
+            "the first one",
+            Arc::new(|_: String| async move { Ok("first".to_string()) }),
+        )
+    };
+    let id = first
+        .load(TestPlugin::boxed("owner", move |ctx| {
+            ctx.command(command())?;
+            Ok(())
+        }))
+        .expect("loads");
+
+    let err = second
+        .load(TestPlugin::boxed("latecomer", |ctx| {
+            ctx.command(PluginCommand::new(
+                "zzshared",
+                "the second one",
+                Arc::new(|_: String| async move { Ok("second".to_string()) }),
+            ))?;
+            Ok(())
+        }))
+        .expect_err("the first kernel's plugin holds it");
+    assert!(err.to_string().contains("zzshared"), "{err}");
+
+    assert!(second.command_names().is_empty());
+    assert_eq!(
+        plugin::get("zzshared")
+            .expect("still the first")
+            .description,
+        "the first one"
+    );
+
+    first.unload(&id).await.expect("unload");
+    assert!(plugin::get("zzshared").is_none());
 }

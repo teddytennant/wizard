@@ -10,10 +10,18 @@
 //! one surface and derived from the table on the other. All three were the same
 //! bug, which is that a command lived in two places.
 //!
-//! What a surface cannot do it declares in [`COMMANDS`] as an
+//! What a surface cannot do a built-in declares in [`COMMANDS`] as an
 //! [`Execution::Unavailable`] column, and this module refuses it by name. A
 //! command is never silently missing a match arm, because there is only one
 //! match and the compiler walks every variant through it.
+//!
+//! A plugin-registered command goes through the same [`dispatch`] and the same
+//! gate — it declares the surfaces it runs on
+//! ([`PluginCommand::only`](crate::commands::PluginCommand::only)) and the gate
+//! reads that instead of a table column. What it does *not* share is the match:
+//! its body is its own handler, so it leaves the dispatcher one line after the
+//! gate. That is the whole difference, and it is why the gate is asked of the
+//! command rather than of the table.
 //!
 //! Adding another surface (the Telegram gateway was the third) is therefore: a
 //! [`Surface`] variant, a column on every row of the table, and one
@@ -26,8 +34,8 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 
 use super::{
-    COMMANDS, CommandSpec, Execution, FusionAction, ProviderAction, ServerAction, SlashCommand,
-    UltraAction, commands_for,
+    CommandSpec, Execution, FusionAction, ProviderAction, ServerAction, SlashCommand, UltraAction,
+    commands_for,
 };
 use crate::agent::RewindCandidate;
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, StepBudget, UltraConfig};
@@ -462,19 +470,31 @@ pub trait CommandSurface {
 /* The dispatcher                                                         */
 /* ---------------------------------------------------------------------- */
 
-/// Run one built-in slash command against `surface`.
+/// Run one slash command against `surface`, built-in or plugin-registered.
 ///
-/// The table gates first: a command the surface declares
+/// The gate comes first, and it is asked of the *command* rather than of the
+/// table, so it covers both kinds: whatever the surface declares
 /// [`Execution::Unavailable`] is refused by name, with what it would have done
-/// somewhere else. Everything else routes to a [`CommandSurface`] verb, and
-/// what the user is told about it is written here rather than on the surface.
+/// somewhere else. A plugin command then runs its own handler
+/// ([`run_plugin`]); a built-in routes to a [`CommandSurface`] verb, and what
+/// the user is told about it is written here rather than on the surface.
 pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, surface: &mut S) {
-    let spec = command.spec();
     let at = surface.surface();
-    if spec.execution(at) == Execution::Unavailable {
-        let message = unavailable(spec.name, at);
+    // The gate is asked of the command and not of the table, so a plugin
+    // command's "TUI only" is enforced by this line rather than by a second
+    // one somewhere that would have to remember to exist.
+    if command.execution(at) == Execution::Unavailable {
+        let message = unavailable(command.name(), at);
         return surface.error(message);
     }
+    if let SlashCommand::Plugin { name, args } = command {
+        return run_plugin(name, args, surface).await;
+    }
+    // Total for every remaining variant: `every_command_has_a_table_row`.
+    // `Plugin` is the one that has none and it has already left.
+    let Some(spec) = command.spec() else {
+        return surface.error(format!("'/{}' has no command table row", command.name()));
+    };
 
     match command {
         SlashCommand::Help => {
@@ -649,6 +669,11 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
         SlashCommand::Vim => surface.toggle_vim().await,
         SlashCommand::Ui(name) => surface.set_ui(name).await,
         SlashCommand::Quit => surface.quit().await,
+
+        // Answered above, before `spec` was taken. The early return is what
+        // lets every arm here hold a plain `&'static CommandSpec` instead of an
+        // `Option` unwrapped thirty times.
+        SlashCommand::Plugin { .. } => unreachable!("a plugin command returns above"),
     }
 }
 
@@ -666,6 +691,32 @@ async fn choose<S: CommandSurface + Send + ?Sized>(
         None => elsewhere(spec.name, surface.surface()),
     };
     surface.error(message);
+}
+
+/// Run a plugin-registered command and report what it answered.
+///
+/// Looked up now rather than carried in the variant, which is what makes an
+/// unload exact from the user's side too: a `/name` typed while the plugin was
+/// loaded and dispatched after it went away is refused here instead of running
+/// a handler nothing owns any more.
+async fn run_plugin<S: CommandSurface + Send + ?Sized>(
+    name: String,
+    args: String,
+    surface: &mut S,
+) {
+    let Some(command) = crate::commands::plugin::get(&name) else {
+        return surface.error(format!(
+            "'/{name}' is not registered any more — the plugin that owned it was unloaded"
+        ));
+    };
+    match command.run(args).await {
+        // An empty answer is "nothing to say", the same as a built-in that
+        // only toggles something. A blank notice would be a blank line in the
+        // transcript and a blank message in a chat.
+        Ok(text) if text.trim().is_empty() => {}
+        Ok(text) => surface.notice(text),
+        Err(err) => surface.error(format!("/{name}: {err:#}")),
+    }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -747,18 +798,18 @@ fn omakase_notice(on: bool) -> &'static str {
 /// terminal's `/help` came to omit `/exit`.
 pub fn help_text(surface: Surface) -> String {
     let mut text = String::from("commands:");
-    for spec in COMMANDS
-        .iter()
-        .filter(|spec| spec.execution(surface) != Execution::Unavailable)
-    {
-        match spec.args.is_empty() {
-            true => text.push_str(&format!("\n  /{} — {}", spec.name, spec.description)),
+    for row in crate::commands::available(surface) {
+        match row.args.is_empty() {
+            true => text.push_str(&format!("\n  /{} — {}", row.name, row.description)),
             false => text.push_str(&format!(
                 "\n  /{} {} — {}",
-                spec.name, spec.args, spec.description
+                row.name, row.args, row.description
             )),
         }
     }
+    // Built-ins only. A plugin command that is unavailable here is unavailable
+    // because the plugin said so, and listing somebody else's `/name` under
+    // "terminal only" would read as a promise this build cannot keep.
     let missing: Vec<String> = commands_for(surface, Execution::Unavailable)
         .map(|spec| format!("/{}", spec.name))
         .collect();
@@ -985,8 +1036,10 @@ fn save_goal(project_root: &Path, text: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use crate::commands::spec;
+    use crate::commands::{COMMANDS, spec};
 
     /// What a command did, as the recording surface saw it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1570,5 +1623,170 @@ mod tests {
             );
         }
         assert!(COMMANDS.iter().all(|spec| spec.gateway != Execution::Ui));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Plugin-registered commands                                         */
+    /* ------------------------------------------------------------------ */
+
+    /// A registration that withdraws itself. The registry is process-wide, so a
+    /// probe left behind joins another test's palette assertion.
+    struct Held(String);
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            crate::commands::plugin::uninstall(&self.0);
+        }
+    }
+
+    fn hold(command: crate::commands::PluginCommand) -> Held {
+        let name = command.name.clone();
+        crate::commands::plugin::install("dispatch-test", command).expect("free");
+        Held(name)
+    }
+
+    /// A plugin command goes through the one dispatcher on every surface, and
+    /// its handler is what answers. Nothing about it is a second path: the same
+    /// `dispatch` call the built-ins take.
+    #[tokio::test]
+    async fn a_plugin_command_runs_through_the_one_dispatcher() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorded = Arc::clone(&seen);
+        let _held = hold(crate::commands::PluginCommand::new(
+            "zzdispatch",
+            "a probe",
+            Arc::new(move |args: String| {
+                let recorded = Arc::clone(&recorded);
+                async move {
+                    recorded.lock().expect("lock").push(args.clone());
+                    Ok(format!("answered {args}"))
+                }
+            }),
+        ));
+
+        for &at in Surface::ALL {
+            let mut recorder = Recorder::new(at);
+            let command = SlashCommand::parse("/zzdispatch a  b")
+                .expect("known")
+                .expect("ok");
+            dispatch(command, &mut recorder).await;
+            assert_eq!(recorder.saw, vec![Saw::Notice], "on {at:?}");
+        }
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            vec!["a  b".to_string(); Surface::ALL.len()],
+            "the handler got the raw tail on every surface"
+        );
+    }
+
+    /// The per-surface gate is the same line of code for both kinds of command:
+    /// a plugin that says "TUI only" is refused elsewhere by name, exactly as
+    /// `/vim` is in the window.
+    #[tokio::test]
+    async fn a_plugin_command_can_be_tui_only_and_is_refused_elsewhere() {
+        let _held = hold(
+            crate::commands::PluginCommand::new(
+                "zzterminal",
+                "a probe",
+                Arc::new(|_: String| async move { Ok("ran".to_string()) }),
+            )
+            .only(&[Surface::Tui]),
+        );
+
+        let parse = || {
+            SlashCommand::parse("/zzterminal")
+                .expect("known")
+                .expect("ok")
+        };
+
+        let mut tui = Recorder::new(Surface::Tui);
+        dispatch(parse(), &mut tui).await;
+        assert_eq!(tui.saw, vec![Saw::Notice]);
+
+        for at in [Surface::Gui, Surface::Gateway] {
+            let mut recorder = Recorder::new(at);
+            dispatch(parse(), &mut recorder).await;
+            match recorder.saw.as_slice() {
+                [Saw::Error(message)] => assert!(
+                    message.contains("zzterminal"),
+                    "the refusal names the command: {message}"
+                ),
+                other => panic!("expected a refusal on {at:?}, saw {other:?}"),
+            }
+        }
+    }
+
+    /// The command is looked up at dispatch, not carried in the variant, so a
+    /// `/name` typed while the plugin was loaded and dispatched after it went
+    /// away is refused rather than run.
+    #[tokio::test]
+    async fn a_plugin_command_whose_plugin_unloaded_is_refused() {
+        let command = SlashCommand::Plugin {
+            name: "zzgone".to_string(),
+            args: String::new(),
+        };
+        let mut recorder = Recorder::new(Surface::Tui);
+        dispatch(command, &mut recorder).await;
+        match recorder.saw.as_slice() {
+            [Saw::Error(message)] => assert!(message.contains("zzgone"), "{message}"),
+            other => panic!("expected a refusal, saw {other:?}"),
+        }
+    }
+
+    /// A handler that fails is reported as an error, and a handler with nothing
+    /// to say prints nothing rather than a blank line.
+    #[tokio::test]
+    async fn a_plugin_commands_failure_and_its_silence_both_land_honestly() {
+        let _failing = hold(crate::commands::PluginCommand::new(
+            "zzfails",
+            "a probe",
+            Arc::new(|_: String| async move { Err(anyhow::anyhow!("the disk is on fire")) }),
+        ));
+        let _silent = hold(crate::commands::PluginCommand::new(
+            "zzquiet",
+            "a probe",
+            Arc::new(|_: String| async move { Ok(String::new()) }),
+        ));
+
+        let mut recorder = Recorder::new(Surface::Tui);
+        dispatch(
+            SlashCommand::parse("/zzfails").expect("known").expect("ok"),
+            &mut recorder,
+        )
+        .await;
+        match recorder.saw.as_slice() {
+            [Saw::Error(message)] => assert!(message.contains("the disk is on fire"), "{message}"),
+            other => panic!("expected the handler's error, saw {other:?}"),
+        }
+
+        let mut recorder = Recorder::new(Surface::Tui);
+        dispatch(
+            SlashCommand::parse("/zzquiet").expect("known").expect("ok"),
+            &mut recorder,
+        )
+        .await;
+        assert!(recorder.saw.is_empty(), "an empty answer says nothing");
+    }
+
+    /// `/help` is derived from the merged list, so a plugin's command is in it
+    /// wherever that plugin runs — and out of it where it does not.
+    #[test]
+    fn help_lists_a_plugin_command_where_it_runs() {
+        let _held = hold(
+            crate::commands::PluginCommand::new("zzhelp", "what the probe does", {
+                Arc::new(|_: String| async move { Ok(String::new()) })
+            })
+            .args("[thing]")
+            .only(&[Surface::Tui]),
+        );
+        let tui = help_text(Surface::Tui);
+        assert!(
+            tui.contains("/zzhelp [thing] — what the probe does"),
+            "{tui}"
+        );
+        assert!(!help_text(Surface::Gui).contains("/zzhelp"));
+        // And it is not filed under "terminal only", which is the table's own
+        // gap and not a promise this build can make for somebody else's plugin.
+        assert!(!help_text(Surface::Gui).contains("zzhelp"));
     }
 }

@@ -5095,3 +5095,50 @@ fn omakase_in_config_alone_lights_the_badge_and_the_mode() {
     assert!(app.omakase, "the badge is lit");
     assert!(app.plan_mode, "and plan mode with it");
 }
+
+/// A plugin's slash command completes in the popup and submits as a command,
+/// not as a prompt. The wiring under test is `update_suggestions` and `submit`
+/// reading the merged palette rather than the built-in table alone.
+#[test]
+fn a_plugin_command_completes_and_submits_like_a_builtin() {
+    struct Held(&'static str);
+    impl Drop for Held {
+        fn drop(&mut self) {
+            crate::commands::plugin::uninstall(self.0);
+        }
+    }
+
+    let _held = Held("zzappprobe");
+    crate::commands::plugin::install(
+        "app-test",
+        crate::commands::PluginCommand::new(
+            "zzappprobe",
+            "a probe",
+            std::sync::Arc::new(|_: String| async move { Ok(String::new()) }),
+        )
+        .args("[thing]"),
+    )
+    .expect("the name is free");
+
+    let mut app = app();
+    type_str(&mut app, "/zzappp");
+    let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["zzappprobe"]);
+    assert!(
+        app.suggestions[0].takes_args,
+        "an argument hint waits for arguments"
+    );
+
+    // Tab completes to the name plus a space, then Enter submits the line as a
+    // command rather than sending it to the model.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.input, "/zzappprobe ");
+    type_str(&mut app, "here");
+    match press(&mut app, KeyCode::Enter) {
+        Some(AppAction::Command(SlashCommand::Plugin { name, args })) => {
+            assert_eq!(name, "zzappprobe");
+            assert_eq!(args, "here");
+        }
+        other => panic!("expected the plugin command, got {other:?}"),
+    }
+}

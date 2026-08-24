@@ -53,10 +53,11 @@ use crate::tools::{
 
 use super::super::Ctx;
 use super::super::bus::{Event, EventHandler, HandlerFuture, Verdict};
-use super::super::ctx::{Command, CommandFuture, CommandHandler};
 use super::super::manifest::{Capability, CapabilitySet, PluginSource};
 use super::super::services::Service;
 use super::{Bound, FnId, LuaShutdown, VmHandle, bind};
+use crate::commands::surface::Surface;
+use crate::commands::{CommandFuture, CommandHandler, PluginCommand};
 
 /// Longest a plugin may park in `wizard.sleep`.
 ///
@@ -420,20 +421,49 @@ fn command_fn(
     lua.create_function(move |_, (_this, spec): (Table, Table)| {
         let name: String = spec.get("name")?;
         let description: String = spec.get("description").unwrap_or_default();
+        let args: String = spec.get("args").unwrap_or_default();
         let run: mlua::Function = spec.get("run").map_err(|_| {
             mlua::Error::external(format!("ctx:command{{name='{name}'}} has no run function"))
         })?;
         let func = registry.hold(run);
-        ctx.command(Command::new(
-            name,
+        let mut command = PluginCommand::new(
+            name.clone(),
             description,
             Arc::new(LuaCommand {
                 handle: handle.clone(),
                 func,
             }),
-        ))
-        .map_err(mlua::Error::external)
+        )
+        .args(args);
+        // `surfaces` absent means every surface, matching the Rust default.
+        // Present and empty is a plugin saying "nowhere", which is a plugin bug
+        // rather than a shorthand for "everywhere" — reading it as the latter
+        // would make a typo silently do the opposite of what it says.
+        if let Ok(surfaces) = spec.get::<Table>("surfaces") {
+            let mut named = Vec::new();
+            for value in surfaces.sequence_values::<String>() {
+                named.push(surface_named(&name, &value?)?);
+            }
+            command = command.only(&named);
+        }
+        ctx.command(command).map_err(mlua::Error::external)
     })
+}
+
+/// One entry of `ctx:command{ surfaces = {...} }`.
+///
+/// Refuses an unknown name rather than skipping it: the failure mode of
+/// skipping one is a command silently missing from exactly the surface the
+/// author meant to name.
+fn surface_named(command: &str, value: &str) -> mlua::Result<Surface> {
+    match value {
+        "tui" => Ok(Surface::Tui),
+        "gui" => Ok(Surface::Gui),
+        "gateway" => Ok(Surface::Gateway),
+        other => Err(mlua::Error::external(format!(
+            "ctx:command{{name='{command}'}} names surface '{other}' (tui|gui|gateway)"
+        ))),
+    }
 }
 
 /// `ctx:provider` exists so the shape is the same in both languages, and
