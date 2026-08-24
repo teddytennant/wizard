@@ -36,8 +36,11 @@ leaving a ~35k-line core.
 ## The boundary
 
 **Core (never a plugin).** `src/kernel/`, `src/agent/{mod,turn,context,session,event,retry,breaker}.rs`,
-`src/llm/{mod,provider,compat,registry}.rs` (the `LlmProvider` trait, the shared
-streaming machinery and the registry that resolves a `kind`, not the providers),
+`src/llm/{mod,provider,compat,registry,wire,oauth_callback,xai_oauth}.rs` (the
+`LlmProvider` trait, the shared streaming machinery, the registry that resolves
+a `kind`, the OpenAI-protocol client five backends build on, the loopback
+redirect both sign-ins come back on, and the xAI token store two core *tools*
+authenticate with — not the providers),
 `src/ui/`, `src/app/`, `src/skin/`,
 `src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry}.rs`,
 `src/config.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
@@ -308,10 +311,11 @@ window in which an unloaded plugin's provider was still selectable, and exact
 unload is the reason there is a kernel
 (`a_plugin_registered_provider_is_selectable_from_config`).
 
-**One file still names the providers that are not plugins yet.**
-`src/llm/builtin.rs` is the provider half of the `src/plugins/mod.rs` this
-document describes. Eight of the nine shipped providers are still in it. The
-ninth went through the door; see below.
+**`src/llm/builtin.rs` was the provider half of `src/plugins/mod.rs`, and it
+is deleted.** It held the eight providers that were not plugins yet and seeded
+the process registry from them. All eight went through the door; the registry
+now starts empty and every kind in it was put there by a plugin. See the last
+section.
 
 **`SlashCommand` stayed a closed enum, and gained one open variant.** The
 provider kind became a string plus a lookup because a closed enum meant no
@@ -493,8 +497,8 @@ the agent does from the same install.
 ### Anthropic is a plugin
 
 `src/plugins/anthropic.rs`, behind `--features provider-anthropic`, on by
-default. It registers through `Ctx::provider` at kernel boot and `builtin.rs`
-does not name it. `kind = "anthropic"` in an existing `config.toml` resolves to
+default. It registers through `Ctx::provider` at kernel boot and no core
+module names it. `kind = "anthropic"` in an existing `config.toml` resolves to
 the same descriptor, builds the same client and puts the same bytes on the
 wire; the only thing that changed is who registered it.
 
@@ -520,7 +524,8 @@ a provider plugin's registration must be visible to `ProviderConfig::build` no
 matter who calls it, and in a test binary nobody calls `run`. `install` ensures
 too, so a plugin loaded into some *other* kernel cannot take a kind merely
 because nothing had looked one up yet — which would otherwise make
-`a_plugin_cannot_shadow_a_built_in_provider_kind` depend on test ordering. The
+`a_plugin_cannot_take_a_provider_kind_another_plugin_holds` depend on test
+ordering. The
 re-entrancy that creates (a loading plugin's own `install` calling back into
 the `OnceLock` it is inside) is closed by a thread-local `LOADING` flag rather
 than by rule, because a rule is a thing the next provider conversion forgets.
@@ -533,6 +538,136 @@ registry lookup that returns `None` when the plugin is absent. Gating the
 constant would have pushed `#[cfg]` into onboarding's numbered menu, the TUI's
 provider picker and the settings presets, which is the hand-written-menu
 problem `src/llm/registry.rs` already flags as its own change.
+
+## As built: every provider is a plugin, and `builtin.rs` is gone
+
+The section above described one provider going through the door and eight
+still to go. The eight have gone, and `src/llm/builtin.rs` — the one file that
+still named a concrete provider type — is deleted. `llm::registry`'s process registry now starts **empty**: what a
+build answers to is exactly the set of plugins it was compiled with, and
+nothing else can put a kind in it.
+
+### Seven features over nine kinds
+
+| Feature | Registers | Lives in |
+| --- | --- | --- |
+| `provider-anthropic` | `anthropic` | `src/plugins/anthropic.rs` |
+| `provider-openai` | `openai`, `openrouter` | `src/plugins/openai/` |
+| `provider-ollama` | `ollama` | `src/plugins/ollama.rs` |
+| `provider-llamacpp` | `llamacpp` | `src/plugins/llamacpp.rs` |
+| `provider-cloudflare` | `cloudflare` | `src/plugins/cloudflare.rs` |
+| `provider-xai` | `xai`, `xaioauth` | `src/plugins/xai.rs` |
+| `provider-chatgpt` | `chatgptoauth` | `src/plugins/chatgpt/` |
+
+All on by default; a stock build behaves exactly as before.
+
+The grouping is one feature per *backend*, not per kind, because the two
+multi-kind features would otherwise ship a cargo flag whose entire content is a
+credential variant. `xai` and `xaioauth` are one endpoint, one wire shape and
+one vendor label differing only in where the bearer token comes from — forty
+lines between them. `openrouter` is the `openai` kind with a fixed base URL and
+two attribution headers, and splitting it would also permit a build that had
+`openrouter` but not the `openai` kind that vLLM, LM Studio, DeepSeek and every
+`compat.rs` preset are configured as: a combination nobody wants and everybody
+would have to test.
+
+### What stayed in core, and why
+
+Three modules that look like providers are not.
+
+**`src/llm/wire.rs`** is the OpenAI-protocol machinery — request shape, SSE
+decoding, the bearer-token seam, retry classification. Five of these backends
+build on it. A shared transport that lived inside one plugin would be a
+dependency edge between plugins, and deleting that plugin would break four
+others.
+
+**`src/llm/oauth_callback.rs`** is the loopback redirect both sign-ins come
+back on, and it gained `generate_pkce`, `pkce_challenge` and `jwt_exp` in this
+change. Those were in `xai_oauth.rs` and `chatgpt_oauth.rs` imported them from
+there — an edge between two backends with nothing to do with each other, and
+once each is a plugin, an edge that makes deleting one break the other. RFC
+7636 is not xAI's.
+
+**`src/llm/xai_oauth.rs`** — the token store, the sign-in flow and
+`XaiTokenSource` — is the interesting one, because it *is* xAI's and it is
+still core. The split is by consumer rather than by subject: five of the six
+things that read it are not the chat provider. `tools/web.rs` authenticates
+xAI's server-side **search** API with those tokens and `tools/image.rs` its
+**image** API — both core tools, both reaching for xAI whatever chat backend is
+configured — `sync.rs` backs the token file up, and onboarding and
+`app/prompts.rs` ask whether a session exists. Moving the store into the plugin
+would mean a build without `provider-xai` lost web search and image generation,
+which have nothing to do with which model answers a turn. So `src/plugins/xai.rs`
+is forty lines: the two descriptors saying which credential goes with which
+kind, which is the whole of what is provider-shaped about xAI.
+
+ChatGPT's sign-in is *not* core, by the same test: nothing outside that plugin
+reads its token store, so the store has exactly one consumer and ships with it.
+
+### Provider default strings moved to core, provider types did not
+
+`llm::registry::defaults` holds OpenRouter's and Cloudflare's base URLs, model
+tags and key env vars. Onboarding's numbered menu, the TUI provider picker, the
+settings sheet's preset table and `wizard doctor` all print them, and they have
+to keep printing them on a build compiled without those plugins. This is the
+`ProviderKind::ANTHROPIC` argument applied one level down: core may hold the
+*text* a user would otherwise type, as long as it never names the type behind
+it or constructs one. The alternative was `#[cfg]` inside a numbered menu,
+which is the hand-written-menu problem `src/llm/registry.rs` has flagged from
+the start and which gating the strings would have made harder to fix, not
+easier.
+
+### The edges that had to be cut
+
+Four core modules reached into a provider for something that was not a string.
+
+- **`agent::error_is_transient` downcast `OllamaError`.** That arm was already
+  dead: Ollama's `typed()` puts a `ProviderError` at the *head* of the same
+  `anyhow` chain and the two classifications are the same predicate over the
+  same statuses, so the `ProviderError` branch above it always won. Deleted.
+  One downcast, not one per backend, is the shape a plugin boundary needs.
+- **`kernel/tests.rs` built an `OllamaClient`** as a convenient provider that
+  needs no key and no reachable endpoint. It builds a `wire::OpenAiProvider`
+  now. A kernel test that names a plugin stops compiling the moment that
+  feature is left out, which is the failure the kernel exists to prevent.
+- **`--login chatgpt` and the GUI's sign-in sheet** are `#[cfg]`-gated on
+  `provider-chatgpt`. `--login xai` is not, because its store is core. The
+  sheet's `SUPPORTED` table is gated in step with its `begin` match, and the
+  `debug_assert` already tying those two together is what keeps them honest.
+- **Onboarding's "model already pulled" note** calls the Ollama plugin's tag
+  canonicalizer (`ollama list` prints `llama3:latest` where a config says
+  `llama3`), so that one branch is gated too. Without the plugin there is no
+  `kind = "ollama"` to advise about.
+
+### Proving it, one plugin at a time
+
+`--no-default-features` proves the floor and the default build proves the
+ceiling, and neither catches the case in between: a core module that reached
+into `provider-ollama` compiles with everything off (the module it reached into
+is gone too) and compiles with everything on. It only fails with that one
+feature missing and the rest present.
+
+So `contrib/check-provider-plugins.sh` builds and tests each leave-one-out set
+plus the all-off floor — eight feature sets. It is the slow gate; run it when
+the plugin set or the boundary moves.
+`plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in` is the
+in-tree half: one row per feature, both directions asserted, plus a sweep that
+fails if a kind reached the process kernel that no compiled-in plugin claims —
+which is what would catch `builtin.rs` coming back. That sweep reads the
+*kernel's* slot rather than `registry::kinds()`, because the process registry is
+shared with every other test in the binary and the kernel tests that exercise
+`Ctx::provider` leave their own kinds in it.
+
+`a_stock_build_still_answers_to_all_nine_shipped_kinds` is the other side: the
+nine ids as literal strings, which is what a user's `config.toml` actually
+holds. `builtin.rs` used to make that assertion over its own table, so it could
+only ever agree with itself.
+
+**The `--no-default-features` test count drops, and that is arithmetic rather
+than a regression.** It was 2521 with eight providers still compiled in
+unconditionally; it is 2431 now that all of them are behind features, because
+that leg no longer compiles their test modules. The default leg is the one the
+ratchet in `contrib/check-plugin-work.sh` guards, and it went 2536 → 2557.
 
 ### Still open
 
@@ -620,3 +755,20 @@ that body — very possibly a credential — to a host the plugin never named.
 which prints only the outermost layer, and a host call's reason is almost
 always underneath one. `{:#}` now, so `wizard.process.run` fails as "tool '...'
 failed: exited 3" rather than as "tool '...' failed".
+- **The onboarding menu and the TUI provider picker are still hand-written**,
+  and now they are hand-written menus of *seven* removable plugins rather than
+  one. A stripped build still offers a backend it does not have; picking it
+  writes a config that fails at `build()` with the named error rather than an
+  entry that was never offered. Building both from `registry::kinds()` is the
+  fix, and it is a bigger change now than when it was one provider.
+- **`tools/image.rs` still branches on four provider kind ids.** The question
+  it asks — "does this backend serve an image API, and under which
+  credential" — is a *capability*, and the descriptor does not carry one.
+  Adding an image field to a chat-shaped type to satisfy one tool is the wrong
+  fix; the right one is a service the provider plugin provides and the tool
+  injects, which is what `Ctx::provide` / `Ctx::inject` are for and which is
+  its own change.
+- **The host bridge is still `UnwiredHost`.** A Lua plugin that calls
+  `wizard.http` or `wizard.model` gets an error naming the reason.
+- **Nothing that is not a provider has gone through the door yet.** The
+  thirteen earmarked commands are still built-ins.

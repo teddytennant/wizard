@@ -2,6 +2,23 @@
 //! `auth.x.ai`, then plain `Bearer` access tokens against the
 //! OpenAI-compatible Chat Completions API at `https://api.x.ai/v1`.
 //!
+//! # Why this is core and `src/plugins/xai.rs` is the plugin
+//!
+//! The chat transport is a plugin; this is not, and the split is by consumer
+//! rather than by subject. Five of the six things that read this module are
+//! not the chat provider: `tools/web.rs` authenticates xAI's server-side
+//! **search** API with these tokens and `tools/image.rs` its **image** API —
+//! both core tools, both reaching for xAI whatever backend is configured —
+//! `sync.rs` backs the token file up, and onboarding and `app/prompts.rs` ask
+//! whether a session exists. Moving the store into the plugin would mean a
+//! build without `provider-xai` lost web search and image generation, which
+//! have nothing to do with which model answers a turn.
+//!
+//! So the token store is a credential subsystem that a chat provider happens
+//! to be one consumer of. What is provider-shaped — the two descriptors
+//! saying which credential goes with `kind = "xai"` and `kind = "xaioauth"` —
+//! is in [`crate::plugins::xai`], and nothing here names it.
+//!
 //! The wire protocol is handled by [`super::wire::OpenAiProvider`]; this
 //! module only supplies the credentials:
 //! - [`login`] runs the interactive browser flow (`wizard --login xai` or the
@@ -20,21 +37,15 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-use super::oauth_callback::{self, Callback, Cancel, PasteChannel};
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use super::oauth_callback::{self, Callback, Cancel, PasteChannel, Pkce, generate_pkce, jwt_exp};
 use super::wire::TokenSource;
-use super::wire::{OpenAiProvider, StaticToken};
 use crate::config::Config;
 
 /// OpenID Connect discovery document for xAI accounts.
@@ -59,37 +70,6 @@ pub const DEFAULT_MODEL: &str = "grok-4.6";
 /// Default env var holding a plain xAI API key (`kind = "xai"`).
 pub const DEFAULT_KEY_ENV: &str = "XAI_API_KEY";
 
-// ---------------------------------------------------------------------------
-// PKCE
-// ---------------------------------------------------------------------------
-
-/// A PKCE verifier/challenge pair (RFC 7636, S256).
-#[derive(Debug)]
-pub struct Pkce {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-/// Generate a PKCE pair: the verifier is base64url(64 random bytes) without
-/// padding, capped at the RFC maximum of 128 chars; the challenge is
-/// base64url(sha256(verifier)) without padding.
-pub fn generate_pkce() -> Result<Pkce> {
-    let mut bytes = [0u8; 64];
-    getrandom::fill(&mut bytes).map_err(|err| anyhow!("gathering PKCE randomness: {err}"))?;
-    let mut verifier = URL_SAFE_NO_PAD.encode(bytes);
-    verifier.truncate(128);
-    let challenge = pkce_challenge(&verifier);
-    Ok(Pkce {
-        verifier,
-        challenge,
-    })
-}
-
-/// S256 challenge for a verifier: base64url(sha256(verifier)), no padding.
-pub fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
 /// `n` random bytes as lowercase hex (used for `state` and `nonce`).
 fn random_hex(n: usize) -> Result<String> {
     let mut bytes = vec![0u8; n];
@@ -100,14 +80,6 @@ fn random_hex(n: usize) -> Result<String> {
 // ---------------------------------------------------------------------------
 // JWT expiry
 // ---------------------------------------------------------------------------
-
-/// The `exp` claim of a JWT, or `None` when the token is not a parseable JWT.
-pub fn jwt_exp(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    claims.get("exp")?.as_i64()
-}
 
 /// True when `token` expires at or before `now + EXPIRY_LEEWAY_SECS`.
 /// A token without a readable `exp` is treated as live (the API's 401 path
@@ -956,100 +928,17 @@ impl TokenSource for XaiTokenSource {
     }
 }
 
-/// How `kind = "xai"` is registered — the plain-API-key flavor.
-///
-/// It lives in the OAuth module because that is where the base URL, the
-/// default model and `XAI_API_KEY` already are, and splitting one backend's
-/// constants across two files to satisfy a filename is worse than the mild
-/// surprise of finding the keyed flavor here. Only the credentials differ
-/// between the two: both speak OpenAI-compatible Chat Completions under the
-/// `xai` vendor label.
-pub fn key_descriptor() -> ProviderDescriptor {
-    ProviderDescriptor::new(
-        ProviderKind::XAI,
-        "xAI",
-        Credentials::ApiKey {
-            default_env: Some(DEFAULT_KEY_ENV.to_string()),
-        },
-        |config| {
-            Ok(Arc::new(OpenAiProvider::with_token_source(
-                config.base_url.clone(),
-                config.model.clone(),
-                Arc::new(StaticToken::new(config.api_key())),
-                "xai",
-            )))
-        },
-    )
-}
-
-/// How `kind = "xaioauth"` is registered — the account sign-in flavor, whose
-/// credential is the token store rather than a key.
-pub fn oauth_descriptor() -> ProviderDescriptor {
-    ProviderDescriptor::new(
-        ProviderKind::XAI_OAUTH,
-        "xAI",
-        Credentials::Account {
-            login: "xai".to_string(),
-        },
-        |config| {
-            let source = XaiTokenSource::new().context("setting up xAI OAuth token storage")?;
-            Ok(Arc::new(OpenAiProvider::with_token_source(
-                config.base_url.clone(),
-                config.model.clone(),
-                Arc::new(source),
-                "xai",
-            )))
-        },
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn pkce_challenge_matches_rfc7636_vector() {
-        // RFC 7636 appendix B.
-        assert_eq!(
-            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
-    }
-
-    #[test]
-    fn generated_verifier_is_well_formed() {
-        let pkce = generate_pkce().expect("pkce");
-        // 64 random bytes encode to 86 base64url chars, inside RFC bounds.
-        assert!(
-            (43..=128).contains(&pkce.verifier.len()),
-            "len {}",
-            pkce.verifier.len()
-        );
-        assert!(
-            pkce.verifier
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-            "verifier {} has invalid chars",
-            pkce.verifier
-        );
-        assert_eq!(pkce.challenge, pkce_challenge(&pkce.verifier));
-        // A second pair must differ (randomness).
-        assert_ne!(generate_pkce().expect("pkce").verifier, pkce.verifier);
-    }
-
     /// Unsigned JWT with the given JSON payload.
     fn jwt_with_payload(payload: &str) -> String {
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
-        let body = URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header = enc.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let body = enc.encode(payload.as_bytes());
         format!("{header}.{body}.sig")
-    }
-
-    #[test]
-    fn jwt_exp_reads_the_exp_claim() {
-        let token = jwt_with_payload(r#"{"sub":"u1","exp":1234567890}"#);
-        assert_eq!(jwt_exp(&token), Some(1_234_567_890));
-        assert_eq!(jwt_exp("not-a-jwt"), None);
-        assert_eq!(jwt_exp(&jwt_with_payload(r#"{"sub":"u1"}"#)), None);
     }
 
     #[test]

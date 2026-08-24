@@ -1,6 +1,12 @@
-//! Streaming client for a ChatGPT **subscription** — the Responses API at
-//! `chatgpt.com/backend-api/codex`, reached with OAuth tokens from
-//! [`super::chatgpt_oauth`] rather than an API key.
+//! A ChatGPT **subscription**, as a plugin, behind `--features
+//! provider-chatgpt`: the Responses API at `chatgpt.com/backend-api/codex`,
+//! reached with OAuth tokens from [`oauth`] rather than an API key.
+//!
+//! Transport and sign-in ship together, unlike xAI's, because nothing outside
+//! this plugin reads the ChatGPT token store: no tool authenticates against
+//! OpenAI's non-chat APIs with it, so the store has exactly one consumer and
+//! belongs with it. What is shared with xAI is the loopback redirect the
+//! browser comes back on, and that stayed in [`crate::llm::oauth_callback`].
 //!
 //! This is not the OpenAI Chat Completions API: the request is the Responses
 //! shape (`instructions` + `input` items), the stream is Responses SSE
@@ -19,6 +25,8 @@
 //! reasoning model re-derives its entire chain of thought on every step of a
 //! multi-step turn, and is billed for it every time.
 
+pub mod oauth;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -29,12 +37,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use super::chatgpt_oauth::{self, StoredTokens};
-use super::provider::LlmProvider;
-use super::{
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::provider::LlmProvider;
+use crate::llm::{
     CacheTokens, ChatChunk, ChatMessage, ChatRequest, ChatStream, ContentBlock, FunctionCall,
     ProviderError, Role, ThinkingBlock, ToolCall,
 };
+use oauth::StoredTokens;
 
 /// Static fallback model list; the live list comes from `GET /models`.
 const FALLBACK_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
@@ -63,7 +72,7 @@ struct TokenCache {
 impl ChatgptTokens {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            path: chatgpt_oauth::token_path()?,
+            path: oauth::token_path()?,
             cache: Mutex::new(TokenCache::default()),
         })
     }
@@ -77,7 +86,7 @@ impl ChatgptTokens {
     /// circuit-breaker trip before showing the user the one line that helps.
     fn ensure_loaded(&self, cache: &mut TokenCache) -> Result<StoredTokens> {
         if cache.tokens.is_none() {
-            cache.tokens = chatgpt_oauth::load_tokens(&self.path)?;
+            cache.tokens = oauth::load_tokens(&self.path)?;
         }
         cache.tokens.clone().ok_or_else(|| {
             anyhow::Error::new(ProviderError::http(
@@ -92,7 +101,7 @@ impl ChatgptTokens {
     async fn credentials(&self) -> Result<(String, Option<String>)> {
         let mut cache = self.cache.lock().await;
         let tokens = self.ensure_loaded(&mut cache)?;
-        if chatgpt_oauth::expires_soon(&tokens.access_token)
+        if oauth::expires_soon(&tokens.access_token)
             && let Some(refreshed) = self.refresh(&mut cache).await?
         {
             return Ok((refreshed.access_token, refreshed.account_id));
@@ -138,12 +147,12 @@ impl ChatgptTokens {
         let Some(refresh_token) = current.refresh_token.clone() else {
             return Ok(None);
         };
-        let response = match chatgpt_oauth::refresh(&refresh_token).await {
+        let response = match oauth::refresh(&refresh_token).await {
             Ok(response) => response,
             // A revoked/expired grant never refreshes again: forget the stored
             // tokens so the next run re-prompts for sign-in (as xai_oauth does).
-            Err(err) if err.is::<chatgpt_oauth::RevokedGrant>() => {
-                let _ = chatgpt_oauth::clear_tokens(&self.path);
+            Err(err) if err.is::<oauth::RevokedGrant>() => {
+                let _ = oauth::clear_tokens(&self.path);
                 cache.tokens = None;
                 return Err(err);
             }
@@ -153,7 +162,7 @@ impl ChatgptTokens {
         let id_token = response.id_token.or(current.id_token);
         let account_id = id_token
             .as_deref()
-            .and_then(chatgpt_oauth::account_id_from_id_token)
+            .and_then(oauth::account_id_from_id_token)
             .or(current.account_id);
         let merged = StoredTokens {
             access_token: response.access_token,
@@ -164,7 +173,7 @@ impl ChatgptTokens {
         // Persisted before it is cached, so a re-exec or a second Wizard picks
         // up the token this one just minted rather than replaying the spent
         // refresh token still on disk.
-        chatgpt_oauth::save_tokens(&self.path, &merged)?;
+        oauth::save_tokens(&self.path, &merged)?;
         cache.tokens = Some(merged.clone());
         cache.refreshed_at = Some(std::time::Instant::now());
         Ok(Some(merged))
@@ -206,7 +215,7 @@ impl ChatgptProvider {
         let (access, account) = self.tokens.credentials().await?;
         let mut builder = builder
             .header("Authorization", format!("Bearer {access}"))
-            .header("originator", chatgpt_oauth::API_ORIGINATOR)
+            .header("originator", oauth::API_ORIGINATOR)
             .header("User-Agent", user_agent())
             .header("session-id", &self.session_id)
             .header("OpenAI-Beta", "responses=experimental");
@@ -357,7 +366,7 @@ impl LlmProvider for ChatgptProvider {
     }
 
     async fn context_window(&self, model: &str) -> Option<u32> {
-        super::wire::context_window(model)
+        crate::llm::wire::context_window(model)
     }
 
     fn label(&self) -> String {
@@ -889,6 +898,57 @@ fn build_final<S>(state: &mut SseState<S>) -> ChatChunk {
     }
 }
 
+/// ChatGPT as a kernel plugin.
+///
+/// Transport and sign-in in one plugin, unlike xAI, because nothing outside
+/// it reads the ChatGPT token store: no tool authenticates against
+/// OpenAI's non-chat APIs with it, so the store has exactly one consumer
+/// and belongs with it. The loopback redirect the browser comes back on
+/// is shared with xAI's sign-in and stays in [`crate::llm::oauth_callback`].
+///
+/// A build without this feature has no `--login chatgpt` and no
+/// `kind = \"chatgptoauth\"`, and says so at both.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it.
+pub struct ChatGptPlugin {
+    manifest: PluginManifest,
+}
+
+impl ChatGptPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "chatgpt".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "ChatGPT subscription via account sign-in".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for ChatGptPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for ChatGptPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(oauth::descriptor())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,7 +968,7 @@ mod tests {
         // No tokens needed to test request translation.
         ChatgptProvider {
             http: reqwest::Client::new(),
-            base_url: chatgpt_oauth::BASE_URL.to_string(),
+            base_url: oauth::BASE_URL.to_string(),
             model: "gpt-5.2".to_string(),
             tokens: Arc::new(ChatgptTokens {
                 path: PathBuf::from("/nonexistent"),

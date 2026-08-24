@@ -1,6 +1,6 @@
 //! Fixture-driven tests for the streaming provider adapters.
 //!
-//! Every SSE test inside `src/plugins/anthropic.rs` and `src/llm/openai.rs` builds
+//! Every SSE test inside `src/plugins/anthropic.rs` and `src/plugins/openai/` builds
 //! its input as an inline Rust string literal and feeds it straight to
 //! `decode_sse`. That asserts what the author believed the wire format was, and
 //! it keeps asserting it forever: when a provider renames a field, adds a
@@ -46,12 +46,14 @@ use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-// Anthropic is a plugin (`src/plugins/anthropic.rs`), so a build compiled
-// without `provider-anthropic` has no transport to replay a recording into.
-// Everything in this file that names it is gated; the fixture guards at the
-// bottom are not, because they only read bytes off disk and a build that
-// dropped the plugin must not drop its recordings.
-use wizard::llm::chatgpt::ChatgptProvider;
+// Every backend is a plugin now, so a build compiled without one of these
+// features has no transport to replay its recordings into. Everything in this
+// file that names a provider type is gated; the fixture guards at the bottom
+// are not, because they only read bytes off disk and a build that dropped a
+// plugin must not drop its recordings.
+#[cfg(feature = "provider-chatgpt")]
+use wizard::plugins::chatgpt::ChatgptProvider;
+
 use wizard::llm::provider::LlmProvider;
 use wizard::llm::wire::OpenAiProvider;
 use wizard::llm::{CacheTokens, ChatChunk, ChatMessage, ChatRequest, ToolCall};
@@ -162,6 +164,7 @@ impl RecordedProvider {
     /// Unlike the other two this one authorizes from a token file rather than
     /// from a constructor argument, so [`stub_chatgpt_tokens`] has to have put
     /// one where it will look.
+    #[cfg(feature = "provider-chatgpt")]
     fn responses(&self, model: &str) -> ChatgptProvider {
         stub_chatgpt_tokens();
         ChatgptProvider::new(&self.root, model).expect("build the Responses client")
@@ -220,6 +223,7 @@ async fn read_request_body(socket: &mut TcpStream) -> String {
 /// expiry out of it and answers `false`, which is what keeps this off the
 /// network. A JWT-shaped one near expiry would send the client to
 /// `auth.openai.com` for a refresh in the middle of a unit test.
+#[cfg(feature = "provider-chatgpt")]
 fn stub_chatgpt_tokens() {
     static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
@@ -710,6 +714,7 @@ async fn openai_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
 /// it produced, because this client sends `store: false` and the endpoint
 /// remembers nothing. And the request goes out with OAuth credentials read
 /// from disk, so this is also the only test that drives that path.
+#[cfg(feature = "provider-chatgpt")]
 #[tokio::test]
 async fn responses_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
     let recorded = RecordedProvider::replay("responses/parallel_tool_calls.sse").await;
@@ -788,6 +793,7 @@ async fn responses_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
 /// Reasoning summary deltas and answer text arrive on different event names
 /// and mean different things: a decoder that folds one into the other puts the
 /// model's private deliberation into the transcript as its answer.
+#[cfg(feature = "provider-chatgpt")]
 #[tokio::test]
 async fn responses_reasoning_stays_flagged_through_the_transport() {
     let recorded = RecordedProvider::replay("responses/reasoning_then_text.sse").await;

@@ -67,18 +67,59 @@ exclude = [
 build = "build.rs"
 
 [features]
-# `provider-anthropic` is on because a stock build has always answered to
-# `kind = "anthropic"` and must keep doing so. It is *a feature* because the
-# provider is a plugin (`src/plugins/anthropic.rs`), and the test that a plugin
-# is really a plugin is that the build still works without it: `cargo build
-# --no-default-features` links no Anthropic transport at all, `kind =
-# "anthropic"` then resolves to nothing, and the error says so and lists what
-# is installed. See `docs/plugins.md` and `src/plugins/mod.rs`.
-default = ["provider-anthropic"]
+# Every backend Wizard ships is a plugin behind one of these, and every one is
+# on by default because a stock build has always answered to all nine `kind`
+# values and must keep doing so. What being a feature buys is the test: with
+# any single one left out the tree still compiles, the suite still passes, and
+# that kind resolves to nothing — the error names it and lists what *is*
+# installed, instead of a panic or a link error. `--no-default-features` is the
+# extreme of that, a wizard with no provider transport linked at all.
+#
+# The grouping is one feature per *backend*, not per kind: a feature whose
+# entire content would be a second `Credentials` variant against the same
+# endpoint and the same wire shape is a build flag nobody wants. So `xai`
+# carries `xai` and `xaioauth`, and `openai` carries `openai` and `openrouter`.
+# See `docs/plugins.md` and `src/plugins/mod.rs`.
+default = [
+  "provider-anthropic",
+  "provider-chatgpt",
+  "provider-cloudflare",
+  "provider-llamacpp",
+  "provider-ollama",
+  "provider-openai",
+  "provider-xai",
+]
 
-# Anthropic Messages API, as a plugin. Registers `kind = "anthropic"` through
-# `Ctx::provider` at kernel boot; nothing in core names the type.
+# Anthropic Messages API. `kind = "anthropic"`.
 provider-anthropic = []
+
+# ChatGPT subscription via account sign-in. `kind = "chatgptoauth"`.
+# Carries its own OAuth client and token store; the loopback redirect it comes
+# back on is shared with xAI and stays in core (`llm::oauth_callback`).
+provider-chatgpt = []
+
+# Cloudflare Workers AI. `kind = "cloudflare"`.
+provider-cloudflare = []
+
+# Local llama.cpp `llama-server`. `kind = "llamacpp"`. This is the backend
+# `Config::active` synthesizes when nothing is configured, so a build without
+# it starts with a configured provider that resolves to nothing and says so.
+provider-llamacpp = []
+
+# Local Ollama, native `/api/chat`. `kind = "ollama"`.
+provider-ollama = []
+
+# The OpenAI-compatible family: `kind = "openai"` (which is also how vLLM,
+# LM Studio, DeepSeek and the `compat.rs` presets are reached) and
+# `kind = "openrouter"`. The wire machinery itself is `llm::wire` and stays in
+# core — five backends build on it, so it is infrastructure, not a plugin.
+provider-openai = []
+
+# xAI Grok, by API key (`kind = "xai"`) and by account sign-in
+# (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:
+# `web_search`, `generate_image` and `sync` all use them and have nothing to do
+# with which model answers a turn. See `src/plugins/xai.rs`.
+provider-xai = []
 
 # The GUI (`wizard gui`): an iced window over the agent core, with no webview,
 # no loopback HTTP and no JSON round-trip per streaming token. It is the only

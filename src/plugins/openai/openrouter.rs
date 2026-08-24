@@ -1,21 +1,29 @@
 //! OpenRouter (`https://openrouter.ai`): hundreds of hosted models behind one
 //! OpenAI-compatible Chat Completions endpoint and one API key.
 //!
-//! The wire protocol is handled by [`super::wire::OpenAiProvider`]; this
-//! module only supplies the defaults (`kind = "openrouter"`) and the
-//! attribution headers OpenRouter recommends on every request.
+//! The wire protocol is handled by [`crate::llm::wire::OpenAiProvider`]; this
+//! module only supplies `kind = "openrouter"` and the attribution headers
+//! OpenRouter recommends on every request. The defaults it used to own — base
+//! URL, model, key env var — are in `llm::registry::defaults`, because
+//! onboarding and the settings sheet prefill a form with them and have to keep
+//! doing so on a build compiled without this plugin.
+//!
+//! It ships inside `provider-openai` rather than under a feature of its own:
+//! this is the `openai` kind with a fixed base URL and two headers, and a
+//! cargo feature whose whole content is a `with_headers` call is a build
+//! combination nobody wants and everybody has to test.
 
 use std::sync::Arc;
 
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::wire::{OpenAiProvider, StaticToken};
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use crate::llm::wire::{OpenAiProvider, StaticToken};
 
-/// Default Chat Completions base URL.
-pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
-/// Default model: OpenRouter's Auto Router, which picks a model per prompt.
-pub const DEFAULT_MODEL: &str = "openrouter/auto";
-/// Default env var holding the OpenRouter API key.
-pub const DEFAULT_KEY_ENV: &str = "OPENROUTER_API_KEY";
+// The base URL, model and key env var are in `registry::defaults`: onboarding
+// and the settings sheet prefill a form with them and have to keep doing so on
+// a build compiled without this plugin. Core may hold the text; this file
+// holds the transport and the attribution headers.
+use crate::llm::registry::defaults::OPENROUTER_KEY_ENV as DEFAULT_KEY_ENV;
+
 /// `HTTP-Referer` attribution header value (identifies Wizard to OpenRouter).
 pub const ATTRIBUTION_REFERER: &str = "https://github.com/teddytennant/wizard";
 /// `X-Title` attribution header value.
@@ -65,6 +73,9 @@ pub fn descriptor() -> ProviderDescriptor {
 #[cfg(test)]
 mod tests {
     use crate::llm::provider::LlmProvider;
+    use crate::llm::registry::defaults::{
+        OPENROUTER_BASE_URL as DEFAULT_BASE_URL, OPENROUTER_MODEL as DEFAULT_MODEL,
+    };
 
     use super::*;
 

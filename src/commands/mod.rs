@@ -1859,6 +1859,11 @@ mod tests {
     }
 
     #[test]
+    /// The two kinds it names are plugins, so the parse it exercises only
+    /// exists on a build that has them. The arity and unknown-kind halves
+    /// below hold either way and are covered by
+    /// `an_unregistered_kind_parses_and_fails_later`.
+    #[cfg(all(feature = "provider-ollama", feature = "provider-openai"))]
     fn provider_add_parses_kind_and_arity() {
         let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
         assert_eq!(

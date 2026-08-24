@@ -642,11 +642,17 @@ async fn a_plugin_registered_provider_is_selectable_from_config() {
             Credentials::ApiKey {
                 default_env: Some("KERNEL_TEST_KEY".to_string()),
             },
-            // Ollama's client needs neither a key nor a reachable endpoint,
-            // which is all a registration test has to build.
+            // The shared OpenAI-compatible client, which is core: it needs
+            // neither a key nor a reachable endpoint to construct, which is
+            // all a registration test has to build. Deliberately not one of
+            // the provider plugins' clients — a kernel test that named one
+            // would stop compiling the moment that feature was left out,
+            // which is the failure the kernel exists to make impossible.
             |config| {
-                Ok(Arc::new(crate::llm::ollama::OllamaClient::new(
+                Ok(Arc::new(crate::llm::wire::OpenAiProvider::new(
                     config.base_url.clone(),
+                    "test-model",
+                    "",
                 )))
             },
         ))?;
@@ -675,35 +681,50 @@ async fn a_plugin_registered_provider_is_selectable_from_config() {
     assert!(config.build().is_err());
 }
 
-/// A plugin cannot take a kind a built-in already holds, and a refused claim
-/// leaves nothing behind in either registry.
+/// A plugin cannot take a kind another plugin already holds, and a refused
+/// claim leaves nothing behind in either registry.
 #[tokio::test]
-async fn a_plugin_cannot_shadow_a_built_in_provider_kind() {
+async fn a_plugin_cannot_take_a_provider_kind_another_plugin_holds() {
     use crate::llm::registry::{self, Credentials, ProviderDescriptor, ProviderKind};
 
     let dir = tmp("provider-shadow");
     let kernel = kernel_in(&dir.path);
 
-    // `openai` rather than `anthropic`, which this used to use: anthropic is a
-    // plugin now (`src/plugins/anthropic.rs`) and is absent from a build
-    // without its feature, so a test about *built-ins* has to name one.
-    let err = kernel
-        .load(TestPlugin::boxed("impostor", |ctx| {
+    // There are no built-in providers left to shadow — every kind belongs to
+    // a plugin, and a test that named one of them would only run on a build
+    // that shipped it. So the incumbent is registered here: the rule is
+    // first-claim-wins, and which plugin got there first is not part of it.
+    let kind = ProviderKind::known("kernel-test-incumbent");
+    let incumbent = kernel_in(&dir.path);
+    incumbent
+        .load(TestPlugin::boxed("incumbent", |ctx| {
             ctx.provider(ProviderDescriptor::new(
-                ProviderKind::OPENAI,
-                "Not OpenAI",
+                ProviderKind::known("kernel-test-incumbent"),
+                "The Incumbent",
                 Credentials::Local,
                 |_| Err(anyhow::anyhow!("never built")),
             ))?;
             Ok(())
         }))
-        .expect_err("the built-in holds the kind");
-    assert!(err.to_string().contains("openai"), "{err}");
+        .expect("the first claim wins");
 
-    // The built-in is untouched, and the failed claim left no slot behind.
+    let err = kernel
+        .load(TestPlugin::boxed("impostor", |ctx| {
+            ctx.provider(ProviderDescriptor::new(
+                ProviderKind::known("kernel-test-incumbent"),
+                "Not The Incumbent",
+                Credentials::Local,
+                |_| Err(anyhow::anyhow!("never built")),
+            ))?;
+            Ok(())
+        }))
+        .expect_err("the incumbent holds the kind");
+    assert!(err.to_string().contains("kernel-test-incumbent"), "{err}");
+
+    // The incumbent is untouched, and the failed claim left no slot behind.
     assert!(kernel.provider_names().is_empty());
-    let descriptor = registry::installed(&ProviderKind::OPENAI).expect("still installed");
-    assert_eq!(descriptor.display_name(), "OpenAI-compatible");
+    let descriptor = registry::installed(&kind).expect("still installed");
+    assert_eq!(descriptor.display_name(), "The Incumbent");
 }
 
 /// A plugin's slash command is a first-class command the moment it registers:

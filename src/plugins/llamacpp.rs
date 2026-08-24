@@ -1,4 +1,12 @@
-//! Provider for llama.cpp's `llama-server`.
+//! llama.cpp's `llama-server`, as a plugin, behind `--features
+//! provider-llamacpp`.
+//!
+//! The one backend whose process Wizard owns. Spawning it, waiting for it and
+//! stopping it is [`crate::server`] — core, because `/server`, the
+//! `WIZARD_GGUF_PATH` plumbing and the doctor check all reach it — and the
+//! `prepare` hook on the descriptor below is what connects the two. A plugin
+//! reaching into core is the direction the boundary allows; `server.rs` names
+//! no provider.
 //!
 //! `llama-server` exposes the OpenAI-compatible Chat Completions API under
 //! `/v1`, so chat streaming, model listing, and tool support all delegate to
@@ -24,10 +32,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
 
-use super::provider::LlmProvider;
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::wire::OpenAiProvider;
-use super::{ChatRequest, ChatStream, ProviderError};
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::provider::LlmProvider;
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use crate::llm::wire::OpenAiProvider;
+use crate::llm::{ChatRequest, ChatStream, ProviderError};
 
 /// How long to wait for a TCP connection before declaring llama-server down.
 /// Shorter than the shared chat budget because this client only ever makes
@@ -237,6 +246,60 @@ pub fn descriptor() -> ProviderDescriptor {
         wait.finish(outcome.is_ok());
         outcome
     })
+}
+
+/// llama.cpp as a kernel plugin.
+///
+/// The one backend whose process Wizard owns, which is what
+/// `with_local_server` declares and what `/server` acts on. Spawning and
+/// waiting for `llama-server` is [`crate::server`] — core, because the
+/// `/server` command, the GGUF path plumbing and the doctor check all
+/// reach it — and this plugin's `prepare` hook is what connects the two.
+///
+/// A build without this feature is a Wizard with no default local
+/// backend: `Config::active` still synthesizes a llama.cpp entry when
+/// nothing is configured, and that entry now resolves to the named error
+/// instead of a client. That is the honest outcome, and it is why this
+/// feature is on by default.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it.
+pub struct LlamaCppPlugin {
+    manifest: PluginManifest,
+}
+
+impl LlamaCppPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "llamacpp".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Local llama.cpp llama-server".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for LlamaCppPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for LlamaCppPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(descriptor())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

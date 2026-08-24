@@ -273,7 +273,7 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 /// Default base URL for the xAI API.
 const XAI_BASE_URL: &str = crate::llm::xai_oauth::DEFAULT_BASE_URL;
 /// Default base URL for the OpenRouter API.
-const OPENROUTER_BASE_URL: &str = crate::llm::openrouter::DEFAULT_BASE_URL;
+const OPENROUTER_BASE_URL: &str = crate::llm::registry::defaults::OPENROUTER_BASE_URL;
 /// Default env var name for the OpenAI key.
 const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
 /// Default env var name for the Anthropic key.
@@ -281,13 +281,13 @@ const ANTHROPIC_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// Default env var name for the xAI key.
 const XAI_KEY_ENV: &str = crate::llm::xai_oauth::DEFAULT_KEY_ENV;
 /// Default env var name for the OpenRouter key.
-const OPENROUTER_KEY_ENV: &str = crate::llm::openrouter::DEFAULT_KEY_ENV;
+const OPENROUTER_KEY_ENV: &str = crate::llm::registry::defaults::OPENROUTER_KEY_ENV;
 /// Default OpenRouter model (the Auto Router).
-const OPENROUTER_MODEL: &str = crate::llm::openrouter::DEFAULT_MODEL;
+const OPENROUTER_MODEL: &str = crate::llm::registry::defaults::OPENROUTER_MODEL;
 /// Default env var name for the Cloudflare API token.
-const CLOUDFLARE_KEY_ENV: &str = crate::llm::cloudflare::DEFAULT_KEY_ENV;
+const CLOUDFLARE_KEY_ENV: &str = crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV;
 /// Default Cloudflare Workers AI model (GLM 5.2).
-const CLOUDFLARE_MODEL: &str = crate::llm::cloudflare::DEFAULT_MODEL;
+const CLOUDFLARE_MODEL: &str = crate::llm::registry::defaults::CLOUDFLARE_MODEL;
 
 // ---------------------------------------------------------------------------
 // TUI entry point
@@ -1294,7 +1294,7 @@ fn collect_cloudflare(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     Ok(Some(ProviderAnswers {
         provider_name: "cloudflare".to_string(),
         kind: ProviderKind::CLOUDFLARE,
-        base_url: crate::llm::cloudflare::base_url(&account_id),
+        base_url: crate::llm::registry::defaults::cloudflare_base_url(&account_id),
         model,
         api_key_env: Some(api_key_env),
         api_key,
@@ -1569,8 +1569,14 @@ fn print_summary(config: &Config) {
                 );
             }
         }
-    } else if provider.kind == ProviderKind::OLLAMA {
-        if crate::llm::ollama::model_installed(&provider.model, &installed_ollama_models()) {
+    } else if cfg!(feature = "provider-ollama") && provider.kind == ProviderKind::OLLAMA {
+        // Gated because the tag comparison is the plugin's: `ollama list`
+        // prints `llama3:latest` where a config says `llama3`, and one
+        // canonicalizer for that is better than a second copy here. Without
+        // the plugin there is no `kind = "ollama"` to advise about anyway, and
+        // the generic credential advice below is the honest fallback.
+        #[cfg(feature = "provider-ollama")]
+        if crate::plugins::ollama::model_installed(&provider.model, &installed_ollama_models()) {
             println!("  • model already pulled: {}", provider.model);
         } else {
             println!(
@@ -2243,7 +2249,7 @@ mod tests {
         let answers = Answers {
             provider_name: "cloudflare".to_string(),
             kind: ProviderKind::CLOUDFLARE,
-            base_url: crate::llm::cloudflare::base_url("acc123"),
+            base_url: crate::llm::registry::defaults::cloudflare_base_url("acc123"),
             model: CLOUDFLARE_MODEL.to_string(),
             api_key_env: Some(CLOUDFLARE_KEY_ENV.to_string()),
             ..base_answers()

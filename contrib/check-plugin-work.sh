@@ -13,11 +13,11 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 # The baseline this migration must not regress. Captured with
-# `cargo test --no-fail-fast` on the branch as it stood after the kernel landed
-# (2536); it was 2422 on `main` @ 1ffd988 before that, and 2574 once the host
-# bridge was wired. Raise it when a phase adds tests, so the ratchet keeps
+# `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel
+# landed, 2557 once every provider became a plugin, 2575 with the host bridge
+# and the sandbox fix. Raise it when a phase adds tests, so the ratchet keeps
 # ratcheting.
-BASELINE_TESTS=2574
+BASELINE_TESTS=2575
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }

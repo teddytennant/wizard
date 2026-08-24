@@ -496,11 +496,14 @@ pub(crate) async fn absorb_images(
 /// errors classify themselves; unknown errors (mid-stream drops surface as
 /// plain `anyhow` context chains) stay transient for robustness.
 pub(crate) fn error_is_transient(err: &anyhow::Error) -> bool {
+    // One downcast, not one per backend. Every provider puts a
+    // `ProviderError` at the head of its `anyhow` chain — Ollama's `typed()`
+    // wraps its own error type under one deliberately, and the two
+    // classifications are the same predicate over the same statuses — so the
+    // second arm this used to carry could never be reached, and adding one per
+    // plugin is exactly the thing a plugin boundary exists to stop.
     if let Some(provider) = err.downcast_ref::<crate::llm::ProviderError>() {
         return provider.is_transient();
-    }
-    if let Some(ollama) = err.downcast_ref::<crate::llm::ollama::OllamaError>() {
-        return ollama.is_transient();
     }
     true
 }

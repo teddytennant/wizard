@@ -2,17 +2,9 @@
 //! (not the OpenAI-compatible shim). Shared by the agent loop, the tool
 //! registry, and the TUI.
 
-pub mod builtin;
-pub mod chatgpt;
-pub mod chatgpt_oauth;
-pub mod cloudflare;
 pub mod compat;
 pub mod fusion;
-pub mod llamacpp;
 pub mod oauth_callback;
-pub mod ollama;
-pub mod openai;
-pub mod openrouter;
 pub mod provider;
 pub mod registry;
 #[cfg(test)]
@@ -29,7 +21,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
 /// Boxed stream of [`ChatChunk`]s yielded by every provider's `chat_stream`.
-/// Shared across [`llamacpp`], [`ollama`], [`wire`], and the provider plugins.
+/// Shared by [`wire`] and by every provider plugin.
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatChunk>> + Send>>;
 
 /// How long to wait for a TCP connection before giving up. Reaching the peer
@@ -80,6 +72,11 @@ thread_local! {
 /// runs to completion synchronously on this thread, so the scope covers
 /// exactly the clients it creates, and the previous locality is restored even
 /// if `build` panics.
+///
+/// The only caller is the llama.cpp plugin, so a build without it has nothing
+/// to flip the locality for — dead code, not a mistake. The tests below still
+/// exercise the scope itself either way.
+#[cfg_attr(not(feature = "provider-llamacpp"), allow(dead_code))]
 pub(crate) fn with_local_inference_timeouts<T>(build: impl FnOnce() -> T) -> T {
     struct Restore(Locality);
     impl Drop for Restore {

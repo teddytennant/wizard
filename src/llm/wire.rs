@@ -130,7 +130,7 @@ impl OpenAiProvider {
     /// The client this returns speaks the protocol and nothing more — no
     /// `prompt_cache_key`, whatever `base_url` points at. A caller that owns
     /// an endpoint with one adds it with [`Self::with_prompt_cache_key`];
-    /// `super::openai::provider` is the only place that does.
+    /// `crate::plugins::openai::provider` is the only place that does.
     pub fn new(
         base_url: impl Into<String>,
         model: impl Into<String>,
@@ -202,7 +202,7 @@ impl OpenAiProvider {
     /// and the hosted endpoints configured as `openai` providers cache
     /// automatically and document no key field. Sending it to them anyway
     /// would put a field on the wire that is at best ignored and at worst
-    /// rejected. See `openai::prompt_cache_key`, the only caller.
+    /// rejected. See `plugins::openai::prompt_cache_key`, the only caller.
     pub fn with_prompt_cache_key(mut self, key: PromptCacheKeyFn) -> Self {
         self.prompt_cache_key = Some(key);
         self

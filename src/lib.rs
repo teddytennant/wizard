@@ -354,13 +354,22 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         } else {
             llm::oauth_callback::PasteChannel::Disabled
         };
+        // `chatgpt` is gated because its whole sign-in lives in the plugin
+        // (`crate::plugins::chatgpt::oauth`) and a build without that feature
+        // has nothing to sign into. `xai` is not, because its token store is
+        // core: `web_search` and `generate_image` authenticate with it whatever
+        // chat backend is configured, so signing in stays useful even where
+        // `kind = "xai"` resolves to nothing. See `src/plugins/xai.rs`.
         return match provider.as_str() {
             "xai" => llm::xai_oauth::login(|line: &str| println!("{line}"), paste, false)
                 .await
                 .map(|()| 0),
-            "chatgpt" => llm::chatgpt_oauth::login(|line: &str| println!("{line}"), paste)
-                .await
-                .map(|()| 0),
+            #[cfg(feature = "provider-chatgpt")]
+            "chatgpt" => {
+                crate::plugins::chatgpt::oauth::login(|line: &str| println!("{line}"), paste)
+                    .await
+                    .map(|()| 0)
+            }
             other => {
                 anyhow::bail!("unknown login provider '{other}' (supported: xai, chatgpt)")
             }

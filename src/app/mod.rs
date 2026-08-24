@@ -1173,9 +1173,10 @@ impl App {
                 }
                 // Substitute the account id into the base-URL template
                 // (e.g. `.../accounts/{account_id}/ai/v1`).
-                prompt.base_url = prompt
-                    .base_url
-                    .replace(crate::llm::cloudflare::ACCOUNT_ID_PLACEHOLDER, &value);
+                prompt.base_url = prompt.base_url.replace(
+                    crate::llm::registry::defaults::CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER,
+                    &value,
+                );
             }
             PromptField::BaseUrl => prompt.base_url = value,
             PromptField::Model => prompt.model = value,
@@ -3114,7 +3115,8 @@ impl App {
                             )))
                         }
                         PickerKind::ProviderType => {
-                            use crate::llm::{cloudflare, openrouter, xai_oauth};
+                            use crate::llm::registry::defaults;
+                            use crate::llm::xai_oauth;
                             use std::collections::VecDeque;
                             match picker.selected {
                                 // xAI sign-in: run the OAuth flow; login()
@@ -3142,7 +3144,7 @@ impl App {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::OPENROUTER,
                                         name: "openrouter".to_string(),
-                                        base_url: openrouter::DEFAULT_BASE_URL.to_string(),
+                                        base_url: defaults::OPENROUTER_BASE_URL.to_string(),
                                         model: String::new(),
                                         api_key: None,
                                         queue: VecDeque::from([
@@ -3158,8 +3160,9 @@ impl App {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::CLOUDFLARE,
                                         name: "cloudflare".to_string(),
-                                        base_url: cloudflare::BASE_URL_TEMPLATE.to_string(),
-                                        model: cloudflare::DEFAULT_MODEL.to_string(),
+                                        base_url: defaults::CLOUDFLARE_BASE_URL_TEMPLATE
+                                            .to_string(),
+                                        model: defaults::CLOUDFLARE_MODEL.to_string(),
                                         api_key: None,
                                         queue: VecDeque::from([
                                             PromptField::AccountId,

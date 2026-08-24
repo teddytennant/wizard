@@ -721,6 +721,7 @@ fn server_subcommands_parse() {
     assert!(message.contains("status|start|stop"), "got: {message}");
 }
 
+#[cfg(feature = "provider-xai")]
 #[test]
 fn provider_add_accepts_xai_kinds() {
     let parsed =
@@ -759,6 +760,11 @@ fn provider_add_accepts_xai_kinds() {
     assert!(message.contains("xai|xaioauth"), "got: {message}");
 }
 
+/// Gated on the plugin because `/provider add` validates the kind against
+/// the registry: without `provider-openai` there is no `openrouter` to add,
+/// and refusing it is the correct behaviour rather than the bug this test
+/// looks for.
+#[cfg(feature = "provider-openai")]
 #[test]
 fn provider_add_accepts_openrouter_kind() {
     let parsed = SlashCommand::parse(
@@ -784,6 +790,7 @@ fn provider_add_accepts_openrouter_kind() {
     assert!(message.contains("openrouter"), "got: {message}");
 }
 
+#[cfg(feature = "provider-cloudflare")]
 #[test]
 fn provider_add_accepts_cloudflare_kind() {
     let parsed = SlashCommand::parse(

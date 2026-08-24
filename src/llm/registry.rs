@@ -97,21 +97,34 @@ impl ProviderKind {
 //     is not this change.
 //   - `tools/image.rs` picks an image endpoint per backend. That belongs on a
 //     capability the descriptor does not have yet; see the module docs there.
+//   - `tools/web.rs` and `tools/image.rs` reach xAI's search and image APIs,
+//     which are not chat and so are not behind a `kind` at all.
+//
+// Every provider is now a plugin, so each of these constants names a kind that
+// a build may not answer to. That is a supported state and not a bug: every
+// use is already guarded by a registry lookup that returns `None` when the
+// plugin is absent, and `ProviderKind::ANTHROPIC`'s doc below has the full
+// argument for why holding the *string* is allowed where holding the type is
+// not.
 impl ProviderKind {
-    /// Local llama.cpp `llama-server`. The default local backend.
+    /// Local llama.cpp `llama-server`. The default local backend, and the one
+    /// `Config::active` synthesizes when nothing is configured — so on a build
+    /// without `provider-llamacpp` that synthesized entry resolves to nothing
+    /// and says so, which is why the feature is on by default.
     pub const LLAMACPP: Self = Self::known("llamacpp");
     /// Local Ollama server (native `/api/chat`).
     pub const OLLAMA: Self = Self::known("ollama");
-    /// Any OpenAI-compatible Chat Completions endpoint.
+    /// Any OpenAI-compatible Chat Completions endpoint. Also how vLLM, LM
+    /// Studio, DeepSeek and every `compat.rs` preset are reached.
     pub const OPENAI: Self = Self::known("openai");
     /// Anthropic Messages API. Registered by [`crate::plugins::anthropic`],
     /// so on a build without `provider-anthropic` this constant names a kind
-    /// nothing answers to — which is a supported state, not a bug. A `kind`
-    /// is a string a user writes in a file; core may hold the string (to
-    /// offer it in a menu, to compare against one that was typed) as long as
-    /// it never names the type behind it or constructs one. Every use is
-    /// guarded by a registry lookup that returns `None` when the plugin is
-    /// absent.
+    /// nothing answers to — which is a supported state, not a bug, and is now
+    /// true of every constant in this block. A `kind` is a string a user
+    /// writes in a file; core may hold the string (to offer it in a menu, to
+    /// compare against one that was typed) as long as it never names the type
+    /// behind it or constructs one. Every use is guarded by a registry lookup
+    /// that returns `None` when the plugin is absent.
     pub const ANTHROPIC: Self = Self::known("anthropic");
     /// OpenRouter, with a plain API key.
     pub const OPENROUTER: Self = Self::known("openrouter");
@@ -123,6 +136,57 @@ impl ProviderKind {
     pub const CHATGPT_OAUTH: Self = Self::known("chatgptoauth");
     /// Cloudflare Workers AI.
     pub const CLOUDFLARE: Self = Self::known("cloudflare");
+}
+
+/// The on-disk strings a stock build's backends default to.
+///
+/// Same boundary as the [`ProviderKind`] constants above, and the same
+/// argument. A default base URL, the env var a key is looked up in and the
+/// model tag written into a fresh `config.toml` are all *text a user would
+/// otherwise type*, and core is allowed to hold text: to prefill a form with
+/// it, to offer it in a menu, to compare against something somebody typed. It
+/// is naming the *type* behind a kind, or constructing one, that core may not
+/// do, and nothing here does either.
+///
+/// This module exists because the alternative was `#[cfg(feature = "...")]`
+/// inside onboarding's numbered menu, the TUI provider picker and the settings
+/// sheet's preset table — the hand-written-menu problem this file has flagged
+/// since the registry landed. Those menus should be built from [`kinds`], and
+/// gating the strings first would make that change harder, not easier. Until
+/// it happens a stripped build still offers a backend it does not have, and
+/// choosing one writes a config that fails at `build()` with the named error
+/// rather than an entry that was never offered.
+///
+/// Only backends core actually spells out are here. A provider plugin whose
+/// defaults nothing outside it reads keeps them to itself; llama.cpp, Ollama
+/// and the OpenAI kind have no entries for exactly that reason.
+pub mod defaults {
+    /// OpenRouter's Chat Completions base URL.
+    pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+    /// OpenRouter's Auto Router, which picks a model per prompt.
+    pub const OPENROUTER_MODEL: &str = "openrouter/auto";
+    /// Env var holding an OpenRouter API key.
+    pub const OPENROUTER_KEY_ENV: &str = "OPENROUTER_API_KEY";
+
+    /// Workers AI's OpenAI-compatible base URL, with the account id left as
+    /// [`CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER`] for onboarding to fill in.
+    pub const CLOUDFLARE_BASE_URL_TEMPLATE: &str =
+        "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1";
+    /// The token in [`CLOUDFLARE_BASE_URL_TEMPLATE`] a configured account id
+    /// replaces. Written out rather than formatted so the unsubstituted
+    /// template can be shown in a form and detected when it comes back
+    /// unedited.
+    pub const CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER: &str = "{account_id}";
+    /// Default Workers AI model: GLM 5.2 (Z.ai), the most capable text model
+    /// in the catalog.
+    pub const CLOUDFLARE_MODEL: &str = "@cf/zai-org/glm-5.2";
+    /// Env var holding a Workers AI API token.
+    pub const CLOUDFLARE_KEY_ENV: &str = "CLOUDFLARE_API_TOKEN";
+
+    /// The Workers AI base URL for one account.
+    pub fn cloudflare_base_url(account_id: &str) -> String {
+        CLOUDFLARE_BASE_URL_TEMPLATE.replace(CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER, account_id.trim())
+    }
 }
 
 impl fmt::Display for ProviderKind {
@@ -244,9 +308,11 @@ pub type PrepareFn = Arc<
 
 /// Everything core needs to know about one backend without naming its type.
 ///
-/// A provider registers one of these — from `llm::builtin` today, from
-/// `Ctx::provider` once providers are plugins — and every site that used to
-/// match on a `ProviderKind` variant reads a field off it instead.
+/// A provider registers one of these through `Ctx::provider`, and every site
+/// that used to match on a `ProviderKind` variant reads a field off it
+/// instead. There is no other way in: the table of concrete provider types
+/// that used to seed this registry (`llm::builtin`) is gone, and what a build
+/// answers to is exactly the set of plugins it was compiled with.
 #[derive(Clone)]
 pub struct ProviderDescriptor {
     kind: ProviderKind,
@@ -428,8 +494,13 @@ impl ProviderRegistry {
 /// set of kinds a config file can name is a property of the process.
 /// `Ctx::provider` writes here and into the kernel's own slot in one step, so
 /// an unload withdraws the kind from both.
+/// Starts **empty**, which is the whole of the migration in one line. It used
+/// to be seeded from `llm::builtin::registry()`, a table naming eight concrete
+/// provider types and constructing a descriptor from each; every one of them
+/// is now a plugin that calls [`install`] for itself at kernel boot. A build
+/// with no provider features linked therefore has no kinds, and says so.
 static INSTALLED: LazyLock<RwLock<ProviderRegistry>> =
-    LazyLock::new(|| RwLock::new(super::builtin::registry()));
+    LazyLock::new(|| RwLock::new(ProviderRegistry::new()));
 
 fn read() -> RwLockReadGuard<'static, ProviderRegistry> {
     INSTALLED
@@ -558,9 +629,11 @@ mod tests {
         assert!(installed(&probe.kind).is_none());
         let message = unknown(&probe.kind).to_string();
         assert!(message.contains("a-plugin-that-is-not-loaded"), "{message}");
-        // The valid list is generated, so it names the builtins. `openai`
-        // rather than `anthropic`: the latter is a plugin now and is absent
-        // from a build compiled without it.
+        // The valid list is generated from what is installed rather than
+        // typed out, so on a build with no provider plugins at all it is
+        // empty and this assertion has nothing to check. That is the point of
+        // generating it.
+        #[cfg(feature = "provider-openai")]
         assert!(message.contains("openai"), "{message}");
     }
 

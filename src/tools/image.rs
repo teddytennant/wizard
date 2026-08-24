@@ -386,7 +386,7 @@ fn resolve_endpoint() -> Result<ImageEndpoint, String> {
         } else if provider.kind == ProviderKind::OPENAI || provider.kind == ProviderKind::OPENROUTER
         {
             let default_env = if provider.kind == ProviderKind::OPENROUTER {
-                Some(crate::llm::openrouter::DEFAULT_KEY_ENV)
+                Some(crate::llm::registry::defaults::OPENROUTER_KEY_ENV)
             } else {
                 Some("OPENAI_API_KEY")
             };

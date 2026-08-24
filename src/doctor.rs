@@ -3121,8 +3121,8 @@ mod tests {
             "TAVILY_API_KEY",
             crate::config::GatewayConfig::DEFAULT_TOKEN_ENV,
             crate::llm::xai_oauth::DEFAULT_KEY_ENV,
-            crate::llm::openrouter::DEFAULT_KEY_ENV,
-            crate::llm::cloudflare::DEFAULT_KEY_ENV,
+            crate::llm::registry::defaults::OPENROUTER_KEY_ENV,
+            crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV,
         ] {
             // Wizard's own defaults are in the list on purpose: a default
             // renamed to something this gate cannot confirm would be withheld
