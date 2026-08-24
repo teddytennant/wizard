@@ -13,8 +13,9 @@
 //! field on the wire: llama-server keeps a KV cache per slot and reuses the
 //! longest matching prefix of the next request on its own, with no API to
 //! address it by, so there is no `prompt_cache_key` to send and sending one
-//! would only add a key this server never asked for. See
-//! `openai::is_openai_api`, which is what leaves it off.
+//! would only add a key this server never asked for. Leaving it off costs
+//! nothing here: the shared client sends the field only when the module that
+//! owns the endpoint installs a key function, and only `openai` does.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,8 +24,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
 
-use super::openai::OpenAiProvider;
 use super::provider::LlmProvider;
+use super::wire::OpenAiProvider;
 use super::{ChatRequest, ChatStream, ProviderError};
 
 /// How long to wait for a TCP connection before declaring llama-server down.
@@ -287,7 +288,7 @@ mod tests {
         // front of it does, and the 503-while-loading answer is exactly when
         // waiting the stated time beats guessing. Driven through a real
         // socket because the header is only readable from a real response.
-        let root = crate::llm::testing::one_shot_http_server(
+        let root = crate::llm::test_support::one_shot_http_server(
             "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nContent-Length: \
              7\r\nConnection: close\r\n\r\nloading",
         )
@@ -321,7 +322,7 @@ mod tests {
     async fn a_parallel_batch_reaches_llama_server_in_the_shared_shape() {
         use futures_util::StreamExt as _;
 
-        use crate::llm::openai::testing::{
+        use crate::llm::test_support::{
             PARALLEL_TOOL_BATCH_SSE, Recorded, assert_batch_is_answerable, parallel_batch_request,
         };
 

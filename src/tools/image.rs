@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args, resolve_path};
 use crate::config::{Config, ProviderKind};
-use crate::llm::openai::TokenSource;
+use crate::llm::wire::TokenSource;
 use crate::llm::xai_oauth::{self, XaiTokenSource};
 
 /// Whole-request timeout for image generation (model work is slower than chat).

@@ -357,7 +357,7 @@ impl LlmProvider for ChatgptProvider {
     }
 
     async fn context_window(&self, model: &str) -> Option<u32> {
-        super::openai::context_window(model)
+        super::wire::context_window(model)
     }
 
     fn label(&self) -> String {

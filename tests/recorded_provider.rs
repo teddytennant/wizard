@@ -26,7 +26,7 @@
 //!
 //! One fixture has crossed back the other way, which is the direction worth
 //! copying: `openai/parallel_tool_calls.sse` is `include_str!`d by
-//! `openai::testing::PARALLEL_TOOL_BATCH_SSE`, so the adapter's own in-process
+//! `llm::test_support::PARALLEL_TOOL_BATCH_SSE`, so the adapters' own in-process
 //! decoder tests and the over-a-socket ones here read the same bytes and
 //! cannot drift.
 //!
@@ -48,8 +48,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 use wizard::llm::anthropic::AnthropicProvider;
 use wizard::llm::chatgpt::ChatgptProvider;
-use wizard::llm::openai::OpenAiProvider;
 use wizard::llm::provider::LlmProvider;
+use wizard::llm::wire::OpenAiProvider;
 use wizard::llm::{CacheTokens, ChatChunk, ChatMessage, ChatRequest, ToolCall};
 
 /// How many bytes of the fixture go into each HTTP chunked frame.

@@ -23,7 +23,7 @@ use super::{
     MAX_OUTPUT_BYTES, Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args,
     truncate_output,
 };
-use crate::llm::openai::TokenSource;
+use crate::llm::wire::TokenSource;
 use crate::llm::xai_oauth::{self, XaiTokenSource};
 
 /// Whole-request timeout for fetches and searches.

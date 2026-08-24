@@ -2,7 +2,7 @@
 //! `auth.x.ai`, then plain `Bearer` access tokens against the
 //! OpenAI-compatible Chat Completions API at `https://api.x.ai/v1`.
 //!
-//! The wire protocol is handled by [`super::openai::OpenAiProvider`]; this
+//! The wire protocol is handled by [`super::wire::OpenAiProvider`]; this
 //! module only supplies the credentials:
 //! - [`login`] runs the interactive browser flow (`wizard --login xai` or the
 //!   `/login xai` slash command) and stores the tokens in
@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use super::oauth_callback::{self, Callback, Cancel, PasteChannel};
-use super::openai::TokenSource;
+use super::wire::TokenSource;
 use crate::config::Config;
 
 /// OpenID Connect discovery document for xAI accounts.

@@ -125,9 +125,10 @@ At TUI startup, a missing or unstartable local backend is not fatal. Wizard fall
 
 All providers implement the `LlmProvider` trait (health, model listing, streaming chat, optional context-window probe). Clients include:
 
-- `llamacpp.rs`: default local path; OpenAI-compatible `/v1` plus native `/health` and `/props`
-- `openai.rs`: generic OpenAI-compatible endpoints
-- `anthropic.rs`, `ollama.rs`, `openrouter.rs`, `xai` (via openai + oauth), `cloudflare.rs`
+- `wire.rs`: the OpenAI Chat Completions wire protocol — the request shape, SSE decoding, the token seam and the model-family field rules. Not a provider of its own; six adapters build on it
+- `llamacpp.rs`: default local path; `wire`'s `/v1` client plus native `/health` and `/props`
+- `openai.rs`: OpenAI's own endpoint. Thin, because the protocol lives in `wire.rs`; what is left is the `prompt_cache_key` no other endpoint implements
+- `anthropic.rs`, `ollama.rs`, `openrouter.rs`, `xai` (via wire + oauth), `cloudflare.rs`
 - `chatgpt.rs` / `chatgpt_oauth.rs`: ChatGPT subscription via Codex backend
 - `fusion.rs`: multi-provider debate panel as one `LlmProvider`
 

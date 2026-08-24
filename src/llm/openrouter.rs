@@ -1,13 +1,13 @@
 //! OpenRouter (`https://openrouter.ai`): hundreds of hosted models behind one
 //! OpenAI-compatible Chat Completions endpoint and one API key.
 //!
-//! The wire protocol is handled by [`super::openai::OpenAiProvider`]; this
+//! The wire protocol is handled by [`super::wire::OpenAiProvider`]; this
 //! module only supplies the defaults (`kind = "openrouter"`) and the
 //! attribution headers OpenRouter recommends on every request.
 
 use std::sync::Arc;
 
-use super::openai::{OpenAiProvider, StaticToken};
+use super::wire::{OpenAiProvider, StaticToken};
 
 /// Default Chat Completions base URL.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
