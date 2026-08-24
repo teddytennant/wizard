@@ -30,7 +30,10 @@ use tokio::task::JoinHandle;
 use crate::config::ProviderConfig;
 use crate::gui::settings::{self, ConfigStore};
 use crate::llm::oauth_callback::{self, Canceller};
-use crate::llm::{chatgpt_oauth, xai_oauth};
+#[cfg(feature = "provider-chatgpt")]
+use crate::plugins::chatgpt::oauth as chatgpt_oauth;
+
+use crate::llm::xai_oauth;
 
 /// How long a replaced sign-in gets to notice it was cancelled and drop its
 /// listener. It is a `select!` arm away from doing so; this bound only stops a
@@ -46,7 +49,14 @@ const RELEASE_GRACE: Duration = Duration::from_secs(5);
 /// them on the command line. The browser GUI that this replaced hard-coded its
 /// copy in `settings.js` and matched on strings server-side; a provider added
 /// to one and not the other was a row that opened nothing.
+///
+/// ChatGPT's row is gated on its plugin because its whole sign-in lives there;
+/// xAI's is not, because its token store is core and signing in is useful to
+/// `web_search` and `generate_image` whatever chat backend is configured. The
+/// `debug_assert` in [`OauthState::begin`] is what keeps this honest: a row
+/// here with no flow behind it fails a debug build immediately.
 pub const SUPPORTED: &[(&str, &str, &str)] = &[
+    #[cfg(feature = "provider-chatgpt")]
     (
         "chatgpt",
         "Sign in with ChatGPT",
@@ -118,6 +128,7 @@ impl SignIn {
     ) -> anyhow::Result<String> {
         match provider {
             "xai" => self.begin_xai(store).await,
+            #[cfg(feature = "provider-chatgpt")]
             "chatgpt" => self.begin_chatgpt(store).await,
             other => {
                 debug_assert!(
@@ -150,6 +161,7 @@ impl SignIn {
 
     /// Start a ChatGPT sign-in, replacing any in flight. `store` receives the
     /// provider once the tokens land.
+    #[cfg(feature = "provider-chatgpt")]
     pub async fn begin_chatgpt(
         self: &Arc<Self>,
         store: Arc<ConfigStore>,

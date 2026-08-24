@@ -2,9 +2,9 @@
 //! (`POST {base_url}/v1/messages`), registered through [`Ctx::provider`] and
 //! compiled behind `--features provider-anthropic`.
 //!
-//! This is the first provider to come out of `src/llm/builtin.rs`'s hardcoded
-//! table, and it was picked because it is the only one with no dependency edge
-//! in either direction: nothing in `src/llm/` reaches into it, and it reaches
+//! This was the first provider to come out of `src/llm/builtin.rs`'s hardcoded
+//! table, and it was picked because it was the only one with no dependency edge
+//! in either direction: nothing in `src/llm/` reached into it, and it reaches
 //! back only for the streaming helpers every adapter shares
 //! (`chat_http_builder`, `retry_after_from_headers`, `ensure_tool_call_ids`).
 //! Everything Anthropic-shaped — the block translation, the SSE decoder, the

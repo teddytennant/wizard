@@ -9,6 +9,11 @@
 //! the same coupling the `wire`/`openai` split exists to remove, one layer
 //! down: a shared fixture is not OpenAI's, it is the family's.
 //!
+//! Which is also why it stays in core now that the adapters are plugins in
+//! `src/plugins/`. A fixture module that lived in one of them would be a
+//! dependency edge between plugins, and deleting that plugin would take four
+//! other plugins' tests with it.
+//!
 //! The point of serving a recording over a real socket, rather than feeding
 //! bytes to a decoder in-process, is that it captures **the request the
 //! adapter sent**. Half of every adapter's contract is the body it puts on

@@ -14,6 +14,13 @@
 //! those code paths: a model that is not pulled yet (progress lines) which
 //! advertises no `tools` capability (the JSON-protocol notice). Every byte on
 //! stdout must still be JSON-RPC.
+//!
+//! The whole file needs `provider-ollama`: the fake backend is served to a
+//! `kind = "ollama"` entry, and without the plugin that kind resolves to
+//! nothing, so the session fails at `build()` and never reaches the transport
+//! this is watching. That degrade is asserted in
+//! `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
+#![cfg(feature = "provider-ollama")]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};

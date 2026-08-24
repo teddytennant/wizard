@@ -7,7 +7,7 @@
 //! `chatgpt.com/backend-api/codex` — not the Chat Completions API, and not
 //! `api.openai.com`. That endpoint only answers to the Codex client, so the
 //! requests present as it (`originator: codex_cli_rs`, the Codex client id);
-//! [`super::chatgpt`] speaks the protocol, this module supplies the credentials.
+//! [`super`] speaks the protocol, this module supplies the credentials.
 //!
 //! Tokens live in `~/.wizard/chatgpt_oauth.json` (file 0600), never in
 //! `config.toml`. The account id needed on every API call is a claim inside the
@@ -21,9 +21,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::oauth_callback::{self, Callback, Cancel, PasteChannel};
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::xai_oauth::{generate_pkce, jwt_exp};
+use crate::llm::oauth_callback::{self, Callback, Cancel, PasteChannel, generate_pkce, jwt_exp};
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+
 use crate::config::Config;
 
 /// OAuth authorize endpoint.
@@ -550,11 +550,8 @@ pub fn descriptor() -> ProviderDescriptor {
         },
         |config| {
             Ok(std::sync::Arc::new(
-                crate::llm::chatgpt::ChatgptProvider::new(
-                    config.base_url.clone(),
-                    config.model.clone(),
-                )
-                .context("setting up ChatGPT OAuth token storage")?,
+                super::ChatgptProvider::new(config.base_url.clone(), config.model.clone())
+                    .context("setting up ChatGPT OAuth token storage")?,
             ))
         },
     )

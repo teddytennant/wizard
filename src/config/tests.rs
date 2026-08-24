@@ -718,6 +718,10 @@ fn openrouter_kind_round_trips_through_toml() {
     assert_eq!(parsed.active().kind, ProviderKind::OPENROUTER);
 }
 
+/// The `build()` at the end is what needs the plugin; the serde round trip
+/// above it does not, and is covered for every kind by
+/// `registry::a_kind_serializes_as_the_bare_string_it_is_on_disk`.
+#[cfg(feature = "provider-cloudflare")]
 #[test]
 fn cloudflare_kind_round_trips_through_toml() {
     let original = Config {
@@ -896,10 +900,21 @@ model = "@cf/zai-org/glm-5.2"
         assert!(provider.build().is_ok(), "{} did not build", provider.kind);
         resolved += 1;
     }
+    // The floor is what this build installs, not a literal: the fixture
+    // above names all nine kinds, so every kind the registry answers to has
+    // to be one of them and has to have resolved. A provider that silently
+    // stopped registering takes `kinds()` down with it and the two sides stay
+    // equal, which is why the fixture's own coverage is asserted as well.
+    for kind in registry::kinds() {
+        assert!(
+            config.providers.iter().any(|p| p.kind == kind),
+            "the fixture must name every kind this build ships: {kind}"
+        );
+    }
     assert_eq!(
         resolved,
-        crate::llm::builtin::SHIPPED.len() + usize::from(cfg!(feature = "provider-anthropic")),
-        "every compiled-in kind in the file must resolve"
+        registry::kinds().len(),
+        "every kind this build installs must resolve and build"
     );
 
     // The rest of the entry survives the trip, and the selection resolves.
@@ -951,7 +966,11 @@ model = "gpt-4o"
     assert_eq!(config.providers.len(), 2);
 
     // The healthy provider is still selectable and still builds, which is
-    // the point: one missing backend must not cost the user the others.
+    // the point: one missing backend must not cost the user the others. Only
+    // meaningful where `openai` is one of the backends this build has — with
+    // the plugin left out both entries in the file are absent plugins, which
+    // is a different (and also correct) story.
+    #[cfg(feature = "provider-openai")]
     assert!(config.providers[1].build().is_ok());
 
     let message = match config.providers[0].build() {
@@ -959,9 +978,11 @@ model = "gpt-4o"
         Err(err) => err.to_string(),
     };
     assert!(message.contains("some-provider-plugin"), "{message}");
-    // The valid list is generated from what is installed, so it names the
-    // built-ins. `openai` rather than `anthropic`: the latter is a plugin and
-    // is absent from a build compiled without it.
+    // The valid list is generated from what is installed rather than typed
+    // out, which is the whole improvement over the old enum's error — and
+    // which means on a build with no provider plugins there is nothing in it
+    // to check.
+    #[cfg(feature = "provider-openai")]
     assert!(message.contains("openai"), "{message}");
 }
 
@@ -989,36 +1010,40 @@ async fn preparing_an_unknown_kind_is_not_an_error() {
 /// ones worth asserting: those literals used to live in two files.
 #[test]
 fn a_kinds_default_key_env_is_what_its_build_arm_used_to_pass() {
+    // `None` for a kind this build does not ship, so each assertion below is
+    // skipped rather than rewritten by its plugin's feature: the question is
+    // what the descriptor declares, and an absent plugin declares nothing.
     let env_for = |kind: ProviderKind| {
         registry::installed(&kind)
-            .expect("installed")
-            .credentials()
-            .default_env()
-            .map(str::to_string)
+            .map(|descriptor| descriptor.credentials().default_env().map(str::to_string))
     };
-    assert_eq!(
-        env_for(ProviderKind::OPENROUTER),
-        Some(crate::llm::openrouter::DEFAULT_KEY_ENV.to_string())
+    let expect = |kind: ProviderKind, want: Option<&str>| {
+        if let Some(got) = env_for(kind.clone()) {
+            assert_eq!(got.as_deref(), want, "{kind}");
+        }
+    };
+    expect(
+        ProviderKind::OPENROUTER,
+        Some(crate::llm::registry::defaults::OPENROUTER_KEY_ENV),
     );
-    assert_eq!(
-        env_for(ProviderKind::XAI),
-        Some(crate::llm::xai_oauth::DEFAULT_KEY_ENV.to_string())
+    expect(
+        ProviderKind::XAI,
+        Some(crate::llm::xai_oauth::DEFAULT_KEY_ENV),
     );
-    assert_eq!(
-        env_for(ProviderKind::CLOUDFLARE),
-        Some(crate::llm::cloudflare::DEFAULT_KEY_ENV.to_string())
+    expect(
+        ProviderKind::CLOUDFLARE,
+        Some(crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV),
     );
     // The two that deliberately guess nothing: `openai` is also how vLLM
     // and LM Studio are reached, and `anthropic`'s variable is picked up
     // by the BYOP fallback rather than here.
-    assert_eq!(env_for(ProviderKind::OPENAI), None);
-    #[cfg(feature = "provider-anthropic")]
-    assert_eq!(env_for(ProviderKind::ANTHROPIC), None);
+    expect(ProviderKind::OPENAI, None);
+    expect(ProviderKind::ANTHROPIC, None);
     // Backends with no key at all.
-    assert_eq!(env_for(ProviderKind::LLAMACPP), None);
-    assert_eq!(env_for(ProviderKind::OLLAMA), None);
-    assert_eq!(env_for(ProviderKind::XAI_OAUTH), None);
-    assert_eq!(env_for(ProviderKind::CHATGPT_OAUTH), None);
+    expect(ProviderKind::LLAMACPP, None);
+    expect(ProviderKind::OLLAMA, None);
+    expect(ProviderKind::XAI_OAUTH, None);
+    expect(ProviderKind::CHATGPT_OAUTH, None);
 }
 
 #[test]
@@ -1469,10 +1494,14 @@ fn a_real_config_file_still_deserializes_after_the_provider_registry() {
     assert_eq!(provider.model, "grok-4.6");
 
     // A kind that parses must still be one the registry can actually build,
-    // otherwise "it loads" is worthless.
-    assert!(
+    // otherwise "it loads" is worthless — on a build that ships it. Absent its
+    // plugin the same id parses and resolves to nothing, which is the other
+    // half of the same rule and is asserted in
+    // `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
+    assert_eq!(
         crate::llm::registry::installed(&provider.kind).is_some(),
-        "a shipped provider id must resolve to a descriptor"
+        cfg!(feature = "provider-xai"),
+        "a shipped provider id must resolve exactly when its plugin is in"
     );
 }
 

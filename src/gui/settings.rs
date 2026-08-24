@@ -16,7 +16,8 @@ use anyhow::{Context, Result};
 
 use crate::config::{Config, Credentials, ProviderConfig, ProviderKind};
 use crate::credentials;
-use crate::llm::{cloudflare, openrouter, xai_oauth};
+use crate::llm::registry::defaults;
+use crate::llm::xai_oauth;
 
 /// A provider offered by the settings sheet's "add provider" list and by
 /// onboarding: the defaults to prefill, and what the user still has to give.
@@ -72,8 +73,8 @@ pub const PRESETS: &[Preset] = &[
         name: "openrouter",
         label: "OpenRouter",
         kind: "openrouter",
-        base_url: openrouter::DEFAULT_BASE_URL,
-        model: openrouter::DEFAULT_MODEL,
+        base_url: defaults::OPENROUTER_BASE_URL,
+        model: defaults::OPENROUTER_MODEL,
         needs_key: true,
         needs_base_url: false,
     },
@@ -81,8 +82,8 @@ pub const PRESETS: &[Preset] = &[
         name: "cloudflare",
         label: "Cloudflare Workers AI",
         kind: "cloudflare",
-        base_url: cloudflare::BASE_URL_TEMPLATE,
-        model: cloudflare::DEFAULT_MODEL,
+        base_url: defaults::CLOUDFLARE_BASE_URL_TEMPLATE,
+        model: defaults::CLOUDFLARE_MODEL,
         needs_key: true,
         needs_base_url: true,
     },
@@ -727,7 +728,7 @@ mod tests {
         assert!(matches!(
             key_source_from(
                 &defaulted,
-                |name: &str| (name == openrouter::DEFAULT_KEY_ENV).then(|| "sk-or".to_string()),
+                |name: &str| (name == defaults::OPENROUTER_KEY_ENV).then(|| "sk-or".to_string()),
                 nothing
             ),
             KeySource::Env

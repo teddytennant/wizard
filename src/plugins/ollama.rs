@@ -1,4 +1,12 @@
-//! Streaming HTTP client for Ollama's native `/api/chat` endpoint.
+//! Ollama's native `/api/chat` endpoint, as a plugin, behind `--features
+//! provider-ollama`.
+//!
+//! The readiness hook is the half worth knowing about: `prepare` pulls a
+//! missing model before the first health probe and reports bytes through
+//! [`crate::server::ByteProgress`]. That is a plugin reaching into core for a
+//! progress sink, which is the direction the boundary allows — `src/server.rs`
+//! names no provider, and this file naming it is the same kind of edge as
+//! reaching for the shared HTTP client builder.
 //!
 //! Thin `reqwest` wrapper — no `ollama-rs` dependency, keeping the binary
 //! small. Provides a startup health probe, a native-tool-support probe, and
@@ -23,9 +31,10 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt, stream};
 use serde::Deserialize;
 
-use super::provider::LlmProvider;
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::{ChatChunk, ChatOptions, ChatRequest, ChatStream, ProviderError};
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::provider::LlmProvider;
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use crate::llm::{ChatChunk, ChatOptions, ChatRequest, ChatStream, ProviderError};
 use crate::server::{ByteProgress, Progress};
 
 /// Overall timeout for small control requests (`/api/tags`, `/api/show`).
@@ -154,7 +163,7 @@ impl OllamaClient {
         // `client_read_timeout_for` is what keeps the local case unchanged: a
         // loopback or LAN host still gets `None`, because a local model that is
         // simply thinking slowly must not be killed for it.
-        let http = super::chat_http_builder(super::client_read_timeout_for(&host))
+        let http = crate::llm::chat_http_builder(crate::llm::client_read_timeout_for(&host))
             .build()
             // Builder construction only fails when the TLS backend cannot
             // initialize; fall back to the default client rather than panic.
@@ -874,6 +883,55 @@ pub fn descriptor() -> ProviderDescriptor {
     })
 }
 
+/// Ollama as a kernel plugin.
+///
+/// The readiness hook is the interesting half: `prepare` pulls a missing
+/// model before the first health probe, reporting bytes through
+/// [`crate::server::ByteProgress`]. That is a plugin reaching into core
+/// for a progress sink, which is the direction the boundary allows —
+/// `src/server.rs` names no provider, and this file naming it is the same
+/// kind of edge as reaching for the shared HTTP client builder.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it.
+pub struct OllamaPlugin {
+    manifest: PluginManifest,
+}
+
+impl OllamaPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "ollama".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Local Ollama, native /api/chat".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for OllamaPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for OllamaPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(descriptor())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -923,7 +981,8 @@ mod tests {
             .split_once("#[cfg(test)]\nmod tests {")
             .expect("this module ends with its test module");
         assert!(
-            production.contains("super::chat_http_builder(super::client_read_timeout_for("),
+            production
+                .contains("crate::llm::chat_http_builder(crate::llm::client_read_timeout_for("),
             "the client must come from the shared builder with the locality-aware read timeout"
         );
         assert!(

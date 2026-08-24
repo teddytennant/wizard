@@ -2128,7 +2128,12 @@ mod tests {
         assert_eq!(plain.source, PriceSource::Local);
         assert!((plain.usd - 0.0).abs() < f64::EPSILON);
 
+        // `self_hosted` reads the descriptor's `Credentials`, so a kind whose
+        // plugin this build left out answers `false` — correctly, since there
+        // is no such backend to be self-hosted.
+        #[cfg(feature = "provider-llamacpp")]
         assert!(self_hosted(&ProviderKind::LLAMACPP));
+        #[cfg(feature = "provider-ollama")]
         assert!(self_hosted(&ProviderKind::OLLAMA));
         assert!(!self_hosted(&ProviderKind::ANTHROPIC));
         assert!(!self_hosted(&ProviderKind::OPENAI));

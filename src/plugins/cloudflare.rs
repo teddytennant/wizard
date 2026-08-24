@@ -1,8 +1,14 @@
-//! Cloudflare Workers AI: serverless inference for open models (GLM, Llama,
+//! Cloudflare Workers AI, as a plugin, behind `--features
+//! provider-cloudflare`: serverless inference for open models (GLM, Llama,
 //! Qwen, ...) behind an OpenAI-compatible Chat Completions endpoint scoped to a
 //! Cloudflare account and authenticated with an API token.
 //!
-//! Chat uses the OpenAI wire shape, handled by [`super::wire::OpenAiProvider`].
+//! The base URL template, the account-id placeholder, the default model and
+//! the key env var are in `llm::registry::defaults`: onboarding substitutes an
+//! account id into the template and the settings sheet shows it, and both have
+//! to keep working on a build compiled without this plugin.
+//!
+//! Chat uses the OpenAI wire shape, handled by [`crate::llm::wire::OpenAiProvider`].
 //! This module wraps that client to override the health probe and model listing:
 //! Workers AI's OpenAI-compatible surface exposes only `/v1/chat/completions`
 //! (there is no `/v1/models`), so reachability/auth and model discovery instead
@@ -24,22 +30,17 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::provider::LlmProvider;
-use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
-use super::wire::{OpenAiProvider, StaticToken};
-use super::{ChatRequest, ChatStream, ProviderError};
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::provider::LlmProvider;
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
+use crate::llm::wire::{OpenAiProvider, StaticToken};
+use crate::llm::{ChatRequest, ChatStream, ProviderError};
 
-/// Default model: GLM 5.2 (Z.ai), the most capable text model in the Workers
-/// AI catalog.
-pub const DEFAULT_MODEL: &str = "@cf/zai-org/glm-5.2";
-/// Default env var holding the Cloudflare API token.
-pub const DEFAULT_KEY_ENV: &str = "CLOUDFLARE_API_TOKEN";
-/// Placeholder in [`BASE_URL_TEMPLATE`] replaced by the account id.
-pub const ACCOUNT_ID_PLACEHOLDER: &str = "{account_id}";
-/// Base URL template for the OpenAI-compatible endpoint; the placeholder is
-/// substituted with the user's Cloudflare account id (see [`base_url`]).
-pub const BASE_URL_TEMPLATE: &str =
-    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1";
+// The default model, key env var and base URL template are in
+// `registry::defaults`, not here: onboarding, the settings sheet and `doctor`
+// all print them, and they have to keep printing them on a build compiled
+// without this plugin. Core may hold the text; this file holds the transport.
+use crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV as DEFAULT_KEY_ENV;
 
 /// Curated fallback list of Workers AI text-generation models, used only when
 /// the live catalog query fails. GLM 5.2 leads (the default).
@@ -49,12 +50,6 @@ const FALLBACK_MODELS: &[&str] = &[
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/qwen/qwen2.5-coder-32b-instruct",
 ];
-
-/// Build the OpenAI-compatible base URL for `account_id` by substituting it
-/// into [`BASE_URL_TEMPLATE`].
-pub fn base_url(account_id: &str) -> String {
-    BASE_URL_TEMPLATE.replace(ACCOUNT_ID_PLACEHOLDER, account_id.trim())
-}
 
 /// Cloudflare Workers AI client. Chat requests are delegated to the wrapped
 /// [`OpenAiProvider`]; health and model discovery hit the account-scoped native
@@ -281,26 +276,74 @@ pub fn descriptor() -> ProviderDescriptor {
     )
 }
 
+/// Cloudflare Workers AI as a kernel plugin.
+///
+/// Chat rides on the OpenAI-compatible shim ([`crate::llm::wire`]); what is
+/// Cloudflare's own is the account-scoped native API this file wraps for
+/// health and model discovery, plus the base URL template onboarding
+/// substitutes an account id into.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it.
+pub struct CloudflarePlugin {
+    manifest: PluginManifest,
+}
+
+impl CloudflarePlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "cloudflare".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Cloudflare Workers AI".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for CloudflarePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for CloudflarePlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(descriptor())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::registry::defaults::{CLOUDFLARE_MODEL as DEFAULT_MODEL, cloudflare_base_url};
 
     #[test]
     fn base_url_substitutes_the_account_id() {
         assert_eq!(
-            base_url("abc123"),
+            cloudflare_base_url("abc123"),
             "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
         );
         // Surrounding whitespace (from a pasted answer) is trimmed.
         assert_eq!(
-            base_url("  abc123  "),
+            cloudflare_base_url("  abc123  "),
             "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
         );
     }
 
     #[test]
     fn account_base_strips_the_v1_suffix_for_the_catalog_url() {
-        let provider = CloudflareProvider::new(base_url("acc"), DEFAULT_MODEL, "token");
+        let provider = CloudflareProvider::new(cloudflare_base_url("acc"), DEFAULT_MODEL, "token");
         assert_eq!(
             provider.models_search_url(),
             "https://api.cloudflare.com/client/v4/accounts/acc/ai/models/search"

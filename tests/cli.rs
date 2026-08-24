@@ -91,6 +91,7 @@ fn version_prints_name_and_version() {
     assert!(stdout.starts_with("wizard "), "got: {stdout}");
 }
 
+#[cfg(feature = "provider-ollama")]
 #[test]
 fn unreachable_ollama_provider_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -133,6 +134,11 @@ fn unreachable_ollama_provider_fails_with_actionable_error() {
     );
 }
 
+/// The three tests below drive a real binary against a local backend, so
+/// each needs its plugin compiled in: without it the config resolves to a kind
+/// nothing answers to and the error is the registry's, not the transport's.
+/// That degrade is asserted in `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn unreachable_llamacpp_host_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -179,6 +185,7 @@ fn write_config(home: &Path, contents: &str) {
     std::fs::write(dir.join("config.toml"), contents).expect("write config.toml");
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn fresh_config_resolves_to_the_llamacpp_provider() {
     let home = TempDir::new();
@@ -204,6 +211,7 @@ fn fresh_config_resolves_to_the_llamacpp_provider() {
     );
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn legacy_ollama_config_resolves_to_llamacpp() {
     let home = TempDir::new();

@@ -63,6 +63,18 @@
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+#[cfg(feature = "provider-chatgpt")]
+pub mod chatgpt;
+#[cfg(feature = "provider-cloudflare")]
+pub mod cloudflare;
+#[cfg(feature = "provider-llamacpp")]
+pub mod llamacpp;
+#[cfg(feature = "provider-ollama")]
+pub mod ollama;
+#[cfg(feature = "provider-openai")]
+pub mod openai;
+#[cfg(feature = "provider-xai")]
+pub mod xai;
 
 use std::cell::Cell;
 use std::panic::AssertUnwindSafe;
@@ -90,6 +102,18 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
     #[cfg(feature = "provider-anthropic")]
     plugins.push(Arc::new(anthropic::AnthropicPlugin::new()));
+    #[cfg(feature = "provider-chatgpt")]
+    plugins.push(Arc::new(chatgpt::ChatGptPlugin::new()));
+    #[cfg(feature = "provider-cloudflare")]
+    plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
+    #[cfg(feature = "provider-llamacpp")]
+    plugins.push(Arc::new(llamacpp::LlamaCppPlugin::new()));
+    #[cfg(feature = "provider-ollama")]
+    plugins.push(Arc::new(ollama::OllamaPlugin::new()));
+    #[cfg(feature = "provider-openai")]
+    plugins.push(Arc::new(openai::OpenAiPlugin::new()));
+    #[cfg(feature = "provider-xai")]
+    plugins.push(Arc::new(xai::XaiPlugin::new()));
     plugins
 }
 
@@ -270,40 +294,157 @@ mod tests {
         }
     }
 
-    /// The whole of Half 2 in one assertion, from both sides of the feature.
+    /// Every provider kind this build ships is present *because a plugin
+    /// registered it*, and every kind it does not ship is absent with an error
+    /// that says so.
     ///
-    /// With the feature on, `kind = "anthropic"` resolves — and it resolves
-    /// because a *plugin* registered it, which is why the kernel's own slot is
-    /// asserted alongside the process registry rather than instead of it.
-    /// With the feature off, it resolves to nothing, the error names the kinds
-    /// that are left, and the other eight are untouched. That second branch is
-    /// the "delete any one plugin" rule; it is checked by
-    /// `contrib/check-plugin-work.sh`'s `--no-default-features` leg.
+    /// The table is the feature list, so this is one assertion per row and the
+    /// `#[cfg]` on each row is the whole of the "delete any one plugin" rule:
+    /// with the feature on, the kernel holds the name and a config can select
+    /// the kind; with it off, `installed` answers `None` and [`registry::unknown`]
+    /// names the kind and lists what is left. `contrib/check-plugin-work.sh`
+    /// builds both sides.
     #[test]
-    fn anthropic_is_present_exactly_when_its_feature_is() {
-        let anthropic = ProviderKind::ANTHROPIC;
+    fn a_kind_is_installed_exactly_when_its_plugin_is_compiled_in() {
+        /// `(cargo feature is on, plugin name, kinds it registers)`.
+        ///
+        /// Written out rather than derived from [`compiled_in`] on purpose: a
+        /// plugin that quietly stopped registering one of its two kinds would
+        /// still be in `compiled_in`, and a test generated from the thing it is
+        /// testing cannot see that.
+        const EXPECTED: &[(bool, &str, &[ProviderKind])] = &[
+            (
+                cfg!(feature = "provider-anthropic"),
+                "anthropic",
+                &[ProviderKind::ANTHROPIC],
+            ),
+            (
+                cfg!(feature = "provider-chatgpt"),
+                "chatgpt",
+                &[ProviderKind::CHATGPT_OAUTH],
+            ),
+            (
+                cfg!(feature = "provider-cloudflare"),
+                "cloudflare",
+                &[ProviderKind::CLOUDFLARE],
+            ),
+            (
+                cfg!(feature = "provider-llamacpp"),
+                "llamacpp",
+                &[ProviderKind::LLAMACPP],
+            ),
+            (
+                cfg!(feature = "provider-ollama"),
+                "ollama",
+                &[ProviderKind::OLLAMA],
+            ),
+            (
+                cfg!(feature = "provider-openai"),
+                "openai",
+                &[ProviderKind::OPENAI, ProviderKind::OPENROUTER],
+            ),
+            (
+                cfg!(feature = "provider-xai"),
+                "xai",
+                &[ProviderKind::XAI, ProviderKind::XAI_OAUTH],
+            ),
+        ];
 
-        #[cfg(feature = "provider-anthropic")]
-        {
+        let kernel = kernel();
+        let loaded = kernel.provider_names();
+        for (compiled_in, name, kinds) in EXPECTED {
+            for kind in *kinds {
+                if *compiled_in {
+                    assert!(
+                        loaded.iter().any(|n| n == kind.as_str()),
+                        "the kernel should hold the kind plugin '{name}' registered: {kind}"
+                    );
+                    let descriptor =
+                        registry::installed(kind).expect("a config can select an installed kind");
+                    assert_eq!(descriptor.kind(), kind);
+                    assert!(!descriptor.display_name().is_empty(), "{kind}");
+                } else {
+                    assert!(
+                        registry::installed(kind).is_none(),
+                        "kind '{kind}' is installed on a build without plugin '{name}'"
+                    );
+                    let message = registry::unknown(kind).to_string();
+                    assert!(message.contains(kind.as_str()), "{message}");
+                }
+            }
+        }
+
+        // Nothing reached the process kernel that no row above accounts for.
+        // This is what would catch a provider coming back through some path
+        // other than a plugin — the `builtin.rs` table, for instance, whose
+        // deletion this test is the receipt for.
+        //
+        // Swept over the *kernel's* slot rather than `registry::kinds()`
+        // because the process registry is shared with every other test in the
+        // binary, and the kernel tests that exercise `Ctx::provider` leave
+        // their own kinds in it. The kernel singleton is written only by
+        // `compiled_in`, so it is the order-independent half of the pair.
+        for name in &loaded {
             assert!(
-                kernel().provider_names().iter().any(|n| n == "anthropic"),
-                "the kernel should hold the kind its plugin registered"
+                EXPECTED
+                    .iter()
+                    .any(|(on, _, kinds)| *on && kinds.iter().any(|k| k.as_str() == name)),
+                "kind '{name}' is in the process kernel but no compiled-in plugin claims it"
             );
-            let descriptor = registry::installed(&anthropic).expect("a config can select it");
-            assert_eq!(descriptor.display_name(), "Anthropic");
         }
+    }
 
-        #[cfg(not(feature = "provider-anthropic"))]
-        {
-            assert!(registry::installed(&anthropic).is_none());
-            let message = registry::unknown(&anthropic).to_string();
-            assert!(message.contains("anthropic"), "{message}");
-            assert!(message.contains("openai"), "{message}");
+    /// The back-compat claim, from the outside: a **stock** build answers to
+    /// all nine kinds that have ever been written into a `config.toml`.
+    ///
+    /// `builtin.rs` used to make this assertion over its own table, which
+    /// meant it could only ever agree with itself. Asserted here against
+    /// literal strings — the exact bytes on disk — it is the thing a user
+    /// actually depends on, and it fails if a kind quietly changes spelling on
+    /// its way into a plugin. Skipped on any build that is not stock, because
+    /// leaving a plugin out is the whole point of the feature.
+    #[test]
+    #[cfg(all(
+        feature = "provider-anthropic",
+        feature = "provider-chatgpt",
+        feature = "provider-cloudflare",
+        feature = "provider-llamacpp",
+        feature = "provider-ollama",
+        feature = "provider-openai",
+        feature = "provider-xai",
+    ))]
+    fn a_stock_build_still_answers_to_all_nine_shipped_kinds() {
+        let installed = registry::kinds();
+        for id in [
+            "anthropic",
+            "chatgptoauth",
+            "cloudflare",
+            "llamacpp",
+            "ollama",
+            "openai",
+            "openrouter",
+            "xai",
+            "xaioauth",
+        ] {
+            let kind = ProviderKind::new(id);
+            assert!(installed.contains(&kind), "{id} is not installed");
+            let descriptor = registry::installed(&kind).expect("installed");
+            assert_eq!(descriptor.kind().as_str(), id);
+            assert!(!descriptor.display_name().is_empty(), "{id}");
         }
+    }
 
-        // Either way, the providers that are not plugins are unaffected.
-        for kind in crate::llm::builtin::SHIPPED {
-            assert!(registry::installed(&kind).is_some(), "{kind}");
+    /// Exactly one backend has a process `/server` manages. Ollama runs
+    /// locally too and must not be caught by that flag.
+    #[test]
+    fn only_llamacpp_owns_a_local_server() {
+        for kind in registry::kinds() {
+            let descriptor = registry::installed(&kind).expect("installed");
+            assert_eq!(
+                descriptor.manages_local_server(),
+                kind == ProviderKind::LLAMACPP,
+                "{kind}"
+            );
         }
     }
 }

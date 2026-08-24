@@ -1,13 +1,16 @@
-//! The OpenAI provider: `https://api.openai.com`'s own Chat Completions
-//! endpoint, and whatever else a user configures as `kind = "openai"`.
+//! The OpenAI-compatible family, as a plugin: `https://api.openai.com`'s own
+//! Chat Completions endpoint, whatever else a user configures as
+//! `kind = "openai"`, and [`openrouter`]. Behind `--features provider-openai`.
 //!
 //! Almost nothing about talking to OpenAI is peculiar to OpenAI. The request
 //! shape, the SSE decoding, the bearer-token seam, the retry classification
 //! and the model-family field rules are the *protocol*, shared by every
-//! adapter in this family, and they live in [`super::wire`]. This module is
+//! adapter in this family, and they live in [`crate::llm::wire`]. This module is
 //! what is left when those are taken out, and it is deliberately small: five
 //! other providers used to import their protocol from here, which is what
-//! stopped any of them from being lifted out on their own.
+//! stopped any of them from being lifted out on their own. `wire` stayed in
+//! core when this file became a plugin, for exactly that reason: five backends
+//! build on it, so it is infrastructure and not this plugin's property.
 //!
 //! What is left is one request field. OpenAI's Chat Completions API accepts a
 //! `prompt_cache_key` that routes a turn to the cache the previous turn
@@ -17,6 +20,9 @@
 //! builds that client directly and gets no key, which is exactly the
 //! behaviour each of them already documented and tested for.
 
+pub mod openrouter;
+
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
 use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use crate::llm::wire::OpenAiProvider;
 use crate::llm::{ChatMessage, Role};
@@ -160,6 +166,63 @@ pub fn descriptor() -> ProviderDescriptor {
             )))
         },
     )
+}
+
+/// The OpenAI-compatible family as a kernel plugin.
+///
+/// Two kinds, one plugin, because they are one endpoint shape with two
+/// sets of defaults: `openrouter` is `openai` with a fixed base URL and
+/// two attribution headers. Splitting them would give the smaller half a
+/// cargo feature whose whole content is a `with_headers` call, and would
+/// leave a build that had `openrouter` but not the `openai` kind that
+/// vLLM, LM Studio, DeepSeek and every `compat.rs` preset are configured
+/// as — a combination nobody wants and everybody would have to test.
+///
+/// The wire machinery itself is [`crate::llm::wire`] and stays in core:
+/// five backends build on it, so it is infrastructure rather than this
+/// plugin's property. What is left here is the one field that really is
+/// OpenAI's — `prompt_cache_key`, which no other endpoint on this wire
+/// implements.
+///
+/// `network` is declared because that is what this plugin does, even though
+/// the capability set only gates the Lua host bridge today. A manifest that
+/// under-declares is the failure mode worth avoiding: the grant prompt is
+/// generated from it.
+pub struct OpenAiPlugin {
+    manifest: PluginManifest,
+}
+
+impl OpenAiPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "openai".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "OpenAI-compatible Chat Completions, and OpenRouter".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for OpenAiPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for OpenAiPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provider(descriptor())?;
+        ctx.provider(openrouter::descriptor())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
