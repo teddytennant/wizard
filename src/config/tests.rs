@@ -1392,3 +1392,81 @@ fn config_sovereign_mode_raises_a_capped_budget_without_flags() {
     config.apply_cli(&cli(&[]));
     assert_eq!(config.max_steps, StepBudget::new(100));
 }
+
+/// A whole config file as it is actually written on disk, not a two-field
+/// fixture.
+///
+/// Opening [`ProviderKind`](crate::llm::registry::ProviderKind) from a closed
+/// enum into a registry changed how `kind` is parsed, and the failure this
+/// guards against is the one that would not show up in a unit test of the
+/// parser: a real file mixes a provider with a gateway section, a `[ui]` table
+/// of user strings, and a dozen scalars, and it is the *combination* that has
+/// to keep deserializing. Taken from a working install, with the Telegram id
+/// replaced.
+const A_REAL_CONFIG: &str = r#"
+model = "qwen3.6:27b"
+ollama_host = "http://127.0.0.1:11434"
+llamacpp_host = "http://127.0.0.1:11435"
+mode = "genie"
+max_steps = 0
+continuous = false
+plan_first = false
+compact_threshold_bytes = 48000
+active_provider = "xai"
+code_mode = false
+
+[[providers]]
+name = "xai"
+kind = "xaioauth"
+base_url = "https://api.x.ai/v1"
+model = "grok-4.6"
+
+[gateway]
+kind = "telegram"
+token_env = "WIZARD_TELEGRAM_TOKEN"
+allowed_chat_ids = [1234567890]
+
+[ui]
+spinner_verbs = ["Overcoming", "Transvaluing values"]
+"#;
+
+#[test]
+fn a_real_config_file_still_deserializes_after_the_provider_registry() {
+    let config: Config = toml::from_str(A_REAL_CONFIG).expect("a real config must still parse");
+
+    assert_eq!(config.active_provider.as_deref(), Some("xai"));
+    assert_eq!(config.model, "qwen3.6:27b");
+    assert_eq!(config.compact_threshold_bytes, 48_000);
+
+    let provider = config
+        .providers
+        .iter()
+        .find(|provider| provider.name == "xai")
+        .expect("the configured provider survives the round trip");
+    // The point of the whole change: `kind` is now an open id rather than an
+    // enum variant, and the spelling on disk has to keep resolving.
+    assert_eq!(provider.kind.as_str(), "xaioauth");
+    assert_eq!(provider.model, "grok-4.6");
+
+    // A kind that parses must still be one the registry can actually build,
+    // otherwise "it loads" is worthless.
+    assert!(
+        crate::llm::registry::installed(&provider.kind).is_some(),
+        "a shipped provider id must resolve to a descriptor"
+    );
+}
+
+#[test]
+fn a_real_config_file_round_trips_through_serialization() {
+    // Wizard rewrites this file (`/provider add`, `/model`), so a parse that
+    // succeeds but serializes to something the next launch reads differently
+    // would corrupt a working install one command at a time.
+    let config: Config = toml::from_str(A_REAL_CONFIG).expect("parse");
+    let written = toml::to_string_pretty(&config).expect("serialize");
+    let reparsed: Config = toml::from_str(&written).expect("a written config must parse back");
+
+    assert_eq!(reparsed.active_provider, config.active_provider);
+    assert_eq!(reparsed.model, config.model);
+    assert_eq!(reparsed.providers.len(), config.providers.len());
+    assert_eq!(reparsed.providers[0].kind, config.providers[0].kind);
+}
