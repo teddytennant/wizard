@@ -237,26 +237,25 @@ fn parse_provider(args: &[&str]) -> Result<SlashCommand, String> {
         },
         Some("add") => {
             if args.len() < 5 {
-                return Err(
-                    "usage: /provider add <name> <llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth|cloudflare> <base_url> <model> [API_KEY_ENV]"
-                        .to_string(),
-                );
+                // The kinds are listed from what is installed, not from a
+                // literal. The literal that used to be here had drifted:
+                // `chatgptoauth` was a valid kind the config file loaded and
+                // this line never mentioned.
+                let kinds = crate::llm::registry::kinds()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("|");
+                return Err(format!(
+                    "usage: /provider add <name> <{kinds}> <base_url> <model> [API_KEY_ENV]"
+                ));
             }
-            let kind = match args[2] {
-                "llamacpp" => ProviderKind::LlamaCpp,
-                "ollama" => ProviderKind::Ollama,
-                "openai" => ProviderKind::Openai,
-                "anthropic" => ProviderKind::Anthropic,
-                "openrouter" => ProviderKind::OpenRouter,
-                "xai" => ProviderKind::Xai,
-                "xaioauth" => ProviderKind::XaiOauth,
-                "cloudflare" => ProviderKind::Cloudflare,
-                other => {
-                    return Err(format!(
-                        "unknown provider kind '{other}' (llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth|cloudflare)"
-                    ));
-                }
-            };
+            // Validated against what is registered rather than against a
+            // second copy of the same list.
+            let kind = ProviderKind::new(args[2]);
+            if crate::llm::registry::installed(&kind).is_none() {
+                return Err(crate::llm::registry::unknown(&kind).to_string());
+            }
             ProviderAction::Add {
                 name: args[1].to_string(),
                 kind,
@@ -1587,7 +1586,7 @@ mod tests {
             SlashCommand::Provider(ProviderAction::Menu),
             SlashCommand::ProviderSetup {
                 name: "x".into(),
-                kind: ProviderKind::Ollama,
+                kind: ProviderKind::OLLAMA,
                 base_url: "u".into(),
                 model: "m".into(),
                 api_key: None,
@@ -1709,7 +1708,7 @@ mod tests {
             parse("/provider add local ollama http://localhost:11434 qwen3:8b"),
             Ok(SlashCommand::Provider(ProviderAction::Add {
                 name: "local".to_string(),
-                kind: ProviderKind::Ollama,
+                kind: ProviderKind::OLLAMA,
                 base_url: "http://localhost:11434".to_string(),
                 model: "qwen3:8b".to_string(),
                 api_key_env: None,
@@ -1719,7 +1718,7 @@ mod tests {
             parse("/provider add or openrouter https://openrouter.ai/api/v1 auto OPENROUTER_KEY"),
             Ok(SlashCommand::Provider(ProviderAction::Add {
                 name: "or".to_string(),
-                kind: ProviderKind::OpenRouter,
+                kind: ProviderKind::OPENROUTER,
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 model: "auto".to_string(),
                 api_key_env: Some("OPENROUTER_KEY".to_string()),

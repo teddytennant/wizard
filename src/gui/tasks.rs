@@ -1269,7 +1269,7 @@ mod tests {
             name: name.to_string(),
             // Ollama builds a client without a key or a reachable endpoint,
             // which is all a seat has to prove here.
-            kind: crate::config::ProviderKind::Ollama,
+            kind: crate::config::ProviderKind::OLLAMA,
             base_url: "http://127.0.0.1:11434".to_string(),
             model: model.to_string(),
             api_key_env: None,
@@ -1576,7 +1576,7 @@ mod tests {
             providers: vec![
                 crate::config::ProviderConfig {
                     name: "local".to_string(),
-                    kind: crate::config::ProviderKind::LlamaCpp,
+                    kind: crate::config::ProviderKind::LLAMACPP,
                     base_url: "http://127.0.0.1:11435".to_string(),
                     model: "qwen3.6:27b".to_string(),
                     api_key_env: None,
@@ -1586,7 +1586,7 @@ mod tests {
                 },
                 crate::config::ProviderConfig {
                     name: "claude".to_string(),
-                    kind: crate::config::ProviderKind::Anthropic,
+                    kind: crate::config::ProviderKind::ANTHROPIC,
                     base_url: "https://api.anthropic.com".to_string(),
                     model: "claude-fable-5".to_string(),
                     api_key_env: None,
@@ -2179,7 +2179,7 @@ mod tests {
         let mut config = Config::default();
         config.providers.push(crate::config::ProviderConfig {
             name: "openai".to_string(),
-            kind: ProviderKind::Openai,
+            kind: ProviderKind::OPENAI,
             base_url: "https://example.test/v1".to_string(),
             model: "m".to_string(),
             api_key_env: None,

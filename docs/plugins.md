@@ -36,8 +36,9 @@ leaving a ~35k-line core.
 ## The boundary
 
 **Core (never a plugin).** `src/kernel/`, `src/agent/{mod,turn,context,session,event,retry,breaker}.rs`,
-`src/llm/{mod,provider,compat}.rs` (the `LlmProvider` trait and the shared
-streaming machinery, not the providers), `src/ui/`, `src/app/`, `src/skin/`,
+`src/llm/{mod,provider,compat,registry}.rs` (the `LlmProvider` trait, the shared
+streaming machinery and the registry that resolves a `kind`, not the providers),
+`src/ui/`, `src/app/`, `src/skin/`,
 `src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry}.rs`,
 `src/config.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
 
@@ -74,7 +75,7 @@ without redesigning it.
 | --- | --- |
 | `ctx:tool(spec)` | register a tool the model can call |
 | `ctx:command(spec)` | register a slash command |
-| `ctx:provider(spec)` | register an `LlmProvider` |
+| `ctx:provider(spec)` | register a backend `config.toml` can select |
 | `ctx:on(event, handler, priority)` | subscribe to a lifecycle event |
 | `ctx:emit(event, payload)` | publish one |
 | `ctx:provide(name, service)` | expose a service to other plugins |
@@ -277,6 +278,33 @@ both languages. It is not, and cannot be: an `LlmProvider` is TLS and SSE
 framing, which is the half this document itself puts in Rust. The call exists on
 the Lua table and refuses, naming the reason
 (`a_provider_cannot_be_registered_from_lua`).
+
+**`ctx:provider` takes a descriptor, not a provider.** It took an
+`Arc<dyn LlmProvider>` first, which made the call unusable for what it is for: a
+provider instance is bound to one base URL, one model and one key, and all three
+come out of the user's config, so no `kind = "..."` could ever name an instance
+somebody had already constructed. It now takes a `ProviderDescriptor` — an id,
+a display name, a credential policy, a `build(&ProviderConfig)`, and an optional
+readiness hook — which is the thing the config side needs. `ProviderKind` stopped
+being a nine-variant enum in the same change; `src/llm/registry.rs` has the
+argument.
+
+**A provider is registered in two places at once.** Every other registration has
+the kernel as its consumer: a tool is copied out into the agent's registry, a
+command into the palette. A provider's consumer is `ProviderConfig::build`,
+which runs where no kernel handle exists — a unit test, `wizard doctor`, the
+settings sheet's probe. So `insert_provider` writes the kernel's slot *and* the
+process-wide registry in one step, and `remove_providers` sweeps both. Doing it
+as a separate publish step, the way `install_tools_into` works, would leave a
+window in which an unloaded plugin's provider was still selectable, and exact
+unload is the reason there is a kernel
+(`a_plugin_registered_provider_is_selectable_from_config`).
+
+**One file still names every shipped provider.** `src/llm/builtin.rs` is the
+provider half of the `src/plugins/mod.rs` this document describes, and it is the
+only file left with a `use crate::llm::anthropic::…`. `config.rs` has none. No
+provider is a plugin yet and none is behind a cargo feature: the door is open
+and nothing has gone through it.
 
 **Capabilities are finer-grained than `Stdlib` is.** `Stdlib::Sandboxed` drops
 `os` and `io` wholesale, so `filesystem` and `process` would both have to open

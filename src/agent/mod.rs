@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::config::{Config, Mode, ProviderKind};
+use crate::config::{Config, Mode};
 use crate::dispatch::Dispatcher;
 use crate::hooks::HookEngine;
 use crate::images::{ImageRef, ImageStore};
@@ -1615,7 +1615,7 @@ impl Agent {
                 endpoint: &provider.base_url,
                 usd_per_mtok_in: provider.usd_per_mtok_in,
                 usd_per_mtok_out: provider.usd_per_mtok_out,
-                self_hosted: crate::usage::self_hosted(provider.kind),
+                self_hosted: crate::usage::self_hosted(&provider.kind),
             },
         );
         let record = crate::usage::UsageRecord {
@@ -1926,27 +1926,12 @@ async fn build_headless_agent_inner(
     let client = active
         .build()
         .with_context(|| format!("building provider '{}'", active.name))?;
-    // llama.cpp gets a lifecycle hand: when nothing answers, Wizard starts
-    // the server itself, showing spawn/load progress on a spinner (plain
-    // stderr lines when stderr is not a terminal).
-    if active.kind == ProviderKind::LlamaCpp {
-        let wait = crate::progress::ServerSpinner::start();
-        let outcome = crate::server::ensure_running(&active, &wait).await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
-    // Ollama's analog: a configured tag that is not pulled yet is pulled now
-    // (loopback hosts only — never download onto a remote server).
-    if active.kind == ProviderKind::Ollama && crate::server::local_port(&active.base_url).is_some()
-    {
-        let wait =
-            crate::progress::ServerSpinner::start_with("Checking the local model…", "model ready");
-        let outcome = crate::llm::ollama::OllamaClient::new(active.base_url.clone())
-            .ensure_model(&model, &wait)
-            .await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
+    // Whatever this backend needs before it can answer: llama.cpp spawns its
+    // server when nothing answers, Ollama pulls a tag that is not on the
+    // server yet, every hosted backend needs nothing. `model` rather than
+    // `active.model` because a `/model` override has to pull the tag this
+    // agent will actually ask for.
+    active.prepare(&model).await?;
     client
         .health()
         .await

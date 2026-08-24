@@ -599,3 +599,103 @@ async fn a_default_kernel_is_usable_without_options() {
     assert_eq!(kernel.call_budget(), lua::DEFAULT_CALL_BUDGET);
     assert!(kernel.host().notify("p", "hi").await.is_err());
 }
+
+/// A provider registered through `Ctx::provider` is selectable from
+/// `config.toml`, and stops being selectable the moment its plugin unloads.
+///
+/// This is the whole reason `ProviderKind` stopped being an enum. Before the
+/// change `Ctx::provider` took a live `LlmProvider` and there was no way for a
+/// `kind = "..."` to reach it — the call existed and could not be used for
+/// what it was for.
+#[tokio::test]
+async fn a_plugin_registered_provider_is_selectable_from_config() {
+    use crate::config::ProviderConfig;
+    use crate::llm::registry::{self, Credentials, ProviderDescriptor, ProviderKind};
+
+    let dir = tmp("provider-kind");
+    let kernel = kernel_in(&dir.path);
+    let kind = ProviderKind::known("kernel-test-backend");
+
+    let config = ProviderConfig {
+        name: "p".to_string(),
+        kind: kind.clone(),
+        base_url: "http://127.0.0.1:11434".to_string(),
+        model: "m".to_string(),
+        api_key_env: None,
+        gguf_path: None,
+        usd_per_mtok_in: None,
+        usd_per_mtok_out: None,
+    };
+
+    // Nothing has registered it yet, so the config names a backend that is not
+    // there — which loads, and fails at the point of use.
+    assert!(config.descriptor().is_none());
+    assert!(config.build().is_err());
+
+    let plugin = TestPlugin::boxed("backend", move |ctx| {
+        ctx.provider(ProviderDescriptor::new(
+            ProviderKind::known("kernel-test-backend"),
+            "A Test Backend",
+            Credentials::ApiKey {
+                default_env: Some("KERNEL_TEST_KEY".to_string()),
+            },
+            // Ollama's client needs neither a key nor a reachable endpoint,
+            // which is all a registration test has to build.
+            |config| {
+                Ok(Arc::new(crate::llm::ollama::OllamaClient::new(
+                    config.base_url.clone(),
+                )))
+            },
+        ))?;
+        Ok(())
+    });
+    let id = kernel.load(plugin).expect("load");
+
+    // Both halves see it: the kernel owns it for disposal, the process
+    // registry answers the config lookup.
+    assert_eq!(kernel.provider_names(), ["kernel-test-backend"]);
+    let descriptor = config.descriptor().expect("registered");
+    assert_eq!(descriptor.display_name(), "A Test Backend");
+    assert_eq!(
+        descriptor.credentials().default_env(),
+        Some("KERNEL_TEST_KEY")
+    );
+    assert!(config.build().is_ok());
+
+    kernel.unload(&id).await.expect("unload");
+
+    // Exact disposal reaches across the bridge: an unloaded plugin's kind is
+    // no longer something a config file can select.
+    assert!(kernel.provider_names().is_empty());
+    assert_eq!(kernel.residue().providers, 0);
+    assert!(registry::installed(&kind).is_none());
+    assert!(config.build().is_err());
+}
+
+/// A plugin cannot take a kind a built-in already holds, and a refused claim
+/// leaves nothing behind in either registry.
+#[tokio::test]
+async fn a_plugin_cannot_shadow_a_built_in_provider_kind() {
+    use crate::llm::registry::{self, Credentials, ProviderDescriptor, ProviderKind};
+
+    let dir = tmp("provider-shadow");
+    let kernel = kernel_in(&dir.path);
+
+    let err = kernel
+        .load(TestPlugin::boxed("impostor", |ctx| {
+            ctx.provider(ProviderDescriptor::new(
+                ProviderKind::ANTHROPIC,
+                "Not Anthropic",
+                Credentials::Local,
+                |_| Err(anyhow::anyhow!("never built")),
+            ))?;
+            Ok(())
+        }))
+        .expect_err("the built-in holds the kind");
+    assert!(err.to_string().contains("anthropic"), "{err}");
+
+    // The built-in is untouched, and the failed claim left no slot behind.
+    assert!(kernel.provider_names().is_empty());
+    let descriptor = registry::installed(&ProviderKind::ANTHROPIC).expect("still installed");
+    assert_eq!(descriptor.display_name(), "Anthropic");
+}

@@ -731,7 +731,7 @@ fn provider_add_accepts_xai_kinds() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "xai".to_string(),
-            kind: ProviderKind::Xai,
+            kind: ProviderKind::XAI,
             base_url: "https://api.x.ai/v1".to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: Some("XAI_API_KEY".to_string()),
@@ -745,7 +745,7 @@ fn provider_add_accepts_xai_kinds() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "grok".to_string(),
-            kind: ProviderKind::XaiOauth,
+            kind: ProviderKind::XAI_OAUTH,
             base_url: "https://api.x.ai/v1".to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: None,
@@ -770,7 +770,7 @@ fn provider_add_accepts_openrouter_kind() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "openrouter".to_string(),
-            kind: ProviderKind::OpenRouter,
+            kind: ProviderKind::OPENROUTER,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             model: "openrouter/auto".to_string(),
             api_key_env: Some("OPENROUTER_API_KEY".to_string()),
@@ -795,7 +795,7 @@ fn provider_add_accepts_cloudflare_kind() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "cf".to_string(),
-            kind: ProviderKind::Cloudflare,
+            kind: ProviderKind::CLOUDFLARE,
             base_url: "https://api.cloudflare.com/client/v4/accounts/acc/ai/v1".to_string(),
             model: "@cf/zai-org/glm-5.2".to_string(),
             api_key_env: Some("CLOUDFLARE_API_TOKEN".to_string()),

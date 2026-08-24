@@ -341,56 +341,63 @@ impl Tool for GenerateImageTool {
 fn resolve_endpoint() -> Result<ImageEndpoint, String> {
     if let Ok(config) = Config::load() {
         let provider = config.active();
-        match provider.kind {
-            ProviderKind::XaiOauth => {
-                if xai_signed_in() {
-                    let source = XaiTokenSource::new()
-                        .map_err(|err| format!("opening the xAI OAuth token store: {err:#}"))?;
-                    return Ok(ImageEndpoint {
-                        base_url: provider.base_url,
-                        is_xai: true,
-                        auth: ImageAuth::Oauth(source),
-                    });
-                }
-                // Active is OAuth but no session — try key fallbacks below with
-                // this provider's base URL first if a key exists.
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    true,
-                    Some(xai_oauth::DEFAULT_KEY_ENV),
-                    &["xai", &provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+        // Still branching on specific kinds, and it is the one place in this
+        // refactor where that could not become a descriptor lookup. The
+        // question here is "does this backend serve an image API, and under
+        // which credential" — a *capability*, which the descriptor does not
+        // carry. Adding an image field to it to satisfy one tool would put a
+        // second, image-shaped protocol on a type whose whole job is the chat
+        // one; the right shape is a service the provider plugin provides and
+        // this tool injects, and that is the next phase. Until then this reads
+        // the ids directly, and the `if` chain rather than a `match` is only
+        // because a kind is a string now and strings are not patterns.
+        if provider.kind == ProviderKind::XAI_OAUTH {
+            if xai_signed_in() {
+                let source = XaiTokenSource::new()
+                    .map_err(|err| format!("opening the xAI OAuth token store: {err:#}"))?;
+                return Ok(ImageEndpoint {
+                    base_url: provider.base_url,
+                    is_xai: true,
+                    auth: ImageAuth::Oauth(source),
+                });
             }
-            ProviderKind::Xai => {
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    true,
-                    provider
-                        .api_key_env
-                        .as_deref()
-                        .or(Some(xai_oauth::DEFAULT_KEY_ENV)),
-                    &["xai", &provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+            // Active is OAuth but no session — try key fallbacks below with
+            // this provider's base URL first if a key exists.
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                true,
+                Some(xai_oauth::DEFAULT_KEY_ENV),
+                &["xai", &provider.name],
+            ) {
+                return Ok(endpoint);
             }
-            ProviderKind::Openai | ProviderKind::OpenRouter => {
-                let default_env = match provider.kind {
-                    ProviderKind::OpenRouter => Some(crate::llm::openrouter::DEFAULT_KEY_ENV),
-                    _ => Some("OPENAI_API_KEY"),
-                };
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    is_xai_base_url(&provider.base_url),
-                    provider.api_key_env.as_deref().or(default_env),
-                    &[&provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+        } else if provider.kind == ProviderKind::XAI {
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                true,
+                provider
+                    .api_key_env
+                    .as_deref()
+                    .or(Some(xai_oauth::DEFAULT_KEY_ENV)),
+                &["xai", &provider.name],
+            ) {
+                return Ok(endpoint);
             }
-            _ => {}
+        } else if provider.kind == ProviderKind::OPENAI || provider.kind == ProviderKind::OPENROUTER
+        {
+            let default_env = if provider.kind == ProviderKind::OPENROUTER {
+                Some(crate::llm::openrouter::DEFAULT_KEY_ENV)
+            } else {
+                Some("OPENAI_API_KEY")
+            };
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                is_xai_base_url(&provider.base_url),
+                provider.api_key_env.as_deref().or(default_env),
+                &[&provider.name],
+            ) {
+                return Ok(endpoint);
+            }
         }
     }
 

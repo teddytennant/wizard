@@ -1045,7 +1045,9 @@ impl CommandContext<'_> {
         // A switch to llama.cpp may target a server that is not up yet:
         // kick off the auto-start in the background (the rebuild below
         // proceeds regardless; probes fall back until the model loads).
-        if provider.kind == ProviderKind::LlamaCpp
+        if provider
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.manages_local_server())
             && server::probe(&provider.base_url).await == server::Health::Down
         {
             self.app.notice(format!(
@@ -1472,7 +1474,10 @@ impl CommandContext<'_> {
     /// `/server` does not apply.
     fn llamacpp_provider(&mut self) -> Option<ProviderConfig> {
         let provider = self.app.config.active();
-        if provider.kind == ProviderKind::LlamaCpp {
+        if provider
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.manages_local_server())
+        {
             Some(provider)
         } else {
             self.app.notice(format!(
@@ -1575,7 +1580,7 @@ impl CommandContext<'_> {
                     // loop owns the config + agent slot.
                     let provider = ProviderConfig {
                         name: "xai-oauth".to_string(),
-                        kind: ProviderKind::XaiOauth,
+                        kind: ProviderKind::XAI_OAUTH,
                         base_url: crate::llm::xai_oauth::DEFAULT_BASE_URL.to_string(),
                         model: crate::llm::xai_oauth::DEFAULT_MODEL.to_string(),
                         api_key_env: None,

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::oauth_callback::{self, Callback, Cancel, PasteChannel};
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::xai_oauth::{generate_pkce, jwt_exp};
 use crate::config::Config;
 
@@ -241,7 +242,7 @@ pub async fn wait_and_complete_with_paste(
 pub fn provider_config() -> crate::config::ProviderConfig {
     crate::config::ProviderConfig {
         name: "chatgpt".to_string(),
-        kind: crate::config::ProviderKind::ChatgptOauth,
+        kind: crate::config::ProviderKind::CHATGPT_OAUTH,
         base_url: BASE_URL.to_string(),
         model: DEFAULT_MODEL.to_string(),
         api_key_env: None,
@@ -533,6 +534,30 @@ fn parse_callback(target: &str, expected_state: &str) -> Callback {
         Some(code) => Callback::Code(code),
         None => Callback::Failed("the callback carried no authorization code".to_string()),
     }
+}
+
+/// How `kind = "chatgptoauth"` is registered.
+///
+/// A ChatGPT subscription is not the Chat Completions API — it is the
+/// Responses API behind account tokens — so it is the one cloud backend with
+/// a client of its own rather than a configuration of the shared one.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::CHATGPT_OAUTH,
+        "ChatGPT",
+        Credentials::Account {
+            login: "chatgpt".to_string(),
+        },
+        |config| {
+            Ok(std::sync::Arc::new(
+                crate::llm::chatgpt::ChatgptProvider::new(
+                    config.base_url.clone(),
+                    config.model.clone(),
+                )
+                .context("setting up ChatGPT OAuth token storage")?,
+            ))
+        },
+    )
 }
 
 #[cfg(test)]

@@ -15,7 +15,6 @@ use crate::event::Event;
 use crate::hooks::HookEngine;
 use crate::llm::provider::LlmProvider;
 use crate::mcp::McpManager;
-use crate::server;
 use crate::skills::Skill;
 use crate::tools::CommandDispatch;
 use crate::tools::registry::ToolRegistry;
@@ -208,37 +207,29 @@ pub(super) fn restore_ultra(app: &App, agent: &mut Agent) {
 }
 
 /// True for backends that run on this machine (no API key, no cloud).
-pub(super) fn is_local_kind(kind: ProviderKind) -> bool {
-    matches!(kind, ProviderKind::LlamaCpp | ProviderKind::Ollama)
+///
+/// A backend nothing has registered counts as cloud, which is what makes the
+/// fallback chain below still terminate: an unknown kind must not be treated
+/// as a local backend whose failure is recoverable, because there is no local
+/// process to blame and no reason to think another provider will do better.
+pub(super) fn is_local_kind(kind: &ProviderKind) -> bool {
+    crate::llm::registry::installed(kind)
+        .is_some_and(|descriptor| descriptor.credentials().is_local())
 }
 
-/// Build `provider`'s client and prove it usable: for local llama.cpp this
-/// spawns `llama-server` when possible (the terminal is still in normal mode
-/// at startup, so spawn/load progress shows on a plain-terminal spinner),
-/// then runs the provider's health probe.
+/// Build `provider`'s client and prove it usable: run whatever readiness step
+/// the backend declares (llama.cpp spawns its server, Ollama pulls the model),
+/// then the provider's own health probe.
+///
+/// The readiness step used to be two open-coded `if provider.kind == …` blocks
+/// here and two identical ones in [`crate::agent::build_client`]. It is now
+/// [`ProviderConfig::prepare`], so the startup path no longer knows which
+/// backends have a local process at all.
 pub(super) async fn try_provider(provider: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
     let client = provider
         .build()
         .with_context(|| format!("building provider '{}'", provider.name))?;
-    if provider.kind == ProviderKind::LlamaCpp {
-        let wait = crate::progress::ServerSpinner::start();
-        let outcome = server::ensure_running(provider, &wait).await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
-    // Ollama gets the same first-run hand for the model itself: a configured
-    // tag that is not pulled yet (onboarding's BYOM pick, a hand-written
-    // config) is pulled now with visible progress. Loopback hosts only —
-    // Wizard never downloads models onto a remote server.
-    if provider.kind == ProviderKind::Ollama && server::local_port(&provider.base_url).is_some() {
-        let wait =
-            crate::progress::ServerSpinner::start_with("Checking the local model…", "model ready");
-        let outcome = crate::llm::ollama::OllamaClient::new(provider.base_url.clone())
-            .ensure_model(&provider.model, &wait)
-            .await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
+    provider.prepare(&provider.model).await?;
     client
         .health()
         .await
@@ -252,28 +243,28 @@ pub(super) async fn try_provider(provider: &ProviderConfig) -> Result<Arc<dyn Ll
 const BYOP_ENV_FALLBACKS: &[(&str, ProviderKind, &str, &str, &str)] = &[
     (
         "ANTHROPIC_API_KEY",
-        ProviderKind::Anthropic,
+        ProviderKind::ANTHROPIC,
         "https://api.anthropic.com",
         "claude-fable-5",
         "anthropic",
     ),
     (
         "OPENAI_API_KEY",
-        ProviderKind::Openai,
+        ProviderKind::OPENAI,
         "https://api.openai.com/v1",
         "gpt-4o",
         "openai",
     ),
     (
         "XAI_API_KEY",
-        ProviderKind::Xai,
+        ProviderKind::XAI,
         "https://api.x.ai/v1",
         "grok-4.6",
         "xai",
     ),
     (
         "OPENROUTER_API_KEY",
-        ProviderKind::OpenRouter,
+        ProviderKind::OPENROUTER,
         "https://openrouter.ai/api/v1",
         "openrouter/auto",
         "openrouter",
@@ -296,7 +287,7 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
     // background and surfaces a failure as a notice. A *build* error is a config
     // error (e.g. malformed base URL), so it stays fatal. The local fallback
     // chain below only matters when a local backend is the active provider.
-    if !is_local_kind(active.kind) {
+    if !is_local_kind(&active.kind) {
         return active
             .build()
             .with_context(|| format!("building provider '{}'", active.name));
@@ -309,7 +300,7 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
 
     // Any other configured cloud provider.
     for provider in config.providers.clone() {
-        if is_local_kind(provider.kind) || provider.name == active.name {
+        if is_local_kind(&provider.kind) || provider.name == active.name {
             continue;
         }
         match try_provider(&provider).await {
@@ -326,13 +317,13 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
     }
 
     // A provider synthesized from a standard API-key env var.
-    for &(key_env, kind, base_url, model, name) in BYOP_ENV_FALLBACKS {
+    for (key_env, kind, base_url, model, name) in BYOP_ENV_FALLBACKS {
         if !std::env::var(key_env).is_ok_and(|v| !v.trim().is_empty()) {
             continue;
         }
         let provider = ProviderConfig {
             name: name.to_string(),
-            kind,
+            kind: kind.clone(),
             base_url: base_url.to_string(),
             model: model.to_string(),
             api_key_env: Some(key_env.to_string()),

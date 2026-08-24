@@ -1690,7 +1690,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
     let mut config = Config::default();
     config.providers = vec![crate::config::ProviderConfig {
         name: "anthropic".to_string(),
-        kind: crate::config::ProviderKind::Anthropic,
+        kind: crate::config::ProviderKind::ANTHROPIC,
         base_url: "https://api.anthropic.com".to_string(),
         model: "claude-opus-5".to_string(),
         api_key_env: None,

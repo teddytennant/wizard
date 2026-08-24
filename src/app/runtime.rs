@@ -63,7 +63,7 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     // A cloud provider's health probe was skipped at startup (it would block the
     // first paint); run_tui runs it in the background below. Local providers
     // already proved themselves in startup_client (and loaded the model).
-    let active_is_cloud = !is_local_kind(config.active().kind);
+    let active_is_cloud = !is_local_kind(&config.active().kind);
 
     let project_root = std::env::current_dir().context("resolving project root")?;
 

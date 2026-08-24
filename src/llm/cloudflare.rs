@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::provider::LlmProvider;
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::wire::{OpenAiProvider, StaticToken};
 use super::{ChatRequest, ChatStream, ProviderError};
 
@@ -256,6 +257,28 @@ struct ModelSearch {
 struct ModelInfo {
     #[serde(default)]
     name: String,
+}
+
+/// How `kind = "cloudflare"` is registered.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::CLOUDFLARE,
+        "Cloudflare",
+        Credentials::ApiKey {
+            default_env: Some(DEFAULT_KEY_ENV.to_string()),
+        },
+        |config| {
+            let key = config.api_key();
+            if key.is_empty() {
+                config.warn_missing_key("API token", DEFAULT_KEY_ENV);
+            }
+            Ok(Arc::new(CloudflareProvider::new(
+                config.base_url.clone(),
+                config.model.clone(),
+                key,
+            )))
+        },
+    )
 }
 
 #[cfg(test)]

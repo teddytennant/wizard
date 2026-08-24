@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::wire::{OpenAiProvider, StaticToken};
 
 /// Default Chat Completions base URL.
@@ -37,6 +38,28 @@ pub fn provider(
         ("HTTP-Referer", ATTRIBUTION_REFERER),
         ("X-Title", ATTRIBUTION_TITLE),
     ])
+}
+
+/// How `kind = "openrouter"` is registered.
+///
+/// No missing-key warning, matching the old `match` arm exactly. OpenRouter
+/// answers a keyless request with a usable error of its own, and the arm never
+/// warned; the two arms that do warn are preserved just as precisely.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::OPENROUTER,
+        "OpenRouter",
+        Credentials::ApiKey {
+            default_env: Some(DEFAULT_KEY_ENV.to_string()),
+        },
+        |config| {
+            Ok(Arc::new(provider(
+                config.base_url.clone(),
+                config.model.clone(),
+                config.api_key(),
+            )))
+        },
+    )
 }
 
 #[cfg(test)]

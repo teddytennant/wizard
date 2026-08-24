@@ -901,7 +901,7 @@ mod tests {
             name: name.to_string(),
             // Ollama builds a client without needing a key or a reachable
             // endpoint, which is all these seats have to prove.
-            kind: crate::config::ProviderKind::Ollama,
+            kind: crate::config::ProviderKind::OLLAMA,
             base_url: "http://127.0.0.1:11434".to_string(),
             model: model.to_string(),
             api_key_env: None,

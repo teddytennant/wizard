@@ -28,7 +28,7 @@ use tokio::sync::{RwLock, mpsc};
 use crate::agent::{Agent, AgentEvent, RewindCandidate, ultra};
 use crate::commands::surface::{CommandSurface, PlanState, SessionSnapshot, Surface, dispatch};
 use crate::commands::{ServerAction, SlashCommand};
-use crate::config::{Config, Mode, ProviderKind, ReasoningEffort};
+use crate::config::{Config, Mode, ReasoningEffort};
 use crate::llm::provider::LlmProvider;
 use crate::mcp::McpManager;
 
@@ -480,11 +480,14 @@ fn toggle_ultra(agent: &mut Agent, ctx: &mut CommandCtx<'_>) {
 /// command, answering into the chat instead of onto a status line.
 async fn server_command(action: ServerAction, config: &Config, shared: &Arc<TaskShared>) {
     let provider = config.active();
-    if provider.kind != ProviderKind::LlamaCpp {
+    if !provider
+        .descriptor()
+        .is_some_and(|descriptor| descriptor.manages_local_server())
+    {
         return error(
             shared,
             format!(
-                "'/server' manages the local llama-server; the active provider '{}' is {:?}",
+                "'/server' manages the local llama-server; the active provider '{}' is {}",
                 provider.name, provider.kind
             ),
         );

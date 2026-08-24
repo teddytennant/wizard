@@ -58,6 +58,7 @@
 //! the five-minute default. [`CacheTtl`] has the arithmetic.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -66,6 +67,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::provider::LlmProvider;
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::{
     CacheTokens, ChatChunk, ChatMessage, ChatOptions, ChatRequest, ChatStream, ContentBlock,
     FunctionCall, ProviderError, Role, ThinkingBlock, ToolCall,
@@ -1330,6 +1332,29 @@ where
         }
     })
     .boxed()
+}
+
+/// How `kind = "anthropic"` is registered.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::ANTHROPIC,
+        "Anthropic",
+        // No default env var, matching the old `match` arm: `ANTHROPIC_API_KEY`
+        // is picked up by the bring-your-own-provider fallback that synthesizes
+        // a provider entry, not by a provider the user already configured.
+        Credentials::ApiKey { default_env: None },
+        |config| {
+            let key = config.api_key();
+            if key.is_empty() {
+                config.warn_missing_key("API key", "an env var");
+            }
+            Ok(Arc::new(AnthropicProvider::new(
+                config.base_url.clone(),
+                config.model.clone(),
+                key,
+            )))
+        },
+    )
 }
 
 #[cfg(test)]

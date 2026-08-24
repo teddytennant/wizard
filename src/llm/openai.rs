@@ -17,6 +17,7 @@
 //! builds that client directly and gets no key, which is exactly the
 //! behaviour each of them already documented and tested for.
 
+use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use crate::llm::wire::OpenAiProvider;
 use crate::llm::{ChatMessage, Role};
 
@@ -132,6 +133,33 @@ fn prompt_cache_key(model: &str, messages: &[ChatMessage]) -> Option<String> {
     let digest = hasher.finalize();
     let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
     Some(format!("wz-{hex}"))
+}
+
+/// How `kind = "openai"` is registered.
+///
+/// [`Credentials::ApiKey`] with no default env var, because this kind is also
+/// how vLLM, LM Studio, DeepSeek and every `compat.rs` preset is reached:
+/// there is no one variable to guess at, so an unconfigured `api_key_env`
+/// falls through to the stored credential rather than to `OPENAI_API_KEY`.
+/// That is what the old `match` arm did by passing `None`, and guessing here
+/// would start sending an OpenAI key to a local vLLM.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::OPENAI,
+        "OpenAI-compatible",
+        Credentials::ApiKey { default_env: None },
+        |config| {
+            let key = config.api_key();
+            if key.is_empty() {
+                config.warn_missing_key("API key", "an env var");
+            }
+            Ok(std::sync::Arc::new(provider(
+                config.base_url.clone(),
+                config.model.clone(),
+                key,
+            )))
+        },
+    )
 }
 
 #[cfg(test)]

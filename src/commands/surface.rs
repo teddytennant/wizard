@@ -1037,7 +1037,7 @@ mod tests {
             SessionSnapshot {
                 model: "m".to_string(),
                 provider_name: "p".to_string(),
-                provider_kind: ProviderKind::Ollama,
+                provider_kind: ProviderKind::OLLAMA,
                 provider_base_url: "u".to_string(),
                 mode: Mode::Genie,
                 effort: None,

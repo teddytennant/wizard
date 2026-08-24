@@ -25,7 +25,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::config::{Config, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind};
+use crate::config::{
+    Config, Credentials, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind,
+};
 use crate::hardware::{self, GgufModel};
 use crate::import_claude::{self, ImportSelection};
 use crate::skin::Skin;
@@ -123,7 +125,7 @@ impl Answers {
 
         let provider = ProviderConfig {
             name: self.provider_name.clone(),
-            kind: self.kind,
+            kind: self.kind.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             api_key_env: self.api_key_env.clone(),
@@ -134,7 +136,7 @@ impl Answers {
 
         // Mirror an Ollama choice into the legacy fields so config files remain
         // readable by code paths that predate the providers table.
-        if self.kind == ProviderKind::Ollama {
+        if self.kind == ProviderKind::OLLAMA {
             config.model = self.model.clone();
             config.ollama_host = self.base_url.clone();
         }
@@ -142,7 +144,7 @@ impl Answers {
         // Mirror a llama.cpp choice into the top-level fields so the same
         // local provider is synthesized if the providers table ever empties
         // (e.g. `/provider remove`).
-        if self.kind == ProviderKind::LlamaCpp {
+        if self.kind == ProviderKind::LLAMACPP {
             config.llamacpp_host = self.base_url.clone();
             config.gguf_path = self.gguf_path.clone();
         }
@@ -981,7 +983,7 @@ fn collect_local_auto(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     ) {
         LocalPlan::LlamaCpp { gguf_path } => ProviderAnswers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: LLAMACPP_BASE_URL.to_string(),
             model: gguf_model_tag(&gguf_path),
             api_key_env: None,
@@ -990,7 +992,7 @@ fn collect_local_auto(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         },
         LocalPlan::Ollama { model } => ProviderAnswers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::Ollama,
+            kind: ProviderKind::OLLAMA,
             base_url: OLLAMA_BASE_URL.to_string(),
             model,
             api_key_env: None,
@@ -1088,7 +1090,7 @@ fn collect_llamacpp(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
 
     Ok(Some(ProviderAnswers {
         provider_name: "local".to_string(),
-        kind: ProviderKind::LlamaCpp,
+        kind: ProviderKind::LLAMACPP,
         base_url,
         model: gguf_model_tag(&gguf_path),
         api_key_env: None,
@@ -1134,7 +1136,7 @@ fn collect_ollama(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "local".to_string(),
-        kind: ProviderKind::Ollama,
+        kind: ProviderKind::OLLAMA,
         base_url: OLLAMA_BASE_URL.to_string(),
         model,
         api_key_env: None,
@@ -1174,7 +1176,7 @@ fn collect_openai(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "openai".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url: OPENAI_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1214,7 +1216,7 @@ fn collect_anthropic(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "claude".to_string(),
-        kind: ProviderKind::Anthropic,
+        kind: ProviderKind::ANTHROPIC,
         base_url: ANTHROPIC_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1244,7 +1246,7 @@ fn collect_openrouter(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "openrouter".to_string(),
-        kind: ProviderKind::OpenRouter,
+        kind: ProviderKind::OPENROUTER,
         base_url: OPENROUTER_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1291,7 +1293,7 @@ fn collect_cloudflare(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "cloudflare".to_string(),
-        kind: ProviderKind::Cloudflare,
+        kind: ProviderKind::CLOUDFLARE,
         base_url: crate::llm::cloudflare::base_url(&account_id),
         model,
         api_key_env: Some(api_key_env),
@@ -1325,7 +1327,7 @@ fn collect_xai(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "xai".to_string(),
-        kind: ProviderKind::Xai,
+        kind: ProviderKind::XAI,
         base_url: XAI_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1360,7 +1362,7 @@ fn collect_xai_oauth(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "xai".to_string(),
-        kind: ProviderKind::XaiOauth,
+        kind: ProviderKind::XAI_OAUTH,
         base_url: XAI_BASE_URL.to_string(),
         model,
         api_key_env: None,
@@ -1425,7 +1427,7 @@ fn collect_compat(
         };
     Ok(Some(ProviderAnswers {
         provider_name: preset.name.to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url: preset.base_url.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1462,7 +1464,7 @@ fn collect_custom(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "custom".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model,
         api_key_env,
@@ -1532,8 +1534,17 @@ fn print_summary(config: &Config) {
     println!();
     println!("Next steps:");
 
-    match provider.kind {
-        ProviderKind::LlamaCpp => match provider.gguf_path.as_deref() {
+    // The two backends with something on this machine to say a word about are
+    // still named here, because the advice is about *their* artifacts — a GGUF
+    // file, an `ollama pull` — and there is nothing on a descriptor that would
+    // let a stranger's local backend produce it. Everything past them is
+    // generated from the descriptor, so a new cloud provider gets the right
+    // closing line without touching this function.
+    let manages_server = provider
+        .descriptor()
+        .is_some_and(|descriptor| descriptor.manages_local_server());
+    if manages_server {
+        match provider.gguf_path.as_deref() {
             Some(path) if Path::new(path).exists() => {
                 println!("  • llama-server starts automatically (model: {path})");
             }
@@ -1557,40 +1568,42 @@ fn print_summary(config: &Config) {
                     crate::config::DEFAULT_LLAMACPP_PORT
                 );
             }
-        },
-        ProviderKind::Ollama => {
-            if crate::llm::ollama::model_installed(&provider.model, &installed_ollama_models()) {
-                println!("  • model already pulled: {}", provider.model);
-            } else {
-                println!(
-                    "  • first run pulls the model for you (model: {})",
-                    provider.model
-                );
+        }
+    } else if provider.kind == ProviderKind::OLLAMA {
+        if crate::llm::ollama::model_installed(&provider.model, &installed_ollama_models()) {
+            println!("  • model already pulled: {}", provider.model);
+        } else {
+            println!(
+                "  • first run pulls the model for you (model: {})",
+                provider.model
+            );
+        }
+    } else {
+        match provider.credentials() {
+            Credentials::ApiKey { .. } => {
+                // Report the actual state rather than a generic instruction: a
+                // summary that says "Wizard is configured" over a setup with no
+                // key anywhere is how the first turn came to 401 in silence.
+                let stored = crate::credentials::get(&provider.name)
+                    .is_some_and(|key| !key.trim().is_empty());
+                let env = provider.api_key_env.as_deref();
+                let exported = env.is_some_and(|name| {
+                    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+                });
+                for line in api_key_summary(stored, env, exported) {
+                    println!("{line}");
+                }
             }
-        }
-        ProviderKind::Openai
-        | ProviderKind::Anthropic
-        | ProviderKind::OpenRouter
-        | ProviderKind::Xai
-        | ProviderKind::Cloudflare => {
-            // Report the actual state rather than a generic instruction: a
-            // summary that says "Wizard is configured" over a setup with no
-            // key anywhere is how the first turn came to 401 in silence.
-            let stored =
-                crate::credentials::get(&provider.name).is_some_and(|key| !key.trim().is_empty());
-            let env = provider.api_key_env.as_deref();
-            let exported = env.is_some_and(|name| {
-                std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
-            });
-            for line in api_key_summary(stored, env, exported) {
-                println!("{line}");
+            Credentials::Account { login } => {
+                let display = provider
+                    .descriptor()
+                    .map(|descriptor| descriptor.display_name().to_string())
+                    .unwrap_or_else(|| provider.kind.to_string());
+                println!("  • sign in to {display}:  wizard --login {login}");
             }
-        }
-        ProviderKind::XaiOauth => {
-            println!("  • sign in to xAI:  wizard --login xai");
-        }
-        ProviderKind::ChatgptOauth => {
-            println!("  • sign in to ChatGPT:  wizard --login chatgpt");
+            // A local backend Wizard neither starts nor stocks has nothing to
+            // set up, so the summary above is already the whole answer.
+            Credentials::Local => {}
         }
     }
 
@@ -2016,7 +2029,7 @@ mod tests {
     fn base_answers() -> Answers {
         Answers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::Ollama,
+            kind: ProviderKind::OLLAMA,
             base_url: OLLAMA_BASE_URL.to_string(),
             model: "qwen3.6:27b".to_string(),
             api_key_env: None,
@@ -2044,7 +2057,7 @@ mod tests {
         let config = answers.into_config();
         assert_eq!(config.providers.len(), 1);
         assert_eq!(config.active_provider.as_deref(), Some("local"));
-        assert_eq!(config.active().kind, ProviderKind::Ollama);
+        assert_eq!(config.active().kind, ProviderKind::OLLAMA);
         assert_eq!(config.active().model, "qwen3.5:9b");
         // Legacy fields mirror the Ollama choice for back-compat.
         assert_eq!(config.model, "qwen3.5:9b");
@@ -2091,7 +2104,7 @@ mod tests {
     #[test]
     fn llamacpp_answers_carry_gguf_and_skip_legacy_ollama_fields() {
         let answers = Answers {
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:9090".to_string(),
             model: "Qwen3.6-27B-Q4_K_M".to_string(),
             gguf_path: Some("/home/u/.wizard/models/Qwen3.6-27B-Q4_K_M.gguf".to_string()),
@@ -2099,7 +2112,7 @@ mod tests {
         };
         let defaults = Config::default();
         let config = answers.into_config();
-        assert_eq!(config.active().kind, ProviderKind::LlamaCpp);
+        assert_eq!(config.active().kind, ProviderKind::LLAMACPP);
         assert_eq!(config.active().model, "Qwen3.6-27B-Q4_K_M");
         assert_eq!(
             config.active().gguf_path.as_deref(),
@@ -2144,7 +2157,7 @@ mod tests {
     fn cloud_answers_do_not_touch_legacy_ollama_fields() {
         let answers = Answers {
             provider_name: "claude".to_string(),
-            kind: ProviderKind::Anthropic,
+            kind: ProviderKind::ANTHROPIC,
             base_url: ANTHROPIC_BASE_URL.to_string(),
             model: "claude-fable-5".to_string(),
             api_key_env: Some(ANTHROPIC_KEY_ENV.to_string()),
@@ -2154,7 +2167,7 @@ mod tests {
         let defaults = Config::default();
         let config = answers.into_config();
         assert_eq!(config.active().name, "claude");
-        assert_eq!(config.active().kind, ProviderKind::Anthropic);
+        assert_eq!(config.active().kind, ProviderKind::ANTHROPIC);
         assert_eq!(
             config.active().api_key_env.as_deref(),
             Some(ANTHROPIC_KEY_ENV)
@@ -2170,7 +2183,7 @@ mod tests {
         // API-key flavor.
         let answers = Answers {
             provider_name: "xai".to_string(),
-            kind: ProviderKind::Xai,
+            kind: ProviderKind::XAI,
             base_url: XAI_BASE_URL.to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: Some(XAI_KEY_ENV.to_string()),
@@ -2178,21 +2191,21 @@ mod tests {
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "xai");
-        assert_eq!(config.active().kind, ProviderKind::Xai);
+        assert_eq!(config.active().kind, ProviderKind::XAI);
         assert_eq!(config.active().base_url, "https://api.x.ai/v1");
         assert_eq!(config.active().api_key_env.as_deref(), Some("XAI_API_KEY"));
 
         // OAuth flavor: no API key env; credentials come from the token file.
         let answers = Answers {
             provider_name: "xai".to_string(),
-            kind: ProviderKind::XaiOauth,
+            kind: ProviderKind::XAI_OAUTH,
             base_url: XAI_BASE_URL.to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: None,
             ..base_answers()
         };
         let config = answers.into_config();
-        assert_eq!(config.active().kind, ProviderKind::XaiOauth);
+        assert_eq!(config.active().kind, ProviderKind::XAI_OAUTH);
         assert!(config.active().api_key_env.is_none());
         // Legacy Ollama fields stay untouched for cloud choices.
         let defaults = Config::default();
@@ -2204,7 +2217,7 @@ mod tests {
     fn openrouter_answers_build_the_expected_provider() {
         let answers = Answers {
             provider_name: "openrouter".to_string(),
-            kind: ProviderKind::OpenRouter,
+            kind: ProviderKind::OPENROUTER,
             base_url: OPENROUTER_BASE_URL.to_string(),
             model: OPENROUTER_MODEL.to_string(),
             api_key_env: Some(OPENROUTER_KEY_ENV.to_string()),
@@ -2212,7 +2225,7 @@ mod tests {
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "openrouter");
-        assert_eq!(config.active().kind, ProviderKind::OpenRouter);
+        assert_eq!(config.active().kind, ProviderKind::OPENROUTER);
         assert_eq!(config.active().base_url, "https://openrouter.ai/api/v1");
         assert_eq!(config.active().model, "openrouter/auto");
         assert_eq!(
@@ -2229,7 +2242,7 @@ mod tests {
     fn cloudflare_answers_build_the_expected_provider() {
         let answers = Answers {
             provider_name: "cloudflare".to_string(),
-            kind: ProviderKind::Cloudflare,
+            kind: ProviderKind::CLOUDFLARE,
             base_url: crate::llm::cloudflare::base_url("acc123"),
             model: CLOUDFLARE_MODEL.to_string(),
             api_key_env: Some(CLOUDFLARE_KEY_ENV.to_string()),
@@ -2237,7 +2250,7 @@ mod tests {
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "cloudflare");
-        assert_eq!(config.active().kind, ProviderKind::Cloudflare);
+        assert_eq!(config.active().kind, ProviderKind::CLOUDFLARE);
         assert_eq!(
             config.active().base_url,
             "https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1"
@@ -2300,7 +2313,7 @@ mod tests {
     fn pasted_provider_key_never_reaches_config() {
         let answers = Answers {
             provider_name: "openai".to_string(),
-            kind: ProviderKind::Openai,
+            kind: ProviderKind::OPENAI,
             base_url: OPENAI_BASE_URL.to_string(),
             model: OPENAI_MODELS[0].to_string(),
             api_key_env: Some(OPENAI_KEY_ENV.to_string()),
@@ -2502,7 +2515,7 @@ mod tests {
     #[test]
     fn onboarding_config_survives_a_toml_round_trip() {
         let answers = Answers {
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:8080".to_string(),
             model: "Qwen3.6-27B-Q4_K_M".to_string(),
             gguf_path: Some("/m/Qwen3.6-27B-Q4_K_M.gguf".to_string()),
@@ -2517,7 +2530,7 @@ mod tests {
         let raw = toml::to_string_pretty(&answers.into_config()).expect("serialize");
         let reloaded: Config = toml::from_str(&raw).expect("parse");
         assert_eq!(reloaded.active().name, "local");
-        assert_eq!(reloaded.active().kind, ProviderKind::LlamaCpp);
+        assert_eq!(reloaded.active().kind, ProviderKind::LLAMACPP);
         assert_eq!(reloaded.active().model, "Qwen3.6-27B-Q4_K_M");
         assert_eq!(
             reloaded.active().gguf_path.as_deref(),

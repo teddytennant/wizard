@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use tokio::sync::OnceCell;
 
 use super::provider::LlmProvider;
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::wire::OpenAiProvider;
 use super::{ChatRequest, ChatStream, ProviderError};
 
@@ -204,6 +205,38 @@ impl LlmProvider for LlamaCppProvider {
     fn label(&self) -> String {
         format!("llama.cpp:{}", self.model)
     }
+}
+
+/// How `kind = "llamacpp"` is registered.
+///
+/// The `prepare` hook is the interesting half. `llama-server` is a process on
+/// this machine, and Wizard starts it when nothing answers — logic that used
+/// to be open-coded, identically, in `app::session::try_provider` and in
+/// `agent::build_client`, both of which had to know that llama.cpp
+/// specifically needs a spawn. Both now just run the descriptor's hook, and
+/// the knowledge lives here with the backend it is about.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::LLAMACPP,
+        "llama.cpp",
+        Credentials::Local,
+        |config| {
+            Ok(Arc::new(LlamaCppProvider::new(
+                config.base_url.clone(),
+                config.model.clone(),
+            )))
+        },
+    )
+    .with_local_server()
+    .with_prepare(|config, _model| async move {
+        // The terminal is still in normal mode at startup, so spawn/load
+        // progress shows on a plain-terminal spinner (plain stderr lines when
+        // stderr is not a terminal).
+        let wait = crate::progress::ServerSpinner::start();
+        let outcome = crate::server::ensure_running(&config, &wait).await;
+        wait.finish(outcome.is_ok());
+        outcome
+    })
 }
 
 #[cfg(test)]

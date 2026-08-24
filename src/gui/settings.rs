@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
-use crate::config::{Config, ProviderConfig, ProviderKind};
+use crate::config::{Config, Credentials, ProviderConfig, ProviderKind};
 use crate::credentials;
 use crate::llm::{cloudflare, openrouter, xai_oauth};
 
@@ -144,16 +144,6 @@ pub enum KeySource {
     Missing,
 }
 
-/// The default environment variable a kind falls back to, if any.
-fn default_key_env(kind: ProviderKind) -> Option<&'static str> {
-    match kind {
-        ProviderKind::OpenRouter => Some(openrouter::DEFAULT_KEY_ENV),
-        ProviderKind::Xai => Some(xai_oauth::DEFAULT_KEY_ENV),
-        ProviderKind::Cloudflare => Some(cloudflare::DEFAULT_KEY_ENV),
-        _ => None,
-    }
-}
-
 /// Where `provider` would get its key right now.
 pub fn key_source(provider: &ProviderConfig) -> KeySource {
     key_source_from(provider, |name| std::env::var(name).ok(), credentials::get)
@@ -179,15 +169,20 @@ fn key_source_from(
     lookup: impl Fn(&str) -> Option<String>,
     stored: impl Fn(&str) -> Option<String>,
 ) -> KeySource {
-    match provider.kind {
-        ProviderKind::LlamaCpp | ProviderKind::Ollama => return KeySource::NotNeeded,
-        ProviderKind::XaiOauth | ProviderKind::ChatgptOauth => return KeySource::Oauth,
-        _ => {}
+    // Three questions this used to answer with two separate hand-maintained
+    // tables — one here, one in the arms of `ProviderConfig::build` — that had
+    // to agree and were never checked against each other. Both now read the
+    // one descriptor.
+    let credentials = provider.credentials();
+    match &credentials {
+        Credentials::Local => return KeySource::NotNeeded,
+        Credentials::Account { .. } => return KeySource::Oauth,
+        Credentials::ApiKey { .. } => {}
     }
     let env = provider
         .api_key_env
         .as_deref()
-        .or_else(|| default_key_env(provider.kind));
+        .or_else(|| credentials.default_env());
     // Trimmed on both sides, exactly as the resolver trims: a variable holding
     // only whitespace is not a key, and neither is a blank stored entry.
     if env
@@ -407,17 +402,16 @@ pub fn view(config: &Config) -> SettingsView {
 
 /// A [`ProviderKind`] from the string a form field carries.
 ///
-/// Round-tripped through TOML rather than matched by hand, so the accepted
-/// spellings are exactly the ones [`Config`] deserializes and a kind added to
-/// the enum needs no second list here.
+/// Used to round-trip through TOML, because deserializing was the only place
+/// that knew which spellings were valid. Deserializing no longer rejects
+/// anything (see [`crate::llm::registry`]), so the check is now what it was
+/// always standing in for: is a backend registered under this id.
 pub fn parse_kind(kind: &str) -> Result<ProviderKind, String> {
-    #[derive(serde::Deserialize)]
-    struct Probe {
-        kind: ProviderKind,
+    let kind = ProviderKind::new(kind);
+    match crate::llm::registry::installed(&kind) {
+        Some(_) => Ok(kind),
+        None => Err(crate::llm::registry::unknown(&kind).to_string()),
     }
-    toml::from_str::<Probe>(&format!("kind = {kind:?}"))
-        .map(|probe| probe.kind)
-        .map_err(|_| format!("unknown provider kind '{kind}'"))
 }
 
 /// Build the provider's client and ask it for its models: the cheapest call
@@ -605,7 +599,7 @@ mod tests {
     fn provider(name: &str) -> ProviderConfig {
         ProviderConfig {
             name: name.to_string(),
-            kind: ProviderKind::Openai,
+            kind: ProviderKind::OPENAI,
             base_url: "https://example.test/v1".to_string(),
             model: "m".to_string(),
             api_key_env: None,
@@ -660,11 +654,11 @@ mod tests {
     #[test]
     fn local_providers_need_no_key() {
         let mut local = provider("local");
-        local.kind = ProviderKind::LlamaCpp;
+        local.kind = ProviderKind::LLAMACPP;
         assert!(matches!(key_source(&local), KeySource::NotNeeded));
 
         let mut oauth = provider("xai");
-        oauth.kind = ProviderKind::XaiOauth;
+        oauth.kind = ProviderKind::XAI_OAUTH;
         assert!(matches!(key_source(&oauth), KeySource::Oauth));
     }
 
@@ -696,7 +690,7 @@ mod tests {
         let stored_is = |value: &'static str| move |_: &str| Some(value.to_string());
 
         let mut cloud = provider("openai");
-        cloud.kind = ProviderKind::Openai;
+        cloud.kind = ProviderKind::OPENAI;
         cloud.api_key_env = Some("OPENAI_API_KEY".to_string());
 
         // Both set: the export wins, so the column has to say so.
@@ -728,7 +722,7 @@ mod tests {
 
         // A kind with a default env var and none configured still reads it.
         let mut defaulted = provider("openrouter");
-        defaulted.kind = ProviderKind::OpenRouter;
+        defaulted.kind = ProviderKind::OPENROUTER;
         defaulted.api_key_env = None;
         assert!(matches!(
             key_source_from(
@@ -741,7 +735,7 @@ mod tests {
 
         // Backends that need no key are answered before either lookup runs.
         let mut local = provider("local");
-        local.kind = ProviderKind::LlamaCpp;
+        local.kind = ProviderKind::LLAMACPP;
         assert!(matches!(
             key_source_from(&local, env_is("sk-ignored"), stored_is("sk-ignored")),
             KeySource::NotNeeded
@@ -751,21 +745,19 @@ mod tests {
     #[test]
     fn presets_are_all_valid_provider_kinds() {
         for preset in presets() {
-            let kind: ProviderKind = toml::from_str(&format!("kind = \"{}\"", preset.kind))
-                .map(|v: KindProbe| v.kind)
+            let kind = parse_kind(preset.kind)
                 .unwrap_or_else(|err| panic!("preset {}: {err}", preset.name));
-            // Every preset that needs no key must be a local backend.
+            // Every preset that needs no key must be a local backend, which
+            // the descriptor now answers directly instead of by listing the
+            // two kinds that happen to be local today.
             if !preset.needs_key {
-                assert!(matches!(
-                    kind,
-                    ProviderKind::LlamaCpp | ProviderKind::Ollama
-                ));
+                let descriptor = crate::llm::registry::installed(&kind).expect("registered");
+                assert!(
+                    descriptor.credentials().is_local(),
+                    "preset {}",
+                    preset.name
+                );
             }
         }
-    }
-
-    #[derive(serde::Deserialize)]
-    struct KindProbe {
-        kind: ProviderKind,
     }
 }

@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::Value;
 
-use crate::llm::provider::LlmProvider;
+use crate::llm::registry::ProviderDescriptor;
 use crate::tools::Tool;
 
 use super::bus::{Dispatch, Event, EventHandler, HandlerId};
@@ -217,16 +217,26 @@ impl Ctx {
         Ok(())
     }
 
-    /// `ctx:provider(spec)` — register an [`LlmProvider`].
-    pub fn provider(
-        &self,
-        name: impl Into<String>,
-        provider: Arc<dyn LlmProvider>,
-    ) -> Result<(), KernelError> {
+    /// `ctx:provider(spec)` — register a backend `config.toml` can select.
+    ///
+    /// A [`ProviderDescriptor`] rather than a live
+    /// [`LlmProvider`](crate::llm::provider::LlmProvider), which is what this
+    /// took before and what made the call unreachable in practice: a provider
+    /// instance is bound to one base URL, one model and one key, and every one
+    /// of those comes out of the user's config. There was no way for a
+    /// `kind = "..."` to name an instance somebody had already constructed. A
+    /// descriptor is *how to build one from a config*, which is the thing the
+    /// config side has always needed.
+    ///
+    /// Registering here records the descriptor against this plugin so an
+    /// unload withdraws it. It becomes visible to `config.toml` when the
+    /// kernel publishes it with
+    /// [`Kernel::install_providers`](super::Kernel::install_providers).
+    pub fn provider(&self, descriptor: ProviderDescriptor) -> Result<(), KernelError> {
         let name = self
             .kernel
             .slots()
-            .insert_provider(&self.plugin, name.into(), provider)?;
+            .insert_provider(&self.plugin, descriptor)?;
         self.ledger().record_provider(name);
         Ok(())
     }

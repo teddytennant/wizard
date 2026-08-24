@@ -24,6 +24,7 @@ use futures_util::{Stream, StreamExt, stream};
 use serde::Deserialize;
 
 use super::provider::LlmProvider;
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::{ChatChunk, ChatOptions, ChatRequest, ChatStream, ProviderError};
 use crate::server::{ByteProgress, Progress};
 
@@ -841,6 +842,36 @@ where
         }
     })
     .boxed()
+}
+
+/// How `kind = "ollama"` is registered.
+///
+/// [`Credentials::Local`] but *not* [`ProviderDescriptor::with_local_server`]:
+/// Ollama runs on this machine, so its tokens are free, but Wizard neither
+/// spawns nor stops it and `/server` has to keep saying so.
+pub fn descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::OLLAMA,
+        "Ollama",
+        Credentials::Local,
+        |config| Ok(Arc::new(OllamaClient::new(config.base_url.clone()))),
+    )
+    .with_prepare(|config, model| async move {
+        // Loopback hosts only. The analog of llama.cpp's spawn is pulling a
+        // configured tag that is not on the server yet (onboarding's BYOM
+        // pick, a hand-written config) — but Wizard never downloads models
+        // onto somebody else's machine, so a remote Ollama is left alone.
+        if crate::server::local_port(&config.base_url).is_none() {
+            return Ok(());
+        }
+        let wait =
+            crate::progress::ServerSpinner::start_with("Checking the local model…", "model ready");
+        let outcome = OllamaClient::new(config.base_url.clone())
+            .ensure_model(&model, &wait)
+            .await;
+        wait.finish(outcome.is_ok());
+        outcome
+    })
 }
 
 #[cfg(test)]

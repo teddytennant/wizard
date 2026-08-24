@@ -566,7 +566,7 @@ mod tests {
         SessionSnapshot {
             model: "grok-4.5".to_string(),
             provider_name: "xai".to_string(),
-            provider_kind: ProviderKind::Xai,
+            provider_kind: ProviderKind::XAI,
             provider_base_url: "https://api.x.ai/v1".to_string(),
             mode: Mode::Sovereign,
             effort: None,

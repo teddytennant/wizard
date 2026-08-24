@@ -3123,7 +3123,7 @@ impl App {
                                 // xAI API key.
                                 1 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Xai,
+                                        kind: ProviderKind::XAI,
                                         name: "xai".to_string(),
                                         base_url: xai_oauth::DEFAULT_BASE_URL.to_string(),
                                         model: xai_oauth::DEFAULT_MODEL.to_string(),
@@ -3135,7 +3135,7 @@ impl App {
                                 // it alongside the key.
                                 2 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::OpenRouter,
+                                        kind: ProviderKind::OPENROUTER,
                                         name: "openrouter".to_string(),
                                         base_url: openrouter::DEFAULT_BASE_URL.to_string(),
                                         model: String::new(),
@@ -3151,7 +3151,7 @@ impl App {
                                 // GLM 5.2 and can be changed later via /model.
                                 3 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Cloudflare,
+                                        kind: ProviderKind::CLOUDFLARE,
                                         name: "cloudflare".to_string(),
                                         base_url: cloudflare::BASE_URL_TEMPLATE.to_string(),
                                         model: cloudflare::DEFAULT_MODEL.to_string(),
@@ -3165,7 +3165,7 @@ impl App {
                                 // OpenAI — model + key.
                                 4 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: "openai".to_string(),
                                         base_url: "https://api.openai.com/v1".to_string(),
                                         model: String::new(),
@@ -3179,7 +3179,7 @@ impl App {
                                 // Anthropic — model + key.
                                 5 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Anthropic,
+                                        kind: ProviderKind::ANTHROPIC,
                                         name: "claude".to_string(),
                                         base_url: "https://api.anthropic.com".to_string(),
                                         model: String::new(),
@@ -3194,7 +3194,7 @@ impl App {
                                 // prompted, starting with the name.
                                 6 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: String::new(),
                                         base_url: String::new(),
                                         model: String::new(),
@@ -3216,7 +3216,7 @@ impl App {
                                         .get(index - PROVIDER_TYPES.len())
                                     {
                                         self.begin_provider_prompt(ProviderPrompt {
-                                            kind: ProviderKind::Openai,
+                                            kind: ProviderKind::OPENAI,
                                             name: preset.name.to_string(),
                                             base_url: preset.base_url.to_string(),
                                             model: preset.default_model().to_string(),

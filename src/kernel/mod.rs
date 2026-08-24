@@ -55,7 +55,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::Value;
 
-use crate::llm::provider::LlmProvider;
+use crate::llm::registry::{self, ProviderDescriptor};
 use crate::tools::Tool;
 use crate::tools::registry::ToolRegistry;
 
@@ -168,7 +168,7 @@ pub(crate) struct Slots {
     pub(crate) services: ServiceRegistry,
     tools: Mutex<HashMap<String, Owned<Arc<dyn Tool>>>>,
     commands: Mutex<HashMap<String, Owned<Command>>>,
-    providers: Mutex<HashMap<String, Owned<Arc<dyn LlmProvider>>>>,
+    providers: Mutex<HashMap<String, Owned<ProviderDescriptor>>>,
 }
 
 impl Slots {
@@ -204,17 +204,51 @@ impl Slots {
         Ok(name)
     }
 
+    /// Register a provider, in both places it has to exist.
+    ///
+    /// A provider is the one registration whose *consumer* is not the kernel.
+    /// A tool is read out of the kernel and copied into the agent's registry;
+    /// a provider is read out of `config.toml`, by `ProviderConfig::build`,
+    /// which runs in places that hold no kernel handle at all (unit tests,
+    /// `wizard doctor`, the settings sheet's probe). So it lands in the
+    /// process-wide [`registry`] as well as in this kernel's slot, and the two
+    /// are written and swept together here rather than by a separate publish
+    /// step — a publish step is a window in which an unloaded plugin's
+    /// provider is still selectable, and "unload has to be exact" is the
+    /// reason there is a kernel.
     pub(crate) fn insert_provider(
         &self,
         owner: &PluginId,
-        name: String,
-        provider: Arc<dyn LlmProvider>,
+        descriptor: ProviderDescriptor,
     ) -> Result<String, KernelError> {
+        // The kind is the name, taken from the descriptor rather than passed
+        // alongside it, for the same reason a tool's name comes off the tool:
+        // a plugin must not be able to register under one id and answer to
+        // another.
+        let name = descriptor.kind().to_string();
         let mut map = self
             .providers
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        claim(&mut map, "provider", owner, name.clone(), provider)?;
+        claim(
+            &mut map,
+            "provider",
+            owner,
+            name.clone(),
+            descriptor.clone(),
+        )?;
+        // The global can refuse where the slot did not: a built-in already
+        // holds the kind, or another kernel does. Roll the slot back so the
+        // two never disagree about who owns a name.
+        if let Err(taken) = registry::install(descriptor) {
+            map.remove(&name);
+            return Err(KernelError::NameTaken {
+                kind: "provider",
+                name: taken.kind.to_string(),
+                holder: "a provider registered outside this kernel".to_string(),
+                claimant: owner.to_string(),
+            });
+        }
         Ok(name)
     }
 
@@ -241,7 +275,17 @@ impl Slots {
             .unwrap_or_else(PoisonError::into_inner);
         names
             .iter()
-            .filter(|name| map.remove(*name).is_some())
+            .filter(|name| {
+                // Only kinds this kernel actually holds are withdrawn from the
+                // process registry. Sweeping by name alone would let a plugin
+                // that failed to claim `anthropic` still uninstall the
+                // built-in one on its way out.
+                let owned = map.remove(*name).is_some();
+                if owned {
+                    registry::uninstall(&crate::llm::registry::ProviderKind::new(name.as_str()));
+                }
+                owned
+            })
             .count()
     }
 }
@@ -739,14 +783,14 @@ impl Kernel {
         sorted_keys(&self.inner.slots.commands)
     }
 
-    pub fn provider(&self, name: &str) -> Option<Arc<dyn LlmProvider>> {
+    pub fn provider(&self, name: &str) -> Option<ProviderDescriptor> {
         self.inner
             .slots
             .providers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(name)
-            .map(|owned| Arc::clone(&owned.value))
+            .map(|owned| owned.value.clone())
     }
 
     pub fn provider_names(&self) -> Vec<String> {

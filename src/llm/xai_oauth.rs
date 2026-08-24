@@ -20,6 +20,7 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -31,7 +32,9 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use super::oauth_callback::{self, Callback, Cancel, PasteChannel};
+use super::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use super::wire::TokenSource;
+use super::wire::{OpenAiProvider, StaticToken};
 use crate::config::Config;
 
 /// OpenID Connect discovery document for xAI accounts.
@@ -447,7 +450,7 @@ async fn complete_login(pending: PendingLogin, code: &str, state: &str) -> Resul
 pub fn provider_config() -> crate::config::ProviderConfig {
     crate::config::ProviderConfig {
         name: "xai-oauth".to_string(),
-        kind: crate::config::ProviderKind::XaiOauth,
+        kind: crate::config::ProviderKind::XAI_OAUTH,
         base_url: DEFAULT_BASE_URL.to_string(),
         model: DEFAULT_MODEL.to_string(),
         api_key_env: None,
@@ -951,6 +954,53 @@ impl TokenSource for XaiTokenSource {
              set XAI_API_KEY and use a provider with kind \"xai\" instead",
         )
     }
+}
+
+/// How `kind = "xai"` is registered — the plain-API-key flavor.
+///
+/// It lives in the OAuth module because that is where the base URL, the
+/// default model and `XAI_API_KEY` already are, and splitting one backend's
+/// constants across two files to satisfy a filename is worse than the mild
+/// surprise of finding the keyed flavor here. Only the credentials differ
+/// between the two: both speak OpenAI-compatible Chat Completions under the
+/// `xai` vendor label.
+pub fn key_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::XAI,
+        "xAI",
+        Credentials::ApiKey {
+            default_env: Some(DEFAULT_KEY_ENV.to_string()),
+        },
+        |config| {
+            Ok(Arc::new(OpenAiProvider::with_token_source(
+                config.base_url.clone(),
+                config.model.clone(),
+                Arc::new(StaticToken::new(config.api_key())),
+                "xai",
+            )))
+        },
+    )
+}
+
+/// How `kind = "xaioauth"` is registered — the account sign-in flavor, whose
+/// credential is the token store rather than a key.
+pub fn oauth_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor::new(
+        ProviderKind::XAI_OAUTH,
+        "xAI",
+        Credentials::Account {
+            login: "xai".to_string(),
+        },
+        |config| {
+            let source = XaiTokenSource::new().context("setting up xAI OAuth token storage")?;
+            Ok(Arc::new(OpenAiProvider::with_token_source(
+                config.base_url.clone(),
+                config.model.clone(),
+                Arc::new(source),
+                "xai",
+            )))
+        },
+    )
 }
 
 #[cfg(test)]

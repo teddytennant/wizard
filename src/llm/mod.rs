@@ -3,6 +3,7 @@
 //! registry, and the TUI.
 
 pub mod anthropic;
+pub mod builtin;
 pub mod chatgpt;
 pub mod chatgpt_oauth;
 pub mod cloudflare;
@@ -14,6 +15,7 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod provider;
+pub mod registry;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod wire;

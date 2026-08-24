@@ -208,7 +208,7 @@ async fn a_live_turn_reaches_the_window_as_transcript_items() {
     let mut config = Config::default();
     config.providers = vec![ProviderConfig {
         name: "scripted".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model: "test-model".to_string(),
         api_key_env: None,
@@ -382,7 +382,7 @@ async fn a_branched_claude_session_opens_from_the_picker_and_continues() {
     let mut config = Config::default();
     config.providers = vec![ProviderConfig {
         name: "scripted".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model: "test-model".to_string(),
         api_key_env: None,
@@ -1353,7 +1353,7 @@ async fn a_prompting_command_is_answered_from_this_window() {
     let mut config = Config::default();
     config.providers = vec![ProviderConfig {
         name: "scripted".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model: "test-model".to_string(),
         api_key_env: None,
@@ -1478,7 +1478,7 @@ async fn an_unattended_manager_announces_no_console() {
     let mut config = Config::default();
     config.providers = vec![ProviderConfig {
         name: "scripted".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model: "test-model".to_string(),
         api_key_env: None,
