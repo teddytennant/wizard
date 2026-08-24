@@ -59,8 +59,9 @@ use crate::llm::registry::{self, ProviderDescriptor};
 use crate::tools::Tool;
 use crate::tools::registry::ToolRegistry;
 
+pub use crate::commands::{CommandHandler, PluginCommand};
 pub use bus::{Dispatch, Event, EventBus, EventHandler, HandlerId, Verdict};
-pub use ctx::{Command, CommandHandler, Ctx};
+pub use ctx::Ctx;
 pub use lifecycle::{DisposalReport, Effect, Ledger, LoadedPlugin, PluginId, PluginKind};
 pub use manifest::{Capability, CapabilitySet, PluginManifest, PluginSource};
 pub use services::{Service, ServiceRef, ServiceRegistry};
@@ -167,7 +168,7 @@ pub(crate) struct Slots {
     pub(crate) bus: EventBus,
     pub(crate) services: ServiceRegistry,
     tools: Mutex<HashMap<String, Owned<Arc<dyn Tool>>>>,
-    commands: Mutex<HashMap<String, Owned<Command>>>,
+    commands: Mutex<HashMap<String, Owned<PluginCommand>>>,
     providers: Mutex<HashMap<String, Owned<ProviderDescriptor>>>,
 }
 
@@ -193,20 +194,48 @@ impl Slots {
         Ok(name)
     }
 
+    /// Register a slash command, in both places it has to exist.
+    ///
+    /// The second registration whose *consumer* is not the kernel, and it goes
+    /// the same way [`Slots::insert_provider`] does and for the same reason.
+    /// (This is also the second place the "additive and dormant" rule at the
+    /// top of this file is narrower than it reads: the palette merges the
+    /// registry on every keystroke, and it is empty because nothing loads a
+    /// plugin yet, not because nothing reads it.)
+    /// `SlashCommand::parse` is called from `App::submit`, from the window's
+    /// `route`, from the gateway's `apply_command` — none of which hold a
+    /// kernel handle — so the palette resolves a `/name` against the
+    /// process-wide [`crate::commands::plugin`] registry. Written and swept
+    /// here together with this kernel's slot rather than by a later publish
+    /// step, because a publish step is a window in which an unloaded plugin's
+    /// command still resolves.
     pub(crate) fn insert_command(
         &self,
         owner: &PluginId,
-        command: Command,
+        command: PluginCommand,
     ) -> Result<String, KernelError> {
         let name = command.name.clone();
         let mut map = self.commands.lock().unwrap_or_else(PoisonError::into_inner);
-        claim(&mut map, "command", owner, name.clone(), command)?;
+        claim(&mut map, "command", owner, name.clone(), command.clone())?;
+        // The global can refuse where the slot did not: a built-in owns the
+        // name, or another kernel's plugin took it. Roll the slot back so the
+        // two never disagree about who owns a name.
+        if let Err(taken) = crate::commands::plugin::install(owner.as_str(), command) {
+            map.remove(&name);
+            return Err(KernelError::NameTaken {
+                kind: "command",
+                name: taken.name,
+                holder: taken.holder,
+                claimant: owner.to_string(),
+            });
+        }
         Ok(name)
     }
 
     /// Register a provider, in both places it has to exist.
     ///
-    /// A provider is the one registration whose *consumer* is not the kernel.
+    /// A provider was the first registration whose *consumer* is not the kernel
+    /// ([`Slots::insert_command`] is the other, and followed this one).
     /// A tool is read out of the kernel and copied into the agent's registry;
     /// a provider is read out of `config.toml`, by `ProviderConfig::build`,
     /// which runs in places that hold no kernel handle at all (unit tests,
@@ -264,7 +293,18 @@ impl Slots {
         let mut map = self.commands.lock().unwrap_or_else(PoisonError::into_inner);
         names
             .iter()
-            .filter(|name| map.remove(*name).is_some())
+            .filter(|name| {
+                // Only names this kernel actually holds are withdrawn from the
+                // process registry, for the same reason as
+                // [`Slots::remove_providers`]: sweeping by name alone would let
+                // a plugin that failed to claim `/deploy` uninstall the one
+                // that holds it on its way out.
+                let owned = map.remove(*name).is_some();
+                if owned {
+                    crate::commands::plugin::uninstall(name);
+                }
+                owned
+            })
             .count()
     }
 
@@ -769,7 +809,7 @@ impl Kernel {
         sorted_keys(&self.inner.slots.tools)
     }
 
-    pub fn command(&self, name: &str) -> Option<Command> {
+    pub fn command(&self, name: &str) -> Option<PluginCommand> {
         self.inner
             .slots
             .commands

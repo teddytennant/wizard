@@ -74,7 +74,7 @@ without redesigning it.
 | Call | Effect |
 | --- | --- |
 | `ctx:tool(spec)` | register a tool the model can call |
-| `ctx:command(spec)` | register a slash command |
+| `ctx:command(spec)` | register a slash command (name, description, `args` hint, `surfaces`) |
 | `ctx:provider(spec)` | register a backend `config.toml` can select |
 | `ctx:on(event, handler, priority)` | subscribe to a lifecycle event |
 | `ctx:emit(event, payload)` | publish one |
@@ -299,6 +299,72 @@ as a separate publish step, the way `install_tools_into` works, would leave a
 window in which an unloaded plugin's provider was still selectable, and exact
 unload is the reason there is a kernel
 (`a_plugin_registered_provider_is_selectable_from_config`).
+
+**`SlashCommand` stayed a closed enum, and gained one open variant.** The
+provider kind became a string plus a lookup because a closed enum meant no
+provider could be a plugin. The same argument applies to slash commands and the
+same fix does not: `SlashCommand` has 260 use sites, and unlike `ProviderKind`
+its variants carry *parsed arguments* (`Mode`, `ReasoningEffort`, `UltraConfig`,
+`ImportSelection`) that the one dispatcher matches on exhaustively. Turning it
+into a string would push that parsing back out to the surfaces, which is the
+drift `src/commands/` exists to prevent.
+
+So the enum is the built-in spelling and `SlashCommand::Plugin { name, args }`
+is the escape hatch, carrying the registered name and the raw rest of the line.
+A plugin command is a `PluginCommand` in a runtime registry
+(`src/commands/plugin.rs`) rather than a variant, and the two are merged by
+`commands::listing(surface)` — the one list every surface completes, helps and
+advertises from. First-class means all four of those: a plugin's `/name`
+completes in the TUI popup and the window's palette, appears in `/help` and in
+Telegram's `setMyCommands`, parses through `SlashCommand::parse`, and runs
+through `commands::surface::dispatch` with no second path
+(`a_plugin_command_runs_through_the_one_dispatcher`).
+
+**Surface gating for a plugin command is availability, not a column.** A plugin
+declares which surfaces it runs on (`PluginCommand::only`, or `surfaces = {...}`
+from Lua) and the registry answers `Execution::Agent` there and
+`Execution::Unavailable` everywhere else. The `Agent`/`Ui` split answers "which
+half of a two-halved surface owns this command's semantics", and a plugin
+command's semantics are in neither half — they are in the plugin. What the split
+decides in practice is where the dispatch runs, and the agent-holding half is
+the honest answer: it has a runtime, it is the only half the gateway has at all,
+and it puts the output in the transcript in typed order. So `only(&[Surface::Tui])`
+is a genuine "TUI only", enforced by the same line of `dispatch` that enforces
+`/vim`'s (`a_plugin_command_can_be_tui_only_and_is_refused_elsewhere`).
+
+**A command is registered in two places at once, like a provider.** For the same
+reason: `SlashCommand::parse` runs in `App::submit`, in the window's `route` and
+in the gateway's `apply_command`, none of which hold a kernel handle. So
+`insert_command` writes the kernel's slot *and* the process-wide registry in one
+step, and `remove_commands` sweeps both
+(`a_plugin_registered_command_reaches_the_palette_and_leaves_with_the_plugin`).
+
+**Conflict policy: the built-in keeps the name, and the first plugin keeps it
+after that.** A claim on a name a built-in owns — including `/q`, which is a
+parser alias with no table row — is refused, logged with both sides, and leaves
+nothing behind in either registry
+(`a_plugin_cannot_shadow_a_built_in_slash_command`). Shadowing was the
+alternative and is wrong here specifically because a slash command is muscle
+memory: `/clear` is typed without reading, and a plugin that quietly took it
+would be discovered by losing a conversation, whereas a plugin's `/todo` failing
+to appear is discovered by reading `/help`. The refusal is a `Result`, so a
+plugin with a fallback name can catch it and carry on.
+
+**A plugin command is not on the agent's `run_command` allowlist.** Every entry
+of that allowlist is an argument about one command's blast radius — read-only?
+needs a human at a picker? reaches outside the session? — made in
+`SlashCommand::agent_runnable`. A plugin cannot make that argument about itself,
+and an `agent_runnable = true` field would be a plugin grading its own homework.
+A plugin that wants to be model-callable registers a *tool*, which is the API
+that already carries a capability grant. This is the one place a plugin command
+is deliberately not equal to a built-in.
+
+**No command is a plugin yet.** The thirteen the migration earmarks — `/evolve`,
+`/publish`, `/fusion`, `/ultra`, `/server`, `/login`, `/resume-claude`, the
+`ImportClaude` half of `/settings`, `/memory`, `/doctor`, `/todos`, `/cost`,
+`/compact` — are still built-ins in `COMMANDS`, still compiled in, still
+registered eagerly, and none is behind a cargo feature. As with the providers:
+the door is open and nothing has gone through it.
 
 **One file still names every shipped provider.** `src/llm/builtin.rs` is the
 provider half of the `src/plugins/mod.rs` this document describes, and it is the

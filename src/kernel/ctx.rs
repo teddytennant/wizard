@@ -35,11 +35,11 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::Value;
 
+use crate::commands::PluginCommand;
 use crate::llm::registry::ProviderDescriptor;
 use crate::tools::Tool;
 
@@ -48,66 +48,6 @@ use super::lifecycle::{Effect, Ledger, PluginId};
 use super::manifest::{Capability, CapabilitySet, PluginManifest, PluginSource};
 use super::services::{Service, ServiceRef};
 use super::{HostBridge, Kernel, KernelError, Plugin};
-
-/// What a slash command's handler returns.
-pub type CommandFuture = Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'static>>;
-
-/// A slash command a plugin registered.
-pub trait CommandHandler: Send + Sync + 'static {
-    fn run(&self, args: String) -> CommandFuture;
-}
-
-impl<F, Fut> CommandHandler for F
-where
-    F: Fn(String) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = anyhow::Result<String>> + Send + 'static,
-{
-    fn run(&self, args: String) -> CommandFuture {
-        Box::pin(self(args))
-    }
-}
-
-/// One `/name` a plugin added to the palette.
-///
-/// Deliberately not [`crate::commands::SlashCommand`]: that enum is closed and
-/// exhaustively matched in a dozen places, and a plugin command has to be a
-/// value rather than a variant. The palette merges the two; neither knows about
-/// the other.
-#[derive(Clone)]
-pub struct Command {
-    /// Without the leading slash.
-    pub name: String,
-    /// One line for the palette.
-    pub description: String,
-    pub handler: Arc<dyn CommandHandler>,
-}
-
-impl Command {
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        handler: Arc<dyn CommandHandler>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            description: description.into(),
-            handler,
-        }
-    }
-
-    pub async fn run(&self, args: impl Into<String>) -> anyhow::Result<String> {
-        self.handler.run(args.into()).await
-    }
-}
-
-impl std::fmt::Debug for Command {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Command")
-            .field("name", &self.name)
-            .field("description", &self.description)
-            .finish()
-    }
-}
 
 /// The plugin-facing API.
 ///
@@ -211,7 +151,19 @@ impl Ctx {
     }
 
     /// `ctx:command(spec)` — register a slash command.
-    pub fn command(&self, command: Command) -> Result<(), KernelError> {
+    ///
+    /// A [`PluginCommand`] rather than a type of the kernel's own, for the same
+    /// reason [`Ctx::provider`] takes a [`ProviderDescriptor`]: the consumer
+    /// defines the shape. What a slash command *is* — a name, an argument hint,
+    /// a description, which surfaces run it — is `src/commands/`'s question,
+    /// and a second answer here would be a second thing for the palette to
+    /// merge.
+    ///
+    /// Refuses a name a built-in owns or another plugin already registered; see
+    /// [`crate::commands::plugin`] for why it refuses rather than shadows. The
+    /// caller may discard the error and carry on — a warning is logged either
+    /// way — which is the degrade path a plugin with a fallback name wants.
+    pub fn command(&self, command: PluginCommand) -> Result<(), KernelError> {
         let name = self.kernel.slots().insert_command(&self.plugin, command)?;
         self.ledger().record_command(name);
         Ok(())

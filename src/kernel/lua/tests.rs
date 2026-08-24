@@ -544,8 +544,10 @@ async fn a_lua_command_runs() {
         return {
           apply = function(ctx)
             ctx:command {
-              name = "greet",
+              name = "luagreet",
               description = "says hello",
+              args = "[name]",
+              surfaces = { "tui" },
               run = function(args) return "hello " .. args end,
             }
           end,
@@ -554,9 +556,45 @@ async fn a_lua_command_runs() {
     )
     .await
     .expect("loads");
-    let command = kernel.command("greet").expect("registered");
+    let command = kernel.command("luagreet").expect("registered");
     assert_eq!(command.description, "says hello");
     assert_eq!(command.run("world").await.unwrap(), "hello world");
+
+    // The optional keys are the same knobs a Rust plugin has, which is the
+    // point of the `Ctx` shape being identical in both languages.
+    assert_eq!(command.args, "[name]");
+    assert!(command.takes_args);
+    assert_eq!(
+        command.execution(crate::commands::Surface::Tui),
+        crate::commands::Execution::Agent
+    );
+    assert_eq!(
+        command.execution(crate::commands::Surface::Gateway),
+        crate::commands::Execution::Unavailable
+    );
+
+    // And an unknown surface name is refused rather than skipped: a skipped
+    // one is a command silently missing from the surface it was meant for.
+    let err = load(
+        &kernel,
+        "typo",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            ctx:command {
+              name = "luatypo",
+              run = function() return "" end,
+              surfaces = { "terminal" },
+            }
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect_err("'terminal' is not a surface");
+    assert!(err.to_string().contains("terminal"), "{err}");
 }
 
 #[tokio::test]

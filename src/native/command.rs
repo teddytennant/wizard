@@ -51,7 +51,7 @@ use crate::agent::RewindCandidate;
 use crate::commands::surface::{
     Chooser, CommandSurface, Panel, PlanState, SessionSnapshot, Surface, dispatch,
 };
-use crate::commands::{CommandSpec, CustomCommand, Execution, SlashCommand};
+use crate::commands::{CustomCommand, Execution, SlashCommand};
 use crate::config::{Mode, ReasoningEffort};
 use crate::native::theme::Palette;
 use crate::native::widget::chrome;
@@ -352,7 +352,7 @@ pub fn route(line: &str, custom: &[CustomCommand]) -> Route {
         Ok(command) => command,
         Err(why) => return Route::Refused(why),
     };
-    match command.spec().execution(Surface::Gui) {
+    match command.execution(Surface::Gui) {
         Execution::Agent => {
             let body = line.trim().trim_start_matches('/');
             let (name, args) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
@@ -386,7 +386,7 @@ pub async fn run(
 /// One row of the palette.
 pub struct Entry {
     pub name: String,
-    pub args: &'static str,
+    pub args: String,
     pub detail: String,
     /// A workspace's own `.wizard/commands/*.md`.
     pub custom: bool,
@@ -429,15 +429,17 @@ impl Menu {
             return Vec::new();
         };
         let prefix = prefix.to_lowercase();
-        let mut out: Vec<Entry> = crate::commands::COMMANDS
-            .iter()
-            .filter(|spec: &&CommandSpec| spec.name.starts_with(&prefix))
-            .map(|spec| Entry {
-                name: spec.name.to_string(),
-                args: spec.args,
-                detail: spec.description.to_string(),
+        // Built-ins in table order, then plugin commands by name — one merged
+        // list, so a plugin's `/name` completes here exactly as `/model` does.
+        let mut out: Vec<Entry> = crate::commands::listing(Surface::Gui)
+            .into_iter()
+            .filter(|row| row.name.starts_with(&prefix))
+            .map(|row| Entry {
+                name: row.name,
+                args: row.args,
+                detail: row.description,
                 custom: false,
-                unavailable: spec.execution(Surface::Gui) == Execution::Unavailable,
+                unavailable: row.execution == Execution::Unavailable,
             })
             .collect();
         out.extend(
@@ -447,8 +449,8 @@ impl Menu {
                 .map(|command| Entry {
                     name: command.name.clone(),
                     args: match command.expects_args() {
-                        true => "[args]",
-                        false => "",
+                        true => "[args]".to_string(),
+                        false => String::new(),
                     },
                     detail: command.description.clone().unwrap_or_default(),
                     custom: true,
@@ -508,7 +510,7 @@ impl Menu {
                             .size(chrome::UI)
                             .font(crate::native::font::MONO)
                             .color(palette.color(dim)),
-                        text(entry.args)
+                        text(entry.args.clone())
                             .size(chrome::LITERAL)
                             .font(crate::native::font::MONO)
                             .color(palette.color(Token::Faint)),
@@ -756,6 +758,80 @@ mod tests {
         assert!(vim[0].unavailable);
     }
 
+    /// The window's palette merges the plugin registry the same way the TUI's
+    /// popup does, and routes a plugin command to the worker that holds the
+    /// agent — which is where `Execution::Agent` says a plugin command runs.
+    #[test]
+    fn the_palette_lists_and_routes_a_plugin_command() {
+        struct Held(&'static str);
+        impl Drop for Held {
+            fn drop(&mut self) {
+                crate::commands::plugin::uninstall(self.0);
+            }
+        }
+
+        let _held = Held("zznativeprobe");
+        crate::commands::plugin::install(
+            "native-test",
+            crate::commands::PluginCommand::new(
+                "zznativeprobe",
+                "a probe",
+                std::sync::Arc::new(|_: String| async move { Ok(String::new()) }),
+            )
+            .args("[thing]"),
+        )
+        .expect("the name is free");
+
+        let palette = Menu::default();
+        let rows = palette.matches("/zznative");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "zznativeprobe");
+        assert_eq!(rows[0].args, "[thing]");
+        assert!(!rows[0].unavailable, "it runs in the window");
+        assert!(!rows[0].custom, "it is not a workspace markdown command");
+
+        assert_eq!(
+            route("/zznativeprobe here", &[]),
+            Route::Agent {
+                name: "zznativeprobe".to_string(),
+                args: "here".to_string(),
+            }
+        );
+    }
+
+    /// A plugin that restricted itself to the terminal is listed dimmed and
+    /// routed to the window, where `dispatch` refuses it by name — the same
+    /// treatment `/vim` gets, through the same code.
+    #[test]
+    fn a_terminal_only_plugin_command_is_dimmed_and_refused_here() {
+        struct Held(&'static str);
+        impl Drop for Held {
+            fn drop(&mut self) {
+                crate::commands::plugin::uninstall(self.0);
+            }
+        }
+
+        let _held = Held("zznativeonlytui");
+        crate::commands::plugin::install(
+            "native-test",
+            crate::commands::PluginCommand::new(
+                "zznativeonlytui",
+                "a probe",
+                std::sync::Arc::new(|_: String| async move { Ok(String::new()) }),
+            )
+            .only(&[Surface::Tui]),
+        )
+        .expect("the name is free");
+
+        let rows = Menu::default().matches("/zznativeonly");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].unavailable);
+        assert!(matches!(
+            route("/zznativeonlytui", &[]),
+            Route::Window(SlashCommand::Plugin { .. })
+        ));
+    }
+
     /// The cursor wraps in both directions, so ↑ from the first row reaches the
     /// last one.
     #[test]
@@ -766,7 +842,7 @@ mod tests {
         for name in ["planner", "plantuml"] {
             menu.entries.push(Entry {
                 name: name.to_string(),
-                args: "",
+                args: String::new(),
                 detail: String::new(),
                 custom: true,
                 unavailable: false,

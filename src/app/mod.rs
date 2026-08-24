@@ -39,7 +39,7 @@ use serde_json::Value;
 use crate::agent::{Agent, AgentEvent, DoneReason, PlanVerdict, ultra};
 // The built-in command table and its parser live in [`crate::commands`].
 use crate::commands::CustomCommand;
-use crate::commands::{COMMANDS, ProviderAction, SlashCommand, UltraAction};
+use crate::commands::{ProviderAction, SlashCommand, Surface, UltraAction};
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::event::Event;
 use crate::image_view::ImageCache;
@@ -223,8 +223,10 @@ pub struct App {
     pub should_quit: bool,
     /// Tick counter driving the busy spinner.
     pub tick: u64,
-    /// Matching commands (builtin [`COMMANDS`] plus custom commands) for the
-    /// current `/input`, shown as the suggestion popup.
+    /// Matching commands for the current `/input`, shown as the suggestion
+    /// popup: everything [`crate::commands::available`] offers this surface —
+    /// the built-in table and whatever plugins registered — plus the
+    /// workspace's own custom commands.
     pub suggestions: Vec<Suggestion>,
     /// Highlighted row in `suggestions`.
     pub suggestion_index: usize,
@@ -1714,8 +1716,11 @@ impl App {
             self.suggestion_index = 0;
             return;
         }
-        // Builtins in display order, then custom commands (already sorted).
-        let candidates: Vec<Suggestion> = COMMANDS
+        // Builtins in display order, then plugin commands by name, then custom
+        // commands (already sorted). Anything this surface cannot run is left
+        // out rather than offered and then refused — the window dims those
+        // instead, because it has the room to.
+        let candidates: Vec<Suggestion> = crate::commands::available(Surface::Tui)
             .iter()
             .map(Suggestion::from)
             .chain(self.custom_commands.iter().map(Suggestion::from))
@@ -3467,7 +3472,7 @@ impl App {
                 self.suggestions[self.suggestion_index.min(self.suggestions.len() - 1)].clone();
             // An exactly-typed command always runs as typed; otherwise Enter
             // completes the highlighted suggestion first.
-            let exact = COMMANDS.iter().any(|command| command.name == typed)
+            let exact = crate::commands::is_known(&typed)
                 || self.custom_commands.iter().any(|c| c.name == typed);
             if !exact && typed != spec.name {
                 let takes_args = spec.takes_args;
