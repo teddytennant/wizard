@@ -265,3 +265,46 @@ registry plugins run bounded and lose it.
 **A spinning plugin cannot be rescued by `tokio::time::timeout`.** Blocking Lua
 never yields, so the timeout future is never polled. The in-VM hook is the only
 real bound, which is why the above matters.
+
+## As built: where the kernel departs from the design above
+
+The kernel is implemented and the design above is what it was built from, so the
+places it could not be followed are corrections, not notes. Each is pinned by a
+test.
+
+**`ctx:provider` is Rust-only.** The design says the `Ctx` shape is identical in
+both languages. It is not, and cannot be: an `LlmProvider` is TLS and SSE
+framing, which is the half this document itself puts in Rust. The call exists on
+the Lua table and refuses, naming the reason
+(`a_provider_cannot_be_registered_from_lua`).
+
+**Capabilities are finer-grained than `Stdlib` is.** `Stdlib::Sandboxed` drops
+`os` and `io` wholesale, so `filesystem` and `process` would both have to open
+the full standard library and would each imply the other. `narrow_stdlib` closes
+the gap by blanking the *other* capability's names: `filesystem` alone gets
+`io.open` without `os.execute`, `process` alone the reverse. Confinement of
+`wizard.fs.*` follows the `filesystem` capability specifically rather than the
+library profile, so a `process`-only plugin is still pinned to the project
+directory.
+
+**A service cannot be taken back from whoever injected it.** "Provided services
+are withdrawn from anyone who injected them" is not implementable as written,
+because `inject` hands out an `Arc` and an `Arc` cannot be revoked. Plain
+`inject` therefore returns a snapshot that stays alive; `ServiceRef` re-resolves
+by name on each use and starts answering `None` the instant its provider
+unloads. Use `ServiceRef` for anything held across a possible unload.
+
+**A bound is per call, not per lifetime.** The memory ceiling applies
+continuously, but the compute deadline is pushed on each call and the latched
+stop flag is cleared when the VM goes idle. Read literally, a lifetime deadline
+would kill a plugin loaded at 09:00 thirty seconds later.
+
+**There is no `lua/sandbox.rs`.** The file list above names one; the spike
+section says to reuse `src/tools/lua.rs` rather than reimplement it. The latter
+won, so `lua/` has two files. `sandboxed_libs` and `blank_globals` widened to
+`pub(crate)` — the alternative was a second copy of the one allowlist whose
+accidental widening is a supply-chain hole.
+
+**Handler priority: lower runs first.** `DEFAULT_PRIORITY` is 0 and the type is
+signed, so a plugin can order itself ahead of everything without knowing how many
+others exist.
