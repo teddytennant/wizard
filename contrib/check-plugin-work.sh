@@ -35,8 +35,15 @@ step "unused dependencies"
 # ships, and still shows up in `cargo deny`.
 if command -v cargo-machete >/dev/null 2>&1; then
     cargo machete || bad "cargo machete found unused dependencies"
+elif command -v nix >/dev/null 2>&1; then
+    # Not installed on the NixOS box this migration runs on, and skipping it is
+    # not harmless here: the whole point of moving Rust into Lua plugins is that
+    # crates stop being used, and this is the only check that notices.
+    nix run nixpkgs#cargo-machete -- --help >/dev/null 2>&1 \
+        && { nix run nixpkgs#cargo-machete || bad "cargo machete found unused dependencies"; } \
+        || printf 'skipped: could not obtain cargo-machete\n'
 else
-    printf 'skipped: cargo-machete not installed\n'
+    bad "cargo-machete unavailable and no nix to fetch it; unused deps would go unnoticed"
 fi
 
 step "tests"
