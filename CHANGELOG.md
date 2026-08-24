@@ -28,6 +28,22 @@ Nothing below is released yet and the plugin API is not stable.
   The sandbox is the one `src/tools/lua.rs` already had: a runaway plugin is
   stopped on its deadline whether it spins bare, spins after an await, or spins
   inside a `pcall`.
+- **Every LLM provider is a plugin.** All nine shipped kinds now live in
+  `src/plugins/` behind seven cargo features, one per *backend* rather than per
+  kind: `xai`/`xaioauth` are one endpoint differing only in where the bearer
+  token comes from, and `openrouter` is the `openai` kind with a fixed base URL.
+  `src/llm/builtin.rs` is gone and the registry starts empty. Each feature is
+  independently removable, checked by `contrib/check-provider-plugins.sh`, which
+  builds and tests every leave-one-out set rather than trusting that it compiles.
+- **A Lua plugin can do real work.** `wizard.http`, `wizard.process`,
+  `wizard.model`, `wizard.ui`, `wizard.agent` and `wizard.fs` are wired to the
+  implementations Wizard already had -- the same HTTP client and SSRF guard as
+  `web_fetch`, the same process-group kill as `execute`, the same subagent tool
+  the model calls -- rather than second copies. A capability a plugin did not
+  declare is absent, not present-and-refusing. Model spend is billed to the
+  session the way a subagent's is, and a plugin's prompt cannot drive
+  compaction. In-flight fetches, completions and child processes all observe the
+  turn's cancel handle.
 - **`--no-default-features` is meaningful.** It builds, passes its own suite, and
   runs, with the Anthropic provider genuinely absent -- `kind = "anthropic"`
   degrades to a named error rather than a panic. Removing any one plugin has to
