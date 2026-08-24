@@ -1083,9 +1083,16 @@ async fn the_host_file_helpers_are_confined_without_the_filesystem_capability() 
 
 #[tokio::test]
 async fn a_capability_a_plugin_did_not_declare_cannot_be_reached_through_require() {
-    // `require("jit")` used to be a way back to the real `jit` table;
-    // `disable_jit` repoints `package.loaded.jit` for exactly that reason. This
-    // asserts the frozen table survives a bounded plugin's `require`.
+    // `require("jit")` used to be a way back to the real `jit` table --
+    // `disable_jit` repoints `package.loaded.jit` for exactly that reason --
+    // and this asserted the frozen table survived it.
+    //
+    // `narrow_stdlib` now removes `require` and `package` from every plugin,
+    // because `package.loadlib` was a way back to *native code* and no
+    // capability in the table means that. So the route is gone rather than
+    // guarded, which is the stronger property; what is asserted here is that it
+    // is really gone, and that `jit` itself is still the frozen stand-in for a
+    // plugin that reaches the global directly.
     let dir = TempDir::new("cap-require");
     let kernel = kernel_with_host(&dir.path, RecordingHost::arc(), Duration::from_secs(5));
     load(
@@ -1099,8 +1106,10 @@ async fn a_capability_a_plugin_did_not_declare_cannot_be_reached_through_require
             ctx:tool {
               name = "peek",
               execute = function()
-                local jit2 = require("jit")
-                return tostring(jit2.on == nil) .. "/" .. tostring(jit2.status())
+                return "require=" .. tostring(require ~= nil)
+                  .. " package=" .. tostring(package ~= nil)
+                  .. " jit.on=" .. tostring(jit.on == nil)
+                  .. " jit.status=" .. tostring(jit.status())
               end,
             }
           end,
@@ -1109,7 +1118,10 @@ async fn a_capability_a_plugin_did_not_declare_cannot_be_reached_through_require
     )
     .await
     .expect("loads");
-    assert_eq!(call(&kernel, "peek", json!({})).await, "true/false");
+    assert_eq!(
+        call(&kernel, "peek", json!({})).await,
+        "require=false package=false jit.on=true jit.status=false"
+    );
 }
 
 #[tokio::test]
@@ -1199,4 +1211,55 @@ async fn a_named_plugin_loads_from_source() {
     .expect("loads");
     assert_eq!(id.as_str(), "named");
     assert!(kernel.is_loaded(&id));
+}
+
+/// A plugin that declared only `filesystem` must not be able to load native
+/// code.
+///
+/// `narrow_stdlib` blanks the other capability's names, but `package` was left
+/// alone to match what every `Stdlib::Full` script has always had. That is
+/// defensible for a locally authored tool, whose author is the user, and wrong
+/// for a plugin: `package.loadlib` maps a `.so` into the process and calls it,
+/// which is `ffi` wearing a different name and is not reachable from any
+/// capability in the table. A plugin that asks for `filesystem` -- the mildest
+/// grant a text-munging plugin needs -- would be granted arbitrary native
+/// execution as a side effect, and the capability list a user reads at install
+/// time would be a description of nothing.
+#[tokio::test]
+async fn a_capability_grant_does_not_smuggle_in_native_code_loading() {
+    let dir = TempDir::new("lua-loadlib");
+    let kernel = kernel_with_host(&dir.path, RecordingHost::arc(), Duration::from_secs(5));
+    load(
+        &kernel,
+        "prober",
+        &[Capability::Filesystem],
+        PluginSource::Registry,
+        r#"
+        return {
+          apply = function(ctx)
+            ctx:tool {
+              name = "probe",
+              execute = function()
+                local reach = {}
+                reach[#reach+1] = "package=" .. tostring(package ~= nil)
+                reach[#reach+1] = "loadlib=" ..
+                  tostring(package ~= nil and package.loadlib ~= nil)
+                reach[#reach+1] = "require=" .. tostring(require ~= nil)
+                reach[#reach+1] = "cpath=" ..
+                  tostring(package ~= nil and package.cpath ~= nil)
+                return table.concat(reach, " ")
+              end,
+            }
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("the prober loads");
+
+    let reached = call(&kernel, "probe", serde_json::json!({})).await;
+    assert_eq!(
+        reached, "package=false loadlib=false require=false cpath=false",
+        "a filesystem grant must not reach the native-library loader: {reached}"
+    );
 }

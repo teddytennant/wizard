@@ -60,6 +60,16 @@ Nothing below is released yet and the plugin API is not stable.
 
 ### Fixed
 
+- **A plugin capability did not mean what it said.** `filesystem` and `process`
+  each opened the full Lua standard library, and the narrowing that takes the
+  other one's names back left `package` in place. So a plugin that declared
+  `filesystem` -- the mildest thing a text-munging plugin asks for -- could call
+  `package.loadlib`, map a native library into the process and run it, which is
+  every capability at once and is not any of the six. `require` reached the same
+  loader through `package.cpath`. Both are now removed from every plugin
+  whatever it declared, because no grant in the table means "load and execute
+  arbitrary native code". Locally authored scripted tools are unaffected: they
+  do not run through the plugin host, and their author is the user.
 - **`/provider add` accepted fewer kinds than the config file did.** Its
   hand-written list of eight omitted `chatgptoauth`, so it rejected a spelling
   Wizard itself would load. The list and its usage string are generated from the

@@ -229,6 +229,24 @@ pub(crate) fn narrow_stdlib(lua: &Lua, caps: &CapabilitySet) -> mlua::Result<()>
         }
     }
 
+    // `package` goes for everyone, whatever they declared.
+    //
+    // It is not gated because there is no grant it could hang off: none of the
+    // six capabilities means "load and execute arbitrary native code", and
+    // `package.loadlib` maps a `.so` into this process and calls it, which is
+    // `ffi` under another name. `require` reaches the same loader through
+    // `package.cpath`.
+    //
+    // Leaving it alone is what `Stdlib::Full` has always done, and for a
+    // locally authored scripted tool that is right: its author is the user, and
+    // `src/tools/lua.rs` is unaffected by this function. A plugin is different.
+    // It can arrive from the registry, its capabilities are what the install
+    // prompt shows the user, and `filesystem` -- the mildest thing a
+    // text-munging plugin asks for -- would otherwise carry native execution in
+    // with it, making that prompt a description of nothing.
+    globals.set("require", LuaValue::Nil)?;
+    globals.set("package", LuaValue::Nil)?;
+
     Ok(())
 }
 
