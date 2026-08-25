@@ -79,8 +79,8 @@ const STDIO_ENV_DENYLIST: &[&str] = &[
 /// server's tool rather than colliding with it, so the server's tool goes
 /// unreachable with no warning to anyone. A unit test enforces the list.
 ///
-/// The three web tools are on it unconditionally although they are a plugin
-/// (`--features tool-web`), because this list is about *names*: a name Wizard
+/// The web tools, the two git tools and `publish` are on it unconditionally
+/// although each is a plugin, because this list is about *names*: a name Wizard
 /// itself can register must not be claimable by an MCP server on a build that
 /// happens to have left the plugin out, or the server's `web_fetch` would work
 /// until somebody rebuilt with the feature on and then collide. Holding the
@@ -110,6 +110,7 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "run_command",
     "compact",
     "computer",
+    "publish",
     "spawn_subagent",
     crate::tools::code::RUN_CODE_TOOL_NAME,
 ];
@@ -1336,6 +1337,9 @@ mod tests {
         }
         if !cfg!(feature = "tool-git") {
             absent.extend(["git_status", "git_diff"]);
+        }
+        if !cfg!(feature = "tool-publish") {
+            absent.extend(["publish"]);
         }
         assert_eq!(
             extra, absent,

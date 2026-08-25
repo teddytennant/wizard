@@ -116,6 +116,8 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use serde_json::Value;
+
 use crate::kernel::{Kernel, KernelOptions, Plugin, PluginSource};
 use crate::tools::registry::ToolRegistry;
 
@@ -328,6 +330,50 @@ async fn load_user_plugins(kernel: &Kernel) {
 /// goes through, and from `mcp serve`, which builds its own.
 pub fn install_tools_into(registry: &mut ToolRegistry) -> usize {
     kernel().install_tools_into(registry)
+}
+
+/// Run a plugin-registered tool by name, for a surface that is not an agent.
+///
+/// The fourth degrade path, and the reason it is new: `publish` is a tool
+/// *and* a command's body. `docs/plugins.md` has three rules for what an
+/// absent plugin looks like — a provider degrades to a named error because a
+/// `kind` is a string a user typed, a tool degrades to being **absent from the
+/// roster** because the roster is what the model is told it can call, and a
+/// surface degrades to a sentence because its `clap` variant is in core and
+/// keeps parsing. A tool that a slash command also invokes needs the second
+/// rule for the model and the third for the human: the model must not be told
+/// about a `publish` that cannot run, and `/publish` must not silently do
+/// nothing.
+///
+/// So this is [`crate::entrypoint::installed`] for a tool. `feature` is
+/// carried the way [`crate::entrypoint::absent`] carries it: at the call site,
+/// because the caller is the one place that knows which flag would bring the
+/// thing back and core must not hold a table mapping tool names to features.
+///
+/// The context is the kernel's project root rather than the caller's cwd, and
+/// deliberately: it is the same directory [`host::WizardHost`] gives a host
+/// call with no agent bound, so a tool invoked from a command and the same
+/// tool invoked from a plugin see one answer to "where am I".
+///
+/// `Err` is either the tool's own bad news — already worded by the tool, so a
+/// caller prints it rather than wrapping it — or the sentence naming the
+/// feature.
+pub async fn run_tool(name: &str, feature: &str, args: Value) -> Result<String, String> {
+    bundled::ensure().await;
+    let kernel = kernel();
+    let Some(tool) = kernel.tool(name) else {
+        return Err(format!(
+            "the `{name}` tool is not in this build — it was compiled without the `{feature}` \
+             feature. Rebuild with `cargo build --release --features {feature}`, or install a \
+             stock release binary, which has it: `{feature}` is on by default."
+        ));
+    };
+    let ctx = crate::tools::ToolContext::new(kernel.project_root());
+    match tool.execute(args, &ctx).await {
+        Ok(output) if output.is_error => Err(output.content),
+        Ok(output) => Ok(output.content),
+        Err(err) => Err(format!("{:#}", anyhow::Error::new(err))),
+    }
 }
 
 /// This process's host bridge, once the kernel exists.
@@ -555,8 +601,8 @@ mod tests {
     async fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
         /// `(cargo feature is on, plugin name, tools it registers)`.
         ///
-        /// `git` is Lua and `web` is Rust, and the row is the same row: the
-        /// kernel does not distinguish them, which is the claim
+        /// `git` and `publish` are Lua and `web` is Rust, and the rows are the
+        /// same rows: the kernel does not distinguish them, which is the claim
         /// `docs/plugins.md` opens with.
         const EXPECTED: &[(bool, &str, &[&str])] = &[
             (
@@ -569,6 +615,7 @@ mod tests {
                 "git",
                 &["git_status", "git_diff"],
             ),
+            (cfg!(feature = "tool-publish"), "publish", &["publish"]),
         ];
 
         // The Lua half does not load with the kernel — see `bundled` — so a

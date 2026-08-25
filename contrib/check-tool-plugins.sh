@@ -40,6 +40,13 @@
 #     has been awaited, so the leg proves that leaving it out costs two tool
 #     names and not a compile error in the four places that assert what the
 #     roster holds (`plugins`, `mcp`, `harness`, `tools::registry`).
+#   - `tool-publish` left out. The second Lua plugin, and the first whose
+#     tool a *slash command* invokes as well as the model, so it has two
+#     degrade paths at once: `publish` must be absent from the roster, and
+#     `/publish` and `wizard --publish` must each answer with the sentence
+#     naming the feature rather than doing nothing. Four call sites go through
+#     `plugins::run_tool`, and this is what proves none of them was left
+#     reaching for a deleted `crate::evolve::publish`.
 #   - `acp` left out, which is also the only build that does not link
 #     `agent-client-protocol` at all — the one plugin feature that gates a
 #     dependency, so it is the one where "removable" includes the dependency
@@ -146,6 +153,7 @@ leg() {
 # Leave-one-out, against an otherwise-stock feature set.
 leg "without tool-web" --features "$(without tool-web)"
 leg "without tool-git" --features "$(without tool-git)"
+leg "without tool-publish" --features "$(without tool-publish)"
 leg "without graph" --features "$(without graph)"
 leg "without acp" --features "$(without acp)"
 leg "without fleet" --features "$(without fleet)"

@@ -1838,8 +1838,8 @@ pub async fn build_headless_agent_for_session(
 }
 
 /// The agent's whole tool set, freshly composed: native tools, scripted tools
-/// (`~/.wizard/tools`), the MCP tools `manager` is connected to, the subagent
-/// spawner, and the config-dependent `evolve` / `publish` tools.
+/// (`~/.wizard/tools`), the MCP tools `manager` is connected to, the plugin
+/// tools, the subagent spawner, and the config-dependent `evolve` tool.
 ///
 /// Returns the registry and the spawn tool's shared model slot, which the caller
 /// must hand to [`Agent::bind_subagent_model`] — a fresh spawn tool reads the
@@ -1847,7 +1847,7 @@ pub async fn build_headless_agent_for_session(
 ///
 /// This is what a build composes and what `/reload` recomposes, so a reloaded
 /// session has exactly the tools a fresh one does — no more (a second copy of
-/// every MCP server) and no fewer (`evolve` and `publish` silently dropped).
+/// every MCP server) and no fewer (`evolve` silently dropped).
 ///
 /// `run_code` is registered whenever `config.code_mode` is on, and the *model's*
 /// half of the gate — it must never be advertised to a model without native tool
@@ -1921,14 +1921,18 @@ pub async fn build_tool_registry(
     registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
         config.clone(),
     )));
-    registry.register(Arc::new(crate::tools::publish::PublishTool::new(
-        config.clone(),
-    )));
-    // Over `base`, which is composed before the spawn tool, `evolve` and
-    // `publish`, and before `exit_plan` and `interview` (which `Agent::new`
-    // adds later). So a program reaches every native, scripted and MCP tool,
-    // and reaches none of those five or `run_code` itself: programs cannot
-    // nest, and there is no recursion to bound because there is no recursion.
+    // Over `base`, which is composed before the spawn tool and `evolve`, and
+    // before `exit_plan` and `interview` (which `Agent::new` adds later). So a
+    // program reaches every native, scripted, MCP and plugin tool, and reaches
+    // none of those four or `run_code` itself: programs cannot nest, and there
+    // is no recursion to bound because there is no recursion.
+    //
+    // `publish` moved from this list into `base` when it became a plugin, and
+    // that is a real widening: a subagent is scoped from `base`, so one can
+    // now publish where before only the parent could. It is the architecture's
+    // stated precedence rather than an oversight — plugin tools go into the
+    // registry subagents and `run_code` see — and the gate that matters is
+    // unchanged, since `gh` still has to be authenticated by a person.
     if config.code_mode {
         registry.register(Arc::new(crate::tools::code::RunCodeTool::new(
             Arc::clone(&base),

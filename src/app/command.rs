@@ -24,7 +24,7 @@ use crate::config::{
     Config, Mode, ProviderConfig, ProviderKind, ReasoningEffort, StepBudget, UltraConfig,
 };
 use crate::event::{Event, EventLoop};
-use crate::evolve::{EvolveRequest, EvolveTier, Evolver, PublishRequest, publish};
+use crate::evolve::{EvolveRequest, EvolveTier, Evolver};
 use crate::import_claude::{self, ImportSelection};
 use crate::llm::provider::LlmProvider;
 use crate::mcp::{McpConfig, McpManager};
@@ -1003,17 +1003,18 @@ impl CommandContext<'_> {
 
     /// Fork Wizard to the user's GitHub and surface the one-liner install
     /// command. Runs in a background task so the TUI stays responsive.
+    ///
+    /// The body is a plugin (`--features tool-publish`), so this is a lookup
+    /// and a notice: both arms of the `Result` are already worded — the plugin
+    /// writes its own failures, and a build without it answers with the
+    /// sentence naming the feature.
     fn start_publish(&mut self, branch: Option<String>) {
-        let config = self.app.config.clone();
         let notify = self.events.sender();
         tokio::spawn(async move {
-            let req = PublishRequest { branch };
-            let message = match publish(&config, req, false).await {
-                Ok(outcome) => format!(
-                    "publish: forked to {}  (branch: {})\n\nInstall one-liner:\n{}",
-                    outcome.fork_url, outcome.branch, outcome.install_one_liner
-                ),
-                Err(err) => format!("publish failed: {err:#}"),
+            let args = serde_json::json!({ "branch": branch });
+            let message = match crate::plugins::run_tool("publish", "tool-publish", args).await {
+                Ok(summary) => summary,
+                Err(message) => message,
             };
             let _ = notify.send(Event::Notice(message)).await;
         });

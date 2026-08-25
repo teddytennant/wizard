@@ -1621,3 +1621,275 @@ into is gone too) and with everything on.
   right generalization.
 - **Still no *command* has gone through the door.** The thirteen earmarked ones
   are built-ins.
+
+## As built: `publish` is Lua, and the tool it wrapped is gone with it
+
+`src/evolve/publish.rs` (433 lines) and `src/tools/publish.rs` (128) are both
+deleted. `src/plugins/lua/publish/` is what replaced them, behind
+`--features tool-publish`, on by default. It is the second Lua plugin and the
+first one that is a **subsystem** rather than a tool: `git` moved two tool
+bodies, this moved a nine-step pipeline that four different surfaces call.
+
+The doc comment on the git port named this file before the bridge existed to
+move it — "the most Lua-shaped body in the tree, being almost entirely `gh` and
+`git` invocations" — and that held up. Every one of the nine steps decides an
+argv, reads an exit code and formats a string. The only computation in the
+whole subsystem is one `.login` pulled out of one JSON object.
+
+### Porting the *tool* would have been the wrong half
+
+The obvious move was the small one: make `src/tools/publish.rs` a Lua tool and
+leave `evolve::publish` where it was. That is a `ctx:tool` whose body is a host
+call whose body is the Rust — "Rust with a slower calling convention", which
+this document opens by refusing — and it would have left the part with the
+bugs in it untouched.
+
+So the body moved and the adapter went away with it. What stayed in core is
+what a user types and what a surface prints: the `--publish` flag in
+`src/cli.rs`, `SlashCommand::Publish { branch }`, and four call sites that now
+ask for a tool by name.
+
+### The fourth degrade path: a tool that is also a command's body
+
+This document has three rules for what an absent plugin looks like, and
+`publish` needed two of them at once.
+
+- A missing **provider** still has a `kind` a user can type, so it degrades to
+  a named error listing what is installed.
+- A missing **tool** must be *absent from the roster*, because the roster is
+  what the model is told it can call.
+- A missing **surface** keeps its `clap` variant in core, so it degrades to a
+  sentence naming the flag.
+
+`publish` is a tool the model calls **and** the body of `/publish` and
+`wizard --publish`. The model must not be told about a `publish` that cannot
+run, and a person who types `/publish` must not watch it silently do nothing.
+So `plugins::run_tool(name, feature, args)` is `entrypoint::installed` for a
+tool: it resolves the name out of the process kernel, runs it against the
+kernel's project root — the same context `WizardHost` gives a host call with no
+agent bound — and returns either the tool's own words or the sentence naming
+the feature. `feature` is passed at the call site for the reason
+`entrypoint::absent` takes it there: core must not hold a table mapping tool
+names to cargo flags.
+
+The four callers are one line each and none of them formats anything. That is
+a change in itself: the summary string used to be written out in four places
+(the tool, the TUI, the window, the gateway) with the CLI printing a fifth,
+labelled variant of the same four facts. There is one now, in the plugin.
+
+### Two gaps in the host bridge, both general, both closed
+
+**`wizard.process.exec` clamped a plugin's timeout to `[shell].timeout_secs`,
+and that made every port a thirty-second port.** The clamp read as
+conservative and was a misreading of what that setting is.
+`[shell].timeout_secs` answers "how long is it worth blocking a *turn* for an
+answer", and the shell tool does not kill a command that outruns it — it hands
+the command to the background registry and carries on. Used as a ceiling it
+became something it never was: a hard kill, at a number a user set for a
+different question, applied to a budget the plugin had already chosen and
+reported back as a timeout the plugin did not ask for.
+
+`git_status` never noticed, because thirty seconds is what it asks for. The
+first port with a network in it noticed immediately: `git clone --depth 1` of
+this repository and the first `git push` to a fresh fork are both whole-history
+transfers, and both would have been SIGKILLed mid-transfer. So `exec` takes the
+plugin's budget as given now, bounded by `tools::tasks::BACKGROUND_TIMEOUT` —
+the number that already bounds every command this process starts and does not
+wait for. `wizard.process.run` keeps `[shell]`'s budget, because `run` really
+is the shell tool's foreground call under another name.
+
+**A plugin could not find out where Wizard keeps its own state.** `wizard.fs`
+is confined to the project root without `filesystem`, and `~/.wizard` is not
+under it. The available answer was `os.getenv("HOME") .. "/.wizard"`, and that
+answer is *wrong under `cargo test`*: `Config::wizard_dir` redirects to a temp
+directory there, deliberately, so a suite cannot overwrite a developer's real
+config — and a plugin deriving the path itself would sail straight past the
+redirect into the real one. That is not a hypothetical for this plugin; it
+appends to `evolution.jsonl` and reads `~/.wizard/src`.
+
+So `wizard.paths` carries `Config`'s own accessors, evaluated once at VM build:
+`project`, `home`, `source`, `evolution_log`. Named entries rather than a
+`home` to join onto, for the reason this document gives about `memory`: the
+moment a plugin writes `home .. "/src"` there are two definitions of where the
+checkout is. It is gated on `filesystem`, which is the grant that makes a path
+useful — a plugin without it cannot open anything there, and a path is still a
+fact about somebody's machine.
+
+### Better or worse than the Rust it replaced: better, on three counts
+
+**It stopped blocking the runtime.** Every step of `evolve::publish` was
+`std::process::Command::…output()` — a *blocking* call, inside an `async fn`,
+on the TUI's runtime. A `git push` to a slow remote parked the executor, and
+there was nothing to interrupt: no timeout, no cancel handle, no process group.
+The Lua goes through `wizard.process.exec` → `run_command_cancellable`, which
+is the shell tool's runner: real async, its own process group, a timeout that
+kills the whole tree, and the turn's cancel handle. Ctrl-C during a publish
+does something now.
+
+**It became testable.** The old test module could reach four pure helpers —
+`install_one_liner`, `fork_slug`, `parse_gh_login`, and three `parse_args`
+cases — because everything else was a `Command` against somebody's real GitHub
+account. The nine steps that matter were covered by nothing: whether the
+refspec says `HEAD:main`, whether the fork is created with `--clone=false`,
+whether an existing fork is tolerated, whether the remote is added or updated.
+`wizard.process.exec` is an interface, so a `HostBridge` answering from a table
+keyed on argv runs a whole publish with no `gh` on the machine. Those questions
+are all asserted now.
+
+**It is shorter and says more.** 561 lines of Rust became 330 of Lua, and the
+Lua carries the argument for each step rather than only the step.
+
+One thing is worse and it is worth naming: **a `git push` no longer streams**.
+The Rust captured with `.output()`, so it did not stream either — but a future
+`--verbose` publish would have been three lines there and is a host-bridge
+change here, because `exec` reports only when the command is finished. Nothing
+regressed; a door closed slightly.
+
+### What changed for the user and the model, honestly
+
+**The tool's name, description, schema and summary string are unchanged to the
+character**, including the two spaces before `(branch: …)` and the exact
+`WIZARD_REPO` / `WIZARD_REF` / `WIZARD_BUILD_FROM_SOURCE` spelling that
+`install.sh` reads. Four things did change.
+
+**`wizard --publish` prints the tool's summary** rather than its own `Fork:` /
+`Branch:` / `Commit:` block. One answer, one wording, five printers.
+
+**`publish` is reachable from a subagent and from a `run_code` program.** It
+was registered on the scoped registry, deliberately outside `base`; plugin
+tools go into `base`, which is what subagents are scoped from. That is a real
+widening of blast radius and it is the architecture's stated precedence rather
+than an oversight — the gate that matters is unchanged, because `gh` still has
+to have been authenticated by a person.
+
+**Its position in the roster moved**, as the web and git tools' did: plugin
+tools are appended after the native, scripted and MCP ones.
+
+**`ensure_source` no longer hand-writes one sentence.** The Rust read the
+directory so it could say "exists but does not look like a Wizard checkout";
+Lua has no `read_dir`, and inventing a host call for one predicate would be a
+wider bridge to say what `git clone` already says ("destination path … already
+exists and is not an empty directory"). git's sentence comes back with the
+remedy appended.
+
+`publish` is also on `RESERVED_TOOL_NAMES` now, unconditionally, which it
+should have been before: it is a name this binary can register, so an MCP
+server must not be able to claim it on a build that left the plugin out.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` gained a `without tool-publish` leg — seven
+now. It is the leg that proves the four surfaces went through the lookup
+rather than keeping a reference to a deleted `crate::evolve::publish`, which is
+a failure neither the default build nor `--no-default-features` can see.
+
+## `evolve` was read end to end, and should stay Rust
+
+`src/evolve/mod.rs` is 4,098 lines and was this phase's target: the biggest
+Lua-shaped body left, three session-state references in the whole subsystem,
+and orchestration from top to bottom. By the two questions the `todo` write-up
+leaves behind — is the state per-session, and does core hold a *type* — it
+looks like a yes. It is a no, and the reasons are five that the two questions
+do not ask.
+
+### 1. `wizard.model` cannot express an evolve turn, and refuses where evolve runs
+
+Evolve makes three model calls: a Tier-1 channel proposal, a deep-evolve file
+selection, and a deep-evolve diff. Each has its own system prompt, each runs at
+`temperature = 0.3` because the output is a parsed artifact rather than prose,
+and each retries once by **appending the failed reply and a correction to the
+conversation** — the reply the model gave is what tells it what to fix.
+
+`wizard.model.complete(prompt)` takes one string and wraps it in a system
+prompt the *host* wrote ("You are answering a question from the Wizard plugin
+'evolve'"). No message list, no options. Porting means flattening a
+three-message conversation into one string and losing the temperature, or
+widening the host call until it is `ChatRequest` with JSON in front of it.
+
+And the harder half: **`wizard.model` refuses when no agent is bound**, which
+is correct and is documented above — a provider built on the side has no
+tracker, and unmetered spend on the user's key is worse than a clear error.
+`Evolver::complete` builds exactly that provider, from `Config::active()`, on
+purpose, because `wizard --evolve -p "…"` and the scheduler are agentless
+processes. Porting evolve deletes a shipped entrypoint, or grants Lua the
+unmetered spend the bridge exists to refuse.
+
+### 2. Tier 2 needs forty-five minutes of one command and the process it is running in
+
+Deep evolve's gate is `cargo build --release --locked`, then `cargo test
+--release --locked`, then a smoke test, then `exec`-replacing the running
+binary with the result. Three of those four have no Lua spelling:
+
+- The build and test rungs are bounded at 45 minutes
+  (`DEFAULT_TEST_TIMEOUT`). The `exec` ceiling this change raised is 30
+  minutes, and raising it further would mean a plugin able to hold a host slot
+  for an hour.
+- Both rungs **stream** stderr line by line under a single deadline, and the
+  reason is spelled out in their doc comments: a pipe reaches EOF only when
+  every process holding the write end has exited, so a patch whose `build.rs`
+  never returns parks the reader forever. `exec` reports once, at the end.
+- `Evolver::exec_replace` replaces the running process. There is no host call
+  for that and there should not be one.
+
+### 3. Tier 1 is four on-disk formats, each with a Rust reader
+
+The Tier-1 channels write a `SKILL.md` with loader-shaped frontmatter, a
+`[[server]]` upsert into `mcp.toml`, a `ScriptManifest` beside its script (with
+the executable bit set or cleared depending on runtime), and a
+`SubagentConfig` carrying a `StepBudget` whose default is load-bearing enough
+to have its own paragraph of comment. All four are read back by Rust.
+
+A Lua plugin writing them is a second writer of four formats, which is exactly
+the `memory` argument this document already makes. It is worse here for a
+mechanical reason: three of the four are **TOML**, and a plugin VM has no
+`require` and no `package`, so there is no TOML encoder to reach. It would be
+hand-rolled string formatting, with escaping, for three formats somebody else
+parses.
+
+### 4. `EvolveOutcome` is a core type with five consumers matching on it
+
+`src/tools/evolve.rs` matches every variant to decide whether to write an
+`evolve-reexec` or an `evolve-reload` marker. `describe_outcome` is called by
+the TUI, the window and the gateway. `undo_outcome` matches every variant to
+undo it, reading them back out of `evolution.jsonl`, where they are a
+serialized enum with a `kind` tag and a recursive `FellBackToRuntime` arm. This
+is the `todo` rule's second question answered plainly: a tool whose payload is
+a core type the surfaces match on exhaustively is a tool whose host call would
+be that type's constructor with JSON in front of it.
+
+### 5. Where the seam actually is, and it is not around `evolve`
+
+Three surfaces call `Evolver::run` directly and a fourth calls it from a CLI
+arm. Making evolve a plugin means all four go through a lookup — which is what
+`plugins::run_tool` now is, and it would work — but `/evolve` in the TUI is a
+built-in `SlashCommand` carrying parsed arguments, and this document already
+records why `SlashCommand` stayed a closed enum. That is the *command*
+migration, which nothing has yet gone through, and it is a different change
+from the one this section is about.
+
+### The verdict, and the sharpened rule
+
+`evolve` stays Rust. Not because it is large — `mesh` was 11.7k lines and went
+— but because what it orchestrates is a compiler, a model conversation and the
+process it is running in, and the plugin bridge is deliberately narrow at all
+three.
+
+The `todo` write-up left two questions to ask of a subsystem. This one adds a
+third, and it is the one that decided this:
+
+**3. Does it need more of a host call than the host call has?** The bridge is
+one namespace per *kind* of resource, and each is deliberately the narrowest
+call that does the job: `wizard.model` is a question and an answer, not a
+conversation; `wizard.process.exec` is a command that finishes, not a stream;
+`wizard.fs` is a read and a write, not a directory walk. A subsystem that needs
+the wide version of any of those does not become a plugin by being rewritten in
+Lua — it becomes a plugin plus a host API that is the Rust it replaced, reached
+through JSON. `publish` needed the narrow version of two namespaces and one
+table of strings. `evolve` needs the wide version of three.
+
+What *is* portable out of `src/evolve/` is what has now gone: the `gh`/`git`
+half. `run_history_cli` (`evolve list` / `evolve undo`) is the next-cheapest
+slice by the same test — it loads no config, calls no model, and its whole body
+is reading a JSONL file and deleting files — and it is blocked on the same
+thing `memory` is: `undo_outcome` deserializes a core enum, and `ctx:inject`
+hands Lua only JSON data.

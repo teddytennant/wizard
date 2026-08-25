@@ -1,0 +1,22 @@
+name = "publish"
+version = "1.0.0"
+description = "Fork Wizard to your GitHub account and hand back a one-line installer"
+
+# `process` for `gh` and `git`, `filesystem` for the two paths under
+# `~/.wizard` this plugin reads and appends to.
+#
+# Not `network`, even though everything interesting here crosses one. The
+# plugin opens no socket: `gh` talks to the API and `git` talks to the remote,
+# each inside its own process with its own credentials. Declaring `network`
+# would grant `wizard.http`, which this plugin never calls, and would tell the
+# reader of an install prompt that this code makes its own requests. That is
+# the sort of over-declaration that makes a capability list stop meaning
+# anything.
+#
+# Not `model` and not `agent`: publishing decides nothing and asks nobody.
+capabilities = ["process", "filesystem"]
+
+# Not in `minimal` or `pi`. Publishing forks a repository to somebody's GitHub
+# account, and a CI container and a Raspberry Pi are the two places where
+# nobody is there to have meant it — `gh` is authenticated on neither.
+profiles = ["full", "server"]

@@ -456,7 +456,24 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     }
 
     if cli.publish {
-        return evolve::run_publish_cli(config, cli).await.map(|()| 0);
+        // `--publish` prints what the tool says, because the tool is where the
+        // wording lives now: the plugin composes one summary and the TUI, the
+        // window, the gateway and this arm all print it. The CLI used to lay
+        // the same four facts out as its own labelled block, which was a fifth
+        // spelling of one answer.
+        let branch = cli
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+        let args = serde_json::json!({ "branch": branch });
+        return match plugins::run_tool("publish", "tool-publish", args).await {
+            Ok(summary) => {
+                println!("{summary}");
+                Ok(0)
+            }
+            Err(message) => Err(anyhow::anyhow!("{message}")),
+        };
     }
 
     if cli.evolve {

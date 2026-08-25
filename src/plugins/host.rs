@@ -85,6 +85,30 @@ use crate::llm::provider::LlmProvider;
 use crate::llm::{ChatMessage, ChatRequest};
 use crate::tools::{Tool, ToolContext};
 
+/// The longest a `wizard.process.exec` may run, whatever it asked for.
+///
+/// This used to be `[shell].timeout_secs`, and that was a misreading of what
+/// that setting is. `[shell].timeout_secs` answers "how long is it worth
+/// blocking a *turn* for an answer" — thirty seconds by default — and the
+/// shell tool does not kill a command that outruns it, it hands the command to
+/// the background task registry and keeps going. Used as a *ceiling* it became
+/// something it never was: a hard kill, applied to a budget the plugin had
+/// already chosen, silently, at a number the user set for a different question.
+///
+/// The consequence was that no ported tool could outlive half a minute.
+/// `git_status` never noticed because it asks for thirty seconds; the first
+/// port that runs `git clone` or `git push` over a network noticed
+/// immediately, and would have been killed mid-push with the failure reported
+/// as a timeout the plugin had explicitly not asked for.
+///
+/// So `exec` takes the plugin's own budget as given, bounded by one number:
+/// the same [`BACKGROUND_TIMEOUT`] that already bounds every command this
+/// process starts and does not wait for. A plugin is not more trusted than
+/// that and does not need to be.
+///
+/// [`BACKGROUND_TIMEOUT`]: crate::tools::tasks::BACKGROUND_TIMEOUT
+const MAX_EXEC_TIMEOUT: Duration = crate::tools::tasks::BACKGROUND_TIMEOUT;
+
 /// The live agent behind `wizard.*`, as much of it as the host needs.
 ///
 /// A snapshot rather than a handle on the `Agent`: an `Agent` is `!Sync` in
@@ -470,10 +494,9 @@ impl HostBridge for WizardHost {
 
         let mut process = tokio::process::Command::new(program);
         process.args(args).current_dir(&cwd);
-        let timeout = request.timeout.clamp(
-            Duration::from_secs(1),
-            Duration::from_secs(ctx.shell.timeout_secs.max(1)),
-        );
+        let timeout = request
+            .timeout
+            .clamp(Duration::from_secs(1), MAX_EXEC_TIMEOUT);
         let label = format!("wizard.process.exec({plugin})");
 
         let result = crate::tools::shell::run_command_cancellable(

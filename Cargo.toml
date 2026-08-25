@@ -94,6 +94,7 @@ default = [
   "mesh",
   "tool-web",
   "tool-git",
+  "tool-publish",
 ]
 
 # `wizard acp`: the Agent Client Protocol server that lets Zed, Neovim and
@@ -207,6 +208,20 @@ tool-web = []
 # `/diff` sidebar and the GUI shell out to; those are `src/app/command.rs` and
 # `src/plugins/gui/git.rs` and have never gone through the tool.
 tool-git = []
+
+# `publish`: fork Wizard to the user's GitHub and hand back a one-line
+# installer for their variant. `src/plugins/lua/publish/`, in Lua.
+#
+# The second Lua plugin, and the first one that is a *whole subsystem* rather
+# than a tool wrapper: `src/tools/publish.rs` was a twenty-line adapter over
+# `src/evolve/publish.rs`, and both are gone. What is left in Rust is the
+# `--publish` flag, the `/publish` command and the three surfaces that print
+# what comes back.
+#
+# Leaving it out costs the `publish` tool, and `wizard --publish` / `/publish`
+# then say which feature would bring it back. Nothing else changes: the
+# checkout at `~/.wizard/src` is deep evolve's and is still there.
+tool-publish = []
 
 # xAI Grok, by API key (`kind = "xai"`) and by account sign-in
 # (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:
