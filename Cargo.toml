@@ -47,7 +47,7 @@ categories = [
 #
 # Deliberately narrow, because two things under `assets/` are compiled *into*
 # the binary and excluding either breaks the build rather than slimming it:
-# `assets/fonts/*.ttf` is `include_bytes!`d by `src/native/font.rs`, and
+# `assets/fonts/*.ttf` is `include_bytes!`d by `src/plugins/native/font.rs`, and
 # `assets/themes/*.toml` is `include_str!`d by `src/theme.rs`. `build.rs`,
 # `WIZARD.md` (`include_str!` in `src/agent/prompts.rs` and `src/tools/manual.rs`)
 # and `wizard-release.pub` (`include_str!` in `src/update.rs`) are all load-bearing
@@ -67,7 +67,152 @@ exclude = [
 build = "build.rs"
 
 [features]
-default = []
+# Every backend Wizard ships is a plugin behind one of these, and every one is
+# on by default because a stock build has always answered to all nine `kind`
+# values and must keep doing so. What being a feature buys is the test: with
+# any single one left out the tree still compiles, the suite still passes, and
+# that kind resolves to nothing — the error names it and lists what *is*
+# installed, instead of a panic or a link error. `--no-default-features` is the
+# extreme of that, a wizard with no provider transport linked at all.
+#
+# The grouping is one feature per *backend*, not per kind: a feature whose
+# entire content would be a second `Credentials` variant against the same
+# endpoint and the same wire shape is a build flag nobody wants. So `xai`
+# carries `xai` and `xaioauth`, and `openai` carries `openai` and `openrouter`.
+# See `docs/plugins.md` and `src/plugins/mod.rs`.
+default = [
+  "acp",
+  "fleet",
+  "provider-anthropic",
+  "provider-chatgpt",
+  "provider-cloudflare",
+  "provider-llamacpp",
+  "provider-ollama",
+  "provider-openai",
+  "provider-xai",
+  "graph",
+  "mesh",
+  "tool-web",
+  "tool-git",
+]
+
+# `wizard acp`: the Agent Client Protocol server that lets Zed, Neovim and
+# Emacs embed Wizard over stdio. `src/plugins/acp.rs`.
+#
+# The only plugin feature that gates a *dependency*: `agent-client-protocol` has
+# exactly one consumer and a build without this feature does not link the crate
+# at all, which is most of what leaving it out is worth. Core keeps parsing the
+# subcommand either way — `clap` owns `wizard acp` and `--help` still lists it —
+# so an absent server is a sentence naming this flag rather than a missing verb.
+acp = ["dep:agent-client-protocol"]
+
+# `wizard fleet`: one planning turn decomposes a mission into independent
+# tasks, up to N headless `wizard --mode sovereign` children run them in
+# parallel over git worktrees, and a synthesis turn merges the branches back.
+# `src/plugins/fleet/`. See docs/fleet.md.
+#
+# What stays in core when this is left out is what other things use or would
+# use: `src/git_util.rs` (async git plumbing), `progress::fleet_bars` (a
+# progress *style*, and styles live in one file), and `[fleet]` in
+# `config.toml`, which follows `[web]` — a config section is a promise about
+# what this process does, and a build without the plugin still parses and
+# round-trips one rather than rejecting somebody's file over a section it
+# cannot run.
+fleet = []
+
+# Anthropic Messages API. `kind = "anthropic"`.
+provider-anthropic = []
+
+# ChatGPT subscription via account sign-in. `kind = "chatgptoauth"`.
+# Carries its own OAuth client and token store; the loopback redirect it comes
+# back on is shared with xAI and stays in core (`llm::oauth_callback`).
+provider-chatgpt = []
+
+# Cloudflare Workers AI. `kind = "cloudflare"`.
+provider-cloudflare = []
+
+# Local llama.cpp `llama-server`. `kind = "llamacpp"`. This is the backend
+# `Config::active` synthesizes when nothing is configured, so a build without
+# it starts with a configured provider that resolves to nothing and says so.
+provider-llamacpp = []
+
+# Local Ollama, native `/api/chat`. `kind = "ollama"`.
+provider-ollama = []
+
+# The OpenAI-compatible family: `kind = "openai"` (which is also how vLLM,
+# LM Studio, DeepSeek and the `compat.rs` presets are reached) and
+# `kind = "openrouter"`. The wire machinery itself is `llm::wire` and stays in
+# core — five backends build on it, so it is infrastructure, not a plugin.
+provider-openai = []
+
+# The mesh graph explorer: `MeshGraph` (a `PeerStore` turned into something
+# drawable, with liveness decided once and honestly) and a deterministic force
+# layout over it. `src/plugins/graph/`.
+#
+# The only plugin that registers nothing through `Ctx`, because what it
+# produces is a data model rather than a tool, a command or a provider; see
+# `GraphPlugin`. Its one consumer is the GUI's explorer screen
+# (`src/plugins/native/graph/`), which is gated on this feature in step, so a
+# build without it is a window with no explorer -- which is the window that
+# ships today, since `src/plugins/native/mod.rs` records that screen as deferred
+# and not yet reachable.
+#
+# It enables `mesh` rather than merely assuming it: a `MeshGraph` is built from
+# a `PeerStore`, so this is a genuine dependency between two plugins and Cargo
+# is where one gets written down. `contrib/check-tool-plugins.sh` has to know
+# it too -- dropping `mesh` from the default list leaves `graph` to turn it back
+# on, which is what `without_many` there is for.
+graph = ["mesh"]
+
+# The P2P mesh: node identity, the QUIC transport and its two certificate
+# verifiers, the peer store and its three-state trust decision, mDNS discovery,
+# the consent ledger, `wizard peers`, and the session tee that puts a live
+# transcript in front of a trusted watcher. `src/plugins/mesh/`.
+#
+# The largest plugin in the tree and the one with the most crates behind it, so
+# leaving it out is the one feature flag that measurably shrinks the binary:
+# `dep:quinn` and `dep:mdns-sd` go with it.
+#
+# `graph` depends on it rather than the other way round — a `MeshGraph` is a
+# `PeerStore` turned into something drawable, so the explorer cannot exist
+# without the store — which is why the line below is a feature edge and not a
+# comment. Cargo has no way to say "optional dependency between plugins", so a
+# plugin that needs another names it, exactly as a Lua plugin's
+# `optional_deps` would.
+mesh = ["dep:quinn", "dep:rustls", "dep:mdns-sd"]
+
+# `web_fetch`, `web_search` and `x_search`. `src/plugins/web.rs`.
+#
+# The HTTP plumbing under them is *not* here: the client, the SSRF guard, the
+# hand-walked redirect chain and the body cap are `src/tools/http.rs` and stay
+# in core, because a Lua plugin's `wizard.http` and `generate_image`'s
+# downloader are the other two callers and neither has anything to do with
+# whether the model can call `web_fetch`. Same split as `llm::wire` against
+# `plugins::openai`. Leaving this out costs three tools and nothing else: the
+# registry does not hold them, so the model is not told about them.
+tool-web = []
+
+# `git_status` and `git_diff`. `src/plugins/lua/git/`, and the first plugin
+# that is written in Lua rather than in Rust.
+#
+# It ships inside the binary — `include_str!` in `src/plugins/bundled.rs` —
+# rather than as a file `install.sh` copies to `~/.wizard/plugins`, so it is
+# present in a `cargo test`, in a `cargo install`, and in a downloaded release
+# alike. That is also what lets it run as `PluginSource::FirstParty`
+# (unbounded, JIT on): first-party is a claim about who wrote the code, and it
+# is only true of bytes nobody outside this repository can edit.
+#
+# Leaving it out costs two tools and nothing else: the registry does not hold
+# them, so the model is not told about them. `git` itself is still what the
+# `/diff` sidebar and the GUI shell out to; those are `src/app/command.rs` and
+# `src/plugins/gui/git.rs` and have never gone through the tool.
+tool-git = []
+
+# xAI Grok, by API key (`kind = "xai"`) and by account sign-in
+# (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:
+# `web_search`, `generate_image` and `sync` all use them and have nothing to do
+# with which model answers a turn. See `src/plugins/xai.rs`.
+provider-xai = []
 
 # The GUI (`wizard gui`): an iced window over the agent core, with no webview,
 # no loopback HTTP and no JSON round-trip per streaming token. It is the only
@@ -89,8 +234,16 @@ default = []
 # `.github/workflows/release.yml` publishes `wizard-native-<target>.tar.gz` for
 # the four gnu/darwin targets, and `install.sh WIZARD_NATIVE=1` installs one.
 # See `docs/native-gui.md`.
-# `src/gui/` — sessions, config store, git, OAuth — is behind this flag too:
+# `src/plugins/gui/` — sessions, config store, git, OAuth — is behind this flag too:
 # the window is now the only thing that reaches it.
+#
+# The name is load-bearing and must not change: `install.sh` reads
+# `WIZARD_NATIVE=1`, `.github/workflows/release.yml` has a job called `native`,
+# and `docs/native-gui.md` spells it throughout. It is also the one plugin
+# feature that is not a provider — the window registers a `wizard gui`
+# entrypoint with the kernel and core looks it up by string, so leaving the
+# feature out removes the surface without core changing a line. See
+# `src/plugins/native/plugin.rs`.
 native = ["dep:iced", "dep:iced_highlighter", "dep:iced_test"]
 
 [dependencies]
@@ -111,7 +264,9 @@ async-trait = "0.1"
 
 # Agent Client Protocol server (`wizard acp`): embeds Wizard in ACP editors
 # (Zed, Neovim, Emacs). ACP 2.0 owns stdio via its `Stdio` transport.
-agent-client-protocol = "2.0.0"
+# Optional, behind the `acp` feature (on by default): `src/plugins/acp.rs` is
+# its only consumer, so a build without that plugin should not link it.
+agent-client-protocol = { version = "2.0.0", optional = true }
 
 # Ollama HTTP (rustls so the binary has no OpenSSL link dependency)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -205,17 +360,23 @@ blake2 = "0.10"
 # manifest. Keys are seeded from getrandom — no rand/rand_core dependency.
 ed25519-dalek = "3"
 
-# The P2P mesh transport (`src/mesh/quic.rs`): QUIC with mutual TLS, where the
+# The P2P mesh transport (`src/plugins/mesh/quic.rs`): QUIC with mutual TLS, where the
 # certificate's key IS the node's ed25519 identity, so the handshake proves the
 # peer id rather than a signature check bolted onto a plaintext socket.
 #
 # quinn's default feature set is deliberately off. `platform-verifier` drags in
 # rustls-platform-verifier and a whole OS trust-store integration for a mesh
 # that has no CAs in it at all — every certificate here is self-signed by the
-# node it names, and `src/mesh/tls.rs` is the only verifier. `rustls-ring`
+# node it names, and `src/plugins/mesh/tls.rs` is the only verifier. `rustls-ring`
 # rather than `rustls-aws-lc-rs` because aws-lc-rs is a C library and this
 # project ships static musl builds; ring is already in the tree under reqwest.
-quinn = { version = "0.11", default-features = false, features = [
+#
+# Optional, and pulled only by `--features mesh`: quinn, rustls-ring and their
+# transport are ~40 crates that a headless `wizard -p` with the mesh switched
+# off never executes a line of, and `dep:quinn` is what makes leaving the
+# plugin out actually remove them from the build rather than merely stop
+# calling them.
+quinn = { version = "0.11", optional = true, default-features = false, features = [
   "log",
   "ring",
   "runtime-tokio",
@@ -223,15 +384,17 @@ quinn = { version = "0.11", default-features = false, features = [
 ] }
 # Same rustls the reqwest client already links, reached directly for the two
 # certificate verifiers the mesh installs in place of a CA chain.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# The mesh is the only direct caller; reqwest links its own copy either way, so
+# leaving the plugin out costs no crate here, only the direct edge.
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
 # Zero-config LAN discovery for the mesh, and the second mechanism rather than
 # the first: a pasted address is still how a peer is added, and mDNS grants no
-# trust to anything it finds (see src/mesh/discovery.rs). `default-features =
+# trust to anything it finds (see src/plugins/mesh/discovery.rs). `default-features =
 # false` drops `logging`, which installs an env_logger the crate would then own;
 # wizard logs through `tracing` and nothing else. `async` is kept because the
 # browse channel is drained from a tokio task that has to be cancellable, which
 # a blocking `recv()` is not.
-mdns-sd = { version = "0.20", default-features = false, features = ["log", "async"] }
+mdns-sd = { version = "0.20", optional = true, default-features = false, features = ["log", "async"] }
 
 # The native GUI (`--features native` only). Every feature here is chosen
 # against a dependency that is already in the tree, because the whole point of
@@ -251,7 +414,7 @@ mdns-sd = { version = "0.20", default-features = false, features = ["log", "asyn
 # it pulls `mundy`, which runs its D-Bus query on `async-io` — a second,
 # smol-flavoured reactor thread alongside the tokio runtime the agent core
 # already owns. The theme comes from `crate::theme` anyway (see
-# `src/native/theme.rs`), so the detection would be ignored even if it worked.
+# `src/plugins/native/theme.rs`), so the detection would be ignored even if it worked.
 #
 # `highlighter` reaches syntect through `two-face` with `syntect-default-fancy`,
 # which is byte-identical to the selection above: one syntect, fancy-regex, no
@@ -280,7 +443,7 @@ iced_highlighter = { version = "0.14", optional = true }
 # compositor and snapshots it to PNG, and `iced_test::runtime` re-exports the
 # `UserInterface` the selection tests drive directly, because
 # `Simulator::simulate` hardcodes `clipboard::Null` and so cannot observe a
-# copy. Only `src/native/**` names it, always under `#[cfg(test)]`.
+# copy. Only `src/plugins/native/**` names it, always under `#[cfg(test)]`.
 #
 # Here rather than in `[dev-dependencies]`, which is where it belongs and where
 # it cannot go. Cargo compiles a dev-dependency for every `cargo test` whether
@@ -298,7 +461,7 @@ iced_test = { version = "0.14", optional = true }
 # Embedded LuaJIT for self-extension: scripted tools and evolve glue run through
 # the just-in-time compiler in-process. Vendored so the binary has no system
 # libluajit dependency; `send` so Lua handles can cross await points.
-mlua = { version = "0.12", default-features = false, features = ["luajit", "vendored", "send", "serialize"] }
+mlua = { version = "0.12", default-features = false, features = ["luajit", "vendored", "send", "serialize", "async"] }
 
 # Process-group kill for background tasks (`task_kill`, timeouts)
 [target.'cfg(unix)'.dependencies]

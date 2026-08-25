@@ -28,9 +28,9 @@
 //! draw it. Collapse state, markdown wrapping, summary lines, glyphs and colors
 //! all stay with the surface, which projects these items into its own row type
 //! (fold flags in [`crate::app::TranscriptView`] for the TUI, laid-out blocks
-//! in `crate::native::widget::transcript` for the window). That is the seam
-//! that lets one model serve several renderers without any of them leaking into
-//! the others.
+//! in `crate::plugins::native::widget::transcript` for the window). That is
+//! the seam that lets one model serve several renderers without any of them
+//! leaking into the others.
 //!
 //! # What only the live stream can say
 //!

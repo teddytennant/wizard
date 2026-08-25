@@ -577,8 +577,116 @@ pub(crate) fn take_test_port(port: u16) -> StdTcpListener {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PKCE and JWT: the parts of an OAuth flow that belong to neither provider
+// ---------------------------------------------------------------------------
+//
+// Both sign-ins are authorization-code-with-PKCE against an OIDC discovery
+// document, so the verifier/challenge pair and the `exp` claim of the access
+// token are the same arithmetic in both. They lived in `xai_oauth.rs` and
+// `chatgpt_oauth.rs` imported them from there, which is a dependency edge
+// between two backends that have nothing to do with each other — and once each
+// is a plugin, an edge that makes deleting one break the other. RFC 7636 is
+// not xAI's, so it sits here with the rest of the flow's shared machinery.
+
+/// A PKCE verifier/challenge pair (RFC 7636, S256).
+#[derive(Debug)]
+pub struct Pkce {
+    pub verifier: String,
+    pub challenge: String,
+}
+
+/// Generate a PKCE pair: the verifier is base64url(64 random bytes) without
+/// padding, capped at the RFC maximum of 128 chars; the challenge is
+/// base64url(sha256(verifier)) without padding.
+pub fn generate_pkce() -> Result<Pkce> {
+    use base64::Engine;
+
+    let mut bytes = [0u8; 64];
+    getrandom::fill(&mut bytes)
+        .map_err(|err| anyhow::anyhow!("gathering PKCE randomness: {err}"))?;
+    let mut verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    verifier.truncate(128);
+    let challenge = pkce_challenge(&verifier);
+    Ok(Pkce {
+        verifier,
+        challenge,
+    })
+}
+
+/// S256 challenge for a verifier: base64url(sha256(verifier)), no padding.
+pub fn pkce_challenge(verifier: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+/// The `exp` claim of a JWT, or `None` when the token is not a parseable JWT.
+///
+/// Deliberately unverified: this is a client reading its own token to decide
+/// whether to refresh it early, not a server deciding whether to trust one. A
+/// forged `exp` costs the forger a refresh round trip and nothing else.
+pub fn jwt_exp(token: &str) -> Option<i64> {
+    use base64::Engine;
+
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    claims.get("exp")?.as_i64()
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// Unsigned JWT carrying the given JSON payload.
+    fn jwt_with_payload(payload: &str) -> String {
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header = enc.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let body = enc.encode(payload.as_bytes());
+        format!("{header}.{body}.sig")
+    }
+
+    #[test]
+    fn pkce_challenge_matches_rfc7636_vector() {
+        // RFC 7636 appendix B.
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    #[test]
+    fn generated_verifier_is_well_formed() {
+        let pkce = generate_pkce().expect("pkce");
+        // 64 random bytes encode to 86 base64url chars, inside RFC bounds.
+        assert!(
+            (43..=128).contains(&pkce.verifier.len()),
+            "len {}",
+            pkce.verifier.len()
+        );
+        assert!(
+            pkce.verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "verifier {} has invalid chars",
+            pkce.verifier
+        );
+        assert_eq!(pkce.challenge, pkce_challenge(&pkce.verifier));
+        // A second pair must differ (randomness).
+        assert_ne!(generate_pkce().expect("pkce").verifier, pkce.verifier);
+    }
+
+    #[test]
+    fn jwt_exp_reads_the_exp_claim() {
+        let token = jwt_with_payload(r#"{"sub":"u1","exp":1234567890}"#);
+        assert_eq!(jwt_exp(&token), Some(1_234_567_890));
+        assert_eq!(jwt_exp("not-a-jwt"), None);
+        assert_eq!(jwt_exp(&jwt_with_payload(r#"{"sub":"u1"}"#)), None);
+    }
     use super::*;
 
     /// Bind a port the rest of the suite cannot take from us.

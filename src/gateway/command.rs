@@ -38,7 +38,7 @@ use async_trait::async_trait;
 use crate::agent::{Agent, RewindCandidate, ultra};
 use crate::commands::surface::{CommandSurface, PlanState, SessionSnapshot, Surface, dispatch};
 use crate::commands::{ServerAction, SlashCommand};
-use crate::config::{Config, Mode, ProviderKind, ReasoningEffort};
+use crate::config::{Config, Mode, ReasoningEffort};
 use crate::llm::provider::{LlmProvider, NATIVE_TOOLS_ON_PROBE_FAILURE};
 use crate::mcp::McpManager;
 use crate::tools::tasks::Task;
@@ -498,9 +498,12 @@ impl CommandSurface for GatewaySurface<'_, '_> {
     /// no transcript here to trickle percentages into.
     async fn server(&mut self, action: ServerAction) {
         let provider = self.ctx.config.active();
-        if provider.kind != ProviderKind::LlamaCpp {
+        if !provider
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.manages_local_server())
+        {
             return self.say(format!(
-                "'/server' manages the local llama-server; the active provider '{}' is {:?}",
+                "'/server' manages the local llama-server; the active provider '{}' is {}",
                 provider.name, provider.kind
             ));
         }

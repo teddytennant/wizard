@@ -176,7 +176,7 @@ jobs:
       # is nothing to `apt-get` first.
       #
       # No compositor here, and there never will be one: everything in
-      # `src/native/tests.rs` drives `iced_test`'s headless `Simulator` or a
+      # `src/plugins/native/tests.rs` drives `iced_test`'s headless `Simulator` or a
       # software-rasterized frame in memory. See "Testing, and what a headless
       # machine cannot prove" in docs/native-gui.md for what that leaves
       # unproven.

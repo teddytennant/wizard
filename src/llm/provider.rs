@@ -3,7 +3,7 @@
 //! API (llama.cpp, Ollama, OpenAI-compatible, Anthropic, ...).
 //!
 //! Concrete implementations live in sibling modules ([`super::llamacpp`],
-//! [`super::ollama`], [`super::openai`], [`super::anthropic`]). A provider is
+//! [`super::ollama`], [`super::openai`], and the provider plugins). A provider is
 //! built from a [`crate::config::ProviderConfig`] and handed to the agent as
 //! an `Arc<dyn LlmProvider>`.
 

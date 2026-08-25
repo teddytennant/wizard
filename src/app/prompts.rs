@@ -102,17 +102,15 @@ pub(super) fn xai_oauth_session_present() -> bool {
 }
 
 /// Human-readable provider name for a kind, used in inline prompt questions.
-pub(super) fn provider_display(kind: ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::Xai | ProviderKind::XaiOauth => "xAI",
-        ProviderKind::ChatgptOauth => "ChatGPT",
-        ProviderKind::OpenRouter => "OpenRouter",
-        ProviderKind::Openai => "OpenAI-compatible",
-        ProviderKind::Anthropic => "Anthropic",
-        ProviderKind::Cloudflare => "Cloudflare",
-        ProviderKind::LlamaCpp => "llama.cpp",
-        ProviderKind::Ollama => "Ollama",
-    }
+///
+/// The backend's own descriptor answers this now. A kind nothing has
+/// registered falls back to its id, which is the string the user typed or
+/// configured — worse than "OpenAI-compatible" but never wrong, and it keeps
+/// a prompt for an unknown backend readable instead of blank.
+pub(super) fn provider_display(kind: &ProviderKind) -> String {
+    crate::llm::registry::installed(kind)
+        .map(|descriptor| descriptor.display_name().to_string())
+        .unwrap_or_else(|| kind.to_string())
 }
 
 /// The question shown when collecting `field` for the in-progress `prompt`.
@@ -126,7 +124,7 @@ pub(super) fn prompt_question(field: PromptField, prompt: &ProviderPrompt) -> St
         PromptField::Model => "Model:".to_string(),
         PromptField::ApiKey => format!(
             "Paste your {} API key, then Enter (input hidden):",
-            provider_display(prompt.kind)
+            provider_display(&prompt.kind)
         ),
     }
 }

@@ -78,6 +78,15 @@ const STDIO_ENV_DENYLIST: &[&str] = &[
 /// `spawn_subagent` and `run_code` — because that registration *replaces* the
 /// server's tool rather than colliding with it, so the server's tool goes
 /// unreachable with no warning to anyone. A unit test enforces the list.
+///
+/// The three web tools are on it unconditionally although they are a plugin
+/// (`--features tool-web`), because this list is about *names*: a name Wizard
+/// itself can register must not be claimable by an MCP server on a build that
+/// happens to have left the plugin out, or the server's `web_fetch` would work
+/// until somebody rebuilt with the feature on and then collide. Holding the
+/// string is what core is allowed to do with a plugin — see the
+/// `ProviderKind::ANTHROPIC` argument in `docs/plugins.md`; what it may not do
+/// is name the type.
 const RESERVED_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
@@ -1287,24 +1296,51 @@ impl Tool for McpTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn reserved_tool_names_match_the_native_registry() {
-        let mut expected: HashSet<&str> = vec![
+    #[tokio::test]
+    async fn reserved_tool_names_match_the_native_registry() {
+        use std::collections::BTreeSet;
+
+        let mut compiled: HashSet<&str> = vec![
             crate::agent::subagent::SPAWN_SUBAGENT_TOOL_NAME,
             crate::tools::code::RUN_CODE_TOOL_NAME,
         ]
         .into_iter()
         .collect();
-        let registry = crate::tools::registry::ToolRegistry::with_native_tools();
+        // Native *and* plugin, because both are compiled in and both are ones
+        // an MCP server would be shadowing. The Lua plugins have to be loaded
+        // before they are in the kernel to be copied out of; nothing calls
+        // `plugins::boot` in a test binary.
+        crate::plugins::bundled::ensure().await;
+        let mut registry = crate::tools::registry::ToolRegistry::with_native_tools();
+        crate::plugins::install_tools_into(&mut registry);
         let specs = registry.specs();
         for spec in &specs {
-            expected.insert(spec.function.name.as_str());
+            compiled.insert(spec.function.name.as_str());
         }
         let reserved: HashSet<&str> = RESERVED_TOOL_NAMES.iter().copied().collect();
+
+        let unreserved: BTreeSet<&str> = compiled.difference(&reserved).copied().collect();
+        assert!(
+            unreserved.is_empty(),
+            "RESERVED_TOOL_NAMES must track every tool this build registers; missing {unreserved:?}"
+        );
+
+        // The other direction is not equality, because a plugin tool stays
+        // reserved on a build that left the plugin out — see the constant. So
+        // the extras have to be exactly the tools of the plugins this build
+        // does not have, and nothing else.
+        let extra: BTreeSet<&str> = reserved.difference(&compiled).copied().collect();
+        let mut absent: BTreeSet<&str> = BTreeSet::new();
+        if !cfg!(feature = "tool-web") {
+            absent.extend(["web_fetch", "web_search", "x_search"]);
+        }
+        if !cfg!(feature = "tool-git") {
+            absent.extend(["git_status", "git_diff"]);
+        }
         assert_eq!(
-            reserved, expected,
-            "RESERVED_TOOL_NAMES must track ToolRegistry::with_native_tools \
-             (plus spawn_subagent)"
+            extra, absent,
+            "a reserved name that no compiled-in tool claims must be a plugin tool this \
+             build left out"
         );
     }
 
