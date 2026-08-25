@@ -1,0 +1,20 @@
+name = "git"
+version = "1.0.0"
+description = "Working tree status and diffs, by shelling out to git"
+
+# `process` and nothing else, which is the whole of what this plugin is.
+#
+# Not `filesystem`, even though it reports on files. It never opens one: it
+# asks git, which knows about the index, about `.gitignore` and about what
+# `--cached` means, none of which is recoverable from `io.open`. So the grant
+# it needs is "run a program", and every file this plugin's answers describe is
+# read inside git's process rather than inside this one.
+#
+# Not `ui` either. A tool's output reaches the transcript by being returned;
+# `wizard.ui.notify` is for a plugin that has something to say outside a call.
+capabilities = ["process"]
+
+# In every profile, including `minimal` and `pi`. `docs/plugins.md` lists
+# "core plus file, shell, git, todo" as what a CI container needs, and this is
+# the git in that sentence.
+profiles = ["full", "server", "minimal", "pi"]

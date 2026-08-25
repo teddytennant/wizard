@@ -65,6 +65,7 @@
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+pub mod bundled;
 pub mod host;
 
 #[cfg(feature = "provider-chatgpt")]
@@ -237,6 +238,13 @@ pub async fn boot(project_root: Option<&Path>) {
         let _ = PROJECT_ROOT.set(root.to_path_buf());
     }
     let kernel = kernel();
+    // The plugins that ship in the binary, before the ones that arrived by
+    // being dropped in a directory. Order is the conflict policy: the first
+    // claim on a tool name wins, so a user plugin cannot silently take
+    // `git_diff` out from under the model by being alphabetically earlier.
+    // (It is also its own latch, so a surface that reaches
+    // `build_tool_registry` before `boot` does not load them twice.)
+    bundled::ensure().await;
     // `set` is the latch: exactly one caller gets `Ok`, so a second `boot`
     // (a test, a surface that calls it defensively) is a no-op rather than a
     // second copy of every user plugin failing to claim its own tool names.
@@ -516,15 +524,25 @@ mod tests {
     /// written out rather than derived from [`compiled_in`] for the reason the
     /// provider table gives: a plugin that quietly stopped registering one of
     /// its three tools would still be in `compiled_in`.
-    #[test]
-    fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
+    #[tokio::test]
+    async fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
         /// `(cargo feature is on, plugin name, tools it registers)`.
-        const EXPECTED: &[(bool, &str, &[&str])] = &[(
-            cfg!(feature = "tool-web"),
-            "web",
-            &["web_fetch", "web_search", "x_search"],
-        )];
+        ///
+        /// `git` is Lua and `web` is Rust, and the row is the same row: the
+        /// kernel does not distinguish them, which is the claim
+        /// `docs/plugins.md` opens with.
+        const EXPECTED: &[(bool, &str, &[&str])] = &[
+            (
+                cfg!(feature = "tool-web"),
+                "web",
+                &["web_fetch", "web_search", "x_search"],
+            ),
+            (cfg!(feature = "tool-git"), "git", &["git_status", "git_diff"]),
+        ];
 
+        // The Lua half does not load with the kernel — see `bundled` — so a
+        // test that asserts what the process kernel holds has to ask for it.
+        bundled::ensure().await;
         let kernel = kernel();
         let registered = kernel.tool_names();
         for (compiled_in, name, tools) in EXPECTED {
@@ -557,8 +575,9 @@ mod tests {
     /// [`install_tools_into`] is the only bridge, and `build_tool_registry`
     /// and `mcp serve` are its only callers, so asserting it here covers both
     /// without standing up an agent.
-    #[test]
-    fn plugin_tools_reach_the_agents_registry_and_only_when_compiled_in() {
+    #[tokio::test]
+    async fn plugin_tools_reach_the_agents_registry_and_only_when_compiled_in() {
+        bundled::ensure().await;
         let mut registry = ToolRegistry::with_native_tools();
         let native = registry.len();
         let installed = install_tools_into(&mut registry);
