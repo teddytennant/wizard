@@ -71,6 +71,8 @@
 pub mod acp;
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+#[cfg(test)]
+mod bench;
 pub mod bundled;
 #[cfg(feature = "fleet")]
 pub mod fleet;
