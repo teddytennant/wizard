@@ -74,6 +74,11 @@ pub mod anthropic;
 pub mod bundled;
 #[cfg(feature = "fleet")]
 pub mod fleet;
+// The messaging gateway: the transport, the setup wizard, the service
+// installer, and the two CLI surfaces that reach them. One plugin over one
+// directory, and the first to register two entrypoints.
+#[cfg(feature = "gateway")]
+pub mod gateway;
 pub mod host;
 
 #[cfg(feature = "provider-chatgpt")]
@@ -129,17 +134,14 @@ use crate::tools::registry::ToolRegistry;
 /// `contrib/check-plugin-work.sh` proves.
 ///
 /// Seven of them are providers. The rest are not, and each one is a different
-/// shape of seam: `native` registers a `wizard gui` entrypoint, `tool-web`
-/// three tools, `graph` nothing at all, and `mesh` both a `wizard peers`
-/// subcommand tree and the factory `App` opens a session's tee from. They are
-/// the reason `docs/plugins.md`'s first rule is a rule rather than an
-/// observation — `src/lib.rs` used to call `native::run` and `mesh::cli::run`
-/// by name, and `src/app/` held a `MeshTee` in a field.
-/// Seven of them are providers. Three are *surfaces* — the window, the ACP
-/// server and the fleet — and they are the reason `docs/plugins.md`'s first
-/// rule is a rule rather than an observation: `src/lib.rs` used to call
-/// `native::run`, `acp::run` and `fleet::run` by name, and the entrypoints
-/// they register are what replaced those three calls.
+/// shape of seam: `native`, `acp`, `fleet` and `gateway` register CLI
+/// entrypoints (the gateway two of them), `tool-web` three tools, `graph`
+/// nothing at all, and `mesh` both a `wizard peers` subcommand tree and the
+/// factory `App` opens a session's tee from. They are the reason
+/// `docs/plugins.md`'s first rule is a rule rather than an observation —
+/// `src/lib.rs` used to call `native::run`, `acp::run`, `fleet::run`,
+/// `gateway::run` and `mesh::cli::run` by name, and `src/app/` held a
+/// `MeshTee` in a field.
 //
 // Built by pushing rather than as a `vec![]` literal because every line is
 // `#[cfg]`-gated, and an attribute on an element of a vec literal is not
@@ -158,6 +160,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
     #[cfg(feature = "fleet")]
     plugins.push(Arc::new(fleet::FleetPlugin::new()));
+    #[cfg(feature = "gateway")]
+    plugins.push(Arc::new(gateway::plugin::GatewayPlugin::new()));
     #[cfg(feature = "provider-llamacpp")]
     plugins.push(Arc::new(llamacpp::LlamaCppPlugin::new()));
     #[cfg(feature = "native")]
@@ -649,6 +653,25 @@ mod tests {
                 .map(|entry| entry.name()),
             cfg!(feature = "fleet").then_some(entrypoint::FLEET),
             "the fleet's entrypoint"
+        );
+        // Two rows for one plugin, which is the gateway's whole novelty: it
+        // owns two surfaces, the registry keys on the name alone, and so the
+        // two are two names. A build in which only one of these answered would
+        // be a `wizard --gateway` that reported no gateway while the Telegram
+        // transport sat in the binary.
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint>(entrypoint::GATEWAY)
+                .map(|entry| entry.name()),
+            cfg!(feature = "gateway").then_some(entrypoint::GATEWAY),
+            "`wizard --gateway`"
+        );
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint<crate::cli::GatewayCmd>>(entrypoint::GATEWAY_SERVICE)
+                .map(|entry| entry.name()),
+            cfg!(feature = "gateway").then_some(entrypoint::GATEWAY_SERVICE),
+            "`wizard gateway <verb>`"
         );
     }
 

@@ -636,12 +636,12 @@ pub fn check_gateway_allow_list(config: &Config) -> Check {
              your chat id and add it under [gateway] in ~/.wizard/config.toml",
         );
     }
-    // The group-chat note, in the words `crate::gateway::group_chat_warning`
+    // The group-chat note, in the words `crate::config::group_chat_warning`
     // gives every surface that has to say it. `pass`, not a failure: allow-
     // listing a group is a legitimate thing to configure deliberately and
     // doctor must not refuse a working setup. But it is the check most worth
     // surfacing here, because after setup nothing else ever tells the operator.
-    if let Some(warning) = crate::gateway::group_chat_warning(ids) {
+    if let Some(warning) = crate::config::group_chat_warning(ids) {
         return Check::pass(
             label,
             format!("{} chat id(s) allowed — note: {warning}", ids.len()),

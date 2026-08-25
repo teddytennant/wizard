@@ -175,7 +175,7 @@ impl Answers {
 /// `provider_name`, which is what [`crate::config::ProviderConfig`] resolves
 /// against; the web-search key under the backend name the `web_search` tool
 /// resolves at call time; the bot token under
-/// [`crate::gateway::telegram::TOKEN_CREDENTIAL`], which is what the gateway
+/// [`crate::credentials::GATEWAY_TOKEN`], which is what the gateway
 /// reads. A typo in any of those stores the secret where nothing looks for it
 /// and leaves a setup that looks finished and 401s on the first turn, which is
 /// exactly the failure asking for the key was meant to remove. Injecting the
@@ -205,7 +205,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
         &format!("{} API key", answers.web_search_backend),
     );
     persist(
-        crate::gateway::telegram::TOKEN_CREDENTIAL,
+        crate::credentials::GATEWAY_TOKEN,
         answers.gateway_bot_token.as_deref(),
         "Telegram bot token",
     );
@@ -1615,7 +1615,7 @@ fn print_summary(config: &Config) {
 
     if config.gateway.kind == GatewayKind::Telegram {
         let env = config.gateway.token_env();
-        let token_stored = crate::credentials::get(crate::gateway::telegram::TOKEN_CREDENTIAL)
+        let token_stored = crate::credentials::get(crate::credentials::GATEWAY_TOKEN)
             .is_some_and(|t| !t.trim().is_empty());
         if token_stored {
             println!("  • Telegram bot token: stored in ~/.wizard/credentials.toml");
@@ -2376,7 +2376,7 @@ mod tests {
                 ("openai".to_string(), "sk-provider".to_string()),
                 ("brave".to_string(), "brv-secret-key".to_string()),
                 (
-                    crate::gateway::telegram::TOKEN_CREDENTIAL.to_string(),
+                    crate::credentials::GATEWAY_TOKEN.to_string(),
                     "123456:ABC-test-token".to_string()
                 ),
             ]

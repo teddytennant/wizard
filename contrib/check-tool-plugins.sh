@@ -48,6 +48,14 @@
 #     reaching into the fleet for `FleetDirs`, a status row or a state file —
 #     none of which it does today, and all of which would compile fine both
 #     with every feature on and with every feature off.
+#   - `gateway` left out with everything else present. It is the first plugin
+#     that owns *two* entrypoints, so it is the first leg where "absent" has
+#     two halves that can disagree: a build where `wizard --gateway` degraded
+#     to a sentence and `wizard gateway install` still tried to write a unit
+#     file would pass every other leg here. It is also the leg that proves the
+#     three things core kept — `[gateway]` in `config.toml`,
+#     `credentials::GATEWAY_TOKEN` and `config::group_chat_warning` — are
+#     genuinely core and not a plugin's exports read through a re-export.
 #
 # Usage: contrib/check-tool-plugins.sh [--build-only]
 set -uo pipefail
@@ -149,6 +157,7 @@ leg "without tool-git" --features "$(without tool-git)"
 leg "without graph" --features "$(without graph)"
 leg "without acp" --features "$(without acp)"
 leg "without fleet" --features "$(without fleet)"
+leg "without gateway" --features "$(without gateway)"
 
 # `graph` goes with it: it enables `mesh`, so dropping only `mesh` from the
 # list leaves it on. This is the leg that proves `App::mesh` degrades to a

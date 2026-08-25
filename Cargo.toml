@@ -83,6 +83,7 @@ build = "build.rs"
 default = [
   "acp",
   "fleet",
+  "gateway",
   "provider-anthropic",
   "provider-chatgpt",
   "provider-cloudflare",
@@ -119,6 +120,26 @@ acp = ["dep:agent-client-protocol"]
 # round-trips one rather than rejecting somebody's file over a section it
 # cannot run.
 fleet = []
+
+# `wizard --gateway` and `wizard gateway <verb>`: a chat app drives one
+# autonomous agent turn per inbound message. `src/plugins/gateway/`. See
+# docs/gateway.md.
+#
+# The first plugin that owns *two* CLI surfaces, which is what turned up the
+# limit of `Entrypoint`'s type parameter: the service registry keys on the name
+# alone, so the two surfaces are two names rather than one name at two argument
+# types. See `entrypoint::GATEWAY_SERVICE`.
+#
+# What stays in core when this is left out is what the rest of the tree needs
+# either way: `[gateway]` in `config.toml` (the `[web]` rule -- a config section
+# is a promise about what this process does, and a build without the plugin
+# still parses and round-trips one), `credentials::GATEWAY_TOKEN` (onboarding
+# writes the bot token whether or not this build can spend it, and a key
+# namespace with a feature-shaped hole in it is one two features can collide
+# in), `config::group_chat_warning` (doctor and the setup wizard have to say
+# the same sentence about the same allow-list), and `Surface::Gateway` in the
+# one command dispatcher.
+gateway = []
 
 # Anthropic Messages API. `kind = "anthropic"`.
 provider-anthropic = []

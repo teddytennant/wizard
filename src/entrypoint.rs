@@ -1,12 +1,14 @@
 //! CLI subcommands whose bodies ship in plugins.
 //!
-//! `wizard gui`, `wizard acp` and `wizard fleet` are parsed by core (they are
-//! `clap` variants in [`crate::cli`]) and run by plugins (the iced window
-//! behind `--features native`, the ACP server behind `acp`, the worktree fleet
-//! behind `fleet`). Something has to join those two halves without core naming
-//! the plugin, and this is it: the plugin `provide`s an [`Entrypoint`] under a
-//! well-known name, and the dispatch chain in [`crate::run`] `inject`s one
-//! instead of calling `native::run` / `acp::run` / `fleet::run`.
+//! `wizard gui`, `wizard acp`, `wizard fleet` and the two gateway surfaces are
+//! parsed by core (they are `clap` variants in [`crate::cli`]) and run by
+//! plugins (the iced window behind `--features native`, the ACP server behind
+//! `acp`, the worktree fleet behind `fleet`, the Telegram bot and its service
+//! installer behind `gateway`). Something has to join those two halves without
+//! core naming the plugin, and this is it: the plugin `provide`s an
+//! [`Entrypoint`] under a well-known name, and the dispatch chain in
+//! [`crate::run`] `inject`s one instead of calling `native::run` /
+//! `acp::run` / `fleet::run` / `gateway::run`.
 //!
 //! # Two shapes, because two subcommands are shaped differently
 //!
@@ -41,14 +43,15 @@
 //! was exactly that: the dispatch chain naming a plugin's function, gated on
 //! the plugin's own cargo feature. It compiles either way, which is why it
 //! survived a year — but it means core pays one `#[cfg]` per plugin that owns
-//! a surface, and this module now has three. A name in a registry costs core
-//! one lookup, forever, and the third registration cost this file one generic
-//! parameter and one constructor rather than a third arm's worth of `#[cfg]`.
+//! a surface, and this module now has five names over four plugins. A name in
+//! a registry costs core one lookup, forever; the third registration cost this
+//! file one generic parameter and one constructor rather than a third arm's
+//! worth of `#[cfg]`, and the fifth cost nothing at all, which is the point.
 //!
 //! # What core still holds
 //!
-//! The names (`"gui"`, `"acp"`, `"fleet"`) and the sentence printed when
-//! nothing answers to one. That is the same split [`crate::llm::registry`]
+//! The names (`"gui"`, `"acp"`, `"fleet"`, `"gateway"`, `"gateway-service"`)
+//! and the sentence printed when nothing answers to one. That is the same split [`crate::llm::registry`]
 //! makes for a provider `kind`: core may hold the *string* a user types, and
 //! the prose explaining how to get the thing behind it, as long as it never
 //! names the type or constructs one. Each "not in this build" message in
@@ -89,6 +92,27 @@ pub const ACP: &str = "acp";
 /// constant.
 pub const FLEET: &str = "fleet";
 
+/// The name the messaging gateway registers `wizard --gateway` under: the
+/// long-running bot process itself.
+pub const GATEWAY: &str = "gateway";
+
+/// The name the messaging gateway registers `wizard gateway <verb>` under:
+/// setting a bot up and running it as a background service.
+///
+/// A *second* name rather than a second argument type under [`GATEWAY`], and
+/// this is the constant that documents why. [`Entrypoint`]'s type parameter
+/// separates a lookup at the wrong type from a lookup at the right one, but it
+/// is not a second dimension of the registry key:
+/// [`ServiceRegistry`](crate::kernel::ServiceRegistry) is a
+/// `HashMap<String, _>` whose `provide` *replaces* a name that is already
+/// taken — deliberately, so a reload can put a service back with no window in
+/// which injectors see [`None`]. Registering both gateway surfaces under
+/// `"gateway"` would therefore have left whichever one applied second, and the
+/// other would have read exactly like a plugin that was never compiled in.
+/// The gateway is the first plugin to own two surfaces and so the first to
+/// find this out; `docs/plugins.md` has the write-up.
+pub const GATEWAY_SERVICE: &str = "gateway-service";
+
 /// The boxed body. A `Fn` rather than a `FnOnce` because a [`Service`] is
 /// shared: the registry hands out `Arc`s, and an entrypoint that consumed
 /// itself could not be handed out twice even though only one caller will ever
@@ -121,6 +145,14 @@ type Body<A> = Box<dyn Fn(A) -> Pin<Box<dyn Future<Output = Result<i32>> + Send>
 /// keys on `TypeId` already, so `Entrypoint<Config>` and
 /// `Entrypoint<FleetCmd>` are simply different services and the downcast that
 /// resolves them is the one that was already there.
+///
+/// What the parameter is *not* is a second dimension of the registry key. The
+/// registry is a `HashMap<String, _>` and `provide` replaces a name already
+/// taken, so two surfaces under one name leave whichever applied last. What
+/// the downcast buys is that the loser then reads as [`None`] — an absent
+/// plugin — rather than as the wrong body being handed the wrong argument.
+/// See [`GATEWAY_SERVICE`], which is the second name the first two-surface
+/// plugin needed.
 ///
 /// The default is [`Config`] because that is what a surface with nothing to
 /// parse takes, and it keeps the common `Entrypoint` spelling unqualified.
@@ -404,6 +436,20 @@ mod tests {
         if let Some(entry) = found {
             assert_eq!(entry.name(), PEERS);
         }
+    }
+
+    /// Two surfaces owned by one plugin are two names, and neither answers at
+    /// the other's argument type. The gateway is the case that proved a single
+    /// name could not carry both — see [`GATEWAY_SERVICE`] — so both halves of
+    /// that are asserted here rather than only in the plugin's own tests,
+    /// where a build without the feature would not compile them at all.
+    #[test]
+    #[cfg(feature = "gateway")]
+    fn the_gateways_two_surfaces_are_two_names_at_two_argument_types() {
+        assert!(installed::<Config>(GATEWAY).is_some());
+        assert!(installed::<crate::cli::GatewayCmd>(GATEWAY_SERVICE).is_some());
+        assert!(installed::<crate::cli::GatewayCmd>(GATEWAY).is_none());
+        assert!(installed::<Config>(GATEWAY_SERVICE).is_none());
     }
 
     /// The two lookups are separate registries' worth of names and do not see

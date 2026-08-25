@@ -26,6 +26,20 @@ struct Store {
     keys: BTreeMap<String, String>,
 }
 
+/// Key the messaging gateway's bot token is stored under.
+///
+/// The *name* is core's and the transport that reads it is not, which is the
+/// same split [`crate::llm::registry`] makes for a provider `kind`: this file
+/// owns the key namespace of `credentials.toml`, and a key namespace with a
+/// hole in it on a build that left a plugin out is a namespace two features
+/// can collide in. Onboarding writes the token here (core, and it asks for
+/// one whether or not this build can run a gateway, because the config it is
+/// writing outlives the binary that wrote it) and `plugins::gateway` reads it
+/// back. Naming it in one place is what stops a paste and a read drifting
+/// apart into a gateway that reports "token not set" over a token that was
+/// pasted.
+pub const GATEWAY_TOKEN: &str = "telegram";
+
 /// `~/.wizard/credentials.toml`.
 pub fn path() -> Result<PathBuf> {
     Ok(Config::wizard_dir()?.join("credentials.toml"))

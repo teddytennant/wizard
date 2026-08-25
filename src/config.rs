@@ -208,7 +208,8 @@ pub struct GatewayConfig {
     /// Chat IDs allowed to drive the agent. The list is a closed allow-list:
     /// empty means *nobody* is allowed, so an unconfigured gateway refuses
     /// every message instead of handing a stranger an autonomous agent with
-    /// the unrestricted tool set. See [`crate::gateway::is_authorized`].
+    /// the unrestricted tool set. The gateway plugin's `is_authorized` is what
+    /// enforces it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_chat_ids: Vec<i64>,
 }
@@ -222,6 +223,40 @@ impl GatewayConfig {
     pub fn token_env(&self) -> &str {
         self.token_env.as_deref().unwrap_or(Self::DEFAULT_TOKEN_ENV)
     }
+}
+
+/// The warning a gateway allow-list earns when it names a group chat, or
+/// [`None`] when every id in it is a one-to-one chat.
+///
+/// A negative id is a group on every platform wired up so far, and the
+/// allow-list authorises a *chat* rather than a person, so a group in it hands
+/// full tool access to everyone in that group — including whoever joins it
+/// later.
+///
+/// It lives in core rather than in the gateway plugin for the same reason
+/// [`GatewayConfig`] itself does: it is a fact about a value core parses and
+/// keeps parsing on a build with no gateway in it, and its callers sit on both
+/// sides of the plugin boundary — `wizard doctor` is core, `wizard gateway
+/// setup` is the plugin. They have to say the same sentence, or an operator
+/// hears the warning once and is reassured by its absence the second time.
+/// Same move [`crate::text::is_invisible`] made when its callers ended up on
+/// both sides of the mesh.
+///
+/// It takes a slice rather than a [`GatewayConfig`] because one of those
+/// callers is asking about an id that is not in the config yet: `gateway
+/// setup` has just discovered a chat id and is about to offer to write it, and
+/// the moment to say "that is a group" is before it lands in the file rather
+/// than the next time doctor runs.
+pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
+    let groups: Vec<i64> = allowed.iter().copied().filter(|id| *id < 0).collect();
+    (!groups.is_empty()).then(|| {
+        format!(
+            "{groups:?} look like group chats. The allow-list authorises a chat, not a \
+             person, so every member of those groups — including anyone added later — can \
+             run agent turns on this machine with full tool access. Prefer a one-to-one \
+             chat id."
+        )
+    })
 }
 
 /// Cosmetic TUI settings (`[ui]` in `config.toml`).

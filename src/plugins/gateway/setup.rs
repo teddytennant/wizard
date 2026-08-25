@@ -33,8 +33,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
+use super::telegram::{ChatSighting, Telegram};
 use crate::config::Config;
-use crate::gateway::telegram::{ChatSighting, TOKEN_CREDENTIAL, Telegram};
+use crate::credentials::GATEWAY_TOKEN;
 use crate::trust::Console;
 
 /// How long discovery waits for the operator to send a message before giving
@@ -142,7 +143,7 @@ pub async fn run() -> Result<i32> {
             if token.is_empty() {
                 bail!("no token entered — nothing was changed");
             }
-            crate::credentials::store(TOKEN_CREDENTIAL, &token)
+            crate::credentials::store(GATEWAY_TOKEN, &token)
                 .context("storing the Telegram bot token")?;
             println!(
                 "Stored in {} (mode 0600). It is never written to config.toml.",
@@ -168,7 +169,7 @@ pub async fn run() -> Result<i32> {
             // wrote is removed — one that was already there is somebody else's
             // decision, and the failure may be a network one.
             if pasted {
-                let _ = crate::credentials::remove(TOKEN_CREDENTIAL);
+                let _ = crate::credentials::remove(GATEWAY_TOKEN);
                 println!("The token was not kept.");
             }
             return Err(err).context("checking the bot token with Telegram");
@@ -269,7 +270,7 @@ fn write_step(config: &Config, sighting: &ChatSighting) -> Result<()> {
 
     // Before the question, never after: this is the one thing about the
     // decision the operator cannot see for themselves.
-    if let Some(warning) = super::group_chat_warning(&[chat_id]) {
+    if let Some(warning) = crate::config::group_chat_warning(&[chat_id]) {
         println!();
         println!("WARNING: {warning}");
     }
@@ -715,30 +716,6 @@ mod tests {
             Some(40)
         );
         assert_eq!(allowed_ids(&after), vec![1, 2]);
-    }
-
-    /// The group warning is the same sentence the running gateway and
-    /// `wizard doctor` print, and it only fires on a negative id.
-    #[test]
-    fn a_group_id_is_warned_about_in_the_same_words_as_serve_and_doctor() {
-        let warning =
-            super::super::group_chat_warning(&[-1001234567890]).expect("a negative id is a group");
-        assert!(warning.contains("every member"), "{warning}");
-        assert!(warning.contains("full tool access"), "{warning}");
-        assert!(warning.contains("one-to-one"), "{warning}");
-        // The three surfaces agree because there is one string. doctor wraps
-        // it in a count prefix and serve in "warning: "; both must still
-        // contain it verbatim.
-        let config = {
-            let mut config = Config::default();
-            config.gateway.allowed_chat_ids = vec![-1001234567890];
-            config
-        };
-        let check = crate::doctor::check_gateway_allow_list(&config);
-        assert!(check.detail.contains(&warning), "{}", check.detail);
-
-        assert_eq!(super::super::group_chat_warning(&[123, 456]), None);
-        assert_eq!(super::super::group_chat_warning(&[]), None);
     }
 
     /// Discovery reports the chat, its type and who sent it — the three facts
