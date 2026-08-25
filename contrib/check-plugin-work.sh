@@ -16,9 +16,11 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel,
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2593
-# once `git_status`/`git_diff` became the first Lua plugin (nine tests left
-# with `src/tools/git.rs`, sixteen arrived with the port and the two limits it
-# found). Raise it when a phase adds tests, so the ratchet keeps ratcheting.
+# once `git_status`/`git_diff` became the first Lua plugin. That last step is
+# 2586 - 9 + 16: the figure above was two behind what the suite actually ran,
+# nine tests left with `src/tools/git.rs`, and sixteen arrived with the port
+# and the two limits it turned up. Raise it when a phase adds tests, so the
+# ratchet keeps ratcheting.
 BASELINE_TESTS=2593
 
 fail=0

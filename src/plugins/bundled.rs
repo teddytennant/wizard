@@ -54,10 +54,13 @@
 //! every agent-bearing surface *and every test that composes a registry* goes
 //! through. The second is what makes `cargo test` see them without a fixture.
 //!
-//! `mcp serve` composes its own registry and has its own call, for the same
-//! reason it has its own [`super::install_tools_into`]: an MCP client that saw
-//! a different tool set than the agent does from the same install would be a
-//! bug nobody could reproduce from the outside.
+//! `mcp serve` and `harness export` compose their own registries and need no
+//! call of their own: both are dispatch arms of `crate::run`, and [`boot`] is
+//! above the chain. Their *tests* do call [`ensure`], and have to — a test
+//! that composed a bundle from a registry the loader had never filled would
+//! agree with itself about a bundle the real export never writes.
+//!
+//! [`boot`]: super::boot
 
 use tokio::sync::OnceCell;
 

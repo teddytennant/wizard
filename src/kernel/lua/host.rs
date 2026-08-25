@@ -417,8 +417,12 @@ fn exec_request(spec: &Table) -> mlua::Result<crate::kernel::ExecRequest> {
 /// `wizard.truncate` and `wizard.limits`: the context-window budgets, and the
 /// one function that applies them.
 ///
-/// Ungated, because neither costs anything and neither reaches outside the
-/// process — this is text arithmetic over four compiled-in numbers.
+/// Ungated. `truncate_output` can spill to the session's scratch file, which
+/// is the one thing here that touches a disk, and it is not a way around
+/// `filesystem`: the plugin picks neither the path nor the filename, the bytes
+/// written are its own return value on its way to the model, and it cannot
+/// read any of it back. Gating it would mean a `filesystem` grant on every
+/// plugin that wanted its output framed the way a native tool's is.
 ///
 /// It is here at all because a ported tool cannot preserve its behaviour
 /// without it. A native tool picks a budget per *answer* — `git_diff` caps a

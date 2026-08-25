@@ -1130,9 +1130,10 @@ every surface goes through) **and from `agent::build_tool_registry`** (which
 every agent-bearing surface *and every test that composes a registry* goes
 through). The second is the load-bearing one: nothing calls `boot` in a test
 binary, and a first-party tool nobody could test is not a tool that should
-ship. `mcp serve` and `harness export` run after `boot` and need nothing extra;
-their *tests* call `ensure` themselves and would otherwise have agreed with
-themselves about a bundle the real export never writes.
+ship. `mcp serve` and `harness export` are dispatch arms of `crate::run`, which is
+below `boot`, so they need nothing extra; their *tests* call `ensure`
+themselves and would otherwise have agreed with themselves about a bundle the
+real export never writes.
 
 ### Four gaps in the host bridge, all of them general
 

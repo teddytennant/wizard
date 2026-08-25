@@ -25,15 +25,19 @@
 //!   [`crate::llm::registry`] reach it from `ProviderConfig::build` — a unit
 //!   test, `wizard doctor`, the settings sheet's probe — none of which hold a
 //!   kernel handle or, in some cases, a runtime.
-//! - **Lua plugins load once, from [`boot`], at the top of [`crate::run`].**
-//!   They are files: a `read_dir`, then a VM and a script per plugin. That is
-//!   real work, it is async, and it must happen exactly once for the process
-//!   rather than on whichever code path happened to touch a plugin first.
+//! - **Lua plugins load once, asynchronously, and in two groups.** Building a
+//!   plugin's VM is real work and [`crate::kernel::lua::load_source`] is
+//!   `async`, so neither group can go inside the `OnceLock`. The *bundled*
+//!   ones ship in the binary and load from [`bundled::ensure`], which [`boot`]
+//!   calls and so does [`crate::agent::build_tool_registry`] — see [`bundled`]
+//!   for why the second caller is the load-bearing one. The *user's* load from
+//!   [`boot`] alone: a `read_dir` of `~/.wizard/plugins`, then a VM and a
+//!   script per directory.
 //!
 //! Launch cost of the whole thing on a machine with no plugins installed is
-//! one `read_dir` that returns `ENOENT`. With plugins installed it is one
-//! LuaJIT VM per plugin, which is the cost the user asked for by installing
-//! them.
+//! one LuaJIT VM per bundled plugin plus one `read_dir` that returns `ENOENT`.
+//! With plugins installed it is one more VM each, which is the cost the user
+//! asked for by installing them.
 //!
 //! # Why [`boot`] is called from `run` and not from a surface
 //!
