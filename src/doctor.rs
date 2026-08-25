@@ -2435,7 +2435,7 @@ mod tests {
         // the probe to be skipped; a nonsense name guarantees that.
         let provider = ProviderConfig {
             name: "wizard-doctor-test-provider-never-stored".to_string(),
-            kind: crate::config::ProviderKind::Openai,
+            kind: crate::config::ProviderKind::OPENAI,
             base_url: "https://example.invalid/v1".to_string(),
             model: "gpt-test".to_string(),
             api_key_env: Some("WIZARD_DOCTOR_TEST_KEY_THAT_IS_NEVER_SET".to_string()),
@@ -2453,7 +2453,7 @@ mod tests {
     fn active_provider_check_flags_unknown_selection() {
         let provider = ProviderConfig {
             name: "local".to_string(),
-            kind: crate::config::ProviderKind::LlamaCpp,
+            kind: crate::config::ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:11435".to_string(),
             model: "qwen3.6:27b".to_string(),
             api_key_env: None,
@@ -3121,8 +3121,8 @@ mod tests {
             "TAVILY_API_KEY",
             crate::config::GatewayConfig::DEFAULT_TOKEN_ENV,
             crate::llm::xai_oauth::DEFAULT_KEY_ENV,
-            crate::llm::openrouter::DEFAULT_KEY_ENV,
-            crate::llm::cloudflare::DEFAULT_KEY_ENV,
+            crate::llm::registry::defaults::OPENROUTER_KEY_ENV,
+            crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV,
         ] {
             // Wizard's own defaults are in the list on purpose: a default
             // renamed to something this gate cannot confirm would be withheld

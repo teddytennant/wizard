@@ -1656,9 +1656,18 @@ async fn usage_counts_accumulate_emit_events_and_land_in_the_jsonl_log() {
     // the unknown-model fallback. That pins both halves of the wiring: drop
     // `cost_usd` and the first assertion fires, stop passing the provider's
     // kind through and the source becomes `Fallback` with a non-zero cost.
-    assert_eq!(records[0].cost_usd, Some(0.0));
-    assert_eq!(records[0].price_source, crate::usage::PriceSource::Local);
-    assert_eq!(records[1].price_source, crate::usage::PriceSource::Local);
+    //
+    // "Self-hosted" is read off the llama.cpp descriptor, so this half only
+    // holds on a build that has the plugin; without it the synthesized entry
+    // names a kind nothing answers to and the fallback price is the honest
+    // answer. The counting and provenance-plumbing assertions above are what
+    // this test is for and they hold either way.
+    #[cfg(feature = "provider-llamacpp")]
+    {
+        assert_eq!(records[0].cost_usd, Some(0.0));
+        assert_eq!(records[0].price_source, crate::usage::PriceSource::Local);
+        assert_eq!(records[1].price_source, crate::usage::PriceSource::Local);
+    }
     // These chunks carry `CacheTokens::NONE`, which is what a backend with no
     // prompt cache reports, so the subset counts are zero rather than absent.
     // The turn that *does* report a split is
@@ -1690,7 +1699,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
     let mut config = Config::default();
     config.providers = vec![crate::config::ProviderConfig {
         name: "anthropic".to_string(),
-        kind: crate::config::ProviderKind::Anthropic,
+        kind: crate::config::ProviderKind::ANTHROPIC,
         base_url: "https://api.anthropic.com".to_string(),
         model: "claude-opus-5".to_string(),
         api_key_env: None,

@@ -41,11 +41,17 @@ pub fn export(dir: &Path) -> Result<()> {
         format!("{}\n", SOVEREIGN_SYSTEM_PROMPT.trim_end()),
     )?;
 
-    // Tool descriptions: one markdown file per native tool, named after the
-    // tool. Scripted and MCP tools are runtime-dependent and excluded.
+    // Tool descriptions: one markdown file per compiled-in tool, named after
+    // the tool. Scripted and MCP tools are runtime-dependent and excluded;
+    // plugin tools are not, because a plugin is compiled in exactly as a
+    // native tool is and a bundle that skipped them would leave the model's
+    // biggest descriptions unoverridable. Which tools those are is a property
+    // of the build: leave `tool-web` out and the bundle has no `web_fetch.md`,
+    // because that build has no `web_fetch`.
     let descriptions = dir.join("tool_descriptions");
     std::fs::create_dir_all(&descriptions)?;
-    let registry = ToolRegistry::with_native_tools();
+    let mut registry = ToolRegistry::with_native_tools();
+    crate::plugins::install_tools_into(&mut registry);
     let mut tool_count = 0usize;
     for spec in registry.specs() {
         std::fs::write(
@@ -223,8 +229,14 @@ mod tests {
     use super::*;
     use crate::agent::subagent::SubagentConfig;
 
-    #[test]
-    fn export_writes_a_complete_bundle() {
+    #[tokio::test]
+    async fn export_writes_a_complete_bundle() {
+        // `export` is synchronous and runs from `crate::run`, which has already
+        // called `plugins::boot`; a test binary has not, so it says so here.
+        // Without this the bundle would be exported and checked against a
+        // registry that was missing the same tools, and would agree with
+        // itself about a bundle the real export never writes.
+        crate::plugins::bundled::ensure().await;
         let dir = tempfile::tempdir().expect("tempdir");
         export(dir.path()).expect("export");
 
@@ -233,13 +245,19 @@ mod tests {
         assert!(!prompt.trim().is_empty());
         assert!(prompt.ends_with('\n'));
 
-        // One non-empty description file per native tool, named after the tool
-        // — the "keep names stable" contract HARNESS.md documents.
-        let expected: BTreeSet<String> = ToolRegistry::with_native_tools()
-            .specs()
-            .iter()
-            .map(|spec| spec.function.name.clone())
-            .collect();
+        // One non-empty description file per compiled-in tool, named after the
+        // tool — the "keep names stable" contract HARNESS.md documents. Built
+        // the same way the export builds it, plugin tools included, so a build
+        // without `tool-web` expects no `web_fetch.md` and finds none.
+        let expected: BTreeSet<String> = {
+            let mut registry = ToolRegistry::with_native_tools();
+            crate::plugins::install_tools_into(&mut registry);
+            registry
+                .specs()
+                .iter()
+                .map(|spec| spec.function.name.clone())
+                .collect()
+        };
         let descriptions = dir.path().join("tool_descriptions");
         let mut exported = BTreeSet::new();
         for entry in std::fs::read_dir(&descriptions).expect("descriptions dir") {

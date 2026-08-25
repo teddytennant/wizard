@@ -721,6 +721,7 @@ fn server_subcommands_parse() {
     assert!(message.contains("status|start|stop"), "got: {message}");
 }
 
+#[cfg(feature = "provider-xai")]
 #[test]
 fn provider_add_accepts_xai_kinds() {
     let parsed =
@@ -731,7 +732,7 @@ fn provider_add_accepts_xai_kinds() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "xai".to_string(),
-            kind: ProviderKind::Xai,
+            kind: ProviderKind::XAI,
             base_url: "https://api.x.ai/v1".to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: Some("XAI_API_KEY".to_string()),
@@ -745,7 +746,7 @@ fn provider_add_accepts_xai_kinds() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "grok".to_string(),
-            kind: ProviderKind::XaiOauth,
+            kind: ProviderKind::XAI_OAUTH,
             base_url: "https://api.x.ai/v1".to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: None,
@@ -759,6 +760,11 @@ fn provider_add_accepts_xai_kinds() {
     assert!(message.contains("xai|xaioauth"), "got: {message}");
 }
 
+/// Gated on the plugin because `/provider add` validates the kind against
+/// the registry: without `provider-openai` there is no `openrouter` to add,
+/// and refusing it is the correct behaviour rather than the bug this test
+/// looks for.
+#[cfg(feature = "provider-openai")]
 #[test]
 fn provider_add_accepts_openrouter_kind() {
     let parsed = SlashCommand::parse(
@@ -770,7 +776,7 @@ fn provider_add_accepts_openrouter_kind() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "openrouter".to_string(),
-            kind: ProviderKind::OpenRouter,
+            kind: ProviderKind::OPENROUTER,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             model: "openrouter/auto".to_string(),
             api_key_env: Some("OPENROUTER_API_KEY".to_string()),
@@ -784,6 +790,7 @@ fn provider_add_accepts_openrouter_kind() {
     assert!(message.contains("openrouter"), "got: {message}");
 }
 
+#[cfg(feature = "provider-cloudflare")]
 #[test]
 fn provider_add_accepts_cloudflare_kind() {
     let parsed = SlashCommand::parse(
@@ -795,7 +802,7 @@ fn provider_add_accepts_cloudflare_kind() {
         parsed,
         SlashCommand::Provider(ProviderAction::Add {
             name: "cf".to_string(),
-            kind: ProviderKind::Cloudflare,
+            kind: ProviderKind::CLOUDFLARE,
             base_url: "https://api.cloudflare.com/client/v4/accounts/acc/ai/v1".to_string(),
             model: "@cf/zai-org/glm-5.2".to_string(),
             api_key_env: Some("CLOUDFLARE_API_TOKEN".to_string()),
@@ -4315,7 +4322,11 @@ fn every_key_a_surface_advertises_is_bound() {
         }
     }
 
-    for surface in ["native", "app"] {
+    // `plugins/native` rather than `native`: the window moved under
+    // `src/plugins/` when it became a plugin, and a path this scan cannot find
+    // reads as a surface that advertises nothing — which is why the empty case
+    // below is an assertion rather than a skip.
+    for surface in ["plugins/native", "app"] {
         let mut files = Vec::new();
         sources(&root.join(surface), &mut files);
         if surface == "app" {
@@ -5094,4 +5105,51 @@ fn omakase_in_config_alone_lights_the_badge_and_the_mode() {
     let app = App::new(config);
     assert!(app.omakase, "the badge is lit");
     assert!(app.plan_mode, "and plan mode with it");
+}
+
+/// A plugin's slash command completes in the popup and submits as a command,
+/// not as a prompt. The wiring under test is `update_suggestions` and `submit`
+/// reading the merged palette rather than the built-in table alone.
+#[test]
+fn a_plugin_command_completes_and_submits_like_a_builtin() {
+    struct Held(&'static str);
+    impl Drop for Held {
+        fn drop(&mut self) {
+            crate::commands::plugin::uninstall(self.0);
+        }
+    }
+
+    let _held = Held("zzappprobe");
+    crate::commands::plugin::install(
+        "app-test",
+        crate::commands::PluginCommand::new(
+            "zzappprobe",
+            "a probe",
+            std::sync::Arc::new(|_: String| async move { Ok(String::new()) }),
+        )
+        .args("[thing]"),
+    )
+    .expect("the name is free");
+
+    let mut app = app();
+    type_str(&mut app, "/zzappp");
+    let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["zzappprobe"]);
+    assert!(
+        app.suggestions[0].takes_args,
+        "an argument hint waits for arguments"
+    );
+
+    // Tab completes to the name plus a space, then Enter submits the line as a
+    // command rather than sending it to the model.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.input, "/zzappprobe ");
+    type_str(&mut app, "here");
+    match press(&mut app, KeyCode::Enter) {
+        Some(AppAction::Command(SlashCommand::Plugin { name, args })) => {
+            assert_eq!(name, "zzappprobe");
+            assert_eq!(args, "here");
+        }
+        other => panic!("expected the plugin command, got {other:?}"),
+    }
 }

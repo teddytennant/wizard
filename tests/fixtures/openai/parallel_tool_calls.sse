@@ -19,7 +19,7 @@
 : the bytes without changing what is parsed.
 :
 : This file is also compiled into the adapter's own tests as
-: openai::testing::PARALLEL_TOOL_BATCH_SSE, so the in-process decoder tests
+: llm::test_support::PARALLEL_TOOL_BATCH_SSE, so the in-process decoder tests
 : and the over-a-socket ones read the same bytes. See the header of
 : tests/recorded_provider.rs for how to re-record it from a live stream once
 : the adapter's dump hook exists.

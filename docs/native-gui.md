@@ -60,14 +60,24 @@ Three reasons, and the third is the one that would be easy to lose:
    features and gates on a line floor. A widget tree can only be exercised
    headlessly up to a point, and putting it inside that ratio would push the
    floor down for the whole codebase. Every line of iced code is behind
-   `#[cfg(feature = "native")]` — including everything `src/gui/tasks.rs` adds
+   `#[cfg(feature = "native")]` — including everything `src/plugins/gui/tasks.rs` adds
    for the window: the two watcher fields, `tap` / `untap` / `relay`, `attended`,
    and the one line of `handle_event` that relays. That file carries no
    `#[cfg]` of its own beyond its test module; the gating is one level up, on
    the modules themselves — `pub mod gui;` and `pub mod native;` are both
-   `#[cfg(feature = "native")]` in `src/lib.rs`, so a default build never
-   compiles either, compiles exactly the program it compiled before, and the
-   ratchet keeps measuring the same thing.
+   `#[cfg(feature = "native")]` in `src/plugins/mod.rs`, so a default build
+   never compiles either, compiles exactly the program it compiled before, and
+   the ratchet keeps measuring the same thing.
+
+### The window is a plugin
+
+Both directories live under `src/plugins/` and the window registers itself with
+the kernel instead of being called by name. `src/lib.rs` no longer mentions
+either one: the `wizard gui` arm injects an entrypoint under the string `"gui"`
+and prints the install instructions when nothing answers. See
+[plugins.md](plugins.md) — "the window is a plugin, and it is the first one
+that is not a provider" — for what that took. Nothing about the surface itself
+changed, and `--features native` builds the same program.
 
 ### …and why off-by-default does not mean source-only
 
@@ -108,7 +118,7 @@ Every one of those is chosen against something already in the tree:
 | `default-features = false` + `tiny-skia` | links **no wgpu at all** — not a runtime fallback, an absent dependency. `cargo tree -i wgpu --features native` prints nothing. |
 | `image-without-codecs`, not `image` | `image` turns on the codec default set and would undo Wizard's `png, jpeg, gif, webp` selection. |
 | `linux-theme-detection` **off** | it is in iced's default set and pulls `mundy`, which runs its D-Bus query on `async-io` — a second, smol-flavoured reactor beside the tokio runtime the agent core owns. The theme comes from `crate::theme` anyway. |
-| `markdown` **off** | it pins `pulldown-cmark ^0.12` against Wizard's 0.13, so enabling it links two parsers. `src/native/widget/markdown.rs` renders through the one Wizard already has. |
+| `markdown` **off** | it pins `pulldown-cmark ^0.12` against Wizard's 0.13, so enabling it links two parsers. `src/plugins/native/widget/markdown.rs` renders through the one Wizard already has. |
 | `highlighter` | reaches syntect through `two-face` with `syntect-default-fancy`, byte-identical to Wizard's own selection. One syntect, one regex engine, no oniguruma and therefore no C dependency. |
 
 `cargo tree -d --features native` shows exactly one `syntect`, one `image`, one
@@ -117,8 +127,9 @@ Every one of those is chosen against something already in the tree:
 ## Layout
 
 ```
-src/native/
+src/plugins/native/
 ├── mod.rs               App, Message, update, view, run(), the screens
+├── plugin.rs            the kernel registration: `wizard gui` → run()
 ├── event.rs             the tokio↔iced bridge, and the executor
 ├── font.rs              Inter and JetBrains Mono, embedded
 ├── theme.rs             crate::theme tokens → iced colours
@@ -143,7 +154,8 @@ src/native/
     └── composer.rs     the field, and the send/stop control
 ```
 
-(`graph/` is the mesh explorer. It is **deferred and unreachable in 2.0.0** —
+(`graph/` is the mesh explorer, behind `--features graph` along with the plugin
+it draws from. It is **deferred and unreachable in 2.0.0** —
 it still compiles and its tests still run, but nothing in the window opens it.
 See [graph-explorer.md](graph-explorer.md).)
 
@@ -172,28 +184,28 @@ original wiring list rather than an outstanding one.
 
 ## What is reused rather than rebuilt
 
-The point of S1's "salvage" line was that `src/gui/` is not web-specific. It is
+The point of S1's "salvage" line was that `src/plugins/gui/` is not web-specific. It is
 worth stating what that turned out to mean, because the split is not where a
 file list would suggest:
 
 | what | where it lives | what the window adds |
 |---|---|---|
-| providers, keys, presets, probing, the step limit | `src/gui/settings.rs` | the sheet |
-| OAuth sign-in (xAI, ChatGPT) | `src/gui/oauth.rs` | two rows and a poll |
-| git status, diff, branches, checkout | `src/gui/git.rs` | the rail and the diff pane |
-| sessions, keep-warm eviction, gates | `src/gui/tasks.rs` | a second *client* |
-| every slash command applied to a live agent | `src/gui/command.rs` | nothing: it submits |
+| providers, keys, presets, probing, the step limit | `src/plugins/gui/settings.rs` | the sheet |
+| OAuth sign-in (xAI, ChatGPT) | `src/plugins/gui/oauth.rs` | two rows and a poll |
+| git status, diff, branches, checkout | `src/plugins/gui/git.rs` | the rail and the diff pane |
+| sessions, keep-warm eviction, gates | `src/plugins/gui/tasks.rs` | a second *client* |
+| every slash command applied to a live agent | `src/plugins/gui/command.rs` | nothing: it submits |
 | the chat list: merge, grouping, `2m` | `src/session_registry.rs` | the sidebar |
 | every slash command's semantics | `src/commands/` | `impl CommandSurface` |
 
 Three of those moved during Phase 2 and are worth knowing about:
 
 - **The settings view model, the probe and every provider mutation** were inside
-  `src/gui/server.rs`, between an axum extractor and an axum response. They are
-  now `src/gui/settings.rs`'s, and the route handlers are argument shuffling and
+  `src/plugins/gui/server.rs`, between an axum extractor and an axum response. They are
+  now `src/plugins/gui/settings.rs`'s, and the route handlers are argument shuffling and
   status codes. Nothing about a settings screen is web-specific.
 - **The slash-command executor** — `CommandCtx`, `GuiSurface`, `apply_command`
-  and everything they reach — is `src/gui/command.rs` rather than the back half
+  and everything they reach — is `src/plugins/gui/command.rs` rather than the back half
   of `tasks.rs`. `tasks.rs` was four thousand lines of two separable jobs
   (owning the sessions, and executing a command against one) and is the file
   everything needs; the house rule is to split it rather than grow it, and this
@@ -286,7 +298,7 @@ through the tap, and the composer binds to the child's stdin until
 `ConsoleClosed`. While it is bound the composer says which end it is typing into
 and offers Ctrl-D — the keystroke as well as the button, which was not true
 until `47462b0`: the button read `end input (Ctrl-D)` while nothing anywhere
-bound the key. It is in `run`'s `drops` subscription (`src/native/mod.rs`), and
+bound the key. It is in `run`'s `drops` subscription (`src/plugins/native/mod.rs`), and
 it is a no-op when no console is claimed rather than a binding that only exists
 in one state.
 
@@ -340,7 +352,7 @@ Agent ──AgentEvent(256)──▶ TaskShared::handle_event ──▶ relay �
 
 There used to be a second branch here — `Frame ──▶ JSON ──▶ WebSocket`, for the
 browser GUI — and `handle_event` genuinely did fan out twice. It went with the
-`Frame` enum and `src/gui/ws.rs` (see *What went with the browser GUI* below),
+`Frame` enum and `src/plugins/gui/ws.rs` (see *What went with the browser GUI* below),
 so what is left is `self.relay(&event)` and the fold beside it.
 
 `TaskShared::tap` is what the window attaches, and it takes the event rather
@@ -413,7 +425,7 @@ way to move an ancestor), and selection across images or collapsed rows, which
 are not text.
 
 **Size.** `select/` is **1,188 lines** of implementation and **515** of unit
-tests, plus the end-to-end selection tests in `src/native/tests.rs`. The
+tests, plus the end-to-end selection tests in `src/plugins/native/tests.rs`. The
 renderers that feed it are a further 251 (`widget/transcript.rs`) and 375
 (`widget/markdown.rs`) of implementation — 411 and 489 with their own tests.
 The spike's estimate for a finished text-only layer was 1,200–1,800 plus ~400
@@ -435,7 +447,7 @@ The plan and interview tickets are still claimed exactly once, inside
 `TaskShared`, and answered through `resolve_plan` / `resolve_interview`. The
 window never calls `claim()` on either: doing so would take the reply channel out
 of the bookkeeping that a turn's end and a disconnect both depend on. The console
-gate is the exception and the reason is in `src/native/console.rs`.
+gate is the exception and the reason is in `src/plugins/native/console.rs`.
 
 ## Testing, and what a headless machine cannot prove
 
@@ -539,9 +551,9 @@ Three deliberate choices in it:
 S3 was written as "delete the JavaScript GUI". It deleted the *webview shell*
 and kept the loopback server for one stated reason — remote access — and that
 server has now gone too. Deleted: `gui/assets/` (13 JavaScript modules, a
-stylesheet, an HTML shell and two woff2 faces), `src/gui/server.rs` (the axum
-router and every route), `src/gui/ws.rs` (the per-task WebSocket), the `Frame`
-enum and the replay buffer in `src/gui/tasks.rs`, `src/gui/transcript.rs` (the
+stylesheet, an HTML shell and two woff2 faces), `src/plugins/gui/server.rs` (the axum
+router and every route), `src/plugins/gui/ws.rs` (the per-task WebSocket), the `Frame`
+enum and the replay buffer in `src/plugins/gui/tasks.rs`, `src/plugins/gui/transcript.rs` (the
 replay projection), `docs/gui-protocol.md`, and the `axum` dependency. The
 `--port`, `--no-open` and `--assets` flags went with them.
 
@@ -613,7 +625,7 @@ The four Phase-2 gaps this document listed, answered:
   was a convenience gap and not a capability one. The browser's dropdown was fed
   by `GET /api/models`, which probed *every configured provider* over the
   network on every open; that route was deleted with the rest of the server and
-  its logic was never lifted into `src/gui/settings.rs`. Building a picker here
+  its logic was never lifted into `src/plugins/gui/settings.rs`. Building a picker here
   now means writing the probe fan-out, not moving it.
 - **The feature flag.** Answered: a second release artifact. See
   […and why off-by-default does not mean source-only](#and-why-off-by-default-does-not-mean-source-only).
@@ -632,11 +644,11 @@ Cut deliberately, and not blocking:
 - **Upload, and `verify_attachments`.** Both defended an HTTP boundary the
   window does not have. Deleted.
 - **The page's markdown renderer.** Not ported: the window has its own
-  `pulldown-cmark` pass (`src/native/widget/markdown.rs`), with the syntax
+  `pulldown-cmark` pass (`src/plugins/native/widget/markdown.rs`), with the syntax
   highlighting the JS never had. It also renders *less*, and the difference is
   worth knowing before you expect otherwise: the parser is opened with
   `Options::ENABLE_STRIKETHROUGH` and nothing else
-  (`src/native/widget/markdown.rs:138`), so no tables, no footnotes and **no
+  (`src/plugins/native/widget/markdown.rs:138`), so no tables, no footnotes and **no
   math**. The `unicodeit` pipeline that turns LaTeX into unicode is the TUI's
   alone (`latex_to_unicode` in `src/ui/mod.rs`). The JavaScript is deleted.
 - **The "MCP manager" S1 lists.** There was no such surface in the browser GUI

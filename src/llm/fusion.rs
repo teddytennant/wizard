@@ -896,12 +896,13 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "provider-ollama"), allow(dead_code))]
     fn provider_config(name: &str, model: &str) -> ProviderConfig {
         ProviderConfig {
             name: name.to_string(),
             // Ollama builds a client without needing a key or a reachable
             // endpoint, which is all these seats have to prove.
-            kind: crate::config::ProviderKind::Ollama,
+            kind: crate::config::ProviderKind::OLLAMA,
             base_url: "http://127.0.0.1:11434".to_string(),
             model: model.to_string(),
             api_key_env: None,
@@ -913,6 +914,11 @@ mod tests {
 
     /// The seats a panel offers are what lets an `/ultra` roster be dealt
     /// across it instead of running the whole debate once per candidate.
+    /// Gated because a seat carries a *live client*, and the fixture's
+    /// providers are `kind = "ollama"` — the one client that needs neither a
+    /// key nor a reachable endpoint to construct. Without that plugin there is
+    /// no such kind and `build()` correctly refuses.
+    #[cfg(feature = "provider-ollama")]
     #[test]
     fn panel_seats_name_a_provider_and_its_model() {
         let providers = vec![

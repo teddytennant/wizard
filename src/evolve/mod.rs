@@ -414,7 +414,7 @@ or, for a remote server:
 4. "subagent" — a named, reusable sub-worker with its own prompt and tool scope (a 50-step ceiling by default; optional `max_steps` raises or lowers it, and 0 removes it entirely):
 {"channel":"subagent","name":"reviewer","description":"what it is for","system_prompt":"You are ...","tool_scope":["read_file","search_files","git_diff"]}
 
-Native tool names available for "tool_scope": read_file, write_file, edit_file, list_files, search_files, execute, git_status, git_diff. Omit "tool_scope" (or use null) to grant the full set.
+Tool names available for "tool_scope": read_file, write_file, edit_file, list_files, search_files, execute, git_status, git_diff. Omit "tool_scope" (or use null) to grant the full set.
 
 Picking a channel: use a skill for knowledge or process, an mcp_server for capabilities that live outside Wizard, a scripted_tool (LuaJIT by default) for small executable glue, and a subagent for a specialized, reusable sub-worker. Keep names short and filesystem-safe. Make the artifact complete and immediately usable. For scripted_tool always prefer Lua (`.lua`, `runtime: "luajit"`) unless the user explicitly needs a shell/Python/Node script."##;
 

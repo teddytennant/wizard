@@ -136,3 +136,12 @@ synthesize = true  # false: skip the merge turn, just print branches + table
   `SIGKILL`ed or OOM-killed coordinator never runs that drop, so its workers
   are orphaned and keep going; the stale heartbeat is the only signal, and
   the pids in `fleet.toml` are how you find them.
+
+## Build
+
+Fleet mode is a plugin, behind `--features fleet`, on by default. Every
+published binary has it and nothing needs doing. On a build without it,
+`wizard fleet` still parses — the subcommand is part of the CLI either way —
+and prints one line naming the flag. `[fleet]` in `config.toml` is still read
+and round-tripped there, so a shared config file works on both builds. See
+[plugins.md](plugins.md).

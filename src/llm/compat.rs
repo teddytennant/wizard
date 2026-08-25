@@ -3,7 +3,7 @@
 //! onboarding's "More cloud providers" list, the `/provider` add picker, and
 //! the GUI settings page — so adding a provider is a single row here.
 
-/// A cloud provider reachable through [`crate::llm::openai::OpenAiProvider`]
+/// A cloud provider reachable through [`crate::llm::wire::OpenAiProvider`]
 /// with nothing but a base URL and an API key.
 pub struct CompatPreset {
     /// Provider id: becomes [`ProviderConfig::name`](crate::config::ProviderConfig::name)

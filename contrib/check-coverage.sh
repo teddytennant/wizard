@@ -36,7 +36,7 @@ DEFAULT_MIN_LINE_PERCENT=79
 # once CI has measured this branch a few times.
 #
 # Measured with DEFAULT features only, which is the whole point of the number:
-# `src/native/` sits behind an off-by-default flag and is absent from both
+# `src/plugins/native/` sits behind an off-by-default flag and is absent from both
 # sides of the ratio, so an unmeasured GUI can neither prop the figure up nor
 # drag it down.
 #
