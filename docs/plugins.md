@@ -1835,6 +1835,21 @@ now. It is the leg that proves the four surfaces went through the lookup
 rather than keeping a reference to a deleted `crate::evolve::publish`, which is
 a failure neither the default build nor `--no-default-features` can see.
 
+The counts, and the arithmetic behind them. **Default: 2610 → 2618.** Twelve
+tests left with the two deleted files — eight pure-helper tests in
+`evolve/publish.rs` and four `parse_args` tests in `tools/publish.rs` — and
+twenty arrived: sixteen in `plugins::bundled::tests::publish`, three in
+`plugins::host::tests` (the missing program, the budget, `wizard.paths`), and
+one in `agent::tests` for the channel. **`--no-default-features`: 2178 →
+2170.** The same twelve out, and only the four that are not behind
+`tool-publish` back in, since that leg does not compile the plugin's test
+module.
+
+The ratchet in `contrib/check-plugin-work.sh` said 2609, and the tree had 2610:
+`acp` and `fleet` landed after that line was written. Measuring the real
+number took `--skip decompose`, because at that commit those three tests did
+not fail, they hung — see above.
+
 ## `evolve` was read end to end, and should stay Rust
 
 `src/evolve/mod.rs` was 4,098 lines and was this phase's target: the biggest

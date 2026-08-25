@@ -16,10 +16,16 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel,
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
-# with the mesh, and 2609 once `git_status`/`git_diff` became the first Lua
-# plugin and the mesh landed alongside it. Raise it when a phase adds tests, so
-# the ratchet keeps ratcheting.
-BASELINE_TESTS=2609
+# with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
+# and 2618 with `publish`. Raise it when a phase adds tests, so the ratchet
+# keeps ratcheting.
+#
+# 2609 was one below what the tree actually had by then (2610, measured): the
+# acp and fleet plugins landed after that number was written and nobody raised
+# it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
+# until the turn's event channel was released at the end of a turn those three
+# did not fail — they hung.
+BASELINE_TESTS=2618
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
