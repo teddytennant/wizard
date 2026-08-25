@@ -793,4 +793,28 @@ mod tests {
             );
         }
     }
+
+    /// The flag and the thing behind it ship together.
+    ///
+    /// `manages_local_server` is a claim on a descriptor and
+    /// [`crate::server::LOCAL_SERVER`] is the code that makes it true, and they
+    /// are two registrations that one plugin happens to make in one `apply`.
+    /// A build where the first was present and the second was not would be a
+    /// `/server start` that reported no spawner while the whole spawner sat in
+    /// the binary — which is exactly what a build with the feature *off* looks
+    /// like, and therefore exactly the failure that would ship unnoticed.
+    #[test]
+    fn the_local_server_seam_ships_with_the_descriptor_that_claims_it() {
+        let kernel = kernel();
+        let claimed = registry::kinds()
+            .into_iter()
+            .filter_map(|kind| registry::installed(&kind))
+            .any(|descriptor| descriptor.manages_local_server());
+        let registered = kernel
+            .services()
+            .inject_as::<crate::server::LocalServerHandle>(crate::server::LOCAL_SERVER)
+            .is_some();
+        assert_eq!(claimed, registered, "one without the other");
+        assert_eq!(registered, cfg!(feature = "provider-llamacpp"));
+    }
 }

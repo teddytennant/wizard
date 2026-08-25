@@ -13,6 +13,26 @@
 # (dependency artifacts are shared). Run it when the plugin set or the boundary
 # changes, not on every edit.
 #
+# Two legs here are load-bearing beyond their own plugin, and both are about the
+# local backends:
+#
+#   - `without provider-llamacpp` is the only build with no `/server`
+#     implementation in it. `src/server.rs` is a trait and a lookup, and the
+#     three surfaces that dispatch `/server` have to degrade to a sentence
+#     rather than to a compile error — which neither extreme can show, since
+#     with everything off there is no `/server` caller worth compiling and with
+#     everything on the lookup always answers. It is also the leg that proves
+#     the GGUF downloader left core cleanly: it and the process manager moved
+#     into this plugin together, and anything in core still reaching for either
+#     fails only here.
+#   - `without provider-ollama` proves the other half of that move. Ollama
+#     reports a model pull through `crate::progress::Progress` and asks
+#     `platform::host::local_port` whether a `base_url` is this machine's, and
+#     both of those used to live in `src/server.rs`. If either had gone into the
+#     llama.cpp plugin instead of into core, this leg would still pass and
+#     `without provider-llamacpp` would be the one that broke — so the pair is
+#     what pins the split, not either one alone.
+#
 # Usage: contrib/check-provider-plugins.sh [--build-only]
 set -uo pipefail
 

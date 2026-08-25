@@ -1618,6 +1618,213 @@ into is gone too) and with everything on.
   and neither is behind a feature yet. `gateway` is the interesting one: it is
   a subcommand tree like the fleet, so it is the second customer for the type
   parameter rather than the first, which is the test of whether that was the
-  right generalization.
+  right generalization. *(The gateway has since gone through; it was the second
+  customer and it found the type parameter's limit. See the last section.)*
 - **Still no *command* has gone through the door.** The thirteen earmarked ones
   are built-ins.
+
+## As built: the gateway, and the llama.cpp runtime that was hiding in core
+
+Two changes, landed together because the second is only interesting once the
+first has moved `src/gateway/`. `src/plugins/gateway/` is behind
+`--features gateway`; `src/server.rs` and `src/local_setup.rs` are
+`src/plugins/llamacpp/server.rs` and `setup.rs`, behind the
+`provider-llamacpp` feature that was already there. Both on by default. The
+"other three surfaces are still core" note is now down to `mcp serve`.
+
+### The gateway needed two names, and that is a correction
+
+`wizard --gateway` (the long-running bot) and `wizard gateway setup|install|…`
+(administering it) are two surfaces of one plugin, and the obvious registration
+was one name at two argument types: `Entrypoint<Config>` and
+`Entrypoint<GatewayCmd>` really are different types, and this document already
+says `inject_as` separates them by `TypeId`.
+
+It does not work, and the gateway is the first plugin to find out because it is
+the first to own two surfaces. `ServiceRegistry` is a `HashMap<String, _>` and
+`provide` *replaces* a name already taken — deliberately, so a reload can put a
+service back with no window in which injectors see `None`. Both registrations
+under `"gateway"` would have left whichever applied second, and the other would
+have read exactly like a plugin that was never compiled in.
+
+So the type parameter is not a second dimension of the key. What it buys is
+that a lookup at the wrong type answers `None` instead of handing the wrong
+body the wrong argument, which is the thing
+`an_entrypoint_asked_for_under_the_wrong_argument_type_is_absent` already
+pinned. Two surfaces means two names: `entrypoint::GATEWAY` and
+`entrypoint::GATEWAY_SERVICE`, and
+`the_gateways_two_surfaces_are_two_names_at_two_argument_types` asserts all
+four combinations so the next two-surface plugin does not rediscover this.
+
+### Three things stayed in core, and each one is a different rule
+
+**`[gateway]` in `config.toml`** — the `[web]`/`[mesh]`/`[fleet]` rule. A config
+section is a promise about what this process does, and a build without the
+plugin still parses and round-trips one.
+
+**`credentials::GATEWAY_TOKEN`** — the string `"telegram"`, the key the bot
+token is stored under. This is the `ProviderKind::ANTHROPIC` rule with one
+addition: `src/credentials.rs` owns the *key namespace* of
+`credentials.toml`, and a namespace with a feature-shaped hole in it is one two
+features can collide in. Onboarding writes the token whether or not this build
+can spend it, because the config it is writing outlives the binary that wrote
+it.
+
+**`config::group_chat_warning`** — the `crate::text::is_invisible` move. Its two
+callers ended up on opposite sides of the boundary (`wizard doctor` is core,
+`wizard gateway setup` is the plugin) and they have to say the same sentence,
+because an operator who hears the warning once is reassured by its absence the
+second time. Its test moved with it, which also means the
+`--no-default-features` leg compiles an assertion about it for the first time.
+
+### A bug the move surfaced
+
+`advertised_commands` guarded a command *name* against Telegram's rules
+(`[a-z0-9_]{1,32}`) and its *description* only at the top end. That was safe
+while every row came from `COMMANDS`; it stopped being safe when plugin
+commands started arriving in the same list, because a `ctx:command` — including
+one from a Lua file somebody installed — can register a blank description, and
+`setMyCommands` refuses the whole batch over one bad entry. The operator's
+symptom is an empty autocomplete, not a missing command.
+
+It was found by the module rename changing test *order*: a kernel test that
+registers a `dupe` command with no description leaks it into the process-wide
+command registry, which `gateway::tests` then read. Pre-existing, order-
+dependent, and reproducible on the old tree by running the two tests in the
+other order.
+
+### `server.rs` was never a local-server manager
+
+This is the split the audit called hardest, and the reason is stated as a
+provider-to-plugin edge: the `llamacpp` and `ollama` descriptors reach
+`crate::server` from their `prepare` hooks, so moving `server.rs` out of core
+turns plugin→core into plugin→plugin. Three answers were on the table — a
+kernel service the provider injects, a feature dependency in the shape of
+`graph = ["mesh"]`, or leaving a core shim.
+
+None of them is the answer, because the premise does not survive reading the
+file. **`src/server.rs` is llama.cpp's, top to bottom.** `probe` reads
+`llama-server`'s native `GET /health`, whose 503 means "still loading the
+GGUF". `spawn` passes `--ctx-size`, `--n-gpu-layers` and a `.gguf` path.
+`local_setup.rs` downloads `ggml-org/llama.cpp` release assets. `stop` refuses
+to signal a PID whose process name is not `llama-server`. And `/server` has
+always answered every other backend with "the active provider is X — /server
+only manages a local llama.cpp server".
+
+So the edge is not cut. It is **deleted**: the process manager and the GGUF
+installer went into `provider-llamacpp`, the feature the provider was already
+behind, and a plugin reaching into itself is not an edge. One feature over
+three files, which is what `provider-openai` does across `openai/` and
+`openrouter.rs` and what `native` does across `native/` and `gui/`.
+
+A separate `local-server` feature was the serious alternative and it is worse in
+a specific way rather than merely less tidy. A `provider-llamacpp` built without
+it would still register `kind = "llamacpp"`, still build a client, and simply
+stop starting the server — so the user's symptom would be a connection refused
+rather than the named "that kind is not in this build" every other absent plugin
+produces. **Degrading in behaviour instead of in presence is the one degrade
+path this architecture does not have**, and it is the reason to prefer a bigger
+feature to a tidier one here. `graph = ["mesh"]` is not a precedent for it: a
+`PeerStore` is useful without a drawing of it, and a llama.cpp spawner is not
+useful without a llama.cpp client.
+
+### What crossed the other way, and why that is the load-bearing half
+
+The audit counted 21 core references to `server.rs`, and the interesting finding
+is that most of them are not about llama.cpp either. Three things came *out* of
+that file and into core, each landing beside callers that were already there:
+
+| moved | to | because |
+| --- | --- | --- |
+| `Progress`, `ByteProgress` | `src/progress.rs` | `ServerSpinner` implements them, the TUI/window/gateway each implement one that writes into a transcript, and the **Ollama** plugin reports a model pull through them |
+| `on_path` | `src/platform/host.rs` | onboarding asks it about `ollama`; the GGUF installer asks it about `vulkaninfo` |
+| `local_port` | `src/platform/host.rs` | **Ollama** asks whether a `base_url` is this machine's before pulling a multi-gigabyte model onto it |
+
+That table is the whole of the `ollama → server` edge, and moving it dissolves
+that edge rather than routing it. Ollama needed a progress sink and a loopback
+predicate; it never needed llama.cpp. Leaving either in the plugin would have
+been the mistake `src/tools/http.rs` was split out of the web tools to prevent —
+a build without one plugin losing something that was never that plugin's.
+
+This is also what makes the leave-one-out legs mean something as a *pair*.
+`without provider-ollama` and `without provider-llamacpp` both pass today; if
+the progress traits had gone into the llama.cpp plugin, only the second would
+fail. Neither extreme can see it.
+
+### The seam core kept, and why it returns sentences
+
+`src/server.rs` still exists and is a hundred lines: a name, a three-method
+`LocalServer` trait, the lookup, and two sentences that name no backend. It is
+`src/app/tee.rs` again — the shape stays, the thing moves — and the three
+methods answer with **strings** rather than with a status enum, which is the one
+design decision in it worth arguing.
+
+The old `Health` enum had three variants and the middle one, `Loading`, means
+"the GGUF is still being read off disk". That is a fact about llama.cpp's
+startup, not about local model servers in general. A core enum carrying it would
+be core describing one backend's internals, and the second backend to register
+here would have to either misreport itself or make core grow a variant. So the
+plugin writes the line and the surface decides where to put it — the same rule
+`SessionTee::joined_notice` follows, and for the same reason.
+
+The one fact a surface still gets is `is_down`, and it is not for `/server`: it
+is for the auto-start that runs when somebody switches the active provider, and
+that caller treats "ready" and "loading" identically because both mean "do not
+start a second one".
+
+**Three copies of that prose became one.** `app/command.rs`, the window's
+`command.rs` and the gateway's each held the same five sentences with three
+different error prefixes, which is the shape a boundary drawn in the wrong place
+leaves behind. `/server start`'s wording is now identical on all three, where
+the TUI previously said `llama-server: {err}` and the other two said
+`could not start llama-server: {err}`.
+
+### The `Arc<ServerSpinner>` impl, and what the trait's shape cost
+
+`LocalServer::start` takes an owned `Box<dyn Progress>`, because two of the
+three surfaces background it and a boxed future borrowing its arguments needs a
+lifetime the service registry cannot express — the trade `TeeFactory` already
+documents. But the plain-terminal callers want to say `ServerSpinner::finish`
+afterwards, since only they know the wait is over. `impl Progress for
+Arc<ServerSpinner>` is six lines and lets them keep the spinner and hand a clone
+down. The alternative was a lifetime on the trait, which is a lifetime on every
+implementor forever, to save six lines once.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` grew a `without gateway` leg: seven now. It is
+the first leg where "absent" has two halves that can disagree, which is what the
+two-names finding above is about.
+
+`contrib/check-provider-plugins.sh` did not need a new leg and did need a new
+comment, because two of its existing legs are now load-bearing beyond their own
+plugin: `without provider-llamacpp` is the only build with no `/server`
+implementation in it, and `without provider-ollama` is what proves the progress
+traits and the loopback predicate genuinely went to core rather than into the
+llama.cpp plugin.
+
+In-tree: `plugins::the_local_server_seam_ships_with_the_descriptor_that_claims_it`
+asserts that `manages_local_server` and the registered service are never one
+without the other — a build with the flag and no service reads exactly like a
+build with the feature off, which is the failure that would otherwise ship
+unnoticed. `server::the_local_server_is_present_exactly_when_its_plugin_is` is
+the row, and `entrypoint::the_gateways_two_surfaces_are_two_names_at_two_argument_types`
+is the gateway's.
+
+### Still open, specific to this
+
+- **One surface left.** `mcp serve` is the last one still core, and unlike the
+  five that went through the door it is not behind a feature at all.
+- **`src/hardware.rs` has a stale intra-doc link.** It says
+  `[`crate::local_setup`]`, and there is no such module now. It was left alone
+  on purpose: the file is being ported to Lua in a separate change, and a
+  one-line doc edit in it is a conflict for no benefit. Nothing enforces
+  intra-doc links in the gate, so this costs a `cargo doc` warning and nothing
+  else. `src/hardware.rs`'s two `[`crate::server`]` links still resolve, since
+  that module still exists — they now point at the seam rather than at the
+  spawner, which is the wrong target for what those sentences say.
+- **The `/server` command is still a built-in.** Its row, its verbs and its
+  parse are core's, and only its body moved. That is the right split — the
+  command has to keep existing so it can explain itself on a build with no local
+  backend — but it means `/server` is still not one of the thirteen earmarked
+  commands that has gone through the door. None has.

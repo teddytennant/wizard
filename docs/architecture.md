@@ -45,27 +45,23 @@ wizard/
 │   ├── config.rs            # ~/.wizard/config.toml
 │   ├── app/ / ui/ / event.rs / vim.rs
 │   ├── agent/               # tool-calling loop, prompts, subagents, mission, ultra
-│   ├── server.rs            # llama-server lifecycle
-│   ├── llm/                 # LlmProvider + per-vendor clients (incl. fusion, oauth)
+│   ├── llm/                 # LlmProvider, the shared OpenAI-protocol wire, the registry
 │   ├── mcp/                 # MCP client and mcp-serve server
 │   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs), http.rs
 │   ├── kernel/              # the plugin host: Ctx, event bus, services, Lua VMs
+│   ├── plugins/             # every compiled-in plugin, one per cargo feature (see plugins.md)
 │   ├── evolve/              # tiered self-extension + publish
-│   ├── gui/                 # the window's agent half: tasks, config store, git, OAuth (`native`)
-│   ├── gateway/             # messaging bot (Telegram)
-│   ├── fleet/               # parallel worktree workers
-│   ├── mesh/                # peer discovery, QUIC transport, `wizard peers`
-│   ├── plugins/             # compiled-in plugins, one per cargo feature (see plugins.md)
 │   ├── commands/            # slash-command registry, shared by every surface
-│   ├── platform/            # OS seams: paths, service units, secrets, locks
+│   ├── entrypoint.rs        # the lookup a CLI subcommand whose body ships in a plugin goes through
+│   ├── server.rs            # the seam `/server` goes through; the lifecycle is in plugins/llamacpp/
+│   ├── progress.rs          # the Progress/ByteProgress shape + the plain-terminal spinners
+│   ├── platform/            # OS seams: paths, service units, secrets, locks, host probes
 │   ├── schedule.rs          # cron-scheduled headless runs
 │   ├── git_util.rs          # shared async git / worktree helpers
 │   ├── hooks/               # pre/post tool hooks
 │   ├── trust.rs             # per-project trust gate for project-shipped hooks
 │   ├── logging.rs           # JSONL session log under ~/.wizard/logs (never stdio)
 │   ├── doctor.rs            # environment checks + redacted bug-report bundles
-│   ├── acp.rs               # Agent Client Protocol surface
-│   ├── native/              # wizard gui (iced window, `native` feature)
 │   ├── sync.rs              # signed config bundles
 │   ├── memory.rs / checkpoint.rs / usage.rs / update.rs / …
 │   └── skills/              # bundled skill loader
@@ -135,9 +131,11 @@ All providers implement the `LlmProvider` trait (health, model listing, streamin
 
 Streaming tokens, native tool calls, and a prompt-based JSON fallback when the model lacks native tools all live behind the same trait.
 
-### llama-server lifecycle (`server.rs`)
+### llama-server lifecycle (`plugins/llamacpp/server.rs`)
 
 When the active provider is llama.cpp and nothing answers at its `base_url`, Wizard starts `llama-server` itself (TUI/headless/gateway startup and after `/provider use` switches to llamacpp). Requirements: the URL points at this machine, `llama-server` is on `PATH`, and the provider's `gguf_path` exists. The child is detached in its own process group, logs to `~/.wizard/llama-server.log`, and records its PID in `~/.wizard/llama-server.pid`. Readiness is polled at `GET /health` for up to 60 s. `/server status|start|stop` manages it from the TUI; `stop` verifies the recorded PID is still a `llama-server` before signalling.
+
+All of that ships with the `provider-llamacpp` plugin, because all of it is llama.cpp's. What core keeps is `src/server.rs`: a three-method `LocalServer` trait and the lookup that finds whatever registered one, so `/server` works on the TUI, in the window and in a chat without any of them naming a backend. A build without the plugin answers `/server` with a sentence. See `docs/plugins.md`.
 
 ### Agent loop (`agent/turn.rs`)
 
