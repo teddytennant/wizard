@@ -134,7 +134,17 @@ leg() {
     passed=$(grep -oE '[0-9]+ passed' "$log" | grep -oE '^[0-9]+' | awk '{n += $1} END {print n + 0}')
     failed=$(grep -oE '[0-9]+ failed' "$log" | grep -oE '^[0-9]+' | awk '{n += $1} END {print n + 0}')
     if [ "${passed:-0}" -lt 1 ]; then
-        results+=("NO RESULTS    $label")
+        # A leg with no results is either a leg that ran nothing or a leg
+        # whose log went to a full disk, and those want different reactions:
+        # the first is a bug in this repository, the second is a machine that
+        # needs room. Both still fail -- an unproven leg is unproven -- but
+        # reading `NO RESULTS` and going looking for the code cost an hour
+        # once, so the two are named apart.
+        if grep -q 'No space left on device' "$log"; then
+            results+=("DISK FULL     $label (log truncated; free space and re-run)")
+        else
+            results+=("NO RESULTS    $label")
+        fi
         fail=1
     elif [ "${failed:-1}" -ne 0 ]; then
         if [ "$failed" -eq 1 ] \
