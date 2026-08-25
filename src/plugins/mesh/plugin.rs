@@ -98,7 +98,7 @@ impl Plugin for MeshPlugin {
             Service::native(Subcommand::new(
                 entrypoint::PEERS,
                 super::cli::SUMMARY,
-                |args| super::cli::run_args(args),
+                super::cli::run_args,
             )),
         );
         ctx.provide(tee::SESSION_TEE, Service::native(super::tee::factory()));
