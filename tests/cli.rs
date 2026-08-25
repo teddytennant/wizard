@@ -779,3 +779,55 @@ fn harness_export_writes_a_complete_bundle() {
     assert!(bundle.join("HARNESS.md").is_file(), "bundle guide exported");
     assert!(stdout.contains("exported harness bundle"), "{stdout}");
 }
+
+/// `wizard peers` reaches the mesh plugin, or says which build it is not in.
+///
+/// The one thing a unit test cannot check about this subcommand: whether the
+/// two clap parsers — core's, which takes an unparsed vector, and the plugin's,
+/// which takes eight subcommands and a three-state trust enum — actually meet
+/// in a running binary. `src/cli.rs` proves the arguments cross unchanged and
+/// `plugins::mesh::cli` proves what they mean; only a process can prove the
+/// lookup in between finds anything.
+///
+/// Both sides are asserted against the same feature flag, so the leg in
+/// `contrib/check-tool-plugins.sh` that builds without the mesh checks the
+/// degrade path rather than skipping it.
+#[test]
+fn peers_reaches_the_mesh_plugin_or_says_it_is_absent() {
+    let home = TempDir::new();
+
+    let listed = run_wizard(&home.0, &["peers", "list"], &[]);
+    let stdout = String::from_utf8_lossy(&listed.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&listed.stderr).to_string();
+
+    if !cfg!(feature = "mesh") {
+        assert!(!listed.status.success(), "{stdout}{stderr}");
+        assert!(stderr.contains("this build has no mesh"), "{stderr}");
+        return;
+    }
+
+    assert!(listed.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no peers on this machine"), "{stdout}");
+
+    // The plugin's parser, not core's: the usage line and the eight
+    // subcommands are what somebody sees after mistyping one. Core's
+    // passthrough variant would have printed `wizard peers [ARGS]...` and
+    // listed nothing, which is why `disable_help_flag` is on it.
+    let help = run_wizard(&home.0, &["peers", "--help"], &[]);
+    let help_text = String::from_utf8_lossy(&help.stdout).to_string();
+    assert!(help.status.success(), "{help_text}");
+    for subcommand in [
+        "list", "address", "add", "trust", "forget", "ping", "refresh", "watch",
+    ] {
+        assert!(help_text.contains(subcommand), "{subcommand}: {help_text}");
+    }
+
+    // A trust state the store cannot record is refused by the store's own
+    // enum, reached through core's passthrough. This is the assertion the
+    // whole `Subcommand` seam exists for: core cannot name `Trust`, so this
+    // list can only have come from the plugin.
+    let bad = run_wizard(&home.0, &["peers", "trust", "wiz1abc", "allowed"], &[]);
+    let refusal = String::from_utf8_lossy(&bad.stderr).to_string();
+    assert!(!bad.status.success(), "{refusal}");
+    assert!(refusal.contains("blocked, known, trusted"), "{refusal}");
+}

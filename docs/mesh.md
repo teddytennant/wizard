@@ -16,7 +16,9 @@ wizard peers watch wiz1AbC…                # render its live session in this t
 
 Those eight are the whole surface; there is no `revoke`, because revoking is what `trust <peer> known|blocked` and `forget` do.
 
-The first five answer out of `~/.wizard` and contact nobody. The last three reach another machine, which needs a route here (`[mesh.routes]`, or mDNS) and `[mesh] listen = true` there. **None of them listens** — but all eight open a socket, and it is worth being exact about which one: every branch builds the same transport with `listen` forced off (`src/plugins/mesh/cli.rs:151`), and that binds an *ephemeral* UDP port to dial from (`0.0.0.0:0`, `src/plugins/mesh/quic.rs:274`), never the configured one. So `wizard peers list` while a session holds `4242` open does not fight that session for it, and nothing an inbound packet arrives at is listening for it. A bind that fails is fatal only for the three commands that need a machine on the other end.
+The mesh is a **plugin** (`--features mesh`, on by default), so a build can be made without any of this in it: no `wizard peers`, no session tee, and no quinn, rustls or mdns-sd linked. `wizard peers` on such a build says which feature it wants and how to rebuild. Nothing else changes — `[mesh]` in `config.toml` still parses and is still ignored, which is what keeps a config file that was valid yesterday valid today. See `docs/plugins.md`.
+
+The first five answer out of `~/.wizard` and contact nobody. The last three reach another machine, which needs a route here (`[mesh.routes]`, or mDNS) and `[mesh] listen = true` there. **None of them listens** — but all eight open a socket, and it is worth being exact about which one: every branch builds the same transport with `listen` forced off (`src/plugins/mesh/cli.rs:330`), and that binds an *ephemeral* UDP port to dial from (`0.0.0.0:0`, `src/plugins/mesh/quic.rs:275`), never the configured one. So `wizard peers list` while a session holds `4242` open does not fight that session for it, and nothing an inbound packet arrives at is listening for it. A bind that fails is fatal only for the three commands that need a machine on the other end.
 
 ## What ships, and what does not
 
@@ -108,7 +110,7 @@ Commands that take a peer accept the full address or any unique prefix of one. `
 | `known` | yes (`ping`, `refresh`) | no | no |
 | `trusted` | yes | yes | yes |
 
-There is no work column, because there is no work. `Trust::may_send_work` (`src/plugins/mesh/peer.rs:105`) is named for the tier that was cut, and the only thing that consults it is a subscription — `Mesh::subscribe` on the watching side (`src/plugins/mesh/mod.rs:911`) and the `Watch` frame on the publishing side (`src/plugins/mesh/quic.rs:814`). `wizard peers trust <peer> trusted` says as much on the way out: "That is all trust grants: no work is delegated in either direction, and watching is read-only" (`src/plugins/mesh/cli.rs:314`).
+There is no work column, because there is no work. `Trust::may_send_work` (`src/plugins/mesh/peer.rs:105`) is named for the tier that was cut, and the only thing that consults it is a subscription — `Mesh::subscribe` on the watching side (`src/plugins/mesh/mod.rs:806`) and the `Watch` frame on the publishing side (`src/plugins/mesh/quic.rs:787`). `wizard peers trust <peer> trusted` says as much on the way out: "That is all trust grants: no work is delegated in either direction, and watching is read-only" (`src/plugins/mesh/cli.rs:487`).
 
 A pasted address lands at `known`. Adding is not a decision, and there is deliberately no `--trusted` flag on `add` that collapses the paste and the decision into one keystroke: a paste is a fact about an address, trust is a claim about a machine, and a human checks the two in different ways.
 

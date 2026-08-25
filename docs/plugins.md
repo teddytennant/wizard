@@ -41,10 +41,12 @@ leaving a ~35k-line core.
 a `kind`, the OpenAI-protocol client five backends build on, the loopback
 redirect both sign-ins come back on, and the xAI token store two core *tools*
 authenticate with — not the providers),
-`src/ui/`, `src/app/`, `src/skin/`,
+`src/ui/`, `src/app/` (including `src/app/tee.rs`, which is now the
+`SessionTee` trait and the lookup — not a tee), `src/skin/`,
 `src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry}.rs`,
-`src/entrypoint.rs` (the lookup a CLI subcommand whose body ships in a plugin
-goes through — not the surfaces themselves),
+`src/entrypoint.rs` (the two lookups a CLI subcommand whose body ships in a
+plugin goes through — `Entrypoint` for `wizard gui` and `Subcommand` for
+`wizard peers` — not the surfaces themselves),
 `src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry,http}.rs` (the tool
 trait, the one lookup, and the HTTP client/SSRF guard/redirect walk/body cap
 that the web tools, the image downloader and a Lua plugin's `wizard.http` all
@@ -1048,3 +1050,145 @@ and it exists because the combinations that matter here are ones that script
 never builds: `graph` left out **with the GUI present**, which is the only way
 to catch `src/native/graph/` reaching for an absent plugin, and `tool-web` left
 out with everything else present. Four legs.
+
+
+## As built: the mesh is a plugin, and it took two seams to get it out
+
+`src/mesh/` (~11.7k lines) is `src/plugins/mesh/` behind `--features mesh`, on
+by default. It was the hardest split left and the audit said so: **thirty**
+core-to-mesh references against anthropic's zero and the window's one, and no
+amount of moving files was going to reduce that number on its own. What it
+actually took was two new seams and one trait, and the count is now zero.
+
+### Where the thirty went
+
+Most of them were doc comments, and a doc comment that names a plugin is a
+broken intra-doc link on a build without it rather than an architectural
+problem, so those became plain code spans. Four were real, and each needed a
+different answer.
+
+**`src/app/tee.rs` was a core file that was entirely mesh glue.** 685 lines
+importing ten mesh symbols, holding a `Mesh`, a `QuicTransport` and a
+`Discovery`, hung off `App::handle_agent_event`. `App` held
+`pub mesh: Option<MeshTee>` and `App::run` called `MeshTee::join` by name.
+
+The file moved to `src/plugins/mesh/tee.rs` and what stayed behind under the
+same path is the *shape*: a `SessionTee` trait with three methods, and a
+`TeeFactory` a plugin `provide`s under the name `"session-tee"`. `App::mesh` is
+an `Option<Box<dyn SessionTee>>` now, `app::tee::join` is the lookup, and a
+build without the mesh has a `None` there that nothing can fill.
+
+A trait rather than the `Entrypoint`-style struct because a tee is not one
+closure: it is a live object with a bound socket, a running mDNS advertisement
+and a `leave` that has to say goodbye over the wire, which is why `leave` takes
+`self: Box<Self>` and returns a boxed future. The `Arc<dyn Any>` downcast
+problem `entrypoint.rs` documents does not arise, because what is *injected* is
+the factory — a struct, like `Entrypoint` — and the trait object is what the
+factory returns.
+
+**Every word the user reads about the mesh listening now comes from the
+plugin.** `src/app/runtime.rs` prints `tee.joined_notice()` on success and
+`{err:#}` on failure, and nothing else. The failure sentence ("mesh: not
+listening — … this session runs normally; no peer can watch it") is written in
+`plugins::mesh::tee::factory`, because core saying "mesh" about the thing on
+the other end of a lookup is core knowing what registered there.
+
+**`wizard peers` is a whole clap subcommand tree whose `trust` argument is
+`mesh::Trust`.** This is the one that could not be solved the way `wizard gui`
+was. `Command::Gui` carries no arguments, so core's clap variant names no
+plugin type; `PeersCmd::Trust { state: Trust }` names one in a `#[derive]`.
+
+Mirroring `Trust` into core was the obvious fix and is specifically wrong:
+`Trust` derives `clap::ValueEnum` on the peer store's own type precisely so a
+second spelling on the argument-parsing side cannot drift into a fourth state,
+and its doc comment has said so since it was written. A CLI able to express a
+decision `peers.json` cannot record is worse than a slightly clumsier `--help`.
+
+So the argument list crosses **unparsed**. Core's variant is
+`Peers { args: Vec<String> }` with `trailing_var_arg`, `allow_hyphen_values`
+and — the load-bearing one — `disable_help_flag`, without which clap answers
+`wizard peers --help` in core with a usage line reading `wizard peers [ARGS]...`
+and no mention of the eight subcommands. `entrypoint::Subcommand` is
+`Entrypoint`'s sibling for this shape: a name, a `Vec<String>`, and an exit
+code. The mesh's `PeersCli` is a `clap::Parser` with `no_binary_name`, and
+clap's own `err.exit()` keeps help at 0 and a bad argument at 2.
+
+The cost is real and small: `wizard --help` shows `peers` with core's
+description rather than its subcommand list, and a misspelled subcommand is
+caught one frame later, by the plugin's parser, against the right usage line.
+
+**`src/app/transcript.rs` took a `NodeId`.** The peer-attribution machinery —
+the marker stamped on every physical line of a watched session — is core, and it
+was building that marker from the mesh's `NodeId`. The two things a marker may
+be derived from are a short form and a full address, both strings, so the trait
+*is* the whole dependency: `PeerAddress` has two methods, core owns it, and
+`impl PeerAddress for NodeId` is four lines in `plugins::mesh::node`.
+
+Two strings passed in directly would have been smaller and is the wrong trade —
+it lets a caller pass a *label* where an address goes, which is exactly the
+confusion `PeerOrigin`'s private fields exist to prevent. The trait keeps
+"derived from the key, never from the name" a property of the type instead of
+of every call site.
+
+### `graph` depends on `mesh`, and Cargo is where that is written down
+
+`graph = ["mesh"]`. A `MeshGraph` is a `PeerStore` turned into something
+drawable, so the explorer cannot exist without the store, and the feature edge
+is the honest place to say so — the alternative is a comment and a build that
+fails at link time for somebody who reads neither. It is the first
+plugin-to-plugin dependency in the tree, and it makes `without` in
+`contrib/check-tool-plugins.sh` insufficient by itself: dropping `mesh` from the
+default list leaves `graph` to turn it back on, hence `without_many`.
+
+### What stayed in core
+
+**`[mesh]` in `config.toml`.** Same argument as `[web]`: `listen`, `mdns`,
+`listen_addr` and `[mesh.routes]` are promises about what this *process* does on
+the network, and a build without the plugin still parses and still ignores them,
+rather than failing to load a config file that was valid yesterday.
+
+**`crate::text::is_invisible`.** It came out of the mesh in the `tool-web`
+change and stays out. What is invisible is a property of Unicode, not of the
+mesh, and three callers need the same answer.
+
+**`AgentEvent::is_request`.** The exhaustive match deciding what may cross a
+socket sits next to the variants it matches on, which is the only place it can
+be kept honest. `PeerTurn::sanitize` consults it; it does not own it.
+
+### Two crates left the default build with it
+
+`quinn` and `mdns-sd` are `optional = true` and pulled by `dep:` from the `mesh`
+feature, so a build without it links neither. `rustls` went with them: the mesh
+was the only direct caller, and reqwest brings its own copy either way, so what
+is removed there is the edge rather than the crate.
+
+This is the first plugin whose removal measurably shrinks the binary, which is
+the whole argument for the `pi` profile that `docs/plugins.md` has been
+describing since before any of this was built.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` grew two legs: `mesh` (and therefore `graph`)
+left out headless, and left out **with the window present** — the combination
+that catches a GUI reaching for peers outside the `graph` gate, which neither
+`--no-default-features` nor a default build can see. Six legs now.
+`plugins::the_meshs_two_seams_are_present_exactly_when_its_plugin_is` is the
+in-tree half: both registrations, both directions, plus a sweep asserting the
+mesh registers no tool and no command — because a `mesh_*` tool would be a model
+deciding who watches this session, and that is a trust decision and therefore a
+person's. `tests/cli.rs` runs the real binary against both sides of the flag.
+
+### Still open, specific to this
+
+- **A live session still does not re-read `peers.json`.** `wizard peers trust
+  <peer> known` in a second terminal binds every process started afterwards and
+  not the one already running. Named in `tee.rs` since the tee landed and not
+  changed by the move.
+- **`wizard --help` describes `peers` in one paragraph** rather than listing its
+  eight subcommands, which is the price of the argument list crossing unparsed.
+  Building the top-level listing from what plugins registered is the fix and is
+  the same change the onboarding menu and the provider picker have been waiting
+  for.
+- **The other three surfaces are still core.** `wizard acp`, `wizard gateway`
+  and `mcp serve` are each one `Entrypoint` registration, and none of them is
+  behind a feature yet.
