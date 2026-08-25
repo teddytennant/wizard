@@ -13,13 +13,13 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 # The baseline this migration must not regress. Captured with
-# `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel
-# landed, 2557 once every provider became a plugin, 2575 with the host bridge
 # `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel,
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
-# sandbox fix, 2577 with the window, 2584 with the graph and web tools. Raise it
-# when a phase adds tests, so the ratchet keeps ratcheting.
-BASELINE_TESTS=2584
+# sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2593
+# once `git_status`/`git_diff` became the first Lua plugin (nine tests left
+# with `src/tools/git.rs`, sixteen arrived with the port and the two limits it
+# found). Raise it when a phase adds tests, so the ratchet keeps ratcheting.
+BASELINE_TESTS=2593
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -68,17 +68,24 @@ printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TE
 if [ "${passed:-0}" -lt 1 ]; then
     bad "the test run reported no results at all (truncated log? build failure?)"
 fi
+# The ratchet counts tests that *exist*, not tests that passed on this run.
+# A flaked test is one the suite still has, so counting only `passed` made a
+# flaked run fail twice: once as the flake, and again as a phantom regression
+# one test below the baseline. That second failure is a lie, and it is the kind
+# that trains people to re-run the gate until it is green.
+counted=$passed
 if [ "${failed:-1}" -ne 0 ]; then
     # The one known flake, so a busy machine does not read as a regression.
     if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$test_log" \
        && [ "$failed" -eq 1 ]; then
         printf 'note: only the known lockfile flake failed; re-run it alone to confirm\n'
+        counted=$((passed + failed))
     else
         bad "$failed test(s) failed"
     fi
 fi
-if [ "${passed:-0}" -lt "$BASELINE_TESTS" ]; then
-    bad "test count went backwards: $passed < $BASELINE_TESTS (did tests get deleted rather than moved?)"
+if [ "${counted:-0}" -lt "$BASELINE_TESTS" ]; then
+    bad "test count went backwards: $counted < $BASELINE_TESTS (did tests get deleted rather than moved?)"
 fi
 rm -f "$test_log"
 
