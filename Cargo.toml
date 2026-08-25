@@ -125,10 +125,16 @@ provider-openai = []
 # The only plugin that registers nothing through `Ctx`, because what it
 # produces is a data model rather than a tool, a command or a provider; see
 # `GraphPlugin`. Its one consumer is the GUI's explorer screen
-# (`src/native/graph/`), which is gated on this feature in step, so a build
-# without it is a window with no explorer -- which is the window that ships
-# today, since `src/native/mod.rs` records that screen as deferred and not yet
-# reachable.
+# (`src/plugins/native/graph/`), which is gated on this feature in step, so a
+# build without it is a window with no explorer -- which is the window that
+# ships today, since `src/plugins/native/mod.rs` records that screen as deferred
+# and not yet reachable.
+#
+# It enables `mesh` rather than merely assuming it: a `MeshGraph` is built from
+# a `PeerStore`, so this is a genuine dependency between two plugins and Cargo
+# is where one gets written down. `contrib/check-tool-plugins.sh` has to know
+# it too -- dropping `mesh` from the default list leaves `graph` to turn it back
+# on, which is what `without_many` there is for.
 graph = ["mesh"]
 
 # The P2P mesh: node identity, the QUIC transport and its two certificate

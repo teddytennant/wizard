@@ -66,7 +66,7 @@
 //! | [`widget`] | the transcript's blocks, its markdown, and the composer |
 //! | [`sidebar`] · [`rail`] · [`pane`] | the chat list, the right rail, the open pane |
 //! | [`settings`] · [`command`] · [`console`] | the sheet, the `/` menu, a command's stdin |
-//! | `graph` | the explorer over the `graph` plugin and [`crate::plugins::mesh`] — behind `--features graph`, deferred, not reachable |
+//! | `graph` | the explorer over the `graph` and `mesh` plugins — behind `--features graph`, which enables `mesh`; deferred, not reachable |
 //!
 //! # It links `TaskManager`, not `Agent`
 //!

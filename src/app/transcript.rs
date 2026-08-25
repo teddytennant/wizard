@@ -1011,9 +1011,10 @@ mod tests {
     ///
     /// It is not a weaker test than the real type would be. What is under test
     /// here is that *every line* carries whatever the marker is, and that a
-    /// peer cannot supply one; that the marker is a public key rather than a
-    /// chosen name is the mesh's property and is asserted where the derivation
-    /// lives (`plugins::mesh::tee`).
+    /// peer cannot supply one. That the marker is a public key rather than a
+    /// chosen name is the mesh's property, and it is asserted against a real
+    /// `NodeId` over two real sockets by
+    /// `plugins::mesh::cli::tests::a_watcher_renders_a_peers_turn_and_is_told_when_the_stream_dies`.
     struct FakePeer(u8);
 
     impl PeerAddress for FakePeer {
