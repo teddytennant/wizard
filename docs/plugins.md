@@ -1775,8 +1775,11 @@ whether an existing fork is tolerated, whether the remote is added or updated.
 keyed on argv runs a whole publish with no `gh` on the machine. Those questions
 are all asserted now.
 
-**It is shorter and says more.** 561 lines of Rust became 330 of Lua, and the
-Lua carries the argument for each step rather than only the step.
+**It is not shorter, and saying so would be the easy lie.** The two Rust files
+were 561 lines including about 165 of tests; the Lua is 377 including its
+comments, which is roughly the same implementation with more argument written
+down beside it. What did grow is the tests: 165 lines covering four pure
+helpers became 663 covering the pipeline.
 
 One thing is worse and it is worth naming: **a `git push` no longer streams**.
 The Rust captured with `.output()`, so it did not stream either — but a future
@@ -1827,14 +1830,14 @@ server must not be able to claim it on a build that left the plugin out.
 
 ### Proving it
 
-`contrib/check-tool-plugins.sh` gained a `without tool-publish` leg — seven
+`contrib/check-tool-plugins.sh` gained a `without tool-publish` leg — ten legs
 now. It is the leg that proves the four surfaces went through the lookup
 rather than keeping a reference to a deleted `crate::evolve::publish`, which is
 a failure neither the default build nor `--no-default-features` can see.
 
 ## `evolve` was read end to end, and should stay Rust
 
-`src/evolve/mod.rs` is 4,098 lines and was this phase's target: the biggest
+`src/evolve/mod.rs` was 4,098 lines and was this phase's target: the biggest
 Lua-shaped body left, three session-state references in the whole subsystem,
 and orchestration from top to bottom. By the two questions the `todo` write-up
 leaves behind — is the state per-session, and does core hold a *type* — it
