@@ -95,9 +95,11 @@ impl Plugin for MeshPlugin {
     fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.provide(
             entrypoint::PEERS,
-            Service::native(Subcommand::new(entrypoint::PEERS, |args| {
-                super::cli::run_args(args)
-            })),
+            Service::native(Subcommand::new(
+                entrypoint::PEERS,
+                super::cli::SUMMARY,
+                |args| super::cli::run_args(args),
+            )),
         );
         ctx.provide(tee::SESSION_TEE, Service::native(super::tee::factory()));
         Ok(())

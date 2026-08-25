@@ -47,13 +47,21 @@
 //!
 //! # What core still holds
 //!
-//! The names (`"gui"`, `"acp"`, `"fleet"`) and the sentence printed when
-//! nothing answers to one. That is the same split [`crate::llm::registry`]
-//! makes for a provider `kind`: core may hold the *string* a user types, and
-//! the prose explaining how to get the thing behind it, as long as it never
-//! names the type or constructs one. Each "not in this build" message in
-//! [`crate::run`] is the [`None`] arm of a lookup rather than a
+//! The names (`"gui"`, `"acp"`, `"fleet"`) and the prose for when nothing
+//! answers to one. That is the same split [`crate::llm::registry`] makes for
+//! a provider `kind`: core may hold the *string* a user types, and the words
+//! explaining how to get the thing behind it, as long as it never names the
+//! type or constructs one. Each "not in this build" message in [`crate::run`]
+//! is the [`None`] arm of a lookup rather than a
 //! `#[cfg(not(feature = "..."))]` block.
+//!
+//! What core stopped holding is the *present-tense* description. `wizard
+//! --help` used to print one hand-written line per surface whether or not the
+//! build had it, so a `--no-default-features` binary advertised an ACP server
+//! it could not start. The line is now [`Entrypoint::about`] /
+//! [`Subcommand::about`], read off whatever registered, and
+//! [`crate::cli::command`] decides what a row with nothing behind it looks
+//! like.
 //!
 //! Core also still holds the *arguments*. `FleetCmd` is a `clap::Subcommand`
 //! in [`crate::cli`] and stays there: parsing `wizard fleet run -n 3` is the
@@ -128,6 +136,7 @@ type Body<A> = Box<dyn Fn(A) -> Pin<Box<dyn Future<Output = Result<i32>> + Send>
 /// [`ServiceRegistry::inject_as`]: crate::kernel::ServiceRegistry::inject_as
 pub struct Entrypoint<A = Config> {
     name: &'static str,
+    about: &'static str,
     body: Body<A>,
 }
 
@@ -139,12 +148,12 @@ impl<A: 'static> Entrypoint<A> {
     /// hold: a process that did what it was asked and has nothing to report
     /// has succeeded. A surface that wants to say more than that uses
     /// [`Entrypoint::with_status`].
-    pub fn new<F, Fut>(name: &'static str, body: F) -> Self
+    pub fn new<F, Fut>(name: &'static str, about: &'static str, body: F) -> Self
     where
         F: Fn(A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        Self::with_status(name, move |arg| {
+        Self::with_status(name, about, move |arg| {
             let fut = body(arg);
             async move { fut.await.map(|()| 0) }
         })
@@ -160,13 +169,14 @@ impl<A: 'static> Entrypoint<A> {
     /// [`Entrypoint::new`] would have meant the plugin returning `Err` to get
     /// a non-zero exit, which changes what the user sees in order to make a
     /// signature tidier.
-    pub fn with_status<F, Fut>(name: &'static str, body: F) -> Self
+    pub fn with_status<F, Fut>(name: &'static str, about: &'static str, body: F) -> Self
     where
         F: Fn(A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<i32>> + Send + 'static,
     {
         Self {
             name,
+            about,
             body: Box::new(move |arg| Box::pin(body(arg))),
         }
     }
@@ -176,6 +186,13 @@ impl<A: 'static> Entrypoint<A> {
     /// lookup can still say which one it is.
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// The line `wizard --help` gives this subcommand. See
+    /// [`Subcommand::about`] for why the surface holds it rather than core,
+    /// and why it carries no trailing full stop.
+    pub fn about(&self) -> &'static str {
+        self.about
     }
 
     /// Run it, and hand back the process exit code. Returns when the surface
@@ -191,6 +208,7 @@ impl<A> std::fmt::Debug for Entrypoint<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Entrypoint")
             .field("name", &self.name)
+            .field("about", &self.about)
             .finish()
     }
 }
@@ -261,18 +279,20 @@ type ArgsBody =
 /// reach a peer is a script's answer, and the dispatch chain returns `i32`.
 pub struct Subcommand {
     name: &'static str,
+    about: &'static str,
     body: ArgsBody,
 }
 
 impl Subcommand {
     /// Wrap an `async fn(Vec<String>) -> Result<i32>`.
-    pub fn new<F, Fut>(name: &'static str, body: F) -> Self
+    pub fn new<F, Fut>(name: &'static str, about: &'static str, body: F) -> Self
     where
         F: Fn(Vec<String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<i32>> + Send + 'static,
     {
         Self {
             name,
+            about,
             body: Box::new(move |args| Box::pin(body(args))),
         }
     }
@@ -280,6 +300,31 @@ impl Subcommand {
     /// What this subcommand answers to.
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// The line `wizard --help` gives this subcommand.
+    ///
+    /// Core held this as a doc comment on the `clap` variant until now, which
+    /// meant a build that had left the plugin out still described in the
+    /// present tense a surface it does not have. It belongs to whoever
+    /// implements the surface, for the same reason
+    /// [`ProviderDescriptor::display_name`] belongs to the backend: it is a
+    /// claim about what the thing does, and core does not have the thing.
+    /// What core keeps is the sentence for when *nothing* answers — see
+    /// [`crate::cli::command`].
+    ///
+    /// `&'static str` rather than `String` so [`crate::cli::command`] can copy
+    /// it out of the `Arc` the registry hands back and give it to a
+    /// `clap::Command` that outlives the lookup. A surface's description is
+    /// written in its source; there is nothing to compute.
+    ///
+    /// No trailing full stop, because this is a cell in `--help`'s subcommand
+    /// table rather than a sentence in a paragraph — which is also why `clap`
+    /// strips one off a doc comment on its way into the same slot.
+    ///
+    /// [`ProviderDescriptor::display_name`]: crate::llm::registry::ProviderDescriptor::display_name
+    pub fn about(&self) -> &'static str {
+        self.about
     }
 
     /// Parse `args` and run it. `args` excludes the subcommand's own name:
@@ -293,6 +338,7 @@ impl std::fmt::Debug for Subcommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Subcommand")
             .field("name", &self.name)
+            .field("about", &self.about)
             .finish()
     }
 }
@@ -369,9 +415,11 @@ mod tests {
     }
 
     /// The absent message names the subcommand, the flag that brings it back
-    /// and what the surface is for. All three are load-bearing: somebody
-    /// reading it has just typed a subcommand that `--help` still lists,
-    /// because the `clap` variant stays in core whether or not the body does.
+    /// and what the surface is for. All three are load-bearing: the `clap`
+    /// variant stays in core whether or not the body does, so the subcommand
+    /// still parses and somebody with it in a script or in muscle memory
+    /// still types it — `--help` having stopped listing it is what makes the
+    /// message the *only* place they find out.
     #[test]
     fn the_absent_message_names_the_subcommand_the_feature_and_the_reason() {
         let message = absent(ACP, "acp", "It serves editors over stdio.").to_string();
@@ -386,11 +434,53 @@ mod tests {
     /// the difference necessary.
     #[tokio::test]
     async fn with_status_carries_the_surfaces_own_exit_code() {
-        let entry = Entrypoint::with_status("test", |code: i32| async move { Ok(code) });
+        let entry = Entrypoint::with_status("test", "a test", |code: i32| async move { Ok(code) });
         assert_eq!(entry.run(3).await.expect("ran"), 3);
 
-        let unit = Entrypoint::new("test", |()| async move { Ok(()) });
+        let unit = Entrypoint::new("test", "a test", |()| async move { Ok(()) });
         assert_eq!(unit.run(()).await.expect("ran"), 0);
+    }
+
+    /// Every surface this build compiled in says what it is, and says it in
+    /// the shape `--help`'s subcommand table wants.
+    ///
+    /// The table renders one line per subcommand, so an empty description is
+    /// a blank row and a trailing full stop is a stop `clap` would have
+    /// stripped off a doc comment. Both are the kind of thing that is noticed
+    /// by a reader and not by a compiler, which is why they are asserted here
+    /// rather than left to whoever writes the next plugin.
+    #[test]
+    fn a_registered_surface_describes_itself_for_the_subcommand_table() {
+        let mut abouts: Vec<&str> = Vec::new();
+        if let Some(entry) = installed::<Config>(GUI) {
+            abouts.push(entry.about());
+        }
+        if let Some(entry) = installed::<Config>(ACP) {
+            abouts.push(entry.about());
+        }
+        if let Some(entry) = installed::<crate::cli::FleetCmd>(FLEET) {
+            abouts.push(entry.about());
+        }
+        if let Some(entry) = installed_subcommand(PEERS) {
+            abouts.push(entry.about());
+        }
+        assert_eq!(
+            abouts.len(),
+            [
+                cfg!(feature = "native"),
+                cfg!(feature = "acp"),
+                cfg!(feature = "fleet"),
+                cfg!(feature = "mesh"),
+            ]
+            .iter()
+            .filter(|on| **on)
+            .count(),
+            "every compiled-in surface should have been found"
+        );
+        for about in abouts {
+            assert!(!about.trim().is_empty(), "a surface described itself blank");
+            assert!(!about.ends_with('.'), "{about}");
+        }
     }
 
     /// `wizard peers` is present exactly when the mesh is. The silent failure

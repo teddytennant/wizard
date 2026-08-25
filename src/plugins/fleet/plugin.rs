@@ -21,6 +21,18 @@
 use crate::entrypoint::{self, Entrypoint};
 use crate::kernel::{Capability, Ctx, Plugin, PluginManifest, Service};
 
+/// The line `wizard --help` gives `fleet`.
+///
+/// Core held it as a doc comment on the `clap` variant and printed it whether
+/// or not the build had a fleet in it. Moved here verbatim, minus the
+/// trailing stop `clap` strips off a doc comment on its way into the same
+/// slot. The `FleetCmd` variants underneath keep their doc comments: parsing
+/// `fleet run -n 3` is core's job on every build, so their help has to be
+/// there on every build too.
+const ABOUT: &str = "Fleet mode: decompose a mission into independent tasks and run them as \
+                     parallel headless workers, each in its own git worktree, then merge the \
+                     fleet branches back. See docs/fleet.md";
+
 /// Parallel sovereign workers over git worktrees, as a plugin.
 pub struct FleetPlugin {
     manifest: PluginManifest,
@@ -85,7 +97,11 @@ impl Plugin for FleetPlugin {
     fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.provide(
             entrypoint::FLEET,
-            Service::native(Entrypoint::with_status(entrypoint::FLEET, super::run)),
+            Service::native(Entrypoint::with_status(
+                entrypoint::FLEET,
+                ABOUT,
+                super::run,
+            )),
         );
         Ok(())
     }

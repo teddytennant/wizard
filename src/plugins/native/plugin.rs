@@ -28,6 +28,20 @@
 use crate::entrypoint::{self, Entrypoint};
 use crate::kernel::{Capability, Ctx, Plugin, PluginManifest, Service};
 
+/// The line `wizard --help` gives `gui` **on a build that has a window**.
+///
+/// The one surface whose two descriptions genuinely say different things, and
+/// the reason [`crate::cli::command`] switches between them rather than
+/// picking one. Core's — the doc comment still on the `clap` variant — ends
+/// "Needs a build with `--features native`", which is the useful sentence
+/// exactly when this file is not compiled in. Printing it on a build where
+/// the window is right there is core telling the reader to go and get
+/// something they already have.
+const ABOUT: &str = "Open the GUI: an iced window (chat list, streaming conversation, git rail) \
+                     over the same agent core as the TUI. One process — no webview, no HTTP, no \
+                     port. Chats are built lazily, so it opens fine without a reachable \
+                     provider. See docs/native-gui.md";
+
 /// The iced window, as a plugin.
 ///
 /// Compiled behind `--features native`, which is the same flag the whole
@@ -90,7 +104,7 @@ impl Plugin for NativePlugin {
     fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.provide(
             entrypoint::GUI,
-            Service::native(Entrypoint::new(entrypoint::GUI, super::run)),
+            Service::native(Entrypoint::new(entrypoint::GUI, ABOUT, super::run)),
         );
         Ok(())
     }

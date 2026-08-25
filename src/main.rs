@@ -11,12 +11,12 @@
 
 use std::io::Write;
 
-use clap::Parser;
-
-use wizard::cli::Cli;
-
 fn main() {
-    let cli = Cli::parse();
+    // `cli::parse` rather than `Cli::parse`: the subcommand listing in
+    // `--help` is built from what this build's plugins registered, and the
+    // help *subcommand* for a plugin-owned tree is forwarded to the plugin.
+    // Parsing is unchanged; see `wizard::cli::parse`.
+    let cli = wizard::cli::parse();
 
     // Publish `--harness-dir` as `$WIZARD_HARNESS_DIR` before the tokio
     // runtime exists: every subsystem (prompts, registry, skills, subagents)

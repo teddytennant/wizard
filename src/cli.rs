@@ -250,9 +250,16 @@ pub enum Command {
         cmd: GatewayCmd,
     },
 
-    /// Fleet mode: decompose a mission into independent tasks and run them
-    /// as parallel headless workers, each in its own git worktree, then
-    /// merge the fleet branches back. See docs/fleet.md.
+    /// Not in this build: `wizard fleet` needs the `fleet` feature, which is
+    /// on by default. Rebuild with `--features fleet`, or install a stock
+    /// release binary.
+    //
+    // The doc comment above is what this row says when *nothing has
+    // registered a fleet*, and it is the only time it is printed: `command`
+    // below replaces it with `Entrypoint::about` on a build that has the
+    // plugin, and hides the row entirely on one that does not. The present
+    // tense belongs to whoever implements the surface — see
+    // `crate::entrypoint::Subcommand::about`.
     Fleet {
         #[command(subcommand)]
         cmd: FleetCmd,
@@ -281,9 +288,11 @@ pub enum Command {
         scripted: bool,
     },
 
-    /// Run Wizard as an Agent Client Protocol (ACP) agent over stdio, so ACP
-    /// editors (Zed, Neovim, Emacs) can embed it. Loads config but never
-    /// onboards or opens a TUI — stdin/stdout carry the JSON-RPC protocol.
+    /// Not in this build: `wizard acp` needs the `acp` feature, which is on by
+    /// default. Rebuild with `--features acp`, or install a stock release
+    /// binary.
+    //
+    // The absent text only. See the `Fleet` variant above for why.
     Acp,
 
     /// Open the GUI: an iced window (chat list, streaming conversation, git
@@ -291,6 +300,16 @@ pub enum Command {
     /// HTTP, no port. Needs a build with `--features native`; chats are built
     /// lazily, so it opens fine without a reachable provider.
     /// See docs/native-gui.md.
+    //
+    // The one plugin-owned subcommand whose row stays in `--help` when
+    // nothing has registered it, and the doc comment above is that row —
+    // written for a reader who does *not* have a window, which is why it ends
+    // by naming the flag. `native` is off by default and the window ships as
+    // its own release asset, so on a stock build this is the common case
+    // rather than a misconfiguration, and dropping the row would be the only
+    // way most people never learn the window exists. A build that has one
+    // gets `Entrypoint::about` instead, which does not tell the reader to go
+    // and get something already in front of them.
     Gui {
         /// Accepted and ignored. `wizard gui --native` was how you asked for
         /// the window back when a plain `wizard gui` served a browser page
@@ -397,18 +416,14 @@ pub enum Command {
         list: bool,
     },
 
-    /// Mesh peers: other machines running Wizard, what each one advertises,
-    /// and what this machine has decided about it. List the store, add a peer
-    /// by pasted address, record a trust decision, forget one — and reach a
-    /// peer over the network: ping it, refresh what it advertises, watch its
-    /// live session.
-    ///
-    /// `list` contacts nobody, so its presence column is what this machine
-    /// last observed rather than a live probe; `ping` is the command that
-    /// makes an observation. Reaching a peer needs a route for it here
-    /// (`[mesh.routes]`, or mDNS on the same LAN) and `[mesh] listen = true`
-    /// on that machine, which is off by default. Nothing here listens. See
-    /// docs/mesh.md.
+    /// Not in this build: `wizard peers` needs the `mesh` feature, which is on
+    /// by default. Rebuild with `--features mesh`, or install a stock release
+    /// binary.
+    //
+    // The absent text only — see the `Fleet` variant above. What `wizard
+    // peers` *is* lives in `plugins::mesh::cli::SUMMARY`, which is also the
+    // first paragraph of `wizard peers --help`; the two used to be separate
+    // strings in separate crates' worth of code and had already drifted.
     //
     // Everything after `peers` crosses unparsed, because the tree behind it is
     // the mesh plugin's and one of its arguments is a type core must not name:
@@ -713,6 +728,199 @@ pub enum ScheduleCmd {
         /// Entry name as shown by `wizard schedule list`.
         name: String,
     },
+}
+
+/* ---------------------------------------------------------------------- */
+/* Help, built from what this build actually has                          */
+/* ---------------------------------------------------------------------- */
+
+/// What `--help` does with a subcommand nothing has registered.
+///
+/// Two answers, because the two cases are genuinely different and the
+/// difference is already written down in [`crate::entrypoint::absent`]: `acp`,
+/// `fleet` and `mesh` are on by default and in every published binary, so a
+/// build without one is a build somebody made that way on purpose, and the
+/// row is noise. `native` is off by default and the window ships as its own
+/// release asset, so a build without it is the normal case and the row is how
+/// most people find out there is a window at all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WhenAbsent {
+    /// Drop the row. The `clap` variant still parses, so `wizard acp` still
+    /// answers — with [`crate::entrypoint::absent`], which names the flag.
+    Drop,
+    /// Keep the row, with core's own text. That text is the doc comment on
+    /// the variant, so this arm does nothing at all: it is here to be named
+    /// at the one call site that means it.
+    Keep,
+}
+
+/// One row per CLI subcommand whose body ships in a plugin: what it answers
+/// to, what the plugin says it is on this build, and what to do when nothing
+/// answers.
+///
+/// Core enumerating its four plugin-owned subcommands, which it already does
+/// twice — once as `clap` variants above, once as dispatch arms in
+/// [`crate::run`] — and for the same reason: parsing `wizard fleet run -n 3`
+/// is core's job whether or not a fleet is compiled in, so the variants stay,
+/// and something has to join each one to the lookup that finds its body. The
+/// argument type is part of that join ([`crate::entrypoint::installed`] is a
+/// `TypeId` downcast), which is why this is four written-out lookups and not
+/// a loop over a table of names.
+fn plugin_subcommands() -> [(&'static str, Option<&'static str>, WhenAbsent); 4] {
+    use crate::entrypoint::{self, installed, installed_subcommand};
+
+    [
+        (
+            entrypoint::GUI,
+            installed::<crate::config::Config>(entrypoint::GUI).map(|entry| entry.about()),
+            WhenAbsent::Keep,
+        ),
+        (
+            entrypoint::ACP,
+            installed::<crate::config::Config>(entrypoint::ACP).map(|entry| entry.about()),
+            WhenAbsent::Drop,
+        ),
+        (
+            entrypoint::FLEET,
+            installed::<FleetCmd>(entrypoint::FLEET).map(|entry| entry.about()),
+            WhenAbsent::Drop,
+        ),
+        (
+            entrypoint::PEERS,
+            installed_subcommand(entrypoint::PEERS).map(|entry| entry.about()),
+            WhenAbsent::Drop,
+        ),
+    ]
+}
+
+/// The `clap` command this binary actually has, as opposed to the one the
+/// derive describes.
+///
+/// The derive cannot know: whether `wizard acp` does anything is a property of
+/// the plugin set, which is a runtime lookup. So the four rows above are
+/// folded in here — the description a registered surface gave itself replaces
+/// core's, and a row with nothing behind it is dropped or kept per its policy.
+///
+/// Everything else in the tree keeps using `Cli::parse` / `Cli::try_parse_from`
+/// on the derived command, because everything else is *parsing*, and parsing
+/// does not change: `wizard acp` is accepted on every build and answers with a
+/// sentence rather than a usage error. This is only the listing.
+pub fn command() -> clap::Command {
+    use clap::CommandFactory;
+
+    let mut cmd = Cli::command();
+    for (name, about, absent) in plugin_subcommands() {
+        cmd = cmd.mut_subcommand(name, |sub| match (about, absent) {
+            (Some(about), _) => sub.about(about),
+            (None, WhenAbsent::Drop) => sub.hide(true),
+            (None, WhenAbsent::Keep) => sub,
+        });
+    }
+    cmd
+}
+
+/// Parse this process's arguments, with help that reflects the plugin set.
+///
+/// # Why this is not just `Cli::parse()`
+///
+/// Two things the derived command cannot do, and one thing it must not be
+/// made to do.
+///
+/// **The listing.** [`command`] needs the plugin set, and reaching the plugin
+/// set means building the process kernel. Doing that on every invocation
+/// would be wrong rather than merely wasteful: [`crate::plugins::boot`] sets
+/// the project root *before* the kernel is built, so that a sandboxed
+/// plugin's file helpers are confined to `--cwd` and not to wherever the
+/// process happened to start. A kernel forced into existence at parse time
+/// would be confined to the wrong directory, which is worse than not being
+/// confined at all because it looks like it is working. So the first parse is
+/// the plain derived one and the plugin-aware command is built only on the
+/// path that prints help and exits — a path with no `--cwd` left to honour.
+/// `clap` decides which path that is, not a scan of the argument list for
+/// `-h`: `wizard -p help` is a prompt, not a help request, and the cost of
+/// guessing wrong is the confinement above.
+///
+/// **`wizard help <plugin-subcommand>`.** `wizard peers --help` already
+/// reaches the plugin — core's variant is `trailing_var_arg` with
+/// `disable_help_flag`, so the flag crosses unparsed with everything else and
+/// the plugin's own `clap::Parser` prints its own tree. `wizard help peers`
+/// is `clap`'s help *subcommand*, which `disable_help_flag` does not reach, so
+/// it printed core's `wizard peers [ARGS]...` usage line instead — a real
+/// answer to the wrong question.
+///
+/// It is rewritten here, into the spelling that already works. The
+/// alternative was to teach `clap` to route it, which means core holding a
+/// `clap::Command` for the plugin's tree: either mirrored, which is what
+/// [`crate::entrypoint::Subcommand`] exists to refuse (`trust` takes the peer
+/// store's own `ValueEnum` and a second spelling of it can drift into a
+/// fourth trust state), or handed over by the plugin, which puts `clap` in a
+/// kernel service signature and still ends with `clap` rendering a *second*
+/// copy of the help the plugin renders itself. Two spellings of one request
+/// should not print two documents, and the way to guarantee that is for one
+/// spelling to become the other.
+///
+/// The rewrite fires only when the word after `help` is a name some plugin
+/// registered a [`crate::entrypoint::Subcommand`] under. `wizard help doctor`,
+/// `wizard help` and `wizard help nonsense` are `clap`'s, exactly as before.
+pub fn parse() -> Cli {
+    use clap::CommandFactory;
+
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    match Cli::command().try_get_matches_from(argv.clone()) {
+        Ok(matches) => from_matches(&matches),
+        Err(err) if displays_help(&err) => {
+            match forward_help_to_plugin(&argv) {
+                // `wizard help peers` -> `wizard peers --help`, which parses
+                // cleanly (the flag is just another trailing argument) and
+                // reaches the plugin through the ordinary dispatch arm.
+                Some(rewritten) => from_matches(&command().get_matches_from(rewritten)),
+                None => from_matches(&command().get_matches_from(argv)),
+            }
+        }
+        Err(err) => err.exit(),
+    }
+}
+
+/// Whether this `clap` error is "print help and exit 0" rather than "the
+/// arguments are wrong".
+///
+/// The help paths are the only ones worth building the plugin-aware command
+/// for, and they are also the only ones where doing so is free: they exit
+/// without running anything, so nothing downstream depends on the kernel not
+/// having been built yet.
+fn displays_help(err: &clap::Error) -> bool {
+    use clap::error::ErrorKind;
+    matches!(
+        err.kind(),
+        ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+/// `["wizard", "help", "peers", ..]` becomes `["wizard", "peers", "--help", ..]`
+/// when a plugin has registered a subcommand tree under that name, and
+/// [`None`] otherwise.
+fn forward_help_to_plugin(argv: &[std::ffi::OsString]) -> Option<Vec<std::ffi::OsString>> {
+    let mut rest = argv.iter();
+    let binary = rest.next()?;
+    if rest.next()? != "help" {
+        return None;
+    }
+    let name = rest.next()?;
+    crate::entrypoint::installed_subcommand(name.to_str()?)?;
+
+    let mut rewritten = vec![binary.clone(), name.clone(), "--help".into()];
+    rewritten.extend(rest.cloned());
+    Some(rewritten)
+}
+
+/// `Cli` out of matches `clap` has already accepted.
+///
+/// The `expect` is not optimism: `ArgMatches` came from this very
+/// `clap::Command`, so a failure here is a derive bug rather than user input,
+/// and `clap`'s own `Parser::parse` does the same thing for the same reason.
+fn from_matches(matches: &clap::ArgMatches) -> Cli {
+    use clap::FromArgMatches;
+    Cli::from_arg_matches(matches).expect("clap accepted these arguments")
 }
 
 #[cfg(test)]
