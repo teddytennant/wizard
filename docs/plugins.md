@@ -1204,10 +1204,17 @@ that leaving it out costs two tool names rather than a compile error in the
 four places that assert what the roster holds — `plugins`, `mcp`, `harness`
 and `tools::registry`.
 
-The default test count went 2586 → 2591: nine tests left with `src/tools/git.rs`
-and fourteen arrived in `src/plugins/bundled/tests.rs`. The
-`--no-default-features` count went 2378 → 2369, which is those same nine, since
-that leg no longer compiles the plugin's test module either.
+The default test count went 2586 → 2593: nine tests left with `src/tools/git.rs`,
+fourteen arrived in `src/plugins/bundled/tests.rs`, and two more came out of
+the `todo` attempt below. The `--no-default-features` count went 2378 → 2371 —
+the same nine out, and only the two unconditional ones back in, since that leg
+no longer compiles the plugin's test module.
+
+One wart in the gate itself, found by tripping it: the ratchet compared the
+*passed* count against the baseline, so a run where the known lockfile flake
+fired reported both "known flake, carry on" and "test count went backwards" one
+test below the line. A flaked test is one the suite still has. It counts
+`passed + the known flake` now.
 
 ## `todo` was attempted, and should stay Rust
 
@@ -1226,7 +1233,8 @@ draws?** — and the answer is a spike that was built, run, and thrown away.
 plugin holding no state of its own, reading and writing through those. About
 eighty lines of Lua and forty of Rust.
 
-**It works, in the narrow sense.** The output is byte-identical:
+**It works, in the narrow sense.** The output is byte-identical, and the list
+lands in the `ToolContext::todos` the band draws from:
 
 ```
 WRITE => Ok("todo list updated — 1/3 done\n✓ first\n▸ second\n☐ third")
@@ -1234,8 +1242,8 @@ READ  => Ok("✓ first\n▸ second\n☐ third")
 CORE  => [TodoItem { content: "first", status: Completed }, ...]
 ```
 
-The TUI band updates, the event fires, core keeps the types. Every question
-about *rendering* answers yes.
+The event fires, core keeps the types, the glyphs are the same glyphs. Every
+question about *rendering* answers yes.
 
 ### The three that answer no
 
@@ -1250,7 +1258,7 @@ B's list => [TodoItem { content: "B's work", status: Pending }]
 A reads  => Ok("☐ B's work")
 ```
 
-Session A asked for its todo list and was handed session B's. `docs/plugins.md`
+Session A asked for its todo list and was handed session B's. This document
 already records "last binder wins" as a limitation of `wizard.model`, where it
 is an accounting error. For session state it is a correctness error, and the
 surfaces it breaks — a fleet run, a gateway serving two chats — are exactly the
