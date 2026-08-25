@@ -1771,6 +1771,9 @@ for the `--help` side of the same claim.
   they genuinely are one backend's worth of URLs — and it stops being honest
   the day one of them needs a wire quirk, which is the day it becomes a
   plugin of its own.
-- **`wizard doctor` still prints its own provider listing.** It reads the
-  registry for what is installed, so it does not lie, but its layout is a
-  fourth hand-written thing in the same family.
+- **`--help` for a `Subcommand` tree is still one paragraph, not a tree.**
+  `wizard --help` gives `peers` the same single line it gives `doctor`, which
+  is what the subcommand table gives everything; the eight subcommands under
+  it are one `wizard help peers` away. Listing them at the top level would
+  mean core rendering the plugin's tree, which is the thing the rewrite above
+  exists to avoid.
