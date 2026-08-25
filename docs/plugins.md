@@ -1186,10 +1186,13 @@ person's. `tests/cli.rs` runs the real binary against both sides of the flag.
   not the one already running. Named in `tee.rs` since the tee landed and not
   changed by the move.
 - **`wizard --help` describes `peers` in one paragraph** rather than listing its
-  eight subcommands, which is the price of the argument list crossing unparsed.
-  Building the top-level listing from what plugins registered is the fix and is
-  the same change the onboarding menu and the provider picker have been waiting
-  for.
+  eight subcommands, and `wizard help peers` — clap's own help *subcommand*,
+  which `disable_help_flag` does not reach — prints core's `[ARGS]...` usage
+  line instead of the plugin's. `wizard peers --help`, which is what people
+  type, reaches the plugin. Both are the price of the argument list crossing
+  unparsed; building the top-level listing from what plugins registered is the
+  fix, and it is the same change the onboarding menu and the provider picker
+  have been waiting for.
 - **The other three surfaces are still core.** `wizard acp`, `wizard gateway`
   and `mcp serve` are each one `Entrypoint` registration, and none of them is
   behind a feature yet.
