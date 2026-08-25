@@ -1851,6 +1851,15 @@ The ratchet in `contrib/check-plugin-work.sh` said 2609, and the tree had 2610:
 number took `--skip decompose`, because at that commit those three tests did
 not fail, they hung — see above.
 
+One warning for whoever runs these next, because it cost an hour here. On a
+machine short of disk, `contrib/check-tool-plugins.sh` reports a leg as
+`NO RESULTS` when what actually happened is `tee: /tmp/tmp.XXXX: No space left
+on device` — the leg built, the tests ran, and the log they were parsed out of
+was truncated to nothing. It reads exactly like a leg that produced no tests,
+which is the failure the script's own comment predicts and which is worth
+re-reading before suspecting the code. `without fleet` did it twice at under
+4 GB free and passes standalone: 2582 passed, 0 failed.
+
 ## `evolve` was read end to end, and should stay Rust
 
 `src/evolve/mod.rs` was 4,098 lines and was this phase's target: the biggest
