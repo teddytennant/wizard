@@ -584,8 +584,8 @@ impl Transport for LoopbackTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::capability::Capability;
-    use crate::mesh::node::Identity;
+    use crate::plugins::mesh::capability::Capability;
+    use crate::plugins::mesh::node::Identity;
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

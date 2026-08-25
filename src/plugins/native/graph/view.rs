@@ -34,8 +34,8 @@
 
 use iced::{Point as Screen, Size, Vector};
 
-use crate::mesh::CapabilityKind;
 use crate::plugins::graph::{Layout, MeshGraph, NodeKey, Point as World};
+use crate::plugins::mesh::CapabilityKind;
 
 use super::viewport::Viewport;
 
@@ -381,9 +381,9 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::mesh::peer::synthetic_store;
-    use crate::mesh::{Capability, Identity, Node, PeerStore, Trust};
     use crate::plugins::graph::{Liveness, NodeKind};
+    use crate::plugins::mesh::peer::synthetic_store;
+    use crate::plugins::mesh::{Capability, Identity, Node, PeerStore, Trust};
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

@@ -7,6 +7,15 @@
 //! dispatch chain in [`crate::run`] `inject`s one instead of calling
 //! `native::run`.
 //!
+//! # Two shapes, because two subcommands are shaped differently
+//!
+//! [`Entrypoint`] is `wizard gui`: no arguments, a [`Config`], and it does not
+//! return until the surface closes. [`Subcommand`] is `wizard peers`: a whole
+//! clap subcommand *tree*, no config, and an exit code. Keeping them apart is
+//! cheaper than one type that is half-empty either way, and the difference is
+//! not cosmetic — see [`Subcommand`] for why the argument list crosses this
+//! boundary unparsed.
+//!
 //! # Why this is a service and not a slash command
 //!
 //! [`Ctx::command`](crate::kernel::Ctx::command) already exists and already
@@ -59,6 +68,9 @@ use crate::config::Config;
 /// `wizard gui` reports that this binary has no window while the window sits
 /// in it, registered under a name nobody asks for.
 pub const GUI: &str = "gui";
+
+/// The name the mesh registers its `wizard peers` tree under.
+pub const PEERS: &str = "peers";
 
 /// The boxed body. A `Fn` rather than a `FnOnce` because a [`Service`] is
 /// shared: the registry hands out `Arc`s, and an entrypoint that consumed
@@ -143,6 +155,91 @@ pub fn installed(name: &str) -> Option<Arc<Entrypoint>> {
         .inject_as::<Entrypoint>(name)
 }
 
+/// The boxed body of a [`Subcommand`], over the raw argument list.
+type ArgsBody =
+    Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = Result<i32>> + Send>> + Send + Sync>;
+
+/// A CLI subcommand *tree* a plugin owns, injected by name.
+///
+/// [`Entrypoint`]'s sibling, and the one that carries arguments. `wizard peers`
+/// has eight subcommands, one of which takes a three-state trust decision as a
+/// `clap::ValueEnum`, and that enum is the plugin's: it is the peer store's
+/// recorded decision, derived on the store's own type precisely so a second
+/// spelling on the argument-parsing side cannot drift into a fourth state.
+///
+/// # Why the arguments cross unparsed
+///
+/// Because the alternative is core owning a type it must not own. Core's clap
+/// variant is `Peers { args: Vec<String> }` with `trailing_var_arg` and
+/// `allow_hyphen_values`, so `wizard peers trust wiz1abc trusted` and
+/// `wizard peers --help` both arrive here as a plain vector and are parsed by
+/// the plugin's own [`clap::Parser`], which is where `Trust` lives. The two
+/// things core keeps are the two things `docs/plugins.md` has always let it
+/// keep: the string `"peers"` and the paragraph in `--help` describing what is
+/// behind it.
+///
+/// The cost is real and worth naming: `wizard --help` shows `peers` with core's
+/// one-line description rather than its subcommand list, and a misspelled
+/// subcommand is caught by the plugin's parser rather than the top-level one.
+/// Both produce the same message a user would have got anyway, one frame later.
+/// The alternative — mirroring the eight variants and the trust enum into core
+/// — is a build that can express a decision the store cannot record, which is
+/// the failure the enum's own doc comment was written to prevent.
+///
+/// The exit code rather than `()` because a `wizard peers ping` that could not
+/// reach a peer is a script's answer, and the dispatch chain returns `i32`.
+pub struct Subcommand {
+    name: &'static str,
+    body: ArgsBody,
+}
+
+impl Subcommand {
+    /// Wrap an `async fn(Vec<String>) -> Result<i32>`.
+    pub fn new<F, Fut>(name: &'static str, body: F) -> Self
+    where
+        F: Fn(Vec<String>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<i32>> + Send + 'static,
+    {
+        Self {
+            name,
+            body: Box::new(move |args| Box::pin(body(args))),
+        }
+    }
+
+    /// What this subcommand answers to.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Parse `args` and run it. `args` excludes the subcommand's own name:
+    /// `wizard peers list` arrives as `["list"]`.
+    pub fn run(&self, args: Vec<String>) -> Pin<Box<dyn Future<Output = Result<i32>> + Send>> {
+        (self.body)(args)
+    }
+}
+
+impl std::fmt::Debug for Subcommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Subcommand")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+/// The subcommand tree some plugin registered under `name`, or [`None`] on a
+/// build that did not compile one in.
+///
+/// Same contract as [`installed`], including the `loading()` guard and the
+/// reason for it.
+pub fn installed_subcommand(name: &str) -> Option<Arc<Subcommand>> {
+    if crate::plugins::loading() {
+        return None;
+    }
+    crate::plugins::kernel()
+        .services()
+        .inject_as::<Subcommand>(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +264,27 @@ mod tests {
         if let Some(entry) = found {
             assert_eq!(entry.name(), GUI);
         }
+    }
+
+    /// `wizard peers` is present exactly when the mesh is. The silent failure
+    /// this catches is the same one as the window's, one subcommand along: a
+    /// `mesh` build whose tree did not register prints "this build has no
+    /// mesh" while the whole transport sits in the binary.
+    #[test]
+    fn the_peers_subcommand_is_present_exactly_when_the_mesh_feature_is() {
+        let found = installed_subcommand(PEERS);
+        assert_eq!(found.is_some(), cfg!(feature = "mesh"));
+        if let Some(entry) = found {
+            assert_eq!(entry.name(), PEERS);
+        }
+    }
+
+    /// The two lookups are separate registries' worth of names and do not see
+    /// each other: asking for a subcommand by an entrypoint's name answers
+    /// nothing, which is what keeps `wizard gui` from being reachable as an
+    /// argument-taking tree.
+    #[test]
+    fn an_unregistered_subcommand_is_absent_rather_than_a_failure() {
+        assert!(installed_subcommand("no-such-subcommand").is_none());
     }
 }

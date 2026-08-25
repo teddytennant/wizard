@@ -1151,11 +1151,11 @@ async fn read_events(
 mod tests {
     use super::*;
     use crate::agent::AgentEvent;
-    use crate::mesh::capability::Capability;
-    use crate::mesh::consent::TrustLedger;
-    use crate::mesh::peer::Peer;
-    use crate::mesh::transport::PeerEventKind;
-    use crate::mesh::{PeerText, PeerTurn};
+    use crate::plugins::mesh::capability::Capability;
+    use crate::plugins::mesh::consent::TrustLedger;
+    use crate::plugins::mesh::peer::Peer;
+    use crate::plugins::mesh::transport::PeerEventKind;
+    use crate::plugins::mesh::{PeerText, PeerTurn};
     use chrono::{DateTime, TimeDelta, Utc};
 
     fn identity(byte: u8) -> Identity {

@@ -34,7 +34,7 @@
 //!
 //! # The one entanglement that had to be cut
 //!
-//! `defang` reached into `crate::mesh` for its "what draws as nothing"
+//! `defang` reached into `crate::plugins::mesh` for its "what draws as nothing"
 //! predicate. `mesh` is on its way out of core too, so that was a
 //! plugin-to-plugin edge waiting to happen; the table moved down into
 //! [`crate::text`] and both callers ask core. Nothing about the table changed

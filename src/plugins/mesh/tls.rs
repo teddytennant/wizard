@@ -414,10 +414,10 @@ pub fn server_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::consent::TrustLedger;
-    use crate::mesh::node::Node;
-    use crate::mesh::peer::Peer;
-    use crate::mesh::peer::Trust;
+    use crate::plugins::mesh::consent::TrustLedger;
+    use crate::plugins::mesh::node::Node;
+    use crate::plugins::mesh::peer::Peer;
+    use crate::plugins::mesh::peer::Trust;
     use chrono::{DateTime, Utc};
 
     fn identity(byte: u8) -> Identity {

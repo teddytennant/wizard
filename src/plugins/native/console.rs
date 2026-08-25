@@ -60,7 +60,7 @@ impl Console {
     /// Claim `gate` and bind the composer to `command`'s stdin.
     ///
     /// `None` when the ticket has already been claimed, when it came off a wire
-    /// (a peer's session: `crate::mesh::turn` voids it to ticket 0 precisely so
+    /// (a peer's session: `crate::plugins::mesh::turn` voids it to ticket 0 precisely so
     /// that watching a peer never becomes typing into a peer's shell), or when
     /// the command ended between the announcement and this call.
     pub fn claim(gate: ConsoleGate, command: String) -> Option<Self> {

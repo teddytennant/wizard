@@ -320,7 +320,7 @@ mod tests {
             .graph()
             .links()
             .iter()
-            .filter(|link| link.kind == crate::mesh::EdgeKind::Capability)
+            .filter(|link| link.kind == crate::plugins::mesh::EdgeKind::Capability)
             .count();
         assert!(clustering > 0, "the synthetic mesh shares capabilities");
         assert_eq!(
@@ -330,7 +330,7 @@ mod tests {
         assert!(
             canvas
                 .lines()
-                .all(|link| link.kind != crate::mesh::EdgeKind::Capability)
+                .all(|link| link.kind != crate::plugins::mesh::EdgeKind::Capability)
         );
     }
 

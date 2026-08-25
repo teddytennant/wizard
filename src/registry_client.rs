@@ -1586,7 +1586,7 @@ const DESCRIPTION_CHARS: usize = 88;
 /// terminal with one row.
 ///
 /// What it does not do is make two entries impossible to confuse. There is no
-/// zero-width or homoglyph pass here, for the same reason [`crate::mesh`] does
+/// zero-width or homoglyph pass here, for the same reason [`crate::plugins::mesh`] does
 /// not have one: it needs a Unicode table this crate does not carry. That is
 /// survivable precisely because the fields identity rests on are not this one.
 /// `name` and `author` go through [`validate_segment`], which admits ASCII

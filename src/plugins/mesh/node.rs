@@ -160,6 +160,28 @@ impl NodeId {
     }
 }
 
+/// The transcript renderer's view of a peer, which is these two strings and
+/// nothing else.
+///
+/// One line each, and that is the entire dependency `src/app/transcript.rs`
+/// has on the mesh. It used to take a `NodeId` directly, which made a core
+/// renderer name a plugin; the trait is core's, the type is here, and what
+/// crosses is text derived from a public key.
+///
+/// The trait methods deliberately mirror the inherent ones rather than
+/// wrapping something else: the marker on every line of a watched session has
+/// to be the same short form the graph and the log lines print, or a reader
+/// comparing two surfaces would see two different names for one machine.
+impl crate::app::PeerAddress for NodeId {
+    fn short(&self) -> String {
+        NodeId::short(self)
+    }
+
+    fn address(&self) -> String {
+        NodeId::address(self)
+    }
+}
+
 impl PartialEq for NodeId {
     fn eq(&self, other: &Self) -> bool {
         self.0.to_bytes() == other.0.to_bytes()

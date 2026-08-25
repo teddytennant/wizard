@@ -1,7 +1,7 @@
 //! The explorer's model: the mesh as something drawable, derived from cached
 //! peer state and a clock.
 //!
-//! [`crate::mesh::Graph`] already turns a store into vertices and edges. This
+//! [`crate::plugins::mesh::Graph`] already turns a store into vertices and edges. This
 //! is the layer above it, and it exists because a renderer needs three things
 //! that a wire-shaped snapshot does not owe anybody:
 //!
@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use unicode_width::UnicodeWidthChar as _;
 
-use crate::mesh::{
+use crate::plugins::mesh::{
     Capability, CapabilityKind, EdgeKind, Node, NodeId, PeerStore, PeerText, Presence, Trust,
 };
 
@@ -156,7 +156,7 @@ pub enum NodeKey {
     /// A live session stream, keyed by the node running it *and* the session id
     /// that node reported.
     ///
-    /// Both halves, for the reason [`crate::mesh::Vertex`] gives: a session id
+    /// Both halves, for the reason [`crate::plugins::mesh::Vertex`] gives: a session id
     /// is peer-supplied text chosen by the far end, `main` is what everybody
     /// calls their session, and a key made of the name alone would draw two
     /// machines collaborating on one session that does not exist. Worse, the
@@ -345,7 +345,7 @@ fn truncate_to_columns(text: &str, columns: usize) -> String {
 ///
 /// The `Cf` general category plus the zero-width fillers and variation
 /// selectors that behave the same way on screen. A reviewer found exactly this
-/// class getting past a sanitiser in [`crate::mesh`]; the fix belongs there,
+/// class getting past a sanitiser in [`crate::plugins::mesh`]; the fix belongs there,
 /// and it also belongs here, because a label this module builds must be
 /// bounded by this module's own rules rather than by the state of somebody
 /// else's table.
@@ -574,7 +574,7 @@ impl MeshGraph {
         });
 
         // A store that holds this machine's own address is not something
-        // [`crate::mesh::Mesh::add_peer`] can produce, and it is one hand edit
+        // [`crate::plugins::mesh::Mesh::add_peer`] can produce, and it is one hand edit
         // of `peers.json` away. Drawing it would put the local node on screen
         // twice, hang a self-loop off it, and give it a peer's trust state
         // beside its own.
@@ -927,8 +927,8 @@ mod tests {
     use chrono::TimeDelta;
 
     use super::*;
-    use crate::mesh::peer::{FRESH_SECS, synthetic_store};
-    use crate::mesh::{Capability, Identity, Peer, PeerStore};
+    use crate::plugins::mesh::peer::{FRESH_SECS, synthetic_store};
+    use crate::plugins::mesh::{Capability, Identity, Peer, PeerStore};
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

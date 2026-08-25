@@ -311,9 +311,9 @@ fn absorb(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::consent::TrustLedger;
-    use crate::mesh::node::{Identity, Node};
-    use crate::mesh::peer::{Peer, Trust};
+    use crate::plugins::mesh::consent::TrustLedger;
+    use crate::plugins::mesh::node::{Identity, Node};
+    use crate::plugins::mesh::peer::{Peer, Trust};
     use chrono::{DateTime, Utc};
 
     fn identity(byte: u8) -> Identity {

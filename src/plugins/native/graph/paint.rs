@@ -39,8 +39,8 @@
 
 use iced::Color;
 
-use crate::mesh::{EdgeKind, Trust};
 use crate::plugins::graph::{GraphNode, Liveness};
+use crate::plugins::mesh::{EdgeKind, Trust};
 use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
@@ -210,8 +210,8 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::mesh::{Capability, Identity, Node, PeerStore, PeerText};
     use crate::plugins::graph::{MeshGraph, NodeKey, NodeKind};
+    use crate::plugins::mesh::{Capability, Identity, Node, PeerStore, PeerText};
 
     fn palette(name: &str) -> Palette {
         match name {

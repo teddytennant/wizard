@@ -38,7 +38,6 @@ pub mod local_setup;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
-pub mod mesh;
 pub mod onboarding;
 pub mod output;
 pub mod platform;
@@ -311,8 +310,30 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     if let Some(cli::Command::Skills { cmd }) = &cli.command {
         return registry_client::run_cli(cmd.clone()).await;
     }
-    if let Some(cli::Command::Peers { cmd }) = &cli.command {
-        return mesh::cli::run(cmd.clone()).await;
+    // `wizard peers` is the second CLI subcommand whose body ships in a
+    // plugin, and the first that carries arguments. Core parsed `peers` and
+    // nothing after it; the vector goes to whoever registered the tree. Same
+    // shape as `wizard gui` above: a string, a lookup, and a sentence when
+    // nothing answers.
+    if let Some(cli::Command::Peers { args }) = &cli.command {
+        if let Some(peers) = entrypoint::installed_subcommand(entrypoint::PEERS) {
+            return peers.run(args.clone()).await;
+        }
+        anyhow::bail!(
+            "this build has no mesh — it was built without the `mesh` feature.\n\
+             \n\
+             The mesh is what `wizard peers` administers: peer identity, the QUIC\n\
+             transport under it, and the trust decisions that let another machine watch\n\
+             a session here. Without it there are no peers to list, nothing to bind, and\n\
+             `[mesh]` in config.toml does nothing.\n\
+             \n\
+             Rebuild with it:\n\
+             \n\
+                 cargo install --path . --features mesh\n\
+             \n\
+             It is on by default, so a stock `cargo install --path .` has it. See\n\
+             docs/mesh.md."
+        );
     }
 
     // `wizard resume` is the subcommand spelling of `--resume`, so unlike

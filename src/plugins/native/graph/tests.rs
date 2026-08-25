@@ -34,11 +34,11 @@ use tokio::sync::Mutex;
 
 use super::view::{CapabilityFilter, GraphView};
 use super::{Explorer, Message, paint};
-use crate::mesh::peer::synthetic_store;
-use crate::mesh::{
+use crate::plugins::graph::{Liveness, MeshGraph, NodeKey, NodeKind};
+use crate::plugins::mesh::peer::synthetic_store;
+use crate::plugins::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, Node, PeerStore, PeerText, Trust,
 };
-use crate::plugins::graph::{Liveness, MeshGraph, NodeKey, NodeKind};
 use crate::plugins::native::theme::Palette;
 
 fn at(seconds: i64) -> DateTime<Utc> {
@@ -316,7 +316,7 @@ fn the_explorer_draws_with_fifty_peers_with_none_and_with_an_unreachable_one() {
 // ---------------------------------------------------------------------------
 
 /// A peer with everything on it, so the inspector has every row to render.
-fn furnished() -> (MeshGraph, crate::mesh::NodeId) {
+fn furnished() -> (MeshGraph, crate::plugins::mesh::NodeId) {
     let local = Identity::from_seed([0u8; 32]).announce("here", Capability::none());
     let mut store = PeerStore::ephemeral();
     let id = Identity::from_seed([21u8; 32]).id();
@@ -344,7 +344,7 @@ fn furnished() -> (MeshGraph, crate::mesh::NodeId) {
 }
 
 /// The peer `furnished`'s trusted node introduced.
-fn introduced() -> crate::mesh::NodeId {
+fn introduced() -> crate::plugins::mesh::NodeId {
     Identity::from_seed([22u8; 32]).id()
 }
 

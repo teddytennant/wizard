@@ -537,7 +537,7 @@ pub struct MeshConfig {
     /// (default [`DEFAULT_MESH_LISTEN_ADDR`]). Ignored otherwise.
     pub listen_addr: String,
     /// Announce this node on the local network, and look for peers there
-    /// (default **false**). See [`crate::mesh::discovery`] for what mDNS does
+    /// (default **false**). See [`crate::plugins::mesh::discovery`] for what mDNS does
     /// and, more importantly, what it does not.
     pub mdns: bool,
     /// Where to find peers, as `mesh address -> host:port`.

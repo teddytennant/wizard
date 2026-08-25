@@ -5,7 +5,7 @@
 //! Nothing here links a GUI crate, opens a window or knows what a pixel is,
 //! because the two hard parts of an explorer are not the rendering:
 //!
-//! - [`model`] turns [`crate::mesh`]'s cached peer state into something
+//! - [`model`] turns [`crate::plugins::mesh`]'s cached peer state into something
 //!   drawable, at a clock the caller supplies. It decides liveness once,
 //!   honestly, folding the recorded trust decision together with what the
 //!   store last observed, so a renderer cannot draw a blocked peer green by
@@ -25,7 +25,7 @@
 //! # Peer text is attacker-controlled
 //!
 //! A peer picks its own name, and that name ends up as a label on somebody
-//! else's screen. [`crate::mesh::PeerText`] sanitises at the wire boundary;
+//! else's screen. [`crate::plugins::mesh::PeerText`] sanitises at the wire boundary;
 //! this layer bounds again anyway ([`model::MAX_LABEL_COLUMNS`], in display
 //! columns *and* characters, with invisible formatting characters neutralised
 //! a second time) and gives every node a discriminator taken from its key

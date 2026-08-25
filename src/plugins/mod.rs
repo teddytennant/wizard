@@ -73,6 +73,11 @@ pub mod chatgpt;
 pub mod cloudflare;
 #[cfg(feature = "provider-llamacpp")]
 pub mod llamacpp;
+// The mesh: peer identity, the QUIC transport under it, the consent ledger,
+// the `wizard peers` surface and the session tee. One plugin over one
+// directory, and the largest thing that has gone through the door.
+#[cfg(feature = "mesh")]
+pub mod mesh;
 // The window and the agent core under it: two directories, one plugin. `gui`
 // is not a second plugin and registers nothing — it is sessions, the config
 // store, git and OAuth, the half of the GUI that draws nothing and that
@@ -146,6 +151,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(web::WebPlugin::new()));
     #[cfg(feature = "graph")]
     plugins.push(Arc::new(graph::GraphPlugin::new()));
+    #[cfg(feature = "mesh")]
+    plugins.push(Arc::new(mesh::MeshPlugin::new()));
     plugins
 }
 

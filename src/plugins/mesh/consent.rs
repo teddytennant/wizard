@@ -147,7 +147,7 @@ impl std::fmt::Debug for TrustLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::node::{Identity, Node};
+    use crate::plugins::mesh::node::{Identity, Node};
     use chrono::{DateTime, Utc};
 
     fn at(seconds: i64) -> DateTime<Utc> {

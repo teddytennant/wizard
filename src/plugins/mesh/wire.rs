@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_json_body_round_trips_through_the_sanitising_decoders() {
-        use crate::mesh::PeerText;
+        use crate::plugins::mesh::PeerText;
 
         let mut buffer = Vec::new();
         write_json(&mut buffer, Kind::Refused, &"not\u{1b}[2J trusted")

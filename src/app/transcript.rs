@@ -52,17 +52,51 @@
 //! so an item-level prefix would leave every line after the first unmarked and
 //! a peer could write `wizard: everything is fine` into the gap.
 //!
-//! The marker is built from [`NodeId::short`], which is derived from the peer's
-//! public key rather than from the name it chose, so it is the one part of the
-//! rendering a peer cannot influence at all.
+//! The marker is built from [`PeerAddress::short`], which the mesh derives from
+//! the peer's public key rather than from the name it chose, so it is the one
+//! part of the rendering a peer cannot influence at all.
+//!
+//! # Why [`PeerAddress`] and not the mesh's `NodeId`
+//!
+//! This file used to take a `crate::mesh::NodeId`, which made a core renderer
+//! name a plugin — `docs/plugins.md`'s first rule, broken in the middle of the
+//! TUI. The two things a marker is allowed to be built from are a short form
+//! and a full address, both of them strings, so the trait *is* the whole
+//! dependency and the mesh implements it on `NodeId` in one line.
+//!
+//! Two strings passed in directly would have been smaller and is the wrong
+//! trade: it would let a caller pass a *label* where an address goes, which is
+//! precisely the confusion [`PeerOrigin`]'s private fields exist to prevent. A
+//! trait keeps "derived from the key" a property of the type rather than of
+//! every call site.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use crate::agent::AgentEvent;
 use crate::images::ImageRef;
-use crate::mesh::NodeId;
 use crate::transcript::{Change, ToolItem, ToolItemOutput, TranscriptItem, TranscriptModel};
+
+/// The machine on the far end of a watched session, as much of it as a
+/// transcript is allowed to know.
+///
+/// Two derivations, both of them strings, both taken from the peer's public
+/// key and neither from anything the peer wrote. `crate::plugins::mesh`
+/// implements it on `NodeId`; core never names that type.
+///
+/// Not `Display`, deliberately: a peer has two textual forms with different
+/// jobs — a short one that fits a per-line marker and a full one that cannot
+/// collide — and a single `to_string` would make picking the wrong one a typo
+/// rather than a compile error.
+pub trait PeerAddress {
+    /// The short form, for the marker stamped on every line. A prefix, so two
+    /// of them can collide; see [`PeerAddress::address`].
+    fn short(&self) -> String;
+
+    /// The full address, for the banner. The one line whose job is to say
+    /// exactly which machine is about to write on this screen.
+    fn address(&self) -> String;
+}
 
 /// Whose conversation a [`TranscriptView`] holds.
 ///
@@ -77,8 +111,8 @@ pub enum TranscriptOrigin {
     Local,
     /// A peer's session, arriving over the mesh.
     ///
-    /// No session id, deliberately: one [`crate::mesh::Subscription`] is per
-    /// *node* and carries every session that node is running, because a session
+    /// No session id, deliberately: one subscription is per *node* and carries
+    /// every session that node is running, because a session
     /// id is peer-supplied text and asking a peer to route by a string it chose
     /// is not something this side can pin. The session each event belongs to
     /// arrives on the event.
@@ -88,7 +122,7 @@ pub enum TranscriptOrigin {
 /// Which machine a watched transcript belongs to, rendered.
 ///
 /// Every field is private and [`PeerOrigin::new`] is the only constructor, so
-/// the marker is derived from a [`NodeId`] in exactly one place. That is the
+/// the marker is derived from a [`PeerAddress`] in exactly one place. That is the
 /// property worth protecting: a struct whose marker could be assigned would be
 /// a struct through which a peer's announced name could become the attribution
 /// on its own output.
@@ -101,18 +135,18 @@ pub struct PeerOrigin {
     /// `wiz1AbCdEfG │`, from the peer's public key and from nothing it wrote.
     marker: String,
     /// The full address, for the banner. Full rather than short for the reason
-    /// [`crate::mesh::Graph`] prints it when two labels collide: a short form
-    /// is a prefix, and prefixes collide.
+    /// the mesh's own graph prints it when two labels collide: a short form is
+    /// a prefix, and prefixes collide.
     address: String,
-    /// What the peer calls itself, already sanitised
-    /// ([`crate::mesh::PeerText`]) — or its short address when it has announced
-    /// no name.
+    /// What the peer calls itself, already sanitised at the wire boundary by
+    /// whoever supplied it — or its short address when it has announced no
+    /// name.
     label: String,
 }
 
 impl PeerOrigin {
     /// The origin for one peer, by verified id and announced name.
-    pub fn new(node: NodeId, label: String) -> Self {
+    pub fn new(node: &dyn PeerAddress, label: String) -> Self {
         Self {
             marker: format!("{} │", node.short()),
             address: node.address(),
@@ -159,10 +193,10 @@ impl TranscriptOrigin {
     /// The header a surface prints above a peer's transcript: the name, the
     /// **full** address, and both markers.
     ///
-    /// The full address rather than [`NodeId::short`], for the reason
-    /// [`crate::mesh::Graph`] prints it when two labels collide: a short form
-    /// is a prefix and prefixes collide, and this is the one line whose job is
-    /// to say exactly which machine is about to write on this screen.
+    /// The full address rather than [`PeerAddress::short`], for the reason the
+    /// mesh's own graph prints it when two labels collide: a short form is a
+    /// prefix and prefixes collide, and this is the one line whose job is to
+    /// say exactly which machine is about to write on this screen.
     pub fn banner(&self) -> Option<String> {
         match self {
             TranscriptOrigin::Local => None,
@@ -243,7 +277,7 @@ impl TranscriptView {
     /// The same model and the same reducer as the local one — that is the whole
     /// point of a peer's turn being an [`AgentEvent`] — with an origin that
     /// every rendered line then carries. See the module docs.
-    pub fn for_peer(node: NodeId, label: String) -> Self {
+    pub fn for_peer(node: &dyn PeerAddress, label: String) -> Self {
         Self {
             origin: TranscriptOrigin::Peer(PeerOrigin::new(node, label)),
             ..Self::default()
@@ -551,7 +585,7 @@ pub struct PeerStream {
 
 impl PeerStream {
     /// A stream for one peer, by verified id and announced name.
-    pub fn new(node: NodeId, label: String) -> Self {
+    pub fn new(node: &dyn PeerAddress, label: String) -> Self {
         Self {
             view: TranscriptView::for_peer(node, label),
             printed: Vec::new(),
@@ -784,7 +818,7 @@ fn plain_lines(item: &TranscriptItem) -> Vec<String> {
             }
             lines
         }
-        // A peer's images never carry a path (`crate::mesh::turn::redacted`
+        // A peer's images never carry a path (the mesh's `turn::redacted`
         // empties the array before it reaches a wire), so this says what
         // happened rather than pointing at a file.
         TranscriptItem::Images { source, images } => {
@@ -970,15 +1004,34 @@ impl SubagentPane {
 mod tests {
     use super::*;
     use crate::agent::AgentEvent;
-    use crate::mesh::Identity;
     use crate::tools::ToolOutput;
 
-    fn peer_id(byte: u8) -> NodeId {
-        Identity::from_seed([byte; 32]).id()
+    /// A stand-in for the mesh's `NodeId`, so this file's tests run on a build
+    /// with no mesh in it.
+    ///
+    /// It is not a weaker test than the real type would be. What is under test
+    /// here is that *every line* carries whatever the marker is, and that a
+    /// peer cannot supply one; that the marker is a public key rather than a
+    /// chosen name is the mesh's property and is asserted where the derivation
+    /// lives (`plugins::mesh::tee`).
+    struct FakePeer(u8);
+
+    impl PeerAddress for FakePeer {
+        fn short(&self) -> String {
+            format!("wiz1peer{:02x}", self.0)
+        }
+
+        fn address(&self) -> String {
+            format!("wiz1peer{:02x}averylongfullformthatcannotcollide", self.0)
+        }
+    }
+
+    fn peer_id(byte: u8) -> FakePeer {
+        FakePeer(byte)
     }
 
     fn stream_for(byte: u8) -> PeerStream {
-        PeerStream::new(peer_id(byte), "workshop".to_string())
+        PeerStream::new(&peer_id(byte), "workshop".to_string())
     }
 
     /// The property the whole origin mechanism exists to hold.
@@ -1016,7 +1069,7 @@ mod tests {
         );
         // And the marker is the peer's key, not the name it chose: renaming
         // itself changes the label and not one character of the attribution.
-        let renamed = PeerStream::new(peer_id(1), LOCAL_MARKER.to_string());
+        let renamed = PeerStream::new(&peer_id(1), LOCAL_MARKER.to_string());
         assert_eq!(renamed.view().origin().marker(), Some(marker.as_str()));
     }
 

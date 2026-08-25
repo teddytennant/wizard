@@ -379,7 +379,7 @@ pub(crate) fn web_client() -> Result<reqwest::Client, reqwest::Error> {
 /// re-listed, so there is one audited answer to "what is invisible" instead of
 /// three that can drift.
 ///
-/// That table used to live in `crate::mesh` and this function reached across
+/// That table used to live in `crate::plugins::mesh` and this function reached across
 /// for it. Once the web tools became a plugin that was an edge from a plugin
 /// into a subsystem on its own way out of core, so the table moved down rather
 /// than sideways: core holds the one answer and the mesh, `memory` and this all

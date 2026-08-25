@@ -57,8 +57,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 
+use clap::Parser as _;
+
 use crate::app::PeerStream;
-use crate::cli::PeersCmd;
 use crate::config::{Config, MeshConfig};
 
 use super::consent::TrustLedger;
@@ -94,6 +95,159 @@ const EMPTY_STORE_HELP: &str = "\
 A mesh address is pasted in, not discovered: there is no directory to look a node
 up in, because a node's name is its public key. Run `wizard peers address` on the
 other machine and paste what it prints into `wizard peers add <address>` here.";
+
+/// The `wizard peers` argument list, parsed here rather than in core.
+///
+/// Core's clap variant is `Peers { args: Vec<String> }` and hands the vector
+/// straight to [`run_args`]. This type is the reason for that indirection:
+/// `Trust` below is [`super::Trust`], the peer store's own recorded decision,
+/// and its `clap::ValueEnum` is derived on the store's type precisely so a
+/// second spelling on the argument-parsing side cannot drift into a fourth
+/// state. Core cannot name it, so core does not parse this.
+///
+/// `no_binary_name` because what arrives has already had `wizard peers`
+/// stripped off it: `wizard peers trust <peer> trusted` reaches [`run_args`]
+/// as `["trust", "<peer>", "trusted"]`.
+#[derive(Debug, clap::Parser)]
+#[command(
+    name = "wizard peers",
+    no_binary_name = true,
+    disable_help_subcommand = true
+)]
+pub struct PeersCli {
+    #[command(subcommand)]
+    pub cmd: PeersCmd,
+}
+
+/// `wizard peers` subcommands. Self-contained in the sense `sync` is: no
+/// config beyond `[mesh]`, no onboarding, no LLM. They read and write
+/// ~/.wizard/mesh/peers.json and ~/.wizard/node.key.
+///
+/// Five of them touch nothing else (`list`, `address`, `add`, `trust`,
+/// `forget`); three reach a peer over the network (`ping`, `refresh`,
+/// `watch`), which needs a route and a listening far end. **None of them
+/// listens**: this surface dials, so running `wizard peers` while a session
+/// holds `[mesh] listen` open does not fight it for the port.
+///
+/// The security posture is the module's ([`super`]) and this surface does
+/// not soften it. A pasted address lands at [`Trust::Known`],
+/// which may neither be sent work nor submit any; `accepts_work` is false
+/// until this machine says otherwise; trust is a three-state decision a human
+/// makes and nothing infers it from how a peer behaves; and a blocked peer is
+/// never contacted, which is why there is no command here that reaches out to
+/// one.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum PeersCmd {
+    /// List the peers on this machine with their trust state and presence.
+    /// Reads the local store only: presence is when this machine last
+    /// observed the peer, never a live probe, so a peer that went dark two
+    /// minutes ago reads as stale rather than as online.
+    List,
+
+    /// Print this machine's own mesh address and fingerprint, the text
+    /// another machine pastes into `wizard peers add`. Mints
+    /// ~/.wizard/node.key on first use.
+    Address,
+
+    /// Add a peer from a pasted address.
+    ///
+    /// Adding is not a decision: the peer lands at `known`, which is approved
+    /// for nothing. Re-adding a peer does not change what was decided about
+    /// it either, so pasting a blocked peer's address again does not unblock
+    /// it.
+    Add {
+        /// The peer's address (`wiz1...`), as printed by
+        /// `wizard peers address` on that machine.
+        address: String,
+    },
+
+    /// Record what this machine has decided about a peer.
+    ///
+    /// Moving away from `trusted` also drops anything live for that peer in
+    /// the same call, because a revocation that leaves a stream running has
+    /// revoked nothing.
+    Trust {
+        /// The peer: its full address, or a unique prefix of one. An
+        /// ambiguous prefix is refused rather than resolved to the first
+        /// match.
+        peer: String,
+
+        /// blocked (never contacted), known (approved for nothing), or
+        /// trusted (may exchange work, within its limits).
+        #[arg(value_enum)]
+        state: crate::plugins::mesh::Trust,
+    },
+
+    /// Drop a peer's record entirely.
+    ///
+    /// Not the same as blocking. A forgotten address pasted in again lands at
+    /// `known`, so forgetting a blocked peer discards the decision that was
+    /// keeping it out; use `trust <peer> blocked` when that is what you meant.
+    Forget {
+        /// The peer: its full address, or a unique prefix of one.
+        peer: String,
+    },
+
+    /// Ask a peer whether it is there, and how long the round trip took.
+    ///
+    /// The one command whose answer is a fact about *now* rather than about
+    /// the store. It needs a route (`[mesh.routes]`, or mDNS on the same
+    /// LAN) and a listener on the far end. A blocked peer is not contacted.
+    Ping {
+        /// The peer: its full address, or a unique prefix of one.
+        peer: String,
+    },
+
+    /// Fetch a peer's announcement and fold it into the local store.
+    ///
+    /// What fills in a peer's name and capability: a pasted address carries
+    /// neither, so until a peer is refreshed it renders as its own address.
+    /// The record is written to disk before this returns, and the peer is
+    /// marked seen at the moment it answered.
+    Refresh {
+        /// The peer: its full address, or a unique prefix of one.
+        peer: String,
+    },
+
+    /// Watch a trusted peer's live session stream.
+    ///
+    /// Read-only in both senses: this cannot drive the peer's session, and
+    /// nothing arriving on the stream drives this one. Trusted peers only,
+    /// on both machines — the far end decides separately whether this one may
+    /// watch it.
+    ///
+    /// Every line the peer wrote is marked with the peer's address, and every
+    /// line wizard wrote is marked `wizard`. Runs until the stream ends (the
+    /// peer revoked it, or the connection dropped) or Ctrl-C.
+    Watch {
+        /// The peer: its full address, or a unique prefix of one.
+        peer: String,
+
+        /// Stop after this many events instead of running until the stream
+        /// ends.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+}
+
+/// Parse `wizard peers`'s argument list and run it. What
+/// [`MeshPlugin`](super::MeshPlugin) registers under
+/// [`entrypoint::PEERS`](crate::entrypoint::PEERS).
+///
+/// A parse failure — a misspelled subcommand, a trust state the store cannot
+/// hold, `--help` — is clap's to render, and it renders it against *this*
+/// command rather than against `wizard`, so the usage line and the subcommand
+/// list are the eight below. `exit()` rather than returning the error because
+/// clap's own exit code carries the difference between help (0) and a bad
+/// argument (2), and flattening both into the dispatch chain's `Err` would
+/// make `wizard peers --help` a failure.
+pub async fn run_args(args: Vec<String>) -> Result<i32> {
+    let parsed = match PeersCli::try_parse_from(args) {
+        Ok(parsed) => parsed,
+        Err(err) => err.exit(),
+    };
+    run(parsed.cmd).await
+}
 
 /// Run one `wizard peers` subcommand. Returns the process exit code.
 ///
@@ -487,7 +641,7 @@ async fn refresh(
         .get(&id)
         .map_or_else(|| id.short(), |peer| peer.node.label());
     println!("{}: {label}", id.short());
-    for kind in crate::mesh::CapabilityKind::ALL {
+    for kind in super::CapabilityKind::ALL {
         let entries: Vec<&str> = caps.entries(kind).iter().map(PeerText::as_str).collect();
         if !entries.is_empty() {
             println!("  {}: {}", kind.label(), entries.join(", "));
@@ -526,7 +680,7 @@ async fn watch(
         .get(&id)
         .map_or_else(|| id.short(), |peer| peer.node.label());
     let mut subscription = mesh.subscribe(&id).await?;
-    let mut screen = PeerStream::new(id, label);
+    let mut screen = PeerStream::new(&id, label);
     println!("{}", screen.banner());
     let taken = stream(&mut screen, &mut subscription, limit, &mut |line| {
         println!("{line}")
@@ -549,6 +703,13 @@ async fn watch(
 /// real socket without a terminal — which is what makes "one node watches
 /// another and sees its turns render" a test rather than a screenshot.
 ///
+/// `+ Send` on the sink is not decoration: this runs inside the future
+/// `MeshPlugin` hands the kernel as a [`Subcommand`](crate::entrypoint::Subcommand),
+/// and a `&mut dyn FnMut` held across the `recv().await` below is what would
+/// make that whole future non-`Send`. Every caller's sink is a `println!` or a
+/// `Vec` push, so the bound costs nothing and the alternative is a plugin
+/// entrypoint that cannot be spawned.
+///
 /// Two kinds of line come out of here and they are never confusable. A line
 /// derived from a peer's *content* goes through [`PeerStream::apply`], which
 /// stamps the peer's marker onto every one of its physical lines. A line wizard
@@ -559,7 +720,7 @@ async fn stream(
     screen: &mut PeerStream,
     subscription: &mut Subscription,
     limit: Option<usize>,
-    out: &mut dyn FnMut(&str),
+    out: &mut (dyn FnMut(&str) + Send),
 ) -> usize {
     use super::PeerEventKind;
 
@@ -681,11 +842,11 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::Node;
+    use crate::plugins::mesh::Node;
 
     /// A mesh over an ephemeral store holding `count` deterministic peers.
     fn mesh_with(count: usize) -> Mesh {
-        let store = crate::mesh::peer::synthetic_store(count, 7, Utc::now());
+        let store = crate::plugins::mesh::peer::synthetic_store(count, 7, Utc::now());
         Mesh::new(
             Identity::from_seed([9u8; 32]),
             store,
@@ -841,7 +1002,7 @@ mod tests {
 
     use crate::agent::{AgentEvent, DoneReason};
     use crate::app::LOCAL_MARKER;
-    use crate::mesh::{Capability, PeerEventKind};
+    use crate::plugins::mesh::{Capability, PeerEventKind};
     use std::net::SocketAddr;
 
     fn localhost() -> SocketAddr {
@@ -1007,7 +1168,7 @@ mod tests {
         let mut subscription = within("subscribing", watcher.subscribe(&publisher_id))
             .await
             .expect("a subscription");
-        let mut screen = PeerStream::new(publisher_id, label);
+        let mut screen = PeerStream::new(&publisher_id, label);
         let banner = screen.banner();
         assert!(banner.contains(&publisher_id.address()), "{banner}");
 

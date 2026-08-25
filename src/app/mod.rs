@@ -9,7 +9,7 @@ mod prompts;
 mod recover;
 mod runtime;
 mod session;
-mod tee;
+pub mod tee;
 mod term;
 #[cfg(test)]
 mod tests;
@@ -18,10 +18,10 @@ mod transcript;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
 pub use runtime::run_tui;
-pub use tee::MeshTee;
+pub use tee::{SessionTee, TeeFactory};
 pub use term::restore_terminal_best_effort;
 pub use transcript::{
-    LOCAL_MARKER, PaneStatus, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
+    LOCAL_MARKER, PaneStatus, PeerAddress, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
     TranscriptView,
 };
 
@@ -375,14 +375,16 @@ pub struct App {
     /// only on the first message. Cleared once a turn completes successfully —
     /// the provider has proven itself, so a transient blip self-heals.
     pub provider_health_error: Option<String>,
-    /// This session's tee onto the mesh, when this node is listening.
+    /// This session's events on their way off this machine, when some plugin
+    /// has somewhere to send them.
     ///
-    /// `None` for a default install, and `None` is the shipped default: a peer
-    /// watches this node by dialling it, so with `[mesh] listen` off nobody can
-    /// subscribe and a tee would be a socket bound for a stream nobody can
-    /// open. See [`MeshTee`], which is also where the one call to
-    /// [`crate::mesh::Mesh::publish_turn`] lives.
-    pub mesh: Option<MeshTee>,
+    /// `None` for a default install, and `None` is the shipped default twice
+    /// over: a build without the mesh has nothing registered to open one, and
+    /// a build with it still answers `None` unless `[mesh] listen` is on,
+    /// because a peer watches this node by dialling it and a tee for a stream
+    /// nobody can open is a socket bound for nothing. A `dyn` rather than the
+    /// plugin's type — see [`tee`] for why core does not name it.
+    pub mesh: Option<Box<dyn SessionTee>>,
 }
 
 impl App {
@@ -3998,7 +4000,7 @@ impl App {
         // session-start hook, a background task reporting in, a subagent run —
         // and a tee hung off the turn alone would show a watcher a session that
         // went silent between turns. What crosses is not decided here: see
-        // [`MeshTee::publish`].
+        // [`SessionTee::publish`] and whatever implements it.
         if let Some(mesh) = &self.mesh {
             mesh.publish(&event);
         }
