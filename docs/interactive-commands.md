@@ -61,8 +61,8 @@ one of those too; what it does not have is somebody reading it.
   is the same process as the child it would be driving, it dies when the agent
   dies, and it has a person in front of it — the same condition the TUI meets —
   so `TaskManager::attended` builds its tasks with `ConsoleAccess::Interactive`
-  (`src/gui/tasks.rs`) and the window claims the gate
-  (`src/native/console.rs`). See `docs/native-gui.md`.
+  (`src/plugins/gui/tasks.rs`) and the window claims the gate
+  (`src/plugins/native/console.rs`). See `docs/native-gui.md`.
   `TaskManager::with_registry`, the constructor that does *not* say this, leaves
   `ConsoleAccess::None` in place: a caller that has not claimed a keyboard keeps
   `/dev/null` on fd 0, because announcing a prompt nobody can answer would park

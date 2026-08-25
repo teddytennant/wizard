@@ -73,6 +73,18 @@ pub mod chatgpt;
 pub mod cloudflare;
 #[cfg(feature = "provider-llamacpp")]
 pub mod llamacpp;
+// The window and the agent core under it: two directories, one plugin. `gui`
+// is not a second plugin and registers nothing — it is sessions, the config
+// store, git and OAuth, the half of the GUI that draws nothing and that
+// another front end could be written against. It stays a sibling rather than
+// a child of `native` because nesting it would say the window owns it, and
+// `native/mod.rs` is explicit that the window is a *client* of it. Both are
+// behind the one `native` feature, which `install.sh`, the release workflow
+// and `docs/native-gui.md` all name.
+#[cfg(feature = "native")]
+pub mod gui;
+#[cfg(feature = "native")]
+pub mod native;
 #[cfg(feature = "provider-ollama")]
 pub mod ollama;
 #[cfg(feature = "provider-openai")]
@@ -92,10 +104,15 @@ use crate::tools::registry::ToolRegistry;
 ///
 /// The only file in the tree that names them. Each line is one cargo feature,
 /// and deleting the feature deletes the plugin: the vector is shorter, nothing
-/// else in the tree changes, and the `kind`/tool/command it registered is
-/// simply absent. That is the "delete any one plugin" rule from
+/// else in the tree changes, and the `kind`/tool/command/entrypoint it
+/// registered is simply absent. That is the "delete any one plugin" rule from
 /// `docs/plugins.md`, and it is what the `--no-default-features` leg of
 /// `contrib/check-plugin-work.sh` proves.
+///
+/// Seven of the eight are providers. The eighth, `native`, is a *surface* —
+/// the window — and it is the reason `docs/plugins.md`'s first rule is a rule
+/// rather than an observation: `src/lib.rs` used to call `native::run` by
+/// name, and the entrypoint it registers is what replaced that call.
 //
 // Built by pushing rather than as a `vec![]` literal because every line is
 // `#[cfg]`-gated, and an attribute on an element of a vec literal is not
@@ -112,6 +129,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
     #[cfg(feature = "provider-llamacpp")]
     plugins.push(Arc::new(llamacpp::LlamaCppPlugin::new()));
+    #[cfg(feature = "native")]
+    plugins.push(Arc::new(native::NativePlugin::new()));
     #[cfg(feature = "provider-ollama")]
     plugins.push(Arc::new(ollama::OllamaPlugin::new()));
     #[cfg(feature = "provider-openai")]
@@ -279,6 +298,19 @@ pub(crate) fn host_bridge() -> Option<Arc<host::WizardHost>> {
     }
     let _ = kernel();
     HOST.get().cloned()
+}
+
+/// True on the thread that is currently inside the kernel's initializer.
+///
+/// The one thing anybody outside this module needs to know about [`LOADING`],
+/// and it is needed for the same reason [`ensure_providers`] checks it:
+/// [`kernel`] is a `OnceLock::get_or_init`, so a call that re-enters it from
+/// inside its own closure deadlocks. [`crate::entrypoint::installed`] is the
+/// second such caller — a plugin that asked, during `apply`, whether some
+/// surface was registered would otherwise hang the process rather than get an
+/// answer.
+pub(crate) fn loading() -> bool {
+    LOADING.get()
 }
 
 /// Make sure the compiled-in plugins have registered before a provider kind is

@@ -88,7 +88,7 @@ pub(super) async fn apply_command(
 /// list, and this side owns the agent. So the window-owning verbs are left at
 /// their defaults, which answer honestly rather than pretending to be a window,
 /// and the table's [`Execution::Ui`](crate::commands::Execution::Ui) column
-/// routes them to [`crate::native::command::Native`] before they ever reach
+/// routes them to [`crate::plugins::native::command::Native`] before they ever reach
 /// here.
 struct GuiSurface<'a, 'ctx> {
     agent: &'a mut Agent,

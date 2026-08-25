@@ -15,9 +15,9 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # The baseline this migration must not regress. Captured with
 # `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel
 # landed, 2557 once every provider became a plugin, 2575 with the host bridge
-# and the sandbox fix. Raise it when a phase adds tests, so the ratchet keeps
-# ratcheting.
-BASELINE_TESTS=2575
+# and the sandbox fix, 2577 once the native GUI became a plugin. Raise it when a
+# phase adds tests, so the ratchet keeps ratcheting.
+BASELINE_TESTS=2577
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }

@@ -47,7 +47,7 @@ categories = [
 #
 # Deliberately narrow, because two things under `assets/` are compiled *into*
 # the binary and excluding either breaks the build rather than slimming it:
-# `assets/fonts/*.ttf` is `include_bytes!`d by `src/native/font.rs`, and
+# `assets/fonts/*.ttf` is `include_bytes!`d by `src/plugins/native/font.rs`, and
 # `assets/themes/*.toml` is `include_str!`d by `src/theme.rs`. `build.rs`,
 # `WIZARD.md` (`include_str!` in `src/agent/prompts.rs` and `src/tools/manual.rs`)
 # and `wizard-release.pub` (`include_str!` in `src/update.rs`) are all load-bearing
@@ -141,8 +141,16 @@ provider-xai = []
 # `.github/workflows/release.yml` publishes `wizard-native-<target>.tar.gz` for
 # the four gnu/darwin targets, and `install.sh WIZARD_NATIVE=1` installs one.
 # See `docs/native-gui.md`.
-# `src/gui/` — sessions, config store, git, OAuth — is behind this flag too:
+# `src/plugins/gui/` — sessions, config store, git, OAuth — is behind this flag too:
 # the window is now the only thing that reaches it.
+#
+# The name is load-bearing and must not change: `install.sh` reads
+# `WIZARD_NATIVE=1`, `.github/workflows/release.yml` has a job called `native`,
+# and `docs/native-gui.md` spells it throughout. It is also the one plugin
+# feature that is not a provider — the window registers a `wizard gui`
+# entrypoint with the kernel and core looks it up by string, so leaving the
+# feature out removes the surface without core changing a line. See
+# `src/plugins/native/plugin.rs`.
 native = ["dep:iced", "dep:iced_highlighter", "dep:iced_test"]
 
 [dependencies]
@@ -303,7 +311,7 @@ mdns-sd = { version = "0.20", default-features = false, features = ["log", "asyn
 # it pulls `mundy`, which runs its D-Bus query on `async-io` — a second,
 # smol-flavoured reactor thread alongside the tokio runtime the agent core
 # already owns. The theme comes from `crate::theme` anyway (see
-# `src/native/theme.rs`), so the detection would be ignored even if it worked.
+# `src/plugins/native/theme.rs`), so the detection would be ignored even if it worked.
 #
 # `highlighter` reaches syntect through `two-face` with `syntect-default-fancy`,
 # which is byte-identical to the selection above: one syntect, fancy-regex, no
@@ -332,7 +340,7 @@ iced_highlighter = { version = "0.14", optional = true }
 # compositor and snapshots it to PNG, and `iced_test::runtime` re-exports the
 # `UserInterface` the selection tests drive directly, because
 # `Simulator::simulate` hardcodes `clipboard::Null` and so cannot observe a
-# copy. Only `src/native/**` names it, always under `#[cfg(test)]`.
+# copy. Only `src/plugins/native/**` names it, always under `#[cfg(test)]`.
 #
 # Here rather than in `[dev-dependencies]`, which is where it belongs and where
 # it cannot go. Cargo compiles a dev-dependency for every `cargo test` whether

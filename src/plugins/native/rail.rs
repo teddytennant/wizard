@@ -31,11 +31,11 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Padding};
 
 use crate::agent::AgentEvent;
-use crate::gui::git::GitStatus;
-use crate::gui::tasks::TodoRow;
-use crate::native::subagent::{self, Rail as Subagents};
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::gui::git::GitStatus;
+use crate::plugins::gui::tasks::TodoRow;
+use crate::plugins::native::subagent::{self, Rail as Subagents};
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::theme::Token;
 
 /// The rail's own width, per the design spec.
@@ -454,11 +454,11 @@ fn diffstat<'a, M: 'a>(
         // beside `−14` in white.
         text(format!("+{additions}"))
             .size(chrome::SMALL)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             .color(palette.color(Token::DiffAdd)),
         text(format!("−{deletions}"))
             .size(chrome::SMALL)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             .color(palette.color(Token::DiffDel)),
     ]
     .spacing(6)
@@ -505,7 +505,7 @@ pub fn duration(elapsed: std::time::Duration) -> String {
 /// Keep the tail of a path, which is the half that identifies the file.
 ///
 /// The browser did this with an RTL trick and a leading LRM; a window has to do
-/// it explicitly. `src/native/widget/transcript.rs` matters more at its end than
+/// it explicitly. `src/plugins/native/widget/transcript.rs` matters more at its end than
 /// at its start.
 pub fn elide_left(path: &str, width: usize) -> String {
     let count = path.chars().count();
@@ -642,7 +642,7 @@ mod tests {
     }
 
     /// A path is identified by its end. Eliding the tail would give three rows
-    /// that all read `src/native/widget/…`.
+    /// that all read `src/plugins/native/widget/…`.
     #[test]
     fn a_long_path_keeps_its_tail() {
         assert_eq!(elide_left("src/gui/git.rs", 30), "src/gui/git.rs");

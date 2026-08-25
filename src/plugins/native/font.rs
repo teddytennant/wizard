@@ -20,7 +20,7 @@
 //! The consequence worth stating: a `Font::MONOSPACE` left anywhere in this
 //! crate's window code is a silent fall back to DejaVu Sans Mono beside
 //! JetBrains Mono, which is exactly the failure this module exists to end.
-//! `src/native/tests.rs` asserts that no block the transcript produces carries
+//! `src/plugins/native/tests.rs` asserts that no block the transcript produces carries
 //! it.
 //!
 //! # Variable, and why that matters here
@@ -42,10 +42,10 @@
 use iced::Font;
 
 /// Inter, the UI and prose face. Variable 400–700, latin subset.
-pub const INTER: &[u8] = include_bytes!("../../assets/fonts/inter.ttf");
+pub const INTER: &[u8] = include_bytes!("../../../assets/fonts/inter.ttf");
 
 /// JetBrains Mono, for literals. Variable 400–600, latin subset.
-pub const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/jetbrains-mono.ttf");
+pub const JETBRAINS_MONO: &[u8] = include_bytes!("../../../assets/fonts/jetbrains-mono.ttf");
 
 /// The family name inside `inter.ttf`, as fontdb will register it.
 pub const SANS_FAMILY: &str = "Inter";

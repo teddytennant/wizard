@@ -18,9 +18,13 @@
 //!   agent.
 //!
 //! It is compiled only with `--features native`, because the window is the
-//! only thing that reaches it. The name is kept — rather than folded into
-//! `src/native/` — because none of it draws anything: it is the half of the
-//! GUI that would survive another front end being written against it.
+//! only thing that reaches it, and it moved under `src/plugins/` with the
+//! window when the window became a plugin. It stays a *sibling* of
+//! [`native`](crate::plugins::native) rather than a module inside it, and the
+//! name is kept, because none of it draws anything: it is the half of the GUI
+//! that would survive another front end being written against it, and nesting
+//! it would say the window owns it. It registers nothing with the kernel —
+//! [`crate::plugins::native::plugin`] is the one registration the pair makes.
 
 pub(crate) mod command;
 pub(crate) mod git;

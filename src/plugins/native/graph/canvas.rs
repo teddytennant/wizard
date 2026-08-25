@@ -29,7 +29,7 @@ use iced::{Color, Point as Screen, Rectangle, Renderer, Size, Theme};
 
 use crate::graph::layout::node_radius;
 use crate::graph::{GraphNode, NodeKind};
-use crate::native::theme::Palette;
+use crate::plugins::native::theme::Palette;
 
 use super::paint::{filtered, halo_reach, link_paint, node_paint};
 use super::view::GraphView;

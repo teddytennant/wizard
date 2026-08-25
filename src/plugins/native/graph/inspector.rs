@@ -33,8 +33,8 @@ use iced::{Border, Element, Length, Padding};
 
 use crate::graph::{GraphNode, Inspection, NodeKey, NodeKind};
 use crate::mesh::{CapabilityKind, NodeId};
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::theme::Token;
 
 use super::view::CapabilityFilter;

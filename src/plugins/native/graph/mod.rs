@@ -12,7 +12,7 @@
 //! as before. `pub` is what stops the compiler calling this dead code.
 //!
 //! Putting it back is the four seams that were removed from
-//! [`crate::native`], and nothing else:
+//! [`crate::plugins::native`], and nothing else:
 //!
 //! 1. `Screen::Mesh`, and a `view` arm stacking [`Explorer::view`] over `body`.
 //! 2. `Message::Graph(graph::Message)`, with the `Close` arm routed to
@@ -88,7 +88,7 @@ use tokio::sync::Mutex;
 
 use crate::graph::{Liveness, MeshGraph, NodeKey};
 use crate::mesh::{Mesh, NodeId, Trust};
-use crate::native::theme::Palette;
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 use canvas::GraphCanvas;
@@ -142,7 +142,7 @@ pub enum Message {
     Refresh,
     /// Leave the explorer and go back to the chat.
     ///
-    /// Handled by [`crate::native`], not here: the explorer does not own the
+    /// Handled by [`crate::plugins::native`], not here: the explorer does not own the
     /// screen it is drawn on, so all it can do is say it is finished.
     Close,
 }

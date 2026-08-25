@@ -21,10 +21,10 @@ use crate::agent::{
     build_headless_agent_for_session,
 };
 use crate::config::{Config, Mode};
-use crate::gui::command::{CommandCtx, apply_command};
-use crate::gui::settings::ConfigStore;
 use crate::llm::provider::NATIVE_TOOLS_ON_PROBE_FAILURE;
 use crate::mcp::McpManager;
+use crate::plugins::gui::command::{CommandCtx, apply_command};
+use crate::plugins::gui::settings::ConfigStore;
 use crate::session_registry::{self, SessionRecord, SessionState};
 use crate::tools::{CommandDispatch, ConsoleAccess};
 
@@ -616,7 +616,7 @@ impl TaskManager {
     /// `/dev/null` and dying at its timeout.
     ///
     /// Only the window calls this, and only because it is in-process with the
-    /// child it would be driving. See `src/native/console.rs`.
+    /// child it would be driving. See `src/plugins/native/console.rs`.
     pub(crate) fn attended(config: Arc<ConfigStore>, mcp: Arc<RwLock<McpManager>>) -> Self {
         Self::attended_with_registry(config, mcp, session_registry::running_dir())
     }
@@ -1211,7 +1211,7 @@ mod tests {
     use crate::commands::SlashCommand;
     use crate::commands::surface::Surface;
     use crate::config::ProviderKind;
-    use crate::gui::command::ultra_seats;
+    use crate::plugins::gui::command::ultra_seats;
     use crate::tools::ToolOutput;
 
     /// An unmanaged task: it heartbeats nowhere, so a test run never advertises
@@ -1685,7 +1685,7 @@ mod tests {
     ///
     /// The events the agent produces on its own — [`AgentEvent::Usage`] and
     /// [`AgentEvent::ContextSize`] — are pure relay here, and the window folds
-    /// them in [`crate::native::rail::Meter`]. This is the other half: after a
+    /// them in [`crate::plugins::native::rail::Meter`]. This is the other half: after a
     /// turn against a provider that reports no token counts, after a compaction
     /// and after a rewind, the history changed size with no event to say so, and
     /// [`TaskShared::push_context`] is what says it.

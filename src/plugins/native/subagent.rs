@@ -13,7 +13,7 @@
 //! into the shapes that model already folds — `SubagentRunToolStarted` *is* a
 //! `ToolStarted`, once you know whose it is. That translation is the whole
 //! module, and it is what lets a run's pane be drawn by the same
-//! [`crate::native::widget::transcript::blocks`] the chat is drawn by, with the
+//! [`crate::plugins::native::widget::transcript::blocks`] the chat is drawn by, with the
 //! same tool rows, the same clipping and the same selection layer over it.
 //!
 //! # A run outlives the turn that spawned it

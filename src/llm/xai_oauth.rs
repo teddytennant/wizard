@@ -158,9 +158,9 @@ static TEST_DISCOVERY_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::
 /// [`oauth_callback::serial_callback_port`] first, which is the same lock the
 /// one fixed callback port already forces it to hold.
 ///
-/// The only caller is `src/gui/oauth.rs`, which lives behind `--features
-/// native`: a default-feature test build compiles this seam and exercises none
-/// of it, which is not the same thing as it being unused.
+/// The only caller is `src/plugins/gui/oauth.rs`, which lives behind
+/// `--features native`: a default-feature test build compiles this seam and
+/// exercises none of it, which is not the same thing as it being unused.
 #[cfg(test)]
 #[cfg_attr(not(feature = "native"), allow(dead_code))]
 pub(crate) fn use_test_discovery_url(url: &str) {

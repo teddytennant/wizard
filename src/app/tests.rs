@@ -4322,7 +4322,11 @@ fn every_key_a_surface_advertises_is_bound() {
         }
     }
 
-    for surface in ["native", "app"] {
+    // `plugins/native` rather than `native`: the window moved under
+    // `src/plugins/` when it became a plugin, and a path this scan cannot find
+    // reads as a surface that advertises nothing — which is why the empty case
+    // below is an assertion rather than a skip.
+    for surface in ["plugins/native", "app"] {
         let mut files = Vec::new();
         sources(&root.join(surface), &mut files);
         if surface == "app" {

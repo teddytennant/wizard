@@ -43,10 +43,10 @@ use tokio::sync::{RwLock, mpsc};
 
 use crate::agent::{AgentEvent, DoneReason};
 use crate::config::{Config, ProviderConfig, ProviderKind};
-use crate::gui::settings::ConfigStore;
-use crate::gui::tasks::{TaskManager, TurnRequest};
 use crate::llm::ChatMessage;
 use crate::mcp::McpManager;
+use crate::plugins::gui::settings::ConfigStore;
+use crate::plugins::gui::tasks::{TaskManager, TurnRequest};
 use crate::transcript::{TranscriptItem, TranscriptModel};
 
 use super::select::{Block, Selectable};
@@ -456,7 +456,7 @@ async fn a_branched_claude_session_opens_from_the_picker_and_continues() {
     let mut ui = iced_test::simulator(super::view(&app));
     assert!(ui.find("claude code").is_ok(), "the section is headed");
     assert!(ui.find("claude").is_ok(), "and the rows are tagged");
-    ui.click(crate::native::probe::contains(&needle))
+    ui.click(crate::plugins::native::probe::contains(&needle))
         .expect("click the branched session");
     let clicked = ui.into_messages().next().expect("a message");
     let super::Message::Sidebar(super::sidebar::Message::OpenClaude { source, leaf }) = clicked
@@ -1553,24 +1553,25 @@ fn the_event_feed_is_identified_by_the_chat_and_the_generation() {
         hasher.finish()
     }
 
-    let one = crate::gui::tasks::TaskShared::new(
+    let one = crate::plugins::gui::tasks::TaskShared::new(
         "chat-one".to_string(),
         PathBuf::from("/src/a"),
         "m".to_string(),
         "genie".to_string(),
         None,
     );
-    let two = crate::gui::tasks::TaskShared::new(
+    let two = crate::plugins::gui::tasks::TaskShared::new(
         "chat-two".to_string(),
         PathBuf::from("/src/b"),
         "m".to_string(),
         "genie".to_string(),
         None,
     );
-    let feed = |task: &Arc<crate::gui::tasks::TaskShared>, generation| super::event::Feed {
-        task: Arc::clone(task),
-        generation,
-    };
+    let feed =
+        |task: &Arc<crate::plugins::gui::tasks::TaskShared>, generation| super::event::Feed {
+            task: Arc::clone(task),
+            generation,
+        };
 
     let base = digest(&feed(&one, 0));
     assert_eq!(base, digest(&feed(&one, 0)), "a redraw is not a new feed");
@@ -1586,13 +1587,13 @@ fn the_event_feed_is_identified_by_the_chat_and_the_generation() {
 /// An [`App`] with no compositor behind it, on a task the caller owns.
 fn window(
     manager: Arc<TaskManager>,
-    task: Arc<crate::gui::tasks::TaskShared>,
+    task: Arc<crate::plugins::gui::tasks::TaskShared>,
     cwd: PathBuf,
 ) -> super::App {
     let store = Arc::new(ConfigStore::new(Config::default()));
     let settings = super::settings::Sheet::new(
         Arc::clone(&store),
-        Arc::new(crate::gui::oauth::SignIn::default()),
+        Arc::new(crate::plugins::gui::oauth::SignIn::default()),
     );
     let mut sidebar = super::sidebar::Sidebar::default();
     sidebar.selected = task.id.clone();
@@ -1741,7 +1742,7 @@ async fn the_whole_window_draws_headlessly() -> Result<(), iced_test::Error> {
     assert!(ui.find("scout").is_ok(), "the subagent rail");
     assert!(ui.find("test-model").is_ok(), "the composer's model chip");
     assert!(
-        ui.find(crate::native::probe::contains("4K of 100K"))
+        ui.find(crate::plugins::native::probe::contains("4K of 100K"))
             .is_ok(),
         "the context meter"
     );
@@ -1845,8 +1846,8 @@ fn the_window_has_no_route_into_the_graph_explorer() {
             .join("\n")
     };
     for (file, source) in [
-        ("native/mod.rs", include_str!("mod.rs")),
-        ("native/sidebar.rs", include_str!("sidebar.rs")),
+        ("plugins/native/mod.rs", include_str!("mod.rs")),
+        ("plugins/native/sidebar.rs", include_str!("sidebar.rs")),
     ] {
         let code = code(source);
         for seam in ["Screen::Mesh", "OpenMesh", "Message::Graph", "explorer"] {
@@ -1913,7 +1914,9 @@ async fn the_branch_chip_checks_out_and_reports_a_refusal() {
         super::Message::Rail(super::rail::Message::ToggleBranches),
     );
     assert!(app.rail.branches_open, "the chip opened");
-    let listed = crate::gui::git::branches(root).await.expect("branches");
+    let listed = crate::plugins::gui::git::branches(root)
+        .await
+        .expect("branches");
     app.rail.branches_loaded(listed.branches);
     assert!(
         app.rail.branches.iter().any(|name| name == "side"),
@@ -1922,7 +1925,7 @@ async fn the_branch_chip_checks_out_and_reports_a_refusal() {
     );
 
     // Clicking one switches, and the rail closes behind it.
-    let switched = crate::gui::git::checkout(root, "side", false)
+    let switched = crate::plugins::gui::git::checkout(root, "side", false)
         .await
         .expect("checkout");
     let _ = super::update(
@@ -1941,7 +1944,7 @@ async fn the_branch_chip_checks_out_and_reports_a_refusal() {
 
     // A dirty tree is git's to refuse, and the refusal is the user's to read.
     std::fs::write(root.join("a.txt"), "two\n").expect("write");
-    let refused = crate::gui::git::checkout(root, "main", false)
+    let refused = crate::plugins::gui::git::checkout(root, "main", false)
         .await
         .expect_err("git refuses to overwrite an uncommitted change");
     let _ = super::update(
@@ -2025,13 +2028,13 @@ async fn the_footer_moves_where_a_new_chat_opens_and_nothing_else() {
 /// correct for whatever token it is handed.
 #[test]
 fn the_windows_diff_uses_the_diff_tokens_and_not_the_semantic_ones() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plugins/native");
     for (file, what) in [
         ("pane.rs", "the diff pane"),
         ("rail.rs", "the rail's diffstat"),
     ] {
         let source = std::fs::read_to_string(root.join(file))
-            .unwrap_or_else(|_| panic!("src/native/{file}"));
+            .unwrap_or_else(|_| panic!("src/plugins/native/{file}"));
         // Only the diff-drawing region of each file: `Token::Error` is a
         // legitimate choice elsewhere in both (a failed tool, a notice).
         let start = source

@@ -41,10 +41,25 @@
 //! features — a widget tree that can only be exercised with a compositor would
 //! otherwise drag the floor down for the whole codebase.
 //!
+//! # Why it is a plugin
+//!
+//! Being off by default made it *removable*; being a plugin is what makes it
+//! removable without core knowing. `src/lib.rs` used to call [`run`] by name
+//! from inside a `#[cfg(feature = "native")]` block, which is precisely the
+//! edge `docs/plugins.md`'s first rule forbids — core naming a plugin. Now
+//! [`plugin::NativePlugin`] registers [`run`] as a
+//! [`crate::entrypoint::Entrypoint`] at kernel boot and the dispatch chain
+//! looks it up by string, so this whole directory can leave the build without
+//! a line of core changing. The feature keeps its name: `install.sh`
+//! (`WIZARD_NATIVE=1`), the `native` job in `.github/workflows/release.yml`
+//! and `docs/native-gui.md` all spell it, and the release pipeline is not
+//! worth renaming for tidiness.
+//!
 //! # The pieces
 //!
 //! | module | what it owns |
 //! |---|---|
+//! | [`plugin`] | the one registration: `wizard gui` -> [`run`] |
 //! | [`select`] | cross-block text selection: the thing stock iced cannot do |
 //! | [`theme`] | [`crate::theme`]'s tokens as window colours |
 //! | [`event`] | the tokio↔iced bridge, and the executor |
@@ -55,15 +70,16 @@
 //!
 //! # It links `TaskManager`, not `Agent`
 //!
-//! [`crate::gui::tasks::TaskManager`] already does multi-session ownership,
-//! keep-warm eviction, registry heartbeats, gate holding and slash-command
-//! execution — it was the browser GUI's agent half, and it was never
-//! web-specific, which is why deleting the HTTP layer above it left it standing.
-//! Writing a second session manager for this window would be writing a second
-//! answer to "what happens when two chats are open and one is evicted", and two
-//! answers to that is how the transcript model ended up needing to exist. So
-//! this window is a *client* of that manager, watching it through
-//! [`TaskShared::tap`](crate::gui::tasks::TaskShared::tap).
+//! [`crate::plugins::gui::tasks::TaskManager`] already does multi-session
+//! ownership, keep-warm eviction, registry heartbeats, gate holding and
+//! slash-command execution — it was the browser GUI's agent half, and it was
+//! never web-specific, which is why deleting the HTTP layer above it left it
+//! standing. Writing a second session manager for this window would be writing
+//! a second answer to "what happens when two chats are open and one is
+//! evicted", and two answers to that is how the transcript model ended up
+//! needing to exist. So this window is a *client* of that manager, watching it
+//! through
+//! [`TaskShared::tap`](crate::plugins::gui::tasks::TaskShared::tap).
 //!
 //! # Gates: what this window answers, and what it declines
 //!
@@ -92,6 +108,7 @@ pub mod event;
 pub mod font;
 pub mod graph;
 pub mod pane;
+pub mod plugin;
 pub mod rail;
 pub mod select;
 pub mod settings;
@@ -99,6 +116,8 @@ pub mod sidebar;
 pub mod subagent;
 pub mod theme;
 pub mod widget;
+
+pub use plugin::NativePlugin;
 
 #[cfg(test)]
 pub(crate) mod probe;
@@ -112,10 +131,10 @@ use anyhow::{Context, Result};
 
 use crate::agent::{AgentEvent, DoneReason, PlanVerdict};
 use crate::config::Config;
-use crate::gui::git::{FileDiff, GitStatus};
-use crate::gui::oauth::SignIn;
-use crate::gui::settings::ConfigStore;
-use crate::gui::tasks::{CommandRequest, TaskManager, TaskShared, TurnRequest};
+use crate::plugins::gui::git::{FileDiff, GitStatus};
+use crate::plugins::gui::oauth::SignIn;
+use crate::plugins::gui::settings::ConfigStore;
+use crate::plugins::gui::tasks::{CommandRequest, TaskManager, TaskShared, TurnRequest};
 use crate::theme::Token;
 use crate::transcript::TranscriptModel;
 
@@ -138,7 +157,7 @@ use widget::markdown::MONO;
 pub enum Screen {
     Chat,
     /// The settings sheet, which is also onboarding. See
-    /// [`crate::native::settings`].
+    /// [`crate::plugins::native::settings`].
     Settings,
 }
 
@@ -283,7 +302,7 @@ pub struct App {
     plan: Option<PlanReview>,
     interview: Option<Interview>,
     /// The command whose stdin the composer is bound to. See
-    /// [`crate::native::console`].
+    /// [`crate::plugins::native::console`].
     console: Option<Console>,
     sidebar: sidebar::Sidebar,
     rail: rail::Rail,
@@ -325,7 +344,7 @@ impl App {
                     questions: questions.iter().map(|q| q.question.clone()).collect(),
                 });
             }
-            // The one gate this window claims. See `src/native/console.rs`.
+            // The one gate this window claims. See `src/plugins/native/console.rs`.
             AgentEvent::ConsoleOpened { command, gate } => {
                 match Console::claim(*gate, command.clone()) {
                     Some(console) => self.console = Some(console),
@@ -718,7 +737,7 @@ impl App {
         self.model = opened.model;
         self.sidebar.selected = opened.id;
         self.drawn = u64::MAX;
-        self.working = self.task.state() == crate::gui::tasks::TaskState::Working;
+        self.working = self.task.state() == crate::plugins::gui::tasks::TaskState::Working;
         // Per-chat state, all of it. A subagent rail or a context reading
         // carried across a switch would be another chat's facts under this
         // chat's name.
@@ -747,7 +766,7 @@ impl App {
         let root = self.task.cwd.clone();
         iced::Task::perform(
             async move {
-                let diff = crate::gui::git::diff(&root, &path)
+                let diff = crate::plugins::gui::git::diff(&root, &path)
                     .await
                     .map_err(|err| format!("{err:#}"));
                 (path, diff)
@@ -759,7 +778,7 @@ impl App {
     fn refresh_git(&self) -> iced::Task<Message> {
         let root = self.task.cwd.clone();
         iced::Task::perform(
-            async move { crate::gui::git::status(&root).await.ok() },
+            async move { crate::plugins::gui::git::status(&root).await.ok() },
             |status| Message::Git(Box::new(status)),
         )
     }
@@ -769,7 +788,7 @@ impl App {
         let root = self.task.cwd.clone();
         iced::Task::perform(
             async move {
-                crate::gui::git::branches(&root)
+                crate::plugins::gui::git::branches(&root)
                     .await
                     .map(|found| found.branches)
                     .unwrap_or_default()
@@ -786,7 +805,7 @@ impl App {
         let root = self.task.cwd.clone();
         iced::Task::perform(
             async move {
-                crate::gui::git::checkout(&root, &branch, false)
+                crate::plugins::gui::git::checkout(&root, &branch, false)
                     .await
                     .map_err(|err| format!("{err:#}"))
             },
@@ -1680,7 +1699,7 @@ pub async fn run(config: Config) -> Result<()> {
     // `attended`, not `with_registry`: this window is in-process with the
     // commands it runs and has a person in front of it, so a command that
     // prompts announces itself instead of reading `/dev/null`. See
-    // `src/native/console.rs`.
+    // `src/plugins/native/console.rs`.
     let manager = Arc::new(TaskManager::attended(Arc::clone(&store), mcp));
 
     let id = manager

@@ -64,8 +64,8 @@ pub enum Surface {
     /// its own, because every answer in a second column would have been a copy
     /// of this one: same agent, same commands, same three refusals
     /// (`/vim`, `/theme`, `/quit`). A duplicated column is a column that
-    /// drifts. See `src/native/command.rs`, which returns this variant and says
-    /// why there is no `Surface::Native`.
+    /// drifts. See `src/plugins/native/command.rs`, which returns this
+    /// variant and says why there is no `Surface::Native`.
     Gui,
     /// The Telegram gateway (`wizard gateway`): an allow-listed chat, and the
     /// operator's machine running the turn.
@@ -265,10 +265,10 @@ pub struct SessionSnapshot {
 /// they drift.
 ///
 /// The window-owning verbs carry defaults, so a surface that has no window to
-/// change — the task worker in `src/gui/command.rs`, which holds the agent
-/// while the window holds the panels — implements only what it runs and answers
-/// the rest honestly. Everything else is required: a surface that cannot set the
-/// model does not compile.
+/// change — the task worker in `src/plugins/gui/command.rs`, which holds the
+/// agent while the window holds the panels — implements only what it runs and
+/// answers the rest honestly. Everything else is required: a surface that
+/// cannot set the model does not compile.
 #[async_trait]
 pub trait CommandSurface {
     // --- what the surface is ---

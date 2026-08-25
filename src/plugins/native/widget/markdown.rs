@@ -41,11 +41,11 @@ use iced::advanced::text::Span;
 use iced::font::{Style, Weight};
 use iced::{Color, Font};
 
-use crate::native::font;
+use crate::plugins::native::font;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::native::select::Block;
-use crate::native::theme::Palette;
+use crate::plugins::native::select::Block;
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 /// Body text size, from `docs/gui-design-spec.md` ("14px transcript body").

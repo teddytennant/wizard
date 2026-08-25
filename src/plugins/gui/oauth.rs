@@ -28,10 +28,10 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use crate::config::ProviderConfig;
-use crate::gui::settings::{self, ConfigStore};
 use crate::llm::oauth_callback::{self, Canceller};
 #[cfg(feature = "provider-chatgpt")]
 use crate::plugins::chatgpt::oauth as chatgpt_oauth;
+use crate::plugins::gui::settings::{self, ConfigStore};
 
 use crate::llm::xai_oauth;
 

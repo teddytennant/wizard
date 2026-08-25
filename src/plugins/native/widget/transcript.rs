@@ -28,9 +28,9 @@
 //! other — so the paragraph cache reshapes one paragraph per frame while the
 //! model is writing, rather than the conversation.
 
-use crate::native::font;
-use crate::native::select::Block;
-use crate::native::theme::Palette;
+use crate::plugins::native::font;
+use crate::plugins::native::select::Block;
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 use crate::transcript::{TranscriptItem, TranscriptModel, summarize_tool};
 

@@ -724,10 +724,11 @@ impl SlashCommand {
 /// How one surface runs a built-in command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Execution {
-    /// Applied to the live [`Agent`](crate::agent::Agent). In the window it is
-    /// queued on the chat's worker ([`crate::gui::tasks::TaskManager`]) and
-    /// answers as the same [`AgentEvent`](crate::agent::AgentEvent)s a turn
-    /// carries — a notice, a context reading, an error.
+    /// Applied to the live [`Agent`](crate::agent::Agent). In the window it
+    /// is queued on the chat's worker
+    /// ([`crate::plugins::gui::tasks::TaskManager`]) and answers as the same
+    /// [`AgentEvent`](crate::agent::AgentEvent)s a turn carries — a notice, a
+    /// context reading, an error.
     Agent,
     /// The surface's own: a picker, a panel, an overlay, a list. There is
     /// nothing to ask the agent for, and asking would only be a round trip to

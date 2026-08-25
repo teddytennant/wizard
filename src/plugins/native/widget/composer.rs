@@ -8,7 +8,7 @@
 //! idle spinner sits in a corner reading as "loading forever".
 //!
 //! Two controls would also be a lie about the state machine underneath:
-//! [`TaskManager`](crate::gui::tasks::TaskManager) runs at most one turn per
+//! [`TaskManager`](crate::plugins::gui::tasks::TaskManager) runs at most one turn per
 //! task, so "send" while working and "stop" while idle are both unreachable, and
 //! a UI with two buttons has to grey one of them out on every frame to say what
 //! one button says by being what it is.
@@ -23,8 +23,8 @@
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element, Length, Padding};
 
-use crate::native::Message;
-use crate::native::theme::Palette;
+use crate::plugins::native::Message;
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 use super::markdown::{BODY, MONO};
@@ -104,7 +104,7 @@ pub fn composer<'a>(
     let status = row![
         text(model)
             .size(MONO)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             .color(palette.color(Token::Muted)),
         iced::widget::space().width(Length::Fill),
         text(hint).size(MONO).color(palette.color(Token::Faint)),

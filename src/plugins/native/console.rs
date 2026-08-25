@@ -22,7 +22,7 @@
 //!
 //! # The gate rule, restated because this is the exception
 //!
-//! [`crate::native`]'s header says the window never calls `claim()`. Plan and
+//! [`crate::plugins::native`]'s header says the window never calls `claim()`. Plan and
 //! interview gates are claimed by [`TaskShared::handle_event`], which parks the
 //! reply channel so that a disconnect can resolve it; claiming one here would
 //! take the channel out of that bookkeeping.

@@ -19,8 +19,8 @@
 use iced::widget::{button, column, container, row, text};
 use iced::{Border, Element, Length, Padding};
 
-use crate::native::font;
-use crate::native::theme::Palette;
+use crate::plugins::native::font;
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 /// Section label size. 10.5px uppercase and letterspaced, per the spec.

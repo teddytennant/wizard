@@ -43,6 +43,8 @@ redirect both sign-ins come back on, and the xAI token store two core *tools*
 authenticate with — not the providers),
 `src/ui/`, `src/app/`, `src/skin/`,
 `src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry}.rs`,
+`src/entrypoint.rs` (the lookup a CLI subcommand whose body ships in a plugin
+goes through — not the surfaces themselves),
 `src/config.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
 
 Two rules keep the boundary honest, and CI enforces both:
@@ -770,5 +772,141 @@ failed: exited 3" rather than as "tool '...' failed".
   its own change.
 - **The host bridge is still `UnwiredHost`.** A Lua plugin that calls
   `wizard.http` or `wizard.model` gets an error naming the reason.
-- **Nothing that is not a provider has gone through the door yet.** The
-  thirteen earmarked commands are still built-ins.
+- **The thirteen earmarked commands are still built-ins.** (The window has
+  since gone through the door; see the section below. Nothing that is a
+  *command* has.)
+
+## As built: the window is a plugin, and it is the first one that is not a provider
+
+`src/native/` (the iced window, ~15.7k lines) and `src/gui/` (the agent core
+under it — sessions, the config store, git, OAuth, ~5.1k) are now
+`src/plugins/native/` and `src/plugins/gui/`, behind the existing `native`
+feature, registered through the kernel. Seven provider features became eight
+plugin features, and the eighth is a surface.
+
+It was picked for the same reason anthropic was: a dependency audit found it
+the cleanest split in the tree — 33 outgoing edges and **zero incoming**.
+Nothing in core referenced either directory except one line, and that one line
+is the whole of what this change is about.
+
+### The one edge, and how it was inverted
+
+`src/lib.rs`'s dispatch chain had this:
+
+```rust
+#[cfg(feature = "native")]
+{
+    let config = config::Config::load()?;
+    return native::run(config).await.map(|()| 0);
+}
+```
+
+That is rule 1 broken in the open — a core module naming a plugin — and it
+compiled either way, which is why it survived a year. It is now:
+
+```rust
+if let Some(window) = entrypoint::installed(entrypoint::GUI) {
+    let config = config::Config::load()?;
+    return window.run(config).await.map(|()| 0);
+}
+```
+
+with the `#[cfg(not(feature = "native"))]` bail underneath it becoming an
+ordinary `else`. There is no `#[cfg]` left in that arm. The window
+`provide`s an `Entrypoint` under the name `"gui"` in its `apply`, and core
+injects one.
+
+### Why an entrypoint service rather than `ctx:command`
+
+`Ctx::command` exists, it registers something a plugin owns, and it is the
+wrong hook. Three reasons, and the third is the one that decides it:
+
+- A `PluginCommand` is a `String -> String` body. `wizard gui` takes no
+  arguments and returns nothing; what it does is *not return* until the window
+  closes.
+- A slash command runs inside a session, on a surface that is already up.
+  `wizard gui` runs before there is a session — the window builds its own
+  `TaskManager` and its agents lazily, per chat.
+- `src/commands/plugin.rs` deliberately refuses a plugin command the
+  `CommandSurface` verbs, because handing a plugin `&mut App` makes unload
+  unsafe in a way the ledger cannot fix. A window is `&mut App` and then some.
+
+Registering it as a slash command would have produced a `/gui` in the TUI
+palette that opens a second surface out from under the first. `wizard gui` is
+a **CLI subcommand**, parsed by clap in `src/cli.rs`, and the thing that had to
+become pluggable is its *body*.
+
+So `src/entrypoint.rs` is a new core module holding one concrete type and one
+lookup — an `Entrypoint` is a boxed `Fn(Config) -> Future<Output = Result<()>>`
+plus its name, and `installed(name)` injects one out of the process kernel.
+This is the `ProviderDescriptor` shape at one remove: the consumer defines it
+(the consumer here is the dispatch chain), the plugin supplies "how to start
+one", and an absent plugin is a `None` that becomes a sentence rather than a
+link error.
+
+A concrete struct rather than a trait for a mechanical reason: `inject_as` is
+an `Arc<dyn Any>` downcast and `Arc::downcast` needs a `Sized` target, so
+publishing an `Arc<dyn Trait>` means the injector has to name
+`Arc<Arc<dyn Trait>>`. One closure in a struct is the same expressiveness with
+none of that.
+
+### Why the `#[cfg]`-gated arm was not simply kept
+
+It works, and that is the trap. The cost of keeping it is not this plugin, it
+is the next one: core pays one `#[cfg]` per plugin that owns a surface, and
+the gateway, ACP and `mcp serve` are all the same shape. A name in a registry
+costs core one lookup, once, forever.
+
+### What core still holds
+
+The string `"gui"` and the paragraph printed when nothing answers to it — the
+one telling the reader to run `install.sh` with `WIZARD_NATIVE=1` or to build
+with `--features native`. Same rule as `ProviderKind::ANTHROPIC`: core may
+hold the text a user types and the prose explaining how to get the thing
+behind it, as long as it never names the type or constructs one.
+
+### Two directories, one plugin
+
+`gui` stays a sibling of `native` under `src/plugins/` rather than becoming a
+module inside it. It registers nothing and it draws nothing — it is the half
+of the GUI that would survive another front end being written against it, and
+`src/plugins/native/mod.rs` is explicit that the window is a *client* of it.
+Nesting it would say the window owns it. `compiled_in()` therefore has one
+`native` line covering two directories, which is the same thing
+`provider-openai` does across `openai/` and its `openrouter.rs`.
+
+### The feature name did not change
+
+`native`, exactly as before. `install.sh` reads `WIZARD_NATIVE=1`, the
+`native` job in `.github/workflows/release.yml` publishes
+`wizard-native-<target>.tar.gz`, and `docs/native-gui.md` spells it
+throughout. Renaming it to `plugin-native` for symmetry with
+`provider-anthropic` would break the release pipeline to make a table look
+tidier.
+
+### What did not change
+
+The transport, so to speak: `--features native` builds the same window, opens
+the same first chat, draws the same frame. Two mechanical fixes were needed
+for the move and nothing else — `include_bytes!("../../assets/fonts/…")` in
+`font.rs` gained a `../`, and the source-scanning test in `tests.rs` that
+reads `src/native/{pane,rail}.rs` off disk follows the new path. A default
+build is byte-identical in behaviour: it never compiled these modules before
+and does not now.
+
+### Still open, specific to this
+
+- **`graph/` is still deferred and still unreachable**, exactly as it was.
+  Moving the directory did not wire it in.
+- **The window's plugin declares every capability and none of them is
+  enforced.** `Capability` gates the Lua host bridge, and a compiled-in Rust
+  plugin reaches past it into the crate directly. The declaration is honest
+  documentation — it is what `wizard doctor`'s plugin listing shows — and it
+  is not a sandbox. Making a compiled-in plugin's capabilities mean something
+  is a kernel change, not this one.
+- **The other three surfaces are still core.** `wizard acp`, `wizard gateway`
+  and `mcp serve` are the same shape as `wizard gui` and would each be one
+  `Entrypoint` registration, but none of them is behind a feature yet, so
+  there is nothing to remove and the door being open is the whole of the
+  progress.
+

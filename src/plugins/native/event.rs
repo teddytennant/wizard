@@ -8,7 +8,7 @@
 //! [`AgentEvent`] is `Clone + Debug`, which is exactly iced's bound on a
 //! `Message`, so it *is* the message — no wrapper type, no `From` impl, no
 //! second enum to keep in step with the first. The channel is the one
-//! [`TaskShared::tap`](crate::gui::tasks::TaskShared::tap) hands out, and the
+//! [`TaskShared::tap`](crate::plugins::gui::tasks::TaskShared::tap) hands out, and the
 //! adapter is a hand-rolled [`stream::poll_fn`] over `poll_recv` rather than
 //! `tokio_stream::wrappers::UnboundedReceiverStream`: the wrapper crate exists
 //! to do these four lines, and a dependency that is four lines long is four
@@ -52,7 +52,7 @@ use iced::futures::Stream;
 use tokio::sync::mpsc;
 
 use crate::agent::AgentEvent;
-use crate::gui::tasks::TaskShared;
+use crate::plugins::gui::tasks::TaskShared;
 
 /// Which task's events a subscription is carrying.
 ///

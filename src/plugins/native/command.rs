@@ -53,8 +53,8 @@ use crate::commands::surface::{
 };
 use crate::commands::{CustomCommand, Execution, SlashCommand};
 use crate::config::{Mode, ReasoningEffort};
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::theme::Token;
 use crate::tools::tasks::Task;
 
@@ -320,7 +320,7 @@ pub enum Route {
     /// Not a command at all: send it as a message.
     Message(String),
     /// A built-in the task's worker runs. Name and arguments, as
-    /// [`crate::gui::tasks::CommandRequest`] takes them.
+    /// [`crate::plugins::gui::tasks::CommandRequest`] takes them.
     Agent { name: String, args: String },
     /// A built-in the window runs, through [`dispatch`] against [`Native`].
     Window(SlashCommand),
@@ -508,11 +508,11 @@ impl Menu {
                     row![
                         text(format!("/{}", entry.name))
                             .size(chrome::UI)
-                            .font(crate::native::font::MONO)
+                            .font(crate::plugins::native::font::MONO)
                             .color(palette.color(dim)),
                         text(entry.args.clone())
                             .size(chrome::LITERAL)
-                            .font(crate::native::font::MONO)
+                            .font(crate::plugins::native::font::MONO)
                             .color(palette.color(Token::Faint)),
                         text(entry.detail.as_str())
                             .size(chrome::SMALL)

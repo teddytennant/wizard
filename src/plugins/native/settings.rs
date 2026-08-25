@@ -1,7 +1,7 @@
 //! The settings sheet, and onboarding, which are one screen.
 //!
 //! Every decision this file could make has already been made in
-//! [`crate::gui::settings`]: what a provider row says, where its key comes
+//! [`crate::plugins::gui::settings`]: what a provider row says, where its key comes
 //! from, what Remove does to the active provider, how long a probe gets, what a
 //! step limit may be. This module is the *rendering* and the state machine of
 //! the sheet, and nothing else. If a rule about providers appears below, it is
@@ -30,12 +30,12 @@ use std::sync::Arc;
 use iced::widget::{column, container, row, text, text_input};
 use iced::{Border, Element, Length, Padding};
 
-use crate::gui::oauth::{self, SignIn};
-use crate::gui::settings::{
+use crate::plugins::gui::oauth::{self, SignIn};
+use crate::plugins::gui::settings::{
     ConfigStore, KeySource, NewProvider, Preset, ProviderProbe, SettingsView,
 };
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::theme::Token;
 
 /// What the "add a provider" half of the sheet is doing.
@@ -112,7 +112,7 @@ impl Form {
         }
     }
 
-    fn edit(row: &crate::gui::settings::ProviderRow) -> Self {
+    fn edit(row: &crate::plugins::gui::settings::ProviderRow) -> Self {
         Self {
             preset: None,
             editing: Some(row.name.clone()),
@@ -210,7 +210,7 @@ pub struct Sheet {
 
 impl Sheet {
     pub fn new(store: Arc<ConfigStore>, sign_in: Arc<SignIn>) -> Self {
-        let view = crate::gui::settings::view(&store.current());
+        let view = crate::plugins::gui::settings::view(&store.current());
         Self {
             store,
             sign_in,
@@ -266,7 +266,7 @@ impl Sheet {
                 iced::Task::none()
             }
             Message::Use(name) => {
-                match crate::gui::settings::activate_provider(&self.store, &name) {
+                match crate::plugins::gui::settings::activate_provider(&self.store, &name) {
                     Ok(view) => self.reload(view),
                     Err(err) => self.note(&name, format!("{err:#}")),
                 }
@@ -277,7 +277,7 @@ impl Sheet {
                 let store = Arc::clone(&self.store);
                 iced::Task::perform(
                     async move {
-                        crate::gui::settings::test_provider(&store, &name)
+                        crate::plugins::gui::settings::test_provider(&store, &name)
                             .await
                             .map(|probe| (name, probe))
                     },
@@ -308,7 +308,7 @@ impl Sheet {
                 iced::Task::none()
             }
             Message::Remove(name) => {
-                match crate::gui::settings::forget_provider(&self.store, &name) {
+                match crate::plugins::gui::settings::forget_provider(&self.store, &name) {
                     Ok(view) => self.reload(view),
                     Err(err) => self.note(&name, format!("{err:#}")),
                 }
@@ -335,7 +335,7 @@ impl Sheet {
                 self.sign_in_note = None;
                 let store = Arc::clone(&self.store);
                 iced::Task::perform(
-                    async move { crate::gui::settings::view(&store.current()) },
+                    async move { crate::plugins::gui::settings::view(&store.current()) },
                     |view| Message::Loaded(Box::new(view)),
                 )
             }
@@ -363,7 +363,7 @@ impl Sheet {
                 let store = Arc::clone(&self.store);
                 iced::Task::perform(
                     async move {
-                        crate::gui::settings::save_provider(&store, request)
+                        crate::plugins::gui::settings::save_provider(&store, request)
                             .await
                             .map_err(|err| err.to_string())
                     },
@@ -406,7 +406,7 @@ impl Sheet {
                 if steps == self.view.max_steps {
                     return iced::Task::none();
                 }
-                match crate::gui::settings::set_step_limit(&self.store, steps) {
+                match crate::plugins::gui::settings::set_step_limit(&self.store, steps) {
                     Ok(view) => {
                         self.steps_note = Some(match steps {
                             0 => "Saved — no limit".to_string(),
@@ -443,7 +443,7 @@ impl Sheet {
                     // Best-effort: on a box with no browser the URL is still
                     // the thing to act on, so it goes in the note rather than
                     // the failure being the whole message.
-                    crate::gui::open_browser(&url);
+                    crate::plugins::gui::open_browser(&url);
                     // The URL is in the note too, because a box with no
                     // `xdg-open` still has a person who can paste it.
                     self.sign_in_note = Some(format!(
@@ -464,7 +464,7 @@ impl Sheet {
                     self.sign_in_note = Some(format!("Signed in — {provider} is configured."));
                     let store = Arc::clone(&self.store);
                     iced::Task::perform(
-                        async move { crate::gui::settings::view(&store.current()) },
+                        async move { crate::plugins::gui::settings::view(&store.current()) },
                         |view| Message::Loaded(Box::new(view)),
                     )
                 }
@@ -581,7 +581,7 @@ impl Sheet {
     /// four quiet actions on the right.
     fn provider_row<'a>(
         &'a self,
-        provider: &'a crate::gui::settings::ProviderRow,
+        provider: &'a crate::plugins::gui::settings::ProviderRow,
         palette: &Palette,
     ) -> Element<'a, Message> {
         let key = match provider.key {
@@ -617,7 +617,7 @@ impl Sheet {
                 .wrapping(iced::widget::text::Wrapping::None),
                 text(key.0)
                     .size(chrome::LITERAL)
-                    .font(crate::native::font::MONO)
+                    .font(crate::plugins::native::font::MONO)
                     .wrapping(iced::widget::text::Wrapping::None)
                     .color(palette.color(key.1)),
             ],
@@ -831,7 +831,7 @@ impl Sheet {
             .on_input(move |text| Message::Field(field, text))
             .on_submit(Message::Submit)
             .size(chrome::UI)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             .padding(Padding::new(7.0))
             .style(input_style(palette));
         let input = match field {
@@ -852,7 +852,7 @@ impl Sheet {
             // Save button for one number is a form.
             .on_submit(Message::CommitStepLimit)
             .size(chrome::UI)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             .align_x(iced::alignment::Horizontal::Right)
             .width(Length::Fixed(84.0))
             .padding(Padding::new(6.0))
@@ -982,7 +982,7 @@ mod tests {
     #[test]
     fn only_a_custom_provider_names_itself() {
         assert!(Form::custom().names_itself());
-        let presets = crate::gui::settings::presets();
+        let presets = crate::plugins::gui::settings::presets();
         assert!(!Form::from_preset(0, &presets[0]).names_itself());
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
         sheet
             .view
             .providers
-            .push(crate::gui::settings::ProviderRow {
+            .push(crate::plugins::gui::settings::ProviderRow {
                 name: "xai".to_string(),
                 kind: "xai".to_string(),
                 base_url: "https://api.x.ai/v1".to_string(),
@@ -1086,7 +1086,7 @@ mod tests {
         sheet
             .view
             .providers
-            .push(crate::gui::settings::ProviderRow {
+            .push(crate::plugins::gui::settings::ProviderRow {
                 name: "openai".to_string(),
                 kind: "openai".to_string(),
                 base_url: "https://api.openai.com/v1".to_string(),

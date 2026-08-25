@@ -239,7 +239,7 @@ Evolution events go to `~/.wizard/evolution.jsonl`. `/publish` pushes `~/.wizard
 
 - **TUI** (`app/`, `ui/`, `event.rs`): chat, tool cards, git sidebar, subagent rail, status bar, slash commands
 - **Headless** (`agent` + `output.rs`): text / JSON / stream-json ([headless.md](headless.md))
-- **Window** (`src/native/` drawing, `src/gui/` holding the agent; both `--features native`): the same agent core in-process, in an iced window — no HTTP, no webview, no port ([native-gui.md](native-gui.md)). There is no browser GUI: the loopback HTTP server and JavaScript page that used to be the second surface are deleted. A headless box is reached by running the TUI over SSH, by `wizard -p`, by `wizard acp`, or through the gateway
+- **Window** (`src/plugins/native/` drawing, `src/plugins/gui/` holding the agent; both `--features native`): the same agent core in-process, in an iced window — no HTTP, no webview, no port ([native-gui.md](native-gui.md)). There is no browser GUI: the loopback HTTP server and JavaScript page that used to be the second surface are deleted. A headless box is reached by running the TUI over SSH, by `wizard -p`, by `wizard acp`, or through the gateway
 - **ACP** (`acp.rs`): editor embedding ([acp.md](acp.md)); also the surface Buzz and other ACP harnesses drive ([buzz.md](buzz.md))
 - **Gateway** (`gateway/`): Telegram bot turns ([gateway.md](gateway.md))
 - **Fleet / schedule / sync / doctor / update**: see the matching docs pages

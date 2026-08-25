@@ -17,6 +17,7 @@ pub mod config;
 pub mod credentials;
 pub mod dispatch;
 pub mod doctor;
+pub mod entrypoint;
 pub mod event;
 pub mod evolve;
 pub mod fleet;
@@ -24,13 +25,6 @@ pub mod gates;
 pub mod gateway;
 pub mod git_util;
 pub mod graph;
-// The agent core the native window is built on (sessions, config store, git,
-// OAuth). It used to carry a browser GUI too — an axum server and a JavaScript
-// page — and was compiled into every build for it. That surface is gone, and
-// with it the reason: the window is now the only caller, so the module follows
-// it behind the same feature. See `docs/native-gui.md`.
-#[cfg(feature = "native")]
-pub mod gui;
 pub mod hardware;
 pub mod harness;
 pub mod headless;
@@ -46,8 +40,6 @@ pub mod logging;
 pub mod mcp;
 pub mod memory;
 pub mod mesh;
-#[cfg(feature = "native")]
-pub mod native;
 pub mod onboarding;
 pub mod output;
 pub mod platform;
@@ -160,14 +152,20 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // The window opens existing sessions and builds agents lazily per chat, so
     // it loads config directly (defaults on a fresh install) and never
     // onboards — startup must not depend on a reachable provider.
+    //
+    // The window is a plugin, so this arm names a *string* and not a module.
+    // `plugins::boot` above has already loaded whatever this build compiled
+    // in, and `entrypoint::installed` is the same `inject`-returns-`None`
+    // shape a missing provider `kind` has: absent means a sentence, never a
+    // link error. There is no `#[cfg]` here on purpose — the arm reads the
+    // same on every build, and the difference between them is one lookup.
     if let Some(cli::Command::Gui { native: _ }) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        #[cfg(feature = "native")]
-        {
+        if let Some(window) = entrypoint::installed(entrypoint::GUI) {
             let config = config::Config::load()?;
-            return native::run(config).await.map(|()| 0);
+            return window.run(config).await.map(|()| 0);
         }
         // Two routes, and naming both matters: `wizard app` shipped for a
         // year telling people to rebuild, while the release page carried a
@@ -179,7 +177,6 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // was deleted. A headless box is reached by running the TUI over SSH,
         // by `wizard -p`, by an ACP editor, or through the Telegram gateway —
         // none of which need a window or a port.
-        #[cfg(not(feature = "native"))]
         anyhow::bail!(
             "this build has no native GUI — it was built without the `native` feature.\n\
              \n\

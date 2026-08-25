@@ -13,7 +13,7 @@
 //!   rasterized with tiny-skia — the real renderer, with no wgpu linked at all
 //!   — and asserted on the pixels: a frame the right size, and not a blank one.
 //!   A golden PNG is deliberately *not* committed, for the reason
-//!   `src/native/tests.rs` already gives: Wizard bundles no fonts, so a
+//!   `src/plugins/native/tests.rs` already gives: Wizard bundles no fonts, so a
 //!   pixel-exact snapshot of shaped text is a function of the machine that
 //!   produced it.
 //!
@@ -39,7 +39,7 @@ use crate::mesh::peer::synthetic_store;
 use crate::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, Node, PeerStore, PeerText, Trust,
 };
-use crate::native::theme::Palette;
+use crate::plugins::native::theme::Palette;
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

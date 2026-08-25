@@ -28,9 +28,9 @@ use std::path::PathBuf;
 use iced::widget::{column, container, image, row, scrollable, text};
 use iced::{Element, Length, Padding};
 
-use crate::gui::git::{DiffLine, FileDiff, LineKind};
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::gui::git::{DiffLine, FileDiff, LineKind};
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::theme::Token;
 
 /// What is in the slot.
@@ -44,7 +44,7 @@ pub enum Pane {
     },
     Image(PathBuf),
     /// A subagent run, by id. Its content lives in
-    /// [`crate::native::subagent::Rail`], because the run keeps streaming
+    /// [`crate::plugins::native::subagent::Rail`], because the run keeps streaming
     /// whether or not its pane is open.
     Run(u64),
 }
@@ -99,11 +99,11 @@ pub fn diff<'a, M: Clone + 'a>(
                 row![
                     text(format!("+{}", file.additions))
                         .size(chrome::SMALL)
-                        .font(crate::native::font::MONO)
+                        .font(crate::plugins::native::font::MONO)
                         .color(palette.color(Token::Success)),
                     text(format!("−{}", file.deletions))
                         .size(chrome::SMALL)
-                        .font(crate::native::font::MONO)
+                        .font(crate::plugins::native::font::MONO)
                         .color(palette.color(Token::Error)),
                 ]
                 .spacing(6)
@@ -213,7 +213,7 @@ const DIFF_SIZE: f32 = 12.0;
 /// Horizontal advance of JetBrains Mono, as a fraction of the point size.
 ///
 /// A property of the bundled font (`assets/fonts/jetbrains-mono.ttf`), not a
-/// guess about whatever the system has: `crate::native::font` exists precisely
+/// guess about whatever the system has: `crate::plugins::native::font` exists precisely
 /// so that no monospace text here resolves through a fallback.
 const MONO_ADVANCE: f32 = 0.6;
 
@@ -255,7 +255,7 @@ fn diff_line<'a, M: 'a>(line: &'a DiffLine, palette: &Palette) -> Element<'a, M>
     container(
         text(line.text.clone())
             .size(DIFF_SIZE)
-            .font(crate::native::font::MONO)
+            .font(crate::plugins::native::font::MONO)
             // A diff line is a line. The scroll region around this is
             // `Direction::Both` precisely so a long one can be scrolled to
             // rather than reflowed, but `text` word-wraps by default, so it
@@ -320,7 +320,7 @@ pub fn image_pane<'a, M: Clone + 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gui::git::Hunk;
+    use crate::plugins::gui::git::Hunk;
 
     fn palette() -> Palette {
         Palette::from_theme(&crate::theme::minimal())
@@ -358,7 +358,7 @@ mod tests {
         let mode_only = Ok(file(Vec::new(), false, false));
         let mut ui = iced_test::simulator(diff("a.sh", Some(&mode_only), Probe::Back, &palette));
         assert!(
-            ui.find(crate::native::probe::contains("mode or name only"))
+            ui.find(crate::plugins::native::probe::contains("mode or name only"))
                 .is_ok()
         );
 
@@ -385,7 +385,10 @@ mod tests {
         let mut ui =
             iced_test::simulator(diff("src/lib.rs", Some(&shown), Probe::Back, &palette()));
         assert!(ui.find("+one").is_ok());
-        assert!(ui.find(crate::native::probe::contains("Truncated")).is_ok());
+        assert!(
+            ui.find(crate::plugins::native::probe::contains("Truncated"))
+                .is_ok()
+        );
         Ok(())
     }
 
@@ -407,7 +410,7 @@ mod tests {
         let path = PathBuf::from("/nowhere/gone.png");
         let mut ui = iced_test::simulator(image_pane(&path, Probe::Back, &palette()));
         assert!(
-            ui.find(crate::native::probe::contains("/nowhere/gone.png"))
+            ui.find(crate::plugins::native::probe::contains("/nowhere/gone.png"))
                 .is_ok()
         );
         Ok(())

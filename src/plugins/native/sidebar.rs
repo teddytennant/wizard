@@ -40,8 +40,8 @@ use std::path::PathBuf;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Padding};
 
-use crate::native::theme::Palette;
-use crate::native::widget::chrome;
+use crate::plugins::native::theme::Palette;
+use crate::plugins::native::widget::chrome;
 use crate::session_registry::{ChatRow, Origin, SessionState, Workspace};
 use crate::theme::Token;
 
@@ -245,11 +245,11 @@ impl Sidebar {
         //
         // The row is kept even at one action, because the mesh button that
         // used to sit beside `settings` is coming back — see
-        // [`crate::native::graph`].
+        // [`crate::plugins::native::graph`].
         let head = chrome::spread(
             text("wizard")
                 .size(chrome::UI)
-                .font(crate::native::font::MONO)
+                .font(crate::plugins::native::font::MONO)
                 .color(palette.color(Token::Text)),
             row![chrome::action("settings", Message::OpenSettings, palette)]
                 .spacing(4)

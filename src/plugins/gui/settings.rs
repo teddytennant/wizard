@@ -39,7 +39,7 @@ pub struct Preset {
 /// The providers the window can set up by pasting a key. `xaioauth` and
 /// `chatgptoauth` are deliberately absent: a subscription is not a string you
 /// can paste, so they are earned through the sign-in rows
-/// (`POST /api/login/{provider}`, see [`crate::gui::oauth`]) and then show up
+/// (`POST /api/login/{provider}`, see [`crate::plugins::gui::oauth`]) and then show up
 /// here like any other provider.
 pub const PRESETS: &[Preset] = &[
     Preset {
@@ -320,7 +320,7 @@ pub fn credentials_path() -> Option<PathBuf> {
 /* What a settings screen shows, and what its buttons do                  */
 /* ---------------------------------------------------------------------- */
 
-// Everything below was `src/gui/server.rs`'s, sitting between an axum extractor
+// Everything below was `src/plugins/gui/server.rs`'s, sitting between an axum extractor
 // and an axum response. None of it was web-specific: a settings screen has to
 // list the providers, say where each one's key comes from, prove one answers,
 // add, edit, remove and switch, whatever draws it. Pulling it out of the route
