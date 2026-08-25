@@ -1208,7 +1208,129 @@ and fourteen arrived in `src/plugins/bundled/tests.rs`. The
 `--no-default-features` count went 2378 → 2369, which is those same nine, since
 that leg no longer compiles the plugin's test module either.
 
-## Half of the migration this does not clear: `todo`
+## `todo` was attempted, and should stay Rust
 
-`src/tools/todo.rs` was attempted next and **should stay Rust**. The reasoning,
-and the rule that follows from it, is in the section below.
+`src/tools/todo.rs` is the case that decides whether the rest of the migration
+is feasible, because it is coupled to core in both directions: `AgentEvent`
+carries `Vec<TodoItem>`, three TUI renderers and the GUI rail match on
+`TodoStatus`, and `ToolContext` holds the list. So the question is the good
+one — **can a plugin own the tool's logic while core keeps the types the UI
+draws?** — and the answer is a spike that was built, run, and thrown away.
+
+### What the spike was
+
+`HostBridge::set_state(plugin, key, value)` / `get_state`, gated on
+`Capability::Ui`, with `"todos"` the only key: deserialize to `TodoList`, write
+`binding.ctx.todos`, send `AgentEvent::TodoUpdated`. Then `todo` as a Lua
+plugin holding no state of its own, reading and writing through those. About
+eighty lines of Lua and forty of Rust.
+
+**It works, in the narrow sense.** The output is byte-identical:
+
+```
+WRITE => Ok("todo list updated — 1/3 done\n✓ first\n▸ second\n☐ third")
+READ  => Ok("✓ first\n▸ second\n☐ third")
+CORE  => [TodoItem { content: "first", status: Completed }, ...]
+```
+
+The TUI band updates, the event fires, core keeps the types. Every question
+about *rendering* answers yes.
+
+### The three that answer no
+
+**A host call answers from the bound agent, not from the calling tool
+context.** These are different objects: `host::bind` is per-agent and set at
+`Agent::new`, on `set_model`, on `set_client` and at the top of each turn,
+while a `ToolContext` is per call. The spike, with two sessions in one process:
+
+```
+A's list => [TodoItem { content: "A's work", status: Pending }]
+B's list => [TodoItem { content: "B's work", status: Pending }]
+A reads  => Ok("☐ B's work")
+```
+
+Session A asked for its todo list and was handed session B's. `docs/plugins.md`
+already records "last binder wins" as a limitation of `wizard.model`, where it
+is an accounting error. For session state it is a correctness error, and the
+surfaces it breaks — a fleet run, a gateway serving two chats — are exactly the
+ones with nobody watching.
+
+**Unbound, the tool stops existing.** The Rust tool works with no agent at all,
+because it reads the list off the context it was handed. The Lua one:
+
+```
+UNBOUND read => Err("tool 'todo' failed: wizard.ui needs a running agent
+                     to read session state, and no agent is attached ...")
+```
+
+That is `mcp serve`, and direct registry execution, and every test that calls a
+tool without standing up an agent.
+
+**And it breaks subagents in a way a user would see.**
+`subagent::spawn` gives a plain (non-fork) subagent a *fresh* `TodoList::new()`,
+deliberately, so its scratch todos cannot reach the parent. A forked one shares
+the parent's `Arc`. That distinction lives in the `ToolContext` the subagent
+runs with, which a plugin cannot see — so under the port every subagent writes
+the parent's list, and the user's todo band fills with a subagent's working
+notes mid-turn.
+
+Two more, smaller: `Agent::clear` resets the list by **swapping the `Arc`**, and
+no event is emitted that a plugin could subscribe to; and `wizard.ui.set_state`
+would be a host call whose key is one tool's name and whose payload is one core
+type, which is the "Rust with a slower calling convention" this document
+opens by refusing.
+
+### The verdict
+
+`todo` stays Rust. It is not a hard port — it is a port that is *possible*
+and wrong, which is the more expensive kind, because the spike passes its own
+tests and the failures are in the sessions nobody is looking at.
+
+The gap is not the todo tool's. It is that **a Lua plugin is process-scoped and
+a session is not.** One kernel per process, one VM per plugin, one `LuaTool`
+handle copied into every agent's registry, and one host binding shared by all
+of them. `local store` in a plugin is shared by every agent alive at once, and
+a host call cannot tell which agent asked. Two tests pin this so the next port
+finds it rather than rediscovering it:
+`kernel::lua::tests::a_plugins_state_is_per_process_and_cannot_be_per_session`
+and
+`plugins::host::tests::a_host_call_answers_from_the_bound_agent_not_from_the_calling_tool_context`.
+
+### The rule the rest of the migration should use
+
+Ask two questions of a subsystem before porting it, in this order.
+
+**1. Is its state per-process or per-session?** Per-process — a cache, a
+config-derived table, a registry of things the machine has — is Lua-shaped.
+Per-session is not, and no amount of host API fixes it while the VM is shared:
+what would fix it is a VM (or at least a store) per agent, which is a kernel
+change with a real cost, since it means N LuaJIT states for a fleet of N.
+
+**2. Does core hold a type it needs, or only a string?** Core may hold the text
+a user types — this is already the `ProviderKind::ANTHROPIC` rule — but a tool
+whose payload is a core *type* the UI matches on exhaustively is a tool whose
+host call would be that type's constructor with JSON in front of it.
+
+By those two, of the subsystems the migration earmarks:
+
+**Genuinely Lua-shaped.** Anything whose whole body is "decide an argv, read an
+exit code, format a string", which `git` has now proven end to end:
+`evolve::publish`'s `gh`/`git` orchestration, the scheduler's cron arithmetic,
+`doctor`'s checks, skill and harness bundle loading, `hooks.toml` matching (the
+bus already subsumes it), and the read-only reporting tools. Also anything
+already reachable through a `wizard.*` namespace that exists —
+`web_search`'s five backends are `wizard.http` and a parser.
+
+**Should stay Rust.** Anything whose state is a session's: `todo`, `tasks` and
+`subagent_tasks` (registries the agent constructs and the surfaces poll),
+`compact` (it is intercepted by the agent loop before `execute` is even
+reached), `plan` and `interview` (two-way conversations with a surface, through
+typed events with gates on them), `spill` and `checkpoint`. Anything whose
+payload is a type core matches on. And, as before, anything that is bytes and
+syscalls.
+
+**Blocked, not decided.** `memory` and `image` are Lua-shaped in body and
+blocked on a service: both need a *core* store reachable from a plugin, and
+`ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
+Lua could invoke is the missing piece, and it is the same piece
+`tools/image.rs`'s four-provider-id branch already needs.
