@@ -3,7 +3,7 @@
 //!
 //! The tee itself — a QUIC listener, an identity, a consent ledger, a peer
 //! watching a transcript — is the mesh plugin's
-//! ([`crate::plugins::mesh::tee`], `--features mesh`). What stays here is the
+//! (`crate::plugins::mesh::tee`, `--features mesh`). What stays here is the
 //! two things core needs to hold: the *shape* of "something that takes this
 //! session's events", and the lookup that finds one without naming the plugin
 //! that registered it.
@@ -91,17 +91,14 @@ pub trait SessionTee: Send + Sync + std::fmt::Debug {
     fn leave(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
+/// The future a [`TeeFactory`] hands back: a tee, a reasoned absence, or a
+/// failure already worded by the plugin that tried.
+type Opening = Pin<Box<dyn Future<Output = Result<Option<Box<dyn SessionTee>>>> + Send>>;
+
 /// The boxed constructor. `Fn` rather than `FnOnce` because a
 /// [`Service`](crate::kernel::Service) is shared: the registry hands out
 /// `Arc`s, and only one caller per process will ever run it.
-type Body = Box<
-    dyn Fn(
-            Config,
-            String,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<Box<dyn SessionTee>>>> + Send>>
-        + Send
-        + Sync,
->;
+type Body = Box<dyn Fn(Config, String) -> Opening + Send + Sync>;
 
 /// How a plugin says "I can tee a session", injected by name.
 ///
@@ -132,11 +129,7 @@ impl TeeFactory {
     }
 
     /// Build the tee for one session.
-    pub fn open(
-        &self,
-        config: Config,
-        session: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Box<dyn SessionTee>>>> + Send>> {
+    pub fn open(&self, config: Config, session: String) -> Opening {
         (self.body)(config, session)
     }
 }

@@ -32,11 +32,11 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 
-use wizard::mesh::{
+use wizard::plugins::graph::{Liveness, MeshGraph, NodeKey};
+use wizard::plugins::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, NodeId, PeerEvent, PeerEventKind, PeerStore,
     Subscription, Transport, Trust,
 };
-use wizard::plugins::graph::{Liveness, MeshGraph, NodeKey};
 use wizard::plugins::native::graph::paint::node_paint;
 use wizard::plugins::native::graph::revoke_and_rebuild;
 use wizard::plugins::native::theme::Palette;

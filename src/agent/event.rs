@@ -324,7 +324,7 @@ impl AgentEvent {
     /// The distinction only matters once an event can arrive from somewhere
     /// else. A report is a thing to render; a request is a thing to obey, and
     /// obeying one that came off a socket is letting a peer drive this
-    /// machine's menu. [`crate::plugins::mesh::turn::PeerTurn`] refuses to carry
+    /// machine's menu. The mesh's `PeerTurn` refuses to carry
     /// anything that answers `true` here.
     ///
     /// **The match is exhaustive on purpose, with no wildcard arm.** The rule

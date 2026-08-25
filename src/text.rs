@@ -3,7 +3,7 @@
 //!
 //! There is one question here — *is a conforming renderer entitled to draw this
 //! character as nothing at all* — and three callers that have to agree about
-//! the answer: [`crate::plugins::mesh`] sanitising a peer-chosen name at the wire
+//! the answer: the mesh plugin sanitising a peer-chosen name at the wire
 //! boundary, [`crate::memory`] storing a note, and [`crate::tools::http`]
 //! defanging a fetched page. They agreed by accident before, because the table
 //! lived in `mesh` and the other two reached across for it.
