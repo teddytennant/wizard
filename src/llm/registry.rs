@@ -92,9 +92,13 @@ impl ProviderKind {
 //     configured, so core has to know a local default exists.
 //   - `WIZARD_GGUF_PATH` writes through to the active provider only when that
 //     provider is llama.cpp.
-//   - Onboarding and the TUI's provider picker offer a hand-written menu of
-//     backends. A picker built from `installed()` is the obvious next step and
-//     is not this change.
+//   - Onboarding's menu, the TUI's add-provider picker and the settings
+//     sheet's presets each name backends in their rows. They are no longer
+//     hand-written *lists*: every one of them is filtered by `kinds()`, so a
+//     row is offered only where a plugin registered the kind behind it. What
+//     is left is the label and the sentence beside it, which answer "which of
+//     these should you pick" rather than "what is this backend called" — a
+//     question no descriptor is asked.
 //   - `tools/image.rs` picks an image endpoint per backend. That belongs on a
 //     capability the descriptor does not have yet; see the module docs there.
 //   - `plugins/web.rs` and `tools/image.rs` reach xAI's search and image APIs,
@@ -150,12 +154,11 @@ impl ProviderKind {
 ///
 /// This module exists because the alternative was `#[cfg(feature = "...")]`
 /// inside onboarding's numbered menu, the TUI provider picker and the settings
-/// sheet's preset table — the hand-written-menu problem this file has flagged
-/// since the registry landed. Those menus should be built from [`kinds`], and
-/// gating the strings first would make that change harder, not easier. Until
-/// it happens a stripped build still offers a backend it does not have, and
-/// choosing one writes a config that fails at `build()` with the named error
-/// rather than an entry that was never offered.
+/// sheet's preset table — the hand-written-menu problem this file flagged from
+/// the registry landing until those three menus were filtered by [`kinds`].
+/// They are now, so a stripped build no longer offers a backend it does not
+/// have; the strings here are what a row that *is* offered prefills its form
+/// with, and they are still text rather than types.
 ///
 /// Only backends core actually spells out are here. A provider plugin whose
 /// defaults nothing outside it reads keeps them to itself; llama.cpp, Ollama

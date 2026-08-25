@@ -831,3 +831,101 @@ fn peers_reaches_the_mesh_plugin_or_says_it_is_absent() {
     assert!(!bad.status.success(), "{refusal}");
     assert!(refusal.contains("blocked, known, trusted"), "{refusal}");
 }
+
+/// `wizard help peers` prints the same document `wizard peers --help` does.
+///
+/// clap's help *subcommand* is not reached by `disable_help_flag`, so it used
+/// to render core's passthrough variant — "Usage: wizard peers [ARGS]..." and
+/// nothing else — while the flag spelling one word away printed the plugin's
+/// eight subcommands. Two spellings of one request; two different answers, one
+/// of them useless.
+///
+/// Asserted as byte equality rather than by looking for the subcommands in
+/// both, because "they both mention `refresh`" is exactly what was true before
+/// and after the wrong one. On a build with no mesh there is nothing to
+/// forward to and clap keeps the request, which is the other half of the
+/// claim.
+#[test]
+fn the_help_subcommand_and_the_help_flag_print_the_same_thing_for_a_plugin_tree() {
+    let home = TempDir::new();
+
+    let via_subcommand = run_wizard(&home.0, &["help", "peers"], &[]);
+    let subcommand_text = String::from_utf8_lossy(&via_subcommand.stdout).to_string();
+    assert!(via_subcommand.status.success(), "{subcommand_text}");
+
+    if !cfg!(feature = "mesh") {
+        // Nothing registered `peers`, so nothing was forwarded and clap
+        // answered from core's own variant. What matters is that it is still
+        // an answer and not a crash.
+        assert!(subcommand_text.contains("Usage:"), "{subcommand_text}");
+        return;
+    }
+
+    let via_flag = run_wizard(&home.0, &["peers", "--help"], &[]);
+    let flag_text = String::from_utf8_lossy(&via_flag.stdout).to_string();
+    assert!(via_flag.status.success(), "{flag_text}");
+    assert_eq!(subcommand_text, flag_text);
+    assert!(
+        subcommand_text.contains("wizard peers <COMMAND>"),
+        "the plugin's usage line, not core's `[ARGS]...`:\n{subcommand_text}"
+    );
+}
+
+/// `--help` lists a plugin-owned subcommand exactly when this build has one,
+/// and describes it in the plugin's words.
+///
+/// The bug: the descriptions were doc comments on core's `clap` variants, so
+/// a `--no-default-features` binary advertised an ACP server and a fleet it
+/// could not start, in the present tense, and there was no build on which that
+/// text was wrong enough to notice.
+///
+/// `gui` is the deliberate exception and is checked in both directions for
+/// that reason: it stays listed with core's own text when absent, because the
+/// window is a `curl` away rather than a rebuild, and switches to the
+/// plugin's when present — where core's sentence would be telling the reader
+/// to go and get something already in front of them.
+#[test]
+fn help_lists_a_plugin_subcommand_exactly_when_this_build_has_it() {
+    let home = TempDir::new();
+    let output = run_wizard(&home.0, &["--help"], &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // One line per subcommand, so the row is "  <name>  <description>" and a
+    // dropped row leaves no line starting with the name.
+    let listed = |name: &str| {
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with(&format!("{name} ")))
+    };
+
+    for (compiled_in, name) in [
+        (cfg!(feature = "acp"), "acp"),
+        (cfg!(feature = "fleet"), "fleet"),
+        (cfg!(feature = "mesh"), "peers"),
+    ] {
+        assert_eq!(listed(name), compiled_in, "`{name}` in --help:\n{stdout}");
+    }
+
+    // Always listed, and the two texts are distinguishable: core's names the
+    // feature flag, the plugin's does not.
+    assert!(listed("gui"), "{stdout}");
+    let gui_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("gui "))
+        .expect("the gui row");
+    assert_eq!(
+        gui_line.contains("Needs a build with `--features native`"),
+        !cfg!(feature = "native"),
+        "{gui_line}"
+    );
+
+    // A subcommand `--help` no longer lists still parses and still explains
+    // itself, which is the whole reason dropping the row is acceptable.
+    if !cfg!(feature = "acp") {
+        let absent = run_wizard(&home.0, &["acp"], &[]);
+        let stderr = String::from_utf8_lossy(&absent.stderr).to_string();
+        assert!(!absent.status.success(), "{stderr}");
+        assert!(stderr.contains("--features acp"), "{stderr}");
+    }
+}

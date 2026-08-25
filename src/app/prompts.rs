@@ -41,27 +41,127 @@ pub(super) const PROVIDER_ADD_ROW: &str = "＋ Add provider…";
 /// name from the lens rows, so this row cannot collide with one of them.
 pub(super) const ULTRA_JUDGE_ROW: &str = ultra::JUDGE_NAME;
 
-/// The level-2 provider-type menu: `(label, detail)` in dispatch order. The
-/// Enter handler in [`App::handle_key`] matches on the row index, so this
-/// order is the single source of truth for both rendering and dispatch.
-/// The OpenAI-compatible presets from [`crate::llm::compat::PRESETS`] are
-/// appended after these rows (rendering and dispatch both offset by
-/// `PROVIDER_TYPES.len()`).
-pub(super) const PROVIDER_TYPES: &[(&str, &str)] = &[
-    ("xAI (Grok) — sign in", "OAuth · no API key"),
-    (
-        "xAI (Grok) — API key",
-        "stored in ~/.wizard/credentials.toml",
-    ),
-    ("OpenRouter — API key", "openrouter.ai"),
-    (
-        "Cloudflare Workers AI — API token",
-        "GLM 5.2 · account id + token",
-    ),
-    ("OpenAI — API key", "api.openai.com"),
-    ("Anthropic (Claude) — API key", "api.anthropic.com"),
-    ("OpenAI-compatible — custom", "any base URL + key"),
-];
+/// What a row of the level-2 provider-type menu starts when it is chosen.
+///
+/// The rows used to be dispatched by position: a `match picker.selected` with
+/// eight arms and a comment asking the next person to keep two lists in step.
+/// A menu that is filtered cannot do that — drop one row and every arm after
+/// it starts a different provider than the one on the screen — so the row
+/// carries what it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProviderSetup {
+    /// The OAuth flow, which adds the provider itself on success.
+    XaiSignIn,
+    XaiKey,
+    OpenRouter,
+    Cloudflare,
+    OpenAi,
+    Anthropic,
+    /// Everything prompted, starting with the name.
+    Custom,
+    /// One of [`crate::llm::compat::PRESETS`], by index into that table. The
+    /// index is into a `const` slice compiled into this binary, not into the
+    /// filtered menu, so it cannot shift.
+    Compat(usize),
+}
+
+/// One row of the level-2 provider-type menu.
+pub(super) struct ProviderType {
+    pub(super) label: String,
+    pub(super) detail: String,
+    pub(super) setup: ProviderSetup,
+    /// The `kind` the row writes into `config.toml`. The row is offered when
+    /// this kind is registered and dropped when it is not — an "Anthropic —
+    /// API key" row on a build with no Anthropic plugin collects a key, saves
+    /// it, and then fails at the first turn.
+    pub(super) kind: ProviderKind,
+}
+
+/// The provider-type menu this build can actually carry out, in display
+/// order.
+///
+/// Order is the written order, then the OpenAI-compatible presets from
+/// [`crate::llm::compat::PRESETS`]. Those are all `kind = "openai"`, so they
+/// stand or fall with that one plugin — which is also why they are appended
+/// rather than interleaved: they are one backend's worth of base URLs, not
+/// seven backends.
+///
+/// The labels stay written out. A descriptor's `display_name` answers "what
+/// is this backend called" ("xAI", "OpenAI-compatible"); these rows answer
+/// "which of these should you pick", and "xAI (Grok) — sign in" versus "xAI
+/// (Grok) — API key" is a distinction between two ways of paying for the same
+/// endpoint that no single descriptor can draw. What is derived from the
+/// registry is which rows exist.
+pub(super) fn provider_types() -> Vec<ProviderType> {
+    let row = |label: &str, detail: &str, setup, kind| ProviderType {
+        label: label.to_string(),
+        detail: detail.to_string(),
+        setup,
+        kind,
+    };
+    let fixed = [
+        row(
+            "xAI (Grok) — sign in",
+            "OAuth · no API key",
+            ProviderSetup::XaiSignIn,
+            ProviderKind::XAI_OAUTH,
+        ),
+        row(
+            "xAI (Grok) — API key",
+            "stored in ~/.wizard/credentials.toml",
+            ProviderSetup::XaiKey,
+            ProviderKind::XAI,
+        ),
+        row(
+            "OpenRouter — API key",
+            "openrouter.ai",
+            ProviderSetup::OpenRouter,
+            ProviderKind::OPENROUTER,
+        ),
+        row(
+            "Cloudflare Workers AI — API token",
+            "GLM 5.2 · account id + token",
+            ProviderSetup::Cloudflare,
+            ProviderKind::CLOUDFLARE,
+        ),
+        row(
+            "OpenAI — API key",
+            "api.openai.com",
+            ProviderSetup::OpenAi,
+            ProviderKind::OPENAI,
+        ),
+        row(
+            "Anthropic (Claude) — API key",
+            "api.anthropic.com",
+            ProviderSetup::Anthropic,
+            ProviderKind::ANTHROPIC,
+        ),
+        row(
+            "OpenAI-compatible — custom",
+            "any base URL + key",
+            ProviderSetup::Custom,
+            ProviderKind::OPENAI,
+        ),
+    ];
+    let presets = crate::llm::compat::PRESETS
+        .iter()
+        .enumerate()
+        .map(|(index, preset)| {
+            row(
+                &format!("{} — API key", preset.label),
+                preset.detail,
+                ProviderSetup::Compat(index),
+                ProviderKind::OPENAI,
+            )
+        });
+
+    let installed = crate::llm::registry::kinds();
+    fixed
+        .into_iter()
+        .chain(presets)
+        .filter(|row| installed.contains(&row.kind))
+        .collect()
+}
 
 /// The `web_search` backend menu (`/settings`): `(id, label, detail)`. The id
 /// is what gets written to `[web] search_backend` and (for keyed backends) the
@@ -192,4 +292,116 @@ pub struct Console {
     /// running, and its timeout clock — stopped while somebody was there to
     /// answer it — starts again.
     pub(super) writer: ConsoleWriter,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `/provider` → add offers a backend exactly when its plugin is
+    /// compiled in.
+    ///
+    /// The bug this pins is the one the whole picker was rewritten for: a
+    /// build without `provider-anthropic` used to draw an "Anthropic (Claude)
+    /// — API key" row, take a pasted key, store it in
+    /// `~/.wizard/credentials.toml`, write the provider into `config.toml`,
+    /// and only then fail — at the first turn, with the key already on disk.
+    ///
+    /// One row per feature rather than a count, because the interesting
+    /// builds are the leave-one-out ones
+    /// (`contrib/check-provider-plugins.sh`) and a count agrees with itself
+    /// on all of them.
+    #[test]
+    fn the_add_provider_menu_offers_a_backend_exactly_when_its_plugin_is_compiled_in() {
+        let offered: Vec<ProviderKind> = provider_types()
+            .iter()
+            .map(|row| row.kind.clone())
+            .collect();
+        for (compiled_in, kind) in [
+            (
+                cfg!(feature = "provider-anthropic"),
+                ProviderKind::ANTHROPIC,
+            ),
+            (
+                cfg!(feature = "provider-cloudflare"),
+                ProviderKind::CLOUDFLARE,
+            ),
+            (cfg!(feature = "provider-openai"), ProviderKind::OPENAI),
+            (cfg!(feature = "provider-openai"), ProviderKind::OPENROUTER),
+            (cfg!(feature = "provider-xai"), ProviderKind::XAI),
+            (cfg!(feature = "provider-xai"), ProviderKind::XAI_OAUTH),
+        ] {
+            assert_eq!(
+                offered.contains(&kind),
+                compiled_in,
+                "`{kind}` in the add-provider menu"
+            );
+        }
+    }
+
+    /// Dispatch follows the row, not the row's position.
+    ///
+    /// The old handler was a `match picker.selected` against a fixed array,
+    /// which a filtered menu silently breaks: drop the two xAI rows and
+    /// "OpenRouter" moves to index 0, where the handler starts an xAI OAuth
+    /// sign-in. Nothing about that fails to compile, and on the screen it
+    /// looks like the wrong provider was clicked.
+    #[test]
+    fn every_offered_row_carries_its_own_setup() {
+        let rows = provider_types();
+        let setups: Vec<ProviderSetup> = rows.iter().map(|row| row.setup).collect();
+        let mut seen = setups.clone();
+        seen.sort_by_key(|setup| format!("{setup:?}"));
+        seen.dedup();
+        assert_eq!(seen.len(), setups.len(), "two rows share a setup");
+
+        // And a row's setup agrees with the kind it is gated on, which is what
+        // makes the gate mean anything.
+        for row in &rows {
+            let expected = match row.setup {
+                ProviderSetup::XaiSignIn => ProviderKind::XAI_OAUTH,
+                ProviderSetup::XaiKey => ProviderKind::XAI,
+                ProviderSetup::OpenRouter => ProviderKind::OPENROUTER,
+                ProviderSetup::Cloudflare => ProviderKind::CLOUDFLARE,
+                ProviderSetup::OpenAi | ProviderSetup::Custom | ProviderSetup::Compat(_) => {
+                    ProviderKind::OPENAI
+                }
+                ProviderSetup::Anthropic => ProviderKind::ANTHROPIC,
+            };
+            assert_eq!(row.kind, expected, "{}", row.label);
+        }
+    }
+
+    /// A stock build's menu is the one it has always been, in the order it
+    /// was written: the seven fixed rows, then the compat presets.
+    #[test]
+    #[cfg(all(
+        feature = "provider-anthropic",
+        feature = "provider-cloudflare",
+        feature = "provider-openai",
+        feature = "provider-xai",
+    ))]
+    fn a_stock_build_offers_the_add_provider_menu_it_always_did() {
+        let labels: Vec<String> = provider_types().into_iter().map(|row| row.label).collect();
+        let fixed = [
+            "xAI (Grok) — sign in",
+            "xAI (Grok) — API key",
+            "OpenRouter — API key",
+            "Cloudflare Workers AI — API token",
+            "OpenAI — API key",
+            "Anthropic (Claude) — API key",
+            "OpenAI-compatible — custom",
+        ];
+        assert_eq!(&labels[..fixed.len()], &fixed);
+        assert_eq!(
+            labels.len(),
+            fixed.len() + crate::llm::compat::PRESETS.len()
+        );
+        for (row, preset) in labels[fixed.len()..]
+            .iter()
+            .zip(crate::llm::compat::PRESETS.iter())
+        {
+            assert_eq!(row, &format!("{} — API key", preset.label));
+        }
+    }
 }

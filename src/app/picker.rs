@@ -88,8 +88,11 @@ pub enum PickerKind {
     /// Level 1 of `/provider`: configured providers (Enter switches) plus a
     /// final "add provider" row that opens [`PickerKind::ProviderType`].
     Provider,
-    /// Level 2 of `/provider`: the menu of provider kinds to add. Rows are
-    /// dispatched by index against [`PROVIDER_TYPES`](super::prompts::PROVIDER_TYPES).
+    /// Level 2 of `/provider`: the backends this build can add, from
+    /// [`provider_types`](super::prompts::provider_types). Rows are the ones
+    /// whose `kind` a plugin registered, and Enter dispatches on the row's own
+    /// `ProviderSetup` rather than on its position, because a filtered menu
+    /// has no fixed positions.
     ProviderType,
     /// The `web_search` backend picker (from `/settings`). Item values are
     /// backend ids ([`WEB_BACKENDS`](super::prompts::WEB_BACKENDS)); selecting a keyed backend starts an
