@@ -1731,6 +1731,29 @@ checkout is. It is gated on `filesystem`, which is the grant that makes a path
 useful — a plugin without it cannot open anything there, and a path is still a
 fact about somebody's machine.
 
+### And one bug the bridge already had
+
+Not a gap this port needed — a bug it tripped over, in the bridge as it
+already stood, found by running the suite one test at a time.
+
+`Agent::bind_host` is called at the top of every turn with the turn's
+`Sender<AgentEvent>`, so a plugin's `wizard.ui.notify` lands in *this* turn's
+transcript. The binding then sits in a process-wide slot that outlives the
+turn, and that clone of the sender is a sender that never drops. Every caller
+who waits for the channel to *close* waits forever —
+`plugins::fleet::run_collect_text` collects a planning turn's text by draining
+until `recv` returns `None`, and it is not the only shape like that.
+
+It only hangs when nothing else binds afterwards, so the fleet's planning tests
+pass beside a full suite and wedge when run alone. A hang whose presence
+depends on what else is running is the worst kind, and this one has been in the
+tree since the bridge landed. `run_turn` now re-binds with no channel on its
+way out, which restores exactly the state the host had before the turn:
+`wizard.ui.notify` goes back to the log, which is where a notice with no
+transcript in front of it belongs.
+`agent::tests::a_turns_event_channel_closes_when_the_turn_does` pins it, with a
+timeout, because a regression here does not fail — it stops.
+
 ### Better or worse than the Rust it replaced: better, on three counts
 
 **It stopped blocking the runtime.** Every step of `evolve::publish` was

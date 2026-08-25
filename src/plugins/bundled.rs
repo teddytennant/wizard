@@ -157,7 +157,7 @@ pub(crate) async fn load_into(kernel: &Kernel) {
 /// process with no agent in front of it, so this is not a stub: `exec` runs
 /// real programs through the real runner, and the only thing it lacks is the
 /// agent-shaped half neither bundled plugin asks for.
-#[cfg(test)]
+#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
 pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     Kernel::new(crate::kernel::KernelOptions {
         project_root: root.to_path_buf(),
@@ -167,7 +167,9 @@ pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     })
 }
 
-// Two plugins now, so the split the line above predicted has happened: this is
-// `#[cfg(test)]` and each plugin's tests are a module behind its own feature.
-#[cfg(test)]
+// Two plugins now, so the split the line above predicted has happened: each
+// plugin's tests are a module behind its own feature. The `any` is what keeps
+// a build with neither from carrying a `mod tests` whose only contents are two
+// unused helpers.
+#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
 mod tests;
