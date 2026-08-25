@@ -409,18 +409,20 @@ pub enum Command {
     /// (`[mesh.routes]`, or mDNS on the same LAN) and `[mesh] listen = true`
     /// on that machine, which is off by default. Nothing here listens. See
     /// docs/mesh.md.
-    ///
-    /// The tree behind it is the mesh plugin's, so the arguments cross
-    /// unparsed: `trust` takes the peer store's own three-state
-    /// `clap::ValueEnum`, and mirroring that enum here would be a CLI able to
-    /// express a decision the store cannot record. `--help` reaches the
-    /// plugin's parser for the same reason, which is why it is not swallowed
-    /// here. See [`crate::entrypoint::Subcommand`].
-    ///
-    /// `disable_help_flag` is what makes that last sentence true: without it
-    /// clap answers `wizard peers --help` here, with a usage line reading
-    /// `wizard peers [ARGS]...` and no mention of the eight subcommands that
-    /// actually exist. Help for this tree is the plugin's to print.
+    //
+    // Everything after `peers` crosses unparsed, because the tree behind it is
+    // the mesh plugin's and one of its arguments is a type core must not name:
+    // `trust` takes the peer store's own three-state `clap::ValueEnum`, derived
+    // on the store's type precisely so a second spelling here cannot drift into
+    // a fourth state. See `crate::entrypoint::Subcommand`.
+    //
+    // `disable_help_flag` is load-bearing rather than tidy. Without it clap
+    // answers `wizard peers --help` *here*, with a usage line reading
+    // `wizard peers [ARGS]...` and no mention of the eight subcommands that
+    // actually exist. Help for this tree is the plugin's to print, and these
+    // three lines of rationale are `//` rather than `///` for the same reason:
+    // an argument about where a boundary goes is not what somebody typing
+    // `--help` came for.
     #[command(disable_help_flag = true)]
     Peers {
         #[arg(

@@ -1070,7 +1070,8 @@ different answer.
 **`src/app/tee.rs` was a core file that was entirely mesh glue.** 685 lines
 importing ten mesh symbols, holding a `Mesh`, a `QuicTransport` and a
 `Discovery`, hung off `App::handle_agent_event`. `App` held
-`pub mesh: Option<MeshTee>` and `App::run` called `MeshTee::join` by name.
+`pub mesh: Option<MeshTee>` and `app::runtime::run_tui` called `MeshTee::join`
+by name.
 
 The file moved to `src/plugins/mesh/tee.rs` and what stayed behind under the
 same path is the *shape*: a `SessionTee` trait with three methods, and a
