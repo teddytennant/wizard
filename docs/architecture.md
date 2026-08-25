@@ -48,13 +48,14 @@ wizard/
 │   ├── server.rs            # llama-server lifecycle
 │   ├── llm/                 # LlmProvider + per-vendor clients (incl. fusion, oauth)
 │   ├── mcp/                 # MCP client and mcp-serve server
-│   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs)
+│   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs), http.rs
+│   ├── kernel/              # the plugin host: Ctx, event bus, services, Lua VMs
 │   ├── evolve/              # tiered self-extension + publish
 │   ├── gui/                 # the window's agent half: tasks, config store, git, OAuth (`native`)
 │   ├── gateway/             # messaging bot (Telegram)
 │   ├── fleet/               # parallel worktree workers
 │   ├── mesh/                # peer discovery, QUIC transport, `wizard peers`
-│   ├── graph/               # mesh graph model for the explorer
+│   ├── plugins/             # compiled-in plugins, one per cargo feature (see plugins.md)
 │   ├── commands/            # slash-command registry, shared by every surface
 │   ├── platform/            # OS seams: paths, service units, secrets, locks
 │   ├── schedule.rs          # cron-scheduled headless runs
@@ -200,7 +201,7 @@ Wizard is both an MCP client and an MCP server:
 - **Client:** servers in `~/.wizard/mcp.toml` (stdio or HTTP). On startup and `/reload`, tools are listed and merged into the registry. This is the path for browser control, databases, search, and similar. (Computer use is not one of them: `computer` is a native tool.)
 - **Server:** `wizard mcp-serve` exposes the native tool set over stdio. See [mcp.md](mcp.md).
 
-### Mesh (`mesh/`, `graph/`)
+### Mesh (`mesh/`, `plugins/graph/`)
 
 Peer-to-peer visibility between your own machines: discovery, a QUIC transport with per-peer trust, and `wizard peers` to list, trust, and watch them. It is an **observation** layer — a peer's turn arrives as an event you can watch. (The graph explorer that draws it is deferred and unreachable in 2.0; see [graph-explorer.md](graph-explorer.md).) It does not distribute work: there is no task frame on the wire and nothing in a shipping path hands a peer a job. See [mesh.md](mesh.md). Nothing accepts a connection until `[mesh] listen` is configured.
 

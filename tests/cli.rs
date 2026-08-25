@@ -746,9 +746,16 @@ fn harness_export_writes_a_complete_bundle() {
         .expect("bundle has system_prompt.md");
     assert!(!prompt.trim().is_empty(), "exported prompt is non-empty");
 
-    // One description file per native tool, contents matching the compiled
-    // defaults' non-empty guarantee.
-    for tool in ["read_file", "write_file", "execute", "web_search"] {
+    // One description file per compiled-in tool, contents matching the compiled
+    // defaults' non-empty guarantee. `web_search` is a plugin tool
+    // (`--features tool-web`), so it is only expected when this build has it:
+    // the bundle describes what the binary can do, not what some other build
+    // could.
+    let mut tools = vec!["read_file", "write_file", "execute"];
+    if cfg!(feature = "tool-web") {
+        tools.push("web_search");
+    }
+    for tool in tools {
         let path = bundle.join("tool_descriptions").join(format!("{tool}.md"));
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("bundle has tool_descriptions/{tool}.md"));

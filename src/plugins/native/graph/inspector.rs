@@ -1,7 +1,7 @@
 //! The inspector: one node, in words, from the same snapshot the canvas drew.
 //!
 //! Everything here comes out of [`Inspection`], which borrows from the
-//! [`MeshGraph`](crate::graph::MeshGraph) rather than copying out of it. That is
+//! [`MeshGraph`](crate::plugins::graph::MeshGraph) rather than copying out of it. That is
 //! the whole reason the panel and the canvas cannot disagree about whether a
 //! peer is live: there is one snapshot, taken at one clock, and both surfaces
 //! read it.
@@ -12,7 +12,7 @@
 //!   picks its own label and the fingerprint prefix is the part it cannot
 //!   choose. When the model has flagged the label as confusable with another
 //!   node's, the discriminator is emphasised — advisory only, since
-//!   [`DisplayName::is_ambiguous`](crate::graph::DisplayName::is_ambiguous) is
+//!   [`DisplayName::is_ambiguous`](crate::plugins::graph::DisplayName::is_ambiguous) is
 //!   an approximation and the discriminator is present either way.
 //! - **Liveness and staleness together.** "stale · 4h" rather than a colour: a
 //!   coloured dot with no number cannot distinguish a peer that went quiet four
@@ -31,10 +31,10 @@
 use iced::widget::{button, column, container, row, space, text};
 use iced::{Border, Element, Length, Padding};
 
-use crate::graph::{GraphNode, Inspection, NodeKey, NodeKind};
 use crate::mesh::{CapabilityKind, NodeId};
 use crate::plugins::native::theme::Palette;
 use crate::plugins::native::widget::chrome;
+use crate::plugins::graph::{GraphNode, Inspection, NodeKey, NodeKind};
 use crate::theme::Token;
 
 use super::view::CapabilityFilter;
@@ -189,7 +189,7 @@ fn name<'a>(node: &'a GraphNode, palette: &'a Palette) -> Element<'a, Message> {
         .color(palette.color(Token::Heading));
     let discriminator = text(format!(
         "{} {}",
-        crate::graph::model::DISCRIMINATOR_SEPARATOR,
+        crate::plugins::graph::model::DISCRIMINATOR_SEPARATOR,
         node.name.discriminator()
     ))
     .size(MONO)

@@ -27,9 +27,9 @@ use iced::mouse;
 use iced::widget::canvas::{self, Action, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Point as Screen, Rectangle, Renderer, Size, Theme};
 
-use crate::graph::layout::node_radius;
-use crate::graph::{GraphNode, NodeKind};
 use crate::plugins::native::theme::Palette;
+use crate::plugins::graph::layout::node_radius;
+use crate::plugins::graph::{GraphNode, NodeKind};
 
 use super::paint::{filtered, halo_reach, link_paint, node_paint};
 use super::view::GraphView;
@@ -141,12 +141,12 @@ impl GraphCanvas<'_> {
     ///
     /// Named rather than inlined into [`GraphCanvas::draw_links`] so a test can
     /// hold it: capability links cluster the layout and are never lines,
-    /// [`Link::is_drawn`](crate::graph::Link::is_drawn) is what says so, and
-    /// [`MeshGraph::drawn_links`](crate::graph::MeshGraph::drawn_links) is what
+    /// [`Link::is_drawn`](crate::plugins::graph::Link::is_drawn) is what says so, and
+    /// [`MeshGraph::drawn_links`](crate::plugins::graph::MeshGraph::drawn_links) is what
     /// applies it. Iterating `links()` here instead would put a line between
     /// every pair of peers offering the same model, which on a fifty-node mesh
     /// is a solid block conveying nothing.
-    fn lines(&self) -> impl Iterator<Item = &crate::graph::Link> {
+    fn lines(&self) -> impl Iterator<Item = &crate::plugins::graph::Link> {
         self.view.graph().drawn_links()
     }
 
@@ -265,7 +265,7 @@ fn bar(frame: &mut Frame, at: Screen, radius: f32, color: Color) {
 /// The text beside a dot: the peer's own name, the separator, and the
 /// fingerprint prefix it cannot choose.
 ///
-/// [`DisplayName::rendered`](crate::graph::DisplayName) always carries the
+/// [`DisplayName::rendered`](crate::plugins::graph::DisplayName) always carries the
 /// discriminator, so two peers calling themselves the same thing are told apart
 /// on the canvas and not only in the inspector.
 fn label_of(node: &GraphNode, at: Screen, radius: f32, color: Color) -> Text {
@@ -295,7 +295,7 @@ fn on_canvas(at: Screen, size: Size) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Liveness;
+    use crate::plugins::graph::Liveness;
 
     fn palette() -> Palette {
         Palette::from_theme(&crate::theme::minimal())

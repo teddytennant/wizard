@@ -66,7 +66,7 @@
 //! | [`widget`] | the transcript's blocks, its markdown, and the composer |
 //! | [`sidebar`] · [`rail`] · [`pane`] | the chat list, the right rail, the open pane |
 //! | [`settings`] · [`command`] · [`console`] | the sheet, the `/` menu, a command's stdin |
-//! | [`graph`] | the explorer over [`crate::graph`] and [`crate::mesh`] — deferred, not reachable |
+//! | `graph` | the explorer over the `graph` plugin and [`crate::mesh`] — behind `--features graph`, deferred, not reachable |
 //!
 //! # It links `TaskManager`, not `Agent`
 //!
@@ -106,6 +106,11 @@ pub mod command;
 pub mod console;
 pub mod event;
 pub mod font;
+// The explorer screen, and the only consumer of the `graph` plugin. Gated on
+// it rather than on `native` alone: a plugin whose removal breaks the build is
+// not a plugin, and this screen is `docs/native-gui.md`'s "deferred, not
+// reachable" one, so a window without it is the window that ships today.
+#[cfg(feature = "graph")]
 pub mod graph;
 pub mod pane;
 pub mod plugin;

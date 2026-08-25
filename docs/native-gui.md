@@ -154,7 +154,8 @@ src/plugins/native/
     └── composer.rs     the field, and the send/stop control
 ```
 
-(`graph/` is the mesh explorer. It is **deferred and unreachable in 2.0.0** —
+(`graph/` is the mesh explorer, behind `--features graph` along with the plugin
+it draws from. It is **deferred and unreachable in 2.0.0** —
 it still compiles and its tests still run, but nothing in the window opens it.
 See [graph-explorer.md](graph-explorer.md).)
 

@@ -197,4 +197,24 @@ pretends they exist yet.
 The split between the last four and the first two is the point: nothing in
 `src/graph/` links a GUI crate, and nothing in `src/plugins/native/graph/` decides
 anything about the mesh. See also [`mesh.md`](mesh.md) and
+| `src/plugins/graph/model.rs` | the mesh as drawable data; liveness decided once, honestly |
+| `src/plugins/graph/layout.rs` | the force model as deterministic arithmetic, with pinning and hit testing |
+| `src/native/graph/paint.rs` | liveness and trust as ink, and the single `is_live()` gate |
+| `src/native/graph/viewport.rs` | the one transform between the layout's world and the canvas's pixels |
+| `src/native/graph/view.rs` | every decision a gesture implies, in a struct with no widget in it |
+| `src/native/graph/canvas.rs` | the `canvas::Program`: edges, nodes, labels, gestures |
+| `src/native/graph/inspector.rs` | one node, in words |
+| `src/native/graph/mod.rs` | the screen: state, messages, the settle subscription, revoke |
+
+The split between the last four and the first two is the point: nothing in
+`src/plugins/graph/` links a GUI crate, and nothing in `src/native/graph/`
+decides anything about the mesh.
+
+That split is now a cargo feature as well as a directory. The model and the
+layout are the `graph` plugin (`--features graph`, on by default) and the six
+files under `src/native/graph/` are gated on it in step, so a window built
+without it is a window with no explorer — which is the window that ships today,
+since the screen is not yet reachable from the UI. See
+[`plugins.md`](plugins.md) for why a plugin that registers nothing through
+`Ctx` is still a plugin, and also [`mesh.md`](mesh.md) and
 [`native-gui.md`](native-gui.md).

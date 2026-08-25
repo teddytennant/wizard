@@ -16,7 +16,7 @@
 //! it is *core*, not part of this plugin. That reads backwards until you count
 //! the callers: five of the six are not this file.
 //!
-//! * `tools/web.rs` authenticates xAI's server-side **search** API with that
+//! * `plugins/web.rs` authenticates xAI's server-side **search** API with that
 //!   token, and `web_search` is a core tool that reaches for xAI whatever the
 //!   configured chat backend is;
 //! * `tools/image.rs` does the same for xAI's **image** API, which is the

@@ -87,7 +87,7 @@ pub trait Plugin: Send + Sync {
 /// Host facilities a plugin reaches through `wizard.*`, behind the capability
 /// that names each one.
 ///
-/// A trait rather than direct calls into `crate::tools::web` and friends,
+/// A trait rather than direct calls into `crate::tools::http` and friends,
 /// because the kernel has to be wireable without being wired: it is
 /// instantiated in unit tests, in `wizard doctor`, and by
 /// [`crate::plugins::kernel`] long before any surface exists to answer a

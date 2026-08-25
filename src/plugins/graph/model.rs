@@ -713,7 +713,7 @@ impl MeshGraph {
     /// The layout divides by this: a node that fifty springs pull on is fifty
     /// times as hard to move as one with a single link, and treating them
     /// alike is what makes the local hub oscillate forever instead of
-    /// settling. See [`crate::graph::layout`]'s notes on stability.
+    /// settling. See [`crate::plugins::graph::layout`]'s notes on stability.
     pub fn degrees(&self) -> &[u32] {
         &self.degrees
     }

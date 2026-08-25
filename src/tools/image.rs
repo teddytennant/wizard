@@ -597,15 +597,15 @@ async fn materialize_image(
 /// Separate from the client that talks to the configured generation endpoint,
 /// and for one reason: the endpoint is the user's own configuration, while the
 /// URL in its response is attacker-influenced text that this process is about
-/// to fetch. So it gets [`web::no_redirect_client_builder`], which turns
+/// to fetch. So it gets [`http::no_redirect_client_builder`], which turns
 /// reqwest's automatic follow-10 off; the chain is walked by hand instead so
 /// every hop is SSRF-checked.
 fn download_client() -> Result<reqwest::Client, reqwest::Error> {
-    crate::tools::web::no_redirect_client_builder(GENERATE_TIMEOUT).build()
+    crate::tools::http::no_redirect_client_builder(GENERATE_TIMEOUT).build()
 }
 
 /// Download image bytes from a temporary generation URL. SSRF-guarded: https
-/// only, and the full [`web::check_url`] check — which resolves DNS — on the
+/// only, and the full [`http::check_url`] check — which resolves DNS — on the
 /// URL and on every redirect it leads through.
 ///
 /// The old guard here was neither. It matched local *names* and literal
@@ -624,7 +624,7 @@ async fn download_image(client: &reqwest::Client, url: &str) -> anyhow::Result<V
             parsed.scheme()
         );
     }
-    crate::tools::web::check_url(&parsed, false)
+    crate::tools::http::check_url(&parsed, false)
         .await
         .map_err(|reason| anyhow::anyhow!("refusing to download image: {reason}"))?;
     read_image_body(client, parsed).await
@@ -641,11 +641,15 @@ async fn download_image(client: &reqwest::Client, url: &str) -> anyhow::Result<V
 /// generic hop check allows `http` and `https` both — right for `web_fetch`,
 /// wrong for this.
 async fn read_image_body(client: &reqwest::Client, url: reqwest::Url) -> anyhow::Result<Vec<u8>> {
-    let response = crate::tools::web::get_following_redirects(
+    let response = crate::tools::http::get_following_redirects(
         client,
         url,
         false,
-        crate::tools::web::HopScheme::HttpsOnly,
+        crate::tools::http::HopScheme::HttpsOnly,
+        // The download's own budget, not the web tools' 30s: image generation
+        // endpoints are slow and this walk is part of a call the user is
+        // already waiting minutes for.
+        GENERATE_TIMEOUT,
     )
     .await
     .map_err(|reason| anyhow::anyhow!("image download failed: {reason}"))?;

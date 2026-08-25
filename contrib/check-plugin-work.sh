@@ -15,9 +15,11 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # The baseline this migration must not regress. Captured with
 # `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel
 # landed, 2557 once every provider became a plugin, 2575 with the host bridge
-# and the sandbox fix, 2577 once the native GUI became a plugin. Raise it when a
-# phase adds tests, so the ratchet keeps ratcheting.
-BASELINE_TESTS=2577
+# `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel,
+# 2557 once every provider became a plugin, 2575 with the host bridge and the
+# sandbox fix, 2577 with the window, 2584 with the graph and web tools. Raise it
+# when a phase adds tests, so the ratchet keeps ratcheting.
+BASELINE_TESTS=2584
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -82,16 +84,24 @@ rm -f "$test_log"
 
 # The "delete any one plugin" rule from docs/plugins.md, as something that can
 # fail. A plugin whose removal breaks the build is not a plugin, and the only
-# way to know is to remove it: `--no-default-features` drops
-# `provider-anthropic`, and the tree still has to compile, still has to pass,
-# and `kind = "anthropic"` still has to degrade to a named error rather than a
-# panic. `src/plugins/mod.rs` carries the assertion for the second half.
+# way to know is to remove it: `--no-default-features` drops every one of them,
+# and the tree still has to compile, still has to pass, `kind = "anthropic"`
+# still has to degrade to a named error rather than a panic, and `web_fetch`
+# still has to be absent from the roster the model is told about rather than
+# advertised-and-broken. `src/plugins/mod.rs` carries the assertions for the
+# second and third halves.
+#
+# This leg is the floor and the default build is the ceiling; the case in
+# between — one plugin missing, the rest present — is what
+# `contrib/check-provider-plugins.sh` and `contrib/check-tool-plugins.sh`
+# cover, because a module that reached into one plugin compiles fine both with
+# everything on and with everything off.
 #
 # Cheap enough to run every time (one extra feature-set build) and worth it:
 # this is the leg that catches a core module reaching into a plugin, which is
 # the failure the whole architecture exists to prevent and which the
 # default-features build cannot see.
-step "no-default-features (a build with the anthropic plugin deleted)"
+step "no-default-features (a build with every optional plugin deleted)"
 cargo build --no-default-features --locked || bad "cargo build --no-default-features"
 nd_log=$(mktemp)
 cargo test --no-default-features --locked --no-fail-fast 2>&1 | tee "$nd_log" \

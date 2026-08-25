@@ -12,7 +12,7 @@
 //! as before. `pub` is what stops the compiler calling this dead code.
 //!
 //! Putting it back is the four seams that were removed from
-//! [`crate::plugins::native`], and nothing else:
+//! [`crate::native`], and nothing else:
 //!
 //! 1. `Screen::Mesh`, and a `view` arm stacking [`Explorer::view`] over `body`.
 //! 2. `Message::Graph(graph::Message)`, with the `Close` arm routed to
@@ -26,8 +26,8 @@
 //! ---
 //!
 //! S1.1 of the v2 plan. Everything
-//! *modelled* about the mesh already exists — [`crate::graph::model`] decides
-//! liveness once and honestly, [`crate::graph::layout`] is a deterministic,
+//! *modelled* about the mesh already exists — [`crate::plugins::graph::model`] decides
+//! liveness once and honestly, [`crate::plugins::graph::layout`] is a deterministic,
 //! snapshot-tested force simulation with pinning and hit testing — so this
 //! module is a renderer and nothing else. It adds three things that layer
 //! deliberately does not have: a colour mapping ([`paint`]), a transform
@@ -46,7 +46,7 @@
 //! > A graph that is beautiful and lies about who is online is worse than a
 //! > plain one that does not.
 //!
-//! [`Liveness::is_live`](crate::graph::Liveness::is_live) is the only predicate
+//! [`Liveness::is_live`](crate::plugins::graph::Liveness::is_live) is the only predicate
 //! allowed to make a node draw as up, and [`paint::node_paint`] is the only
 //! place it is consulted. Trust never implies liveness: a peer a human trusted,
 //! that has not answered, draws exactly as un-live as a stranger that has not
@@ -58,7 +58,7 @@
 //!
 //! The layout is stepped from a 60Hz [`iced::time::every`] subscription that
 //! [`GraphView::needs_step`] switches off once
-//! [`kinetic_energy`](crate::graph::Layout::kinetic_energy) falls under
+//! [`kinetic_energy`](crate::plugins::graph::Layout::kinetic_energy) falls under
 //! [`view::SETTLE_ENERGY`]. Not a throttle — the subscription is *dropped*, so
 //! a settled explorer schedules no timer, wakes no thread and redraws nothing.
 //!
@@ -86,9 +86,9 @@ use iced::widget::{button, column, container, row, scrollable, space, text};
 use iced::{Element, Length, Padding, Point as Screen, Size, Subscription, Task};
 use tokio::sync::Mutex;
 
-use crate::graph::{Liveness, MeshGraph, NodeKey};
 use crate::mesh::{Mesh, NodeId, Trust};
 use crate::plugins::native::theme::Palette;
+use crate::plugins::graph::{Liveness, MeshGraph, NodeKey};
 use crate::theme::Token;
 
 use canvas::GraphCanvas;
@@ -142,7 +142,7 @@ pub enum Message {
     Refresh,
     /// Leave the explorer and go back to the chat.
     ///
-    /// Handled by [`crate::plugins::native`], not here: the explorer does not own the
+    /// Handled by [`crate::native`], not here: the explorer does not own the
     /// screen it is drawn on, so all it can do is say it is finished.
     Close,
 }
@@ -496,7 +496,7 @@ pub async fn revoke_and_rebuild(
 /// A layout seed from a node key.
 ///
 /// FNV-1a over the identity's bytes, for the same reason
-/// [`crate::graph::layout`] hand-rolls its own: `DefaultHasher` is explicitly
+/// [`crate::plugins::graph::layout`] hand-rolls its own: `DefaultHasher` is explicitly
 /// not stable between Rust releases, and an arrangement that reshuffles on a
 /// toolchain upgrade is one nobody can navigate by memory.
 fn seed_of(key: &NodeKey) -> u64 {

@@ -729,9 +729,9 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::graph::model::MeshGraph;
     use crate::mesh::peer::synthetic_store;
     use crate::mesh::{Capability, Identity, Node, PeerStore, PeerText, Trust};
+    use crate::plugins::graph::model::MeshGraph;
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

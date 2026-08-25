@@ -1830,7 +1830,7 @@ async fn escape_closes_the_sheet_unless_it_is_onboarding() {
 /// the screen back will delete this and restore that one.
 ///
 /// Worth stating plainly: a screen that is built and reachable from nothing is
-/// exactly what `src/graph/` already was for a whole release. That is a real
+/// exactly what the graph plugin already was for a whole release. That is a real
 /// cost of holding it, and the reason it is written down here and in the
 /// module rather than left for someone to rediscover.
 #[test]
