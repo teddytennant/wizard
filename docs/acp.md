@@ -85,3 +85,11 @@ the same `wizard acp` process. One documented layout is **[Buzz](buzz.md)**
 `buzz-cli`. Both of those are Buzz's own binaries — this repo ships only the
 harness JSON and a room skill under `contrib/`, no Buzz code. See
 [Buzz](buzz.md).
+
+## Build
+
+The server is a plugin, behind `--features acp`, on by default. Every published
+binary has it and nothing needs doing. Leaving it out (`--no-default-features`,
+or a feature list without `acp`) drops the `agent-client-protocol` dependency
+too, and `wizard acp` then prints one line naming the flag rather than starting
+a server that cannot work. See [plugins.md](plugins.md).

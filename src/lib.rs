@@ -307,8 +307,10 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // here: `fleet run` loads its own (its planning and synthesis turns drive
     // a real in-process agent), and `fleet status` / `fleet stop` only touch
     // the project's `.wizard/fleet/` directory. So this is the one entrypoint
-    // whose argument is the parsed subcommand rather than a `Config`, which is
-    // why the lookup names a type — see `entrypoint::Entrypoint`.
+    // whose argument is the parsed subcommand rather than a `Config` — the
+    // lookup below is `Entrypoint<FleetCmd>` and reads identically only
+    // because inference takes the type from the `.run(cmd)` two lines down.
+    // See `entrypoint::Entrypoint` for why the argument is a type parameter.
     //
     // It also keeps its own exit code: `fleet stop` with nothing running says
     // so in one line and exits 1, which is neither an error nor a success.

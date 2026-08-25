@@ -244,6 +244,10 @@ pub fn absent(name: &str, feature: &str, detail: &str) -> anyhow::Error {
     )
 }
 
+/// The lookup itself. Which surface is present on which build is asserted a
+/// row at a time in
+/// `plugins::an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in`,
+/// beside the provider and tool tables it belongs with.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,11 +261,6 @@ mod tests {
         assert!(installed::<Config>("no-such-surface").is_none());
     }
 
-    /// Which surface is present on which build is asserted one row at a time
-    /// in `plugins::an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in`,
-    /// beside the provider and tool tables it belongs with. What is left here
-    /// is the lookup itself.
-    ///
     /// Asking for the wrong argument type is a `None`, not a panic and not a
     /// wrong-shaped call. Pinned because it is the failure mode the type
     /// parameter introduced: it looks exactly like an absent plugin, so the
