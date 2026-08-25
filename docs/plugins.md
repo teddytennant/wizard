@@ -679,12 +679,9 @@ ratchet in `contrib/check-plugin-work.sh` guards, and it went 2536 → 2557.
 
 ### Still open
 
-- **The onboarding menu and the TUI provider picker are still hand-written.**
-  On a build without `provider-anthropic` they still offer Anthropic, and
-  picking it produces a config that fails at `build()` with a clear message
-  rather than an entry that was never offered. Building both from
-  `registry::kinds()` is the fix and is the same change `src/llm/registry.rs`
-  has been asking for.
+- ~~**The onboarding menu and the TUI provider picker are still
+  hand-written.**~~ Both are filtered by `registry::kinds()` now; see "As
+  built: the menus are filtered by the registry" below.
 - **Eight providers to go**, plus everything that is not a provider.
 - **A plugin's spend is in `/cost`'s total and nowhere else.** `UsageTracker`
   is nine bare atomics with no keyed dimension in it, so `wizard.model` bills
@@ -763,12 +760,10 @@ that body — very possibly a credential — to a host the plugin never named.
 which prints only the outermost layer, and a host call's reason is almost
 always underneath one. `{:#}` now, so `wizard.process.run` fails as "tool '...'
 failed: exited 3" rather than as "tool '...' failed".
-- **The onboarding menu and the TUI provider picker are still hand-written**,
-  and now they are hand-written menus of *seven* removable plugins rather than
-  one. A stripped build still offers a backend it does not have; picking it
-  writes a config that fails at `build()` with the named error rather than an
-  entry that was never offered. Building both from `registry::kinds()` is the
-  fix, and it is a bigger change now than when it was one provider.
+- ~~**The onboarding menu and the TUI provider picker are still
+  hand-written**~~, and the settings sheet's presets with them. All three are
+  filtered by `registry::kinds()` now; see "As built: the menus are filtered
+  by the registry" below.
 - **`tools/image.rs` still branches on four provider kind ids.** The question
   it asks — "does this backend serve an image API, and under which
   credential" — is a *capability*, and the descriptor does not carry one.
@@ -1185,14 +1180,12 @@ person's. `tests/cli.rs` runs the real binary against both sides of the flag.
   <peer> known` in a second terminal binds every process started afterwards and
   not the one already running. Named in `tee.rs` since the tee landed and not
   changed by the move.
-- **`wizard --help` describes `peers` in one paragraph** rather than listing its
-  eight subcommands, and `wizard help peers` — clap's own help *subcommand*,
-  which `disable_help_flag` does not reach — prints core's `[ARGS]...` usage
-  line instead of the plugin's. `wizard peers --help`, which is what people
-  type, reaches the plugin. Both are the price of the argument list crossing
-  unparsed; building the top-level listing from what plugins registered is the
-  fix, and it is the same change the onboarding menu and the provider picker
-  have been waiting for.
+- ~~**`wizard --help` describes `peers` in one paragraph**~~ and ~~`wizard help
+  peers` prints core's `[ARGS]...` usage line~~. The paragraph is the plugin's
+  now and `help peers` is rewritten into `peers --help`; see "As built: the
+  menus are filtered by the registry" below. `wizard --help` still describes
+  `peers` in one paragraph rather than listing its eight subcommands, which is
+  what the subcommand table gives every other subcommand too.
 - **The other three surfaces are still core.** `wizard acp`, `wizard gateway`
   and `mcp serve` are each one `Entrypoint` registration, and none of them is
   behind a feature yet.
@@ -1861,3 +1854,165 @@ implementation appearing between them.
 - **The manifest's `capabilities` are declared and, for a bundled plugin,
   unverifiable in one direction.** Not a gap these two hit in practice, and
   already recorded under the window's section.
+## As built: the menus are filtered by the registry
+
+Three migrations wrote this up as "the fix is building the listing from what
+plugins registered — a separate change", and this is that change. Four
+user-facing lists named backends and surfaces a build might not contain:
+`wizard --help`, onboarding's numbered menu, the TUI's add-provider picker,
+and the settings sheet's presets. All four are now narrowed by a registry, and
+none of them offers a row it cannot carry out.
+
+The common shape: a menu is **a table of rows in the source plus a filter over
+a registry**, and the filter is the only thing that moved. Nobody had to
+invent a descriptor field for it, because the question every one of these
+menus was getting wrong was already answerable — "is this kind installed",
+"did anything register this surface".
+
+### `wizard --help` and the surfaces
+
+A subcommand's one-line description was a doc comment on core's `clap`
+variant, so a `--no-default-features` binary described an ACP server it could
+not start, in the present tense, four times over. That line is now
+`Entrypoint::about` / `Subcommand::about`, set by whoever registers the
+surface, and `cli::command()` folds it into the derived `clap::Command` at
+runtime.
+
+What core keeps is the *absent* text, which is the same split it already
+makes for a provider `kind` and for the `entrypoint::absent` sentence: core
+holds the words for the build that does not have the thing, and the thing
+holds the words for itself. The two say different things and should — the
+window's core text ends "Needs a build with `--features native`", which is
+exactly the wrong sentence to print on a build that has a window in it.
+
+**A row with nothing behind it is dropped, except `gui`.** That exception is
+`entrypoint::absent`'s argument, one surface further along: `acp`, `fleet` and
+`mesh` are on by default and in every published binary, so a build without one
+is a build somebody made that way and the row is noise. `native` is off by
+default and the window ships as its own release asset, so a build without it
+is the normal case, the row is how most people learn there is a window, and it
+is one `curl` away rather than a rebuild. Dropping a row does not make the
+subcommand unreachable: the `clap` variant stays in core on every build,
+because parsing `wizard fleet run -n 3` has to keep working so that
+`wizard --plan fleet status` is still rejected for the right reason. `wizard
+acp` on a build without it still answers with `entrypoint::absent`, which is
+now the only place that answer appears.
+
+### `wizard help peers` is rewritten, not routed
+
+`wizard peers --help` already reached the plugin — core's variant is
+`trailing_var_arg` with `disable_help_flag`, so the flag crosses unparsed with
+everything else and the plugin's own `clap::Parser` prints its own tree.
+`wizard help peers` is clap's help *subcommand*, which `disable_help_flag`
+does not reach, so it printed core's `wizard peers [ARGS]...` usage line: a
+real answer to the wrong question.
+
+`cli::parse` rewrites `["help", <name>]` into `[<name>, "--help"]` when a
+plugin has registered a `Subcommand` under that name, and lets clap have
+everything else. The alternative was to teach clap to route it, which means
+core holding a `clap::Command` for the plugin's tree — either mirrored, which
+is what `entrypoint::Subcommand` exists to refuse (`trust` takes the peer
+store's own `ValueEnum`, and a second spelling of it can drift into a fourth
+trust state), or handed over by the plugin, which puts clap in a kernel
+service signature and still ends with clap rendering a *second* copy of the
+help the plugin renders itself. Two spellings of one request should not print
+two documents, and the way to guarantee that is for one spelling to become the
+other.
+
+**The plugin-aware command is built only on the help path, and clap decides
+which path that is.** `plugins::boot` sets the project root *before* the
+kernel is built, because that root is what confines a sandboxed plugin's file
+helpers and a confinement computed from the wrong directory is worse than
+none. A kernel forced into existence at parse time would be confined to
+wherever the process started. So the first parse is the plain derived one, and
+only a `DisplayHelp` error — a path that prints and exits, with no `--cwd`
+left to honour — builds the plugin-aware command. Scanning argv for `-h`
+instead would misfire on `wizard -p help`, and the cost of misfiring is that
+confinement.
+
+### The three provider menus
+
+Onboarding's menu was eleven `Opt::new` literals dispatched by `match provider
+{ 0 => …, 1 => … }`. It is a `Vec<ProviderChoice>` now, each row carrying the
+kinds it can produce and the function that asks the next questions, filtered by
+`registry::kinds()`. Dispatching on the function rather than the index is not
+tidiness: the first time such a menu is filtered, dropping row 0 makes row 1
+run row 0's arm, which compiles, and on the screen looks like the wrong
+provider was clicked. The same rewrite for the same reason in the TUI's
+add-provider picker, where the row now carries a `ProviderSetup`. The settings
+sheet's presets were already a `Vec`, so that one is a `filter`.
+
+**The one-click "Local" row needed the filter one level down.** It is offered
+when *either* local backend is installed, and `plan_local_auto` then picks
+between them from what is on the machine — a downloaded GGUF wins over an
+Ollama install, which is the strongest signal in the function and was still
+producing `kind = "llamacpp"` on a build with no llama.cpp. It takes the
+installed kinds now and skips the steps it cannot honour.
+
+### What stayed hand-written, and why
+
+**The labels and the sentence beside each one.** A descriptor answers "what is
+this backend called" — `display_name` is "xAI", "OpenAI-compatible",
+"Anthropic". A menu row answers "which of these should you pick, and what
+happens next", which is a different question and sometimes several rows' worth
+of answer for one kind: "xAI (Grok) — sign in" and "xAI (Grok) — API key" are
+two ways of paying for one endpoint, and "one pick — model sized to this
+machine" is a claim about the next three steps rather than about a backend.
+Same for "More cloud providers" and "Custom OpenAI-compatible endpoint", which
+are both `kind = "openai"` with different prefills.
+
+**The model catalogs and the per-provider question sequences.** Which Anthropic
+tags to offer, that Cloudflare needs an account id folded into its base URL,
+that llama.cpp needs a GGUF path — none of that is answerable from a
+`ProviderDescriptor`, and none of it should be. A catalog of model tags is not
+part of what a provider *is*; it is a thing that changes without the provider
+changing. `docs/plugins.md` already records the shape of the refusal here: an
+image-generation field was not added to a chat-shaped descriptor to satisfy
+`tools/image.rs`, and a `models: Vec<String>` would be the same mistake with a
+menu as its excuse.
+
+**The `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` suggestions in onboarding.** The
+descriptor has `Credentials::ApiKey { default_env }` and both of those
+backends set it to `None`, deliberately: `default_env` is what to fall back to
+when a config names no variable, and guessing `OPENAI_API_KEY` there would
+start sending an OpenAI key to a local vLLM configured as `kind = "openai"`.
+Onboarding is asking a different question — what to *write into* a fresh
+config — and the two answers differ for exactly the backends where it matters.
+`llm::registry::defaults` holds the ones that are the same either way
+(OpenRouter, Cloudflare) and this is why the other two are not there.
+
+### Proving it
+
+Each menu has a test asserting the absent direction, one feature at a time
+rather than as a count, so the leave-one-out legs of
+`contrib/check-provider-plugins.sh` are what decide it: a stock build and a
+`--no-default-features` build both agree with a broken filter.
+`onboarding::the_provider_menu_offers_only_what_this_build_installed`,
+`app::prompts::the_add_provider_menu_offers_a_backend_exactly_when_its_plugin_is_compiled_in`,
+`gui::settings::the_sheet_offers_a_backend_exactly_when_its_plugin_is_compiled_in`,
+and `onboarding::the_one_click_local_pick_skips_a_backend_this_build_lacks`
+for the row that resolves between two backends.
+
+The other half is that a stock build did not change, which is what
+`a_stock_build_offers_the_menu_it_always_did` pins in onboarding and in the
+picker: the same rows, in the same order. `tests/cli.rs` runs the real binary
+for the `--help` side of the same claim.
+
+### Still open, specific to this
+
+- **`wizard gateway` and `mcp serve` are still core**, so `--help` describes
+  them from core's own doc comments and always will until they are plugins.
+  Nothing about the mechanism above changes for them; they are two more
+  registrations.
+- **The compat presets are a table in core.** `llm::compat::PRESETS` is
+  Gemini, DeepSeek, Groq and the rest as base URLs against `kind = "openai"`,
+  and it is gated as one block on that one plugin. That is honest today —
+  they genuinely are one backend's worth of URLs — and it stops being honest
+  the day one of them needs a wire quirk, which is the day it becomes a
+  plugin of its own.
+- **`--help` for a `Subcommand` tree is still one paragraph, not a tree.**
+  `wizard --help` gives `peers` the same single line it gives `doctor`, which
+  is what the subcommand table gives everything; the eight subcommands under
+  it are one `wizard help peers` away. Listing them at the top level would
+  mean core rendering the plugin's tree, which is the thing the rewrite above
+  exists to avoid.

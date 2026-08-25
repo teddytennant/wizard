@@ -370,48 +370,144 @@ fn run_blocking() -> Result<Option<Config>> {
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// One row of the provider menu.
+///
+/// The row exists in the source; whether it is *offered* is a question for
+/// [`crate::llm::registry`]. That split is the whole of what this type is for:
+/// every backend is a plugin behind a cargo feature now, so a menu written out
+/// as eleven literals offered whatever it was written with, and a build
+/// without `provider-anthropic` still had a row that produced a config failing
+/// at `build()` — an entry that should never have been on the screen.
+struct ProviderChoice {
+    label: &'static str,
+    detail: &'static str,
+    /// The kinds this row can produce. Offered when *any* of them is
+    /// registered, because "Local" resolves to llama.cpp or to Ollama
+    /// depending on what is already on the machine and either one alone is
+    /// enough to make the row work.
+    kinds: Vec<ProviderKind>,
+    /// The questions this row asks next. A function pointer rather than an
+    /// index into a `match`, so a row that is filtered out cannot shift the
+    /// meaning of the ones after it — which is what an index-dispatched menu
+    /// does the first time it is filtered.
+    collect: fn(&mut Tui) -> Result<Option<ProviderAnswers>>,
+}
+
+/// The provider menu, in display order, before `installed` narrows it.
+///
+/// The order is the order: xAI first, then the one-click local pick, then the
+/// keyed clouds, then the bring-your-own rows. Filtering preserves it.
+///
+/// What is derived here is *availability*, and only that. The labels and the
+/// details beside them stay written out, because a descriptor answers "what is
+/// this backend called" and this menu answers "which of these should a person
+/// pick, and why" — "one pick, model sized to this machine" is a claim about
+/// what the *next three steps* will do, and no backend knows that about
+/// itself. `docs/plugins.md` already permits core to hold the text a user
+/// would otherwise type; this is the same boundary one step further out.
+fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
+    let all = vec![
+        ProviderChoice {
+            label: "xAI account sign-in",
+            detail: "grok-4.6 via OAuth, no API key",
+            kinds: vec![ProviderKind::XAI_OAUTH],
+            collect: collect_xai_oauth,
+        },
+        ProviderChoice {
+            label: "xAI (Grok), API key",
+            detail: "grok-4.6 via XAI_API_KEY",
+            kinds: vec![ProviderKind::XAI],
+            collect: collect_xai,
+        },
+        ProviderChoice {
+            label: "Local",
+            detail: "one pick — llama.cpp & Ollama set up for you, model sized to this \
+                     machine; private, no API key",
+            kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
+            collect: collect_local_auto,
+        },
+        ProviderChoice {
+            label: "OpenRouter",
+            detail: "hundreds of models via OPENROUTER_API_KEY",
+            kinds: vec![ProviderKind::OPENROUTER],
+            collect: collect_openrouter,
+        },
+        ProviderChoice {
+            label: "Cloudflare Workers AI",
+            detail: "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)",
+            kinds: vec![ProviderKind::CLOUDFLARE],
+            collect: collect_cloudflare,
+        },
+        ProviderChoice {
+            label: "OpenAI / OpenAI-compatible",
+            detail: "gpt-5.6 family and friends",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_openai,
+        },
+        ProviderChoice {
+            label: "Anthropic (Claude)",
+            detail: "claude-fable-5",
+            kinds: vec![ProviderKind::ANTHROPIC],
+            collect: collect_anthropic,
+        },
+        // Gemini, DeepSeek, Groq and the rest are `compat.rs` presets, which
+        // are `kind = "openai"` with a base URL: they need the OpenAI plugin
+        // and nothing else.
+        ProviderChoice {
+            label: "More cloud providers",
+            detail: "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_compat_menu,
+        },
+        ProviderChoice {
+            label: "Custom OpenAI-compatible endpoint",
+            detail: "any base URL",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_custom,
+        },
+        ProviderChoice {
+            label: "BYOM — llama.cpp",
+            detail: "bring your own model: any GGUF, your server URL",
+            kinds: vec![ProviderKind::LLAMACPP],
+            collect: collect_llamacpp,
+        },
+        ProviderChoice {
+            label: "BYOM — Ollama",
+            detail: "bring your own model: any Ollama tag, pulled on first run",
+            kinds: vec![ProviderKind::OLLAMA],
+            collect: collect_ollama,
+        },
+    ];
+    all.into_iter()
+        .filter(|choice| choice.kinds.iter().any(|kind| installed.contains(kind)))
+        .collect()
+}
+
 /// Drive the sequence of steps. Returns `Ok(None)` as soon as any step is
 /// cancelled.
 fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
-    // Step 1 — provider, xAI first. "Local" is one pick: no further model
-    // questions — Wizard self-configures llama.cpp (or an Ollama install that
-    // already has a model) and downloads a hardware-sized GGUF on first run.
-    // The BYOM local flavors sit alongside the cloud providers for people who
-    // want to bring their own model and pick the pieces themselves.
-    let provider_options = [
-        Opt::new("xAI account sign-in", "grok-4.6 via OAuth, no API key"),
-        Opt::new("xAI (Grok), API key", "grok-4.6 via XAI_API_KEY"),
-        Opt::new(
-            "Local",
-            "one pick — llama.cpp & Ollama set up for you, model sized to this machine; \
-             private, no API key",
-        ),
-        Opt::new("OpenRouter", "hundreds of models via OPENROUTER_API_KEY"),
-        Opt::new(
-            "Cloudflare Workers AI",
-            "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)",
-        ),
-        Opt::new("OpenAI / OpenAI-compatible", "gpt-5.6 family and friends"),
-        Opt::new("Anthropic (Claude)", "claude-fable-5"),
-        Opt::new(
-            "More cloud providers",
-            "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …",
-        ),
-        Opt::new("Custom OpenAI-compatible endpoint", "any base URL"),
-        Opt::new(
-            "BYOM — llama.cpp",
-            "bring your own model: any GGUF, your server URL",
-        ),
-        Opt::new(
-            "BYOM — Ollama",
-            "bring your own model: any Ollama tag, pulled on first run",
-        ),
-    ];
+    // Step 1 — provider, xAI first, and only the ones this build can reach.
+    let choices = provider_choices(&crate::llm::registry::kinds());
+    if choices.is_empty() {
+        anyhow::bail!(
+            "this build has no provider backends compiled in, so there is nothing to \
+             onboard to.\n\
+             \n\
+             Every backend is a plugin behind a cargo feature (`provider-xai`, \
+             `provider-openai`, `provider-llamacpp`, …) and all of them are on by \
+             default. Rebuild with the ones you want, or install a stock release \
+             binary, which has all of them. See docs/plugins.md."
+        );
+    }
+    let options: Vec<Opt> = choices
+        .iter()
+        .map(|choice| Opt::new(choice.label, choice.detail))
+        .collect();
     let provider = match select(
         terminal,
         "Provider",
         "Where should Wizard send its requests?",
-        &provider_options,
+        &options,
         0,
     )? {
         Some(index) => index,
@@ -420,51 +516,9 @@ fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
 
     // Step 2 — model (+ key env / base url, depending on provider). The
     // one-click local pick asks nothing further.
-    let collected = match provider {
-        0 => match collect_xai_oauth(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        1 => match collect_xai(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        2 => match collect_local_auto(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        3 => match collect_openrouter(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        4 => match collect_cloudflare(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        5 => match collect_openai(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        6 => match collect_anthropic(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        7 => match collect_compat_menu(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        8 => match collect_custom(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        9 => match collect_llamacpp(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        _ => match collect_ollama(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
+    let collected = match (choices[provider].collect)(terminal)? {
+        Some(collected) => collected,
+        None => return Ok(None),
     };
 
     // Step 3 — messaging gateway.
@@ -903,34 +957,60 @@ pub enum LocalPlan {
 ///    (the hardware-suggested tag when pulled, else the first listed).
 /// 3. Otherwise llama.cpp with the suggested tier: Wizard downloads the GGUF
 ///    and installs llama-server itself on first run.
+///
+/// Each step is skipped when this build has no plugin for the backend it
+/// would pick. Both are on by default, so a stock build takes every step and
+/// `installed` changes nothing — but a `--features provider-ollama` build has
+/// no llama.cpp to fall back to, and steps 1 and 3 would otherwise hand back
+/// a config that fails at `build()`. That is the same entry-that-was-never-
+/// offered this menu was rewritten to stop producing, one level down: the
+/// "Local" row is offered when *either* backend is present, so the row's own
+/// resolution has to respect which one that was.
+///
+/// [`None`] when neither is installed. Unreachable from the menu, which does
+/// not offer the row at all in that case, and returned rather than asserted
+/// because a caller that is wrong about the plugin set should get an answer
+/// it can report instead of a panic.
 pub fn plan_local_auto(
+    installed: &[ProviderKind],
     existing: &[PathBuf],
     models_dir: &Path,
     ollama_models: &[String],
     suggested: &GgufModel,
     suggested_tag: &str,
-) -> LocalPlan {
-    if !existing.is_empty() {
+) -> Option<LocalPlan> {
+    let llamacpp = installed.contains(&ProviderKind::LLAMACPP);
+    let ollama = installed.contains(&ProviderKind::OLLAMA);
+
+    if llamacpp && !existing.is_empty() {
         let chosen = existing
             .iter()
             .find(|path| path.file_name().is_some_and(|name| name == suggested.file))
             .unwrap_or(&existing[0]);
-        return LocalPlan::LlamaCpp {
+        return Some(LocalPlan::LlamaCpp {
             gguf_path: chosen.display().to_string(),
-        };
+        });
     }
-    if !ollama_models.is_empty() {
+    if ollama && !ollama_models.is_empty() {
         let model = ollama_models
             .iter()
             .find(|model| model.as_str() == suggested_tag)
             .unwrap_or(&ollama_models[0]);
-        return LocalPlan::Ollama {
+        return Some(LocalPlan::Ollama {
             model: model.clone(),
-        };
+        });
     }
-    LocalPlan::LlamaCpp {
-        gguf_path: models_dir.join(suggested.file).display().to_string(),
+    if llamacpp {
+        return Some(LocalPlan::LlamaCpp {
+            gguf_path: models_dir.join(suggested.file).display().to_string(),
+        });
     }
+    // Ollama is installed but has nothing pulled: fall through to it anyway
+    // with the hardware-suggested tag, which `collect_ollama` would have
+    // offered and which is pulled on first run.
+    ollama.then(|| LocalPlan::Ollama {
+        model: suggested_tag.to_string(),
+    })
 }
 
 /// Model tags an installed Ollama already has pulled (empty when Ollama is
@@ -974,13 +1054,16 @@ fn collect_local_auto(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     }
     let dir = models_dir();
     let existing = existing_ggufs(&dir);
-    let answers = match plan_local_auto(
+    let plan = plan_local_auto(
+        &crate::llm::registry::kinds(),
         &existing,
         &dir,
         &installed_ollama_models(),
         suggested,
         &suggested_tag,
-    ) {
+    )
+    .context("the one-click local pick needs `provider-llamacpp` or `provider-ollama`")?;
+    let answers = match plan {
         LocalPlan::LlamaCpp { gguf_path } => ProviderAnswers {
             provider_name: "local".to_string(),
             kind: ProviderKind::LLAMACPP,
@@ -2603,12 +2686,19 @@ mod tests {
         }
     }
 
+    /// Both local backends compiled in, which is what a stock build has and
+    /// what every plan test below except the last three assumes.
+    fn both_local() -> Vec<ProviderKind> {
+        vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA]
+    }
+
     #[test]
     fn local_plan_prefers_a_downloaded_gguf() {
         let dir = Path::new("/m");
         let existing = vec![PathBuf::from("/m/a.gguf"), PathBuf::from("/m/big.gguf")];
         // The suggested tier is on disk: it wins over the first-by-name file.
         let plan = plan_local_auto(
+            &both_local(),
             &existing,
             dir,
             &["qwen3.5:9b".to_string()],
@@ -2617,13 +2707,14 @@ mod tests {
         );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/big.gguf".to_string()
-            }
+            })
         );
         // Suggested tier not on disk: first existing GGUF wins, still no
         // download and still ahead of any Ollama install.
         let plan = plan_local_auto(
+            &both_local(),
             &existing,
             dir,
             &["qwen3.5:9b".to_string()],
@@ -2632,9 +2723,9 @@ mod tests {
         );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/a.gguf".to_string()
-            }
+            })
         );
     }
 
@@ -2643,31 +2734,228 @@ mod tests {
         let dir = Path::new("/m");
         let pulled = vec!["llama3:8b".to_string(), "qwen3.5:9b".to_string()];
         // The hardware-suggested tag is pulled: use it.
-        let plan = plan_local_auto(&[], dir, &pulled, &tier("x.gguf"), "qwen3.5:9b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            dir,
+            &pulled,
+            &tier("x.gguf"),
+            "qwen3.5:9b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::Ollama {
+            Some(LocalPlan::Ollama {
                 model: "qwen3.5:9b".to_string()
-            }
+            })
         );
         // Suggested tag not pulled: first listed model.
-        let plan = plan_local_auto(&[], dir, &pulled, &tier("x.gguf"), "qwen3.6:27b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            dir,
+            &pulled,
+            &tier("x.gguf"),
+            "qwen3.6:27b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::Ollama {
+            Some(LocalPlan::Ollama {
                 model: "llama3:8b".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn local_plan_falls_back_to_a_fresh_llamacpp_download() {
-        let plan = plan_local_auto(&[], Path::new("/m"), &[], &tier("big.gguf"), "qwen3.5:9b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            Path::new("/m"),
+            &[],
+            &tier("big.gguf"),
+            "qwen3.5:9b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/big.gguf".to_string()
-            }
+            })
+        );
+    }
+
+    /// The one-click local pick never resolves to a backend this build left
+    /// out, whatever is lying around on the machine.
+    ///
+    /// Both directions, because both are wrong in the same way and only one
+    /// of them is obvious: a GGUF already downloaded is the *strongest*
+    /// signal in the whole function, and it still must not produce
+    /// `kind = "llamacpp"` on a build that cannot serve one. The row is
+    /// offered because Ollama is present, so what it resolves to has to be
+    /// Ollama.
+    #[test]
+    fn the_one_click_local_pick_skips_a_backend_this_build_lacks() {
+        let dir = Path::new("/m");
+        let gguf = vec![PathBuf::from("/m/a.gguf")];
+        let pulled = vec!["llama3:8b".to_string()];
+
+        let ollama_only = vec![ProviderKind::OLLAMA];
+        assert_eq!(
+            plan_local_auto(
+                &ollama_only,
+                &gguf,
+                dir,
+                &pulled,
+                &tier("x.gguf"),
+                "qwen3.5:9b"
+            ),
+            Some(LocalPlan::Ollama {
+                model: "llama3:8b".to_string()
+            }),
+            "a downloaded GGUF must not win on a build with no llama.cpp"
+        );
+        // Nothing pulled either: still Ollama, with the tag `collect_ollama`
+        // would have offered, because there is no other backend to fall to.
+        assert_eq!(
+            plan_local_auto(&ollama_only, &[], dir, &[], &tier("x.gguf"), "qwen3.5:9b"),
+            Some(LocalPlan::Ollama {
+                model: "qwen3.5:9b".to_string()
+            })
+        );
+
+        let llamacpp_only = vec![ProviderKind::LLAMACPP];
+        assert_eq!(
+            plan_local_auto(
+                &llamacpp_only,
+                &[],
+                dir,
+                &pulled,
+                &tier("big.gguf"),
+                "llama3:8b"
+            ),
+            Some(LocalPlan::LlamaCpp {
+                gguf_path: "/m/big.gguf".to_string()
+            }),
+            "a pulled Ollama model must not win on a build with no Ollama"
+        );
+
+        assert_eq!(
+            plan_local_auto(&[], &gguf, dir, &pulled, &tier("x.gguf"), "llama3:8b"),
+            None,
+            "neither backend compiled in leaves nothing to plan"
+        );
+    }
+
+    /// The menu offers a row exactly when this build can carry it out.
+    ///
+    /// This is the bug the table replaced a literal array to fix: a stripped
+    /// build used to print "Anthropic (Claude)" and then fail at `build()`
+    /// when it was picked. Asserted over feature sets rather than over the
+    /// live registry, so the claim holds on every leg of
+    /// `contrib/check-provider-plugins.sh` and not only on the one that is
+    /// running.
+    #[test]
+    fn the_provider_menu_offers_only_what_this_build_installed() {
+        // Nothing installed: nothing to offer, and onboarding says so rather
+        // than drawing an empty picker.
+        assert!(provider_choices(&[]).is_empty());
+
+        // One backend: its rows and no others. Anthropic is the narrowest —
+        // one kind, one row — so it is the sharpest version of the claim.
+        let anthropic = provider_choices(&[ProviderKind::ANTHROPIC]);
+        assert_eq!(anthropic.len(), 1);
+        assert_eq!(anthropic[0].label, "Anthropic (Claude)");
+
+        // The OpenAI kind carries three rows, because the compat presets and
+        // the custom-endpoint row are both `kind = "openai"`.
+        let openai: Vec<&str> = provider_choices(&[ProviderKind::OPENAI])
+            .iter()
+            .map(|choice| choice.label)
+            .collect();
+        assert_eq!(
+            openai,
+            [
+                "OpenAI / OpenAI-compatible",
+                "More cloud providers",
+                "Custom OpenAI-compatible endpoint",
+            ]
+        );
+
+        // "Local" needs either local backend, not both.
+        for kind in [ProviderKind::LLAMACPP, ProviderKind::OLLAMA] {
+            assert!(
+                provider_choices(std::slice::from_ref(&kind))
+                    .iter()
+                    .any(|choice| choice.label == "Local"),
+                "the one-click local row should survive on {kind} alone"
+            );
+        }
+
+        // Filtering preserves the display order, which is the property an
+        // index-dispatched menu had for free and a filtered one has to keep.
+        let full = provider_choices(&crate::llm::registry::kinds());
+        let labels: Vec<&str> = full.iter().map(|choice| choice.label).collect();
+        let mut sorted = labels.clone();
+        sorted.sort_by_key(|label| {
+            provider_choices(&all_shipped_kinds())
+                .iter()
+                .position(|choice| choice.label == *label)
+                .expect("every offered row is a row")
+        });
+        assert_eq!(labels, sorted);
+    }
+
+    /// Every kind a stock build ships, whether or not this one does. Used to
+    /// pin the menu's display order independently of the feature set the test
+    /// happens to be running under.
+    fn all_shipped_kinds() -> Vec<ProviderKind> {
+        vec![
+            ProviderKind::ANTHROPIC,
+            ProviderKind::CHATGPT_OAUTH,
+            ProviderKind::CLOUDFLARE,
+            ProviderKind::LLAMACPP,
+            ProviderKind::OLLAMA,
+            ProviderKind::OPENAI,
+            ProviderKind::OPENROUTER,
+            ProviderKind::XAI,
+            ProviderKind::XAI_OAUTH,
+        ]
+    }
+
+    /// A stock build's menu is the one it has always been: eleven rows, in
+    /// the order they were written, xAI first.
+    ///
+    /// The point of the change was to stop offering what a build lacks, not
+    /// to redesign the menu, and this is the half of that claim a filtered
+    /// list could quietly break.
+    #[test]
+    #[cfg(all(
+        feature = "provider-anthropic",
+        feature = "provider-cloudflare",
+        feature = "provider-llamacpp",
+        feature = "provider-ollama",
+        feature = "provider-openai",
+        feature = "provider-xai",
+    ))]
+    fn a_stock_build_offers_the_menu_it_always_did() {
+        let labels: Vec<&str> = provider_choices(&crate::llm::registry::kinds())
+            .iter()
+            .map(|choice| choice.label)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "xAI account sign-in",
+                "xAI (Grok), API key",
+                "Local",
+                "OpenRouter",
+                "Cloudflare Workers AI",
+                "OpenAI / OpenAI-compatible",
+                "Anthropic (Claude)",
+                "More cloud providers",
+                "Custom OpenAI-compatible endpoint",
+                "BYOM — llama.cpp",
+                "BYOM — Ollama",
+            ]
         );
     }
 

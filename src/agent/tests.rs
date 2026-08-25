@@ -3949,3 +3949,35 @@ fn switching_to_a_fallback_model_removes_run_code_and_switching_back_restores_it
         "and switching back restores it, from the stash rather than a rebuild"
     );
 }
+
+/// A finished turn's event channel closes.
+///
+/// `run_turn` publishes the turn's sender to the process-wide plugin host
+/// slot so a plugin's `wizard.ui.notify` lands in *this* turn's transcript.
+/// That slot is replaced only by the next bind, so without an explicit
+/// release at turn end the clone outlived the turn and the channel never
+/// closed. Every caller that collects a turn by draining until the channel
+/// ends then hung — which is what the fleet's planning turn does, and it hung
+/// rather than failing, which is the worst shape a bug can take in a suite.
+///
+/// Asserted with a timeout for exactly that reason: a regression here must
+/// fail in two seconds, not run until somebody kills the runner.
+#[tokio::test]
+async fn a_finished_turns_event_channel_closes() {
+    let (mut agent, _provider, tmp) = test_agent(vec![vec![final_chunk("done")]]);
+    let _ = &tmp;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
+    let collector = tokio::spawn(async move {
+        let mut count = 0usize;
+        while rx.recv().await.is_some() {
+            count += 1;
+        }
+        count
+    });
+    agent.run_turn("hello", tx).await.expect("turn runs");
+    let events = tokio::time::timeout(std::time::Duration::from_secs(2), collector)
+        .await
+        .expect("the turn's channel must close when the turn ends")
+        .expect("collector did not panic");
+    assert!(events > 0, "the turn should have emitted something");
+}

@@ -96,6 +96,42 @@ A mesh address is pasted in, not discovered: there is no directory to look a nod
 up in, because a node's name is its public key. Run `wizard peers address` on the
 other machine and paste what it prints into `wizard peers add <address>` here.";
 
+/// What `wizard peers` is, in the one line `wizard --help` gives a
+/// subcommand.
+///
+/// Core used to hold this sentence as a doc comment on its `clap` variant and
+/// print it on every build, mesh or no mesh. It is registered now — see
+/// [`super::MeshPlugin::apply`] — so a build without this plugin has no line
+/// to print and `--help` drops the row instead of describing a surface that
+/// is not there.
+///
+/// It is also the first paragraph of [`long_about`], because the two were
+/// separate strings saying nearly the same thing and had already drifted:
+/// core's ran to "watch its live session" and this file's stopped three
+/// clauses earlier. No trailing full stop — the subcommand table does not
+/// want one, and `long_about` adds it back for the paragraph it opens.
+pub const SUMMARY: &str = "Mesh peers: other machines running Wizard, what each one advertises, \
+                           and what this machine has decided about it. List the store, add a \
+                           peer by pasted address, record a trust decision, forget one — and \
+                           reach a peer over the network: ping it, refresh what it advertises, \
+                           watch its live session";
+
+/// The caveat under [`SUMMARY`]: what `list` does not do, and what reaching a
+/// peer at all needs switched on.
+const CAVEAT: &str = "`list` contacts nobody, so its presence column is what this machine last \
+                      observed rather than a live probe; `ping` is the command that makes an \
+                      observation. Reaching a peer needs a route for it here (`[mesh.routes]`, \
+                      or mDNS on the same LAN) and `[mesh] listen = true` on that machine, \
+                      which is off by default. Nothing here listens. See docs/mesh.md.";
+
+/// The two paragraphs `wizard peers --help` opens with.
+///
+/// A function rather than a `const` because a `const` cannot concatenate
+/// without pulling in a macro crate for it, and this runs once per `--help`.
+fn long_about() -> String {
+    format!("{SUMMARY}.\n\n{CAVEAT}")
+}
+
 /// The `wizard peers` argument list, parsed here rather than in core.
 ///
 /// Core's clap variant is `Peers { args: Vec<String> }` and hands the vector
@@ -112,9 +148,7 @@ other machine and paste what it prints into `wizard peers add <address>` here.";
 /// `about` and `long_about` are spelled out rather than left to this doc
 /// comment because clap would otherwise print the paragraph above — an
 /// argument about where a plugin boundary goes — to somebody who typed
-/// `wizard peers --help` wanting to know what `refresh` does. They are the same
-/// two paragraphs `wizard --help` prints for this subcommand, so the two
-/// surfaces cannot drift.
+/// `wizard peers --help` wanting to know what `refresh` does.
 #[derive(Debug, clap::Parser)]
 #[command(
     name = "wizard peers",
@@ -122,16 +156,7 @@ other machine and paste what it prints into `wizard peers add <address>` here.";
     disable_help_subcommand = true,
     about = "Mesh peers: other machines running Wizard, what each one advertises, and what \
              this machine has decided about it.",
-    long_about = "Mesh peers: other machines running Wizard, what each one advertises, and \
-                  what this machine has decided about it. List the store, add a peer by \
-                  pasted address, record a trust decision, forget one — and reach a peer \
-                  over the network: ping it, refresh what it advertises, watch its live \
-                  session.\n\n\
-                  `list` contacts nobody, so its presence column is what this machine last \
-                  observed rather than a live probe; `ping` is the command that makes an \
-                  observation. Reaching a peer needs a route for it here (`[mesh.routes]`, \
-                  or mDNS on the same LAN) and `[mesh] listen = true` on that machine, \
-                  which is off by default. Nothing here listens. See docs/mesh.md."
+    long_about = long_about()
 )]
 pub struct PeersCli {
     #[command(subcommand)]

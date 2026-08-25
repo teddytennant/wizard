@@ -56,8 +56,8 @@ use paste::{
 };
 use picker::is_builtin_command;
 use prompts::{
-    PROVIDER_ADD_ROW, PROVIDER_TYPES, PromptField, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
-    web_backend_label, web_backend_needs_key, xai_oauth_session_present,
+    PROVIDER_ADD_ROW, PromptField, ProviderSetup, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
+    provider_types, web_backend_label, web_backend_needs_key, xai_oauth_session_present,
 };
 use transcript::PANE_LINGER;
 
@@ -989,24 +989,36 @@ impl App {
         });
     }
 
-    /// Open the provider-type picker (level 2): the menu of provider kinds to
-    /// add. Rows are dispatched by index against the fixed order in
-    /// [`PROVIDER_TYPES`], followed by the OpenAI-compatible presets from
-    /// [`crate::llm::compat::PRESETS`], so the labels stay human-readable.
+    /// Open the provider-type picker (level 2): the backends this build can
+    /// actually add.
+    ///
+    /// The rows come from [`provider_types`], which drops any whose `kind` no
+    /// plugin registered. Nothing is offered that would collect a key and
+    /// then fail on the first turn, and the Enter handler dispatches on the
+    /// row's own [`ProviderSetup`] rather than on its position, so a dropped
+    /// row cannot shift what the rows below it do.
     pub fn open_provider_type_picker(&mut self) {
-        let items: Vec<PickerItem> = PROVIDER_TYPES
-            .iter()
-            .map(|(label, detail)| PickerItem {
-                value: (*label).to_string(),
-                detail: (*detail).to_string(),
+        let items: Vec<PickerItem> = provider_types()
+            .into_iter()
+            .map(|row| PickerItem {
+                value: row.label,
+                detail: row.detail,
                 current: false,
             })
-            .chain(crate::llm::compat::PRESETS.iter().map(|preset| PickerItem {
-                value: format!("{} — API key", preset.label),
-                detail: preset.detail.to_string(),
-                current: false,
-            }))
             .collect();
+        // Every backend is a plugin, so a build can have none of them. The
+        // level-1 picker's "＋ Add provider…" row is still the honest thing
+        // to show there — it is how a user gets to a config file at all — but
+        // the menu behind it has nothing in it, and an empty picker looks
+        // like a hung key rather than an answer.
+        if items.is_empty() {
+            self.notice(
+                "this build has no provider backends compiled in — every one of them is a \
+                 plugin behind a cargo feature, and all are on by default. Install a stock \
+                 release binary, or rebuild with the ones you want.",
+            );
+            return;
+        }
         self.picker = Some(Picker {
             kind: PickerKind::ProviderType,
             title: " add provider · ↑/↓ move · enter select · esc close ".to_string(),
@@ -3120,17 +3132,28 @@ impl App {
                             use crate::llm::registry::defaults;
                             use crate::llm::xai_oauth;
                             use std::collections::VecDeque;
-                            match picker.selected {
+                            // Rebuilt rather than remembered from the open:
+                            // the menu is a pure function of the plugin set,
+                            // which cannot change inside one process, so the
+                            // second call sees the same rows the first one
+                            // drew. Dispatch is on the row's `setup`, not on
+                            // its position — a filtered menu has no fixed
+                            // positions.
+                            let Some(row) = provider_types().into_iter().nth(picker.selected)
+                            else {
+                                return Ok(None);
+                            };
+                            match row.setup {
                                 // xAI sign-in: run the OAuth flow; login()
                                 // auto-adds the provider on success.
-                                0 => {
+                                ProviderSetup::XaiSignIn => {
                                     return Ok(Some(AppAction::Command(SlashCommand::Login {
                                         provider: "xai".to_string(),
                                         force: false,
                                     })));
                                 }
                                 // xAI API key.
-                                1 => {
+                                ProviderSetup::XaiKey => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::XAI,
                                         name: "xai".to_string(),
@@ -3142,7 +3165,7 @@ impl App {
                                 }
                                 // OpenRouter — model is unknown, so prompt for
                                 // it alongside the key.
-                                2 => {
+                                ProviderSetup::OpenRouter => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::OPENROUTER,
                                         name: "openrouter".to_string(),
@@ -3158,7 +3181,7 @@ impl App {
                                 // Cloudflare Workers AI — account id (folded
                                 // into the base URL) + token; model defaults to
                                 // GLM 5.2 and can be changed later via /model.
-                                3 => {
+                                ProviderSetup::Cloudflare => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::CLOUDFLARE,
                                         name: "cloudflare".to_string(),
@@ -3173,7 +3196,7 @@ impl App {
                                     });
                                 }
                                 // OpenAI — model + key.
-                                4 => {
+                                ProviderSetup::OpenAi => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::OPENAI,
                                         name: "openai".to_string(),
@@ -3187,7 +3210,7 @@ impl App {
                                     });
                                 }
                                 // Anthropic — model + key.
-                                5 => {
+                                ProviderSetup::Anthropic => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::ANTHROPIC,
                                         name: "claude".to_string(),
@@ -3202,7 +3225,7 @@ impl App {
                                 }
                                 // OpenAI-compatible custom — everything is
                                 // prompted, starting with the name.
-                                6 => {
+                                ProviderSetup::Custom => {
                                     self.begin_provider_prompt(ProviderPrompt {
                                         kind: ProviderKind::OPENAI,
                                         name: String::new(),
@@ -3221,10 +3244,8 @@ impl App {
                                 // Groq, …) appended after the fixed rows — the
                                 // default model is preset, so only the key is
                                 // asked for.
-                                index => {
-                                    if let Some(preset) = crate::llm::compat::PRESETS
-                                        .get(index - PROVIDER_TYPES.len())
-                                    {
+                                ProviderSetup::Compat(index) => {
+                                    if let Some(preset) = crate::llm::compat::PRESETS.get(index) {
                                         self.begin_provider_prompt(ProviderPrompt {
                                             kind: ProviderKind::OPENAI,
                                             name: preset.name.to_string(),

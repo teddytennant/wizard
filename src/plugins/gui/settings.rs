@@ -107,10 +107,22 @@ pub const PRESETS: &[Preset] = &[
     },
 ];
 
-/// Every preset the settings sheet offers: the dedicated-kind rows above,
-/// followed by the OpenAI-compatible cloud providers from
-/// [`crate::llm::compat::PRESETS`].
+/// Every preset the settings sheet offers **on this build**: the
+/// dedicated-kind rows above, followed by the OpenAI-compatible cloud
+/// providers from [`crate::llm::compat::PRESETS`], with anything whose `kind`
+/// no plugin registered dropped.
+///
+/// The filter is the whole reason this is a function and not the `const`
+/// above. Every backend is a plugin now, so [`PRESETS`] is a list of what
+/// Wizard *can* ship rather than of what this binary has: on a build without
+/// `provider-anthropic` the sheet used to offer an Anthropic row, take a
+/// pasted key, save it, and then fail at [`parse_kind`] — after the key was
+/// on disk. A row that cannot work is not a row.
+///
+/// The compat presets are all `kind = "openai"`, so they stand or fall with
+/// that one plugin.
 pub fn presets() -> Vec<Preset> {
+    let installed = crate::llm::registry::kinds();
     PRESETS
         .iter()
         .cloned()
@@ -123,6 +135,7 @@ pub fn presets() -> Vec<Preset> {
             needs_key: true,
             needs_base_url: false,
         }))
+        .filter(|preset| installed.contains(&ProviderKind::known(preset.kind)))
         .collect()
 }
 
@@ -743,6 +756,14 @@ mod tests {
         ));
     }
 
+    /// The sheet never offers a backend this build cannot build.
+    ///
+    /// `parse_kind` is the same check the sheet makes when the form comes
+    /// back, so this asserts the two ends agree: nothing is offered that the
+    /// save path would refuse. It used to hold only because every leg that
+    /// compiles the window also compiles every provider; it holds by
+    /// construction now, and the table below is what would catch the filter
+    /// being dropped.
     #[test]
     fn presets_are_all_valid_provider_kinds() {
         for preset in presets() {
@@ -760,5 +781,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A row is offered exactly when its plugin is compiled in, one feature at
+    /// a time.
+    ///
+    /// The `cfg!` on each row is the point: a `--no-default-features` build
+    /// gets an empty sheet and a stock one gets every row, and neither of
+    /// those two states can catch a filter that looks at the wrong thing.
+    /// Asserted per feature so it is the leave-one-out legs of
+    /// `contrib/check-provider-plugins.sh` that decide it.
+    #[test]
+    fn the_sheet_offers_a_backend_exactly_when_its_plugin_is_compiled_in() {
+        let offered: Vec<&str> = presets().iter().map(|preset| preset.kind).collect();
+        for (compiled_in, kind) in [
+            (cfg!(feature = "provider-anthropic"), "anthropic"),
+            (cfg!(feature = "provider-cloudflare"), "cloudflare"),
+            (cfg!(feature = "provider-llamacpp"), "llamacpp"),
+            (cfg!(feature = "provider-ollama"), "ollama"),
+            (cfg!(feature = "provider-openai"), "openai"),
+            (cfg!(feature = "provider-openai"), "openrouter"),
+            (cfg!(feature = "provider-xai"), "xai"),
+        ] {
+            assert_eq!(
+                offered.contains(&kind),
+                compiled_in,
+                "`{kind}` in the add-provider sheet"
+            );
+        }
+
+        // The compat presets ride on the OpenAI kind, so they come and go
+        // with it rather than with a feature of their own.
+        assert_eq!(
+            presets()
+                .iter()
+                .filter(|preset| preset.kind == "openai")
+                .count(),
+            if cfg!(feature = "provider-openai") {
+                1 + crate::llm::compat::PRESETS.len()
+            } else {
+                0
+            }
+        );
     }
 }

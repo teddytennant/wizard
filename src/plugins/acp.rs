@@ -477,6 +477,17 @@ fn internal<E: std::fmt::Display>(err: E) -> acp::Error {
 // Registration
 // ---------------------------------------------------------------------------
 
+/// The line `wizard --help` gives `acp`.
+///
+/// It used to be a doc comment on core's `clap` variant, which printed on
+/// every build whether or not one had this plugin in it. Moved here verbatim,
+/// minus the trailing stop `clap` strips off a doc comment on its way into
+/// the same slot. What core kept is the shorter sentence for the build that
+/// does not have this file at all.
+const ABOUT: &str = "Run Wizard as an Agent Client Protocol (ACP) agent over stdio, so ACP \
+                     editors (Zed, Neovim, Emacs) can embed it. Loads config but never \
+                     onboards or opens a TUI — stdin/stdout carry the JSON-RPC protocol";
+
 /// The ACP server, as a plugin.
 ///
 /// The registration sits at the bottom of this file rather than in a
@@ -542,7 +553,7 @@ impl Plugin for AcpPlugin {
     fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.provide(
             entrypoint::ACP,
-            Service::native(Entrypoint::new(entrypoint::ACP, run)),
+            Service::native(Entrypoint::new(entrypoint::ACP, ABOUT, run)),
         );
         Ok(())
     }

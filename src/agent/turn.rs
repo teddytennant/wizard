@@ -1490,6 +1490,17 @@ impl Agent {
         // turn_end hooks: observational, fired however the turn ended.
         self.hooks.turn_end(self.mode, Some(&events)).await;
         self.record_turn_usage();
+        // And the turn's event channel goes with it too. `bind_host` above put
+        // a *clone* of the sender in the process-wide host slot, which is
+        // replaced only by the next bind — so without this the sender outlives
+        // the turn, and anything waiting for the channel to close waits
+        // forever. The fleet's planning turn is exactly that shape
+        // (`run_collect_text` awaits a collector task that ends when the last
+        // sender drops), and it hung after every turn that did not happen to
+        // trigger a rebind. Rebinding without the channel is also what the
+        // slot is documented to mean between turns: `wizard.ui.notify` with no
+        // turn in flight writes to the log.
+        self.bind_host(None);
         result
     }
 
