@@ -35,6 +35,14 @@ Nothing below is released yet and the plugin API is not stable.
   `src/llm/builtin.rs` is gone and the registry starts empty. Each feature is
   independently removable, checked by `contrib/check-provider-plugins.sh`, which
   builds and tests every leave-one-out set rather than trusting that it compiles.
+- **The window, the graph explorer and the web tools are plugins.**
+  `src/native/` and `src/gui/` moved under `src/plugins/` behind the existing
+  `native` feature, and `wizard gui` is no longer a call to `native::run` from
+  the dispatch chain: the window provides an entrypoint service and core injects
+  one, so core holds the name `gui` and the sentence printed when nothing
+  answers to it, and never the type. `graph` and `tool-web` are their own
+  features. Each is independently removable, checked by
+  `contrib/check-tool-plugins.sh`.
 - **A Lua plugin can do real work.** `wizard.http`, `wizard.process`,
   `wizard.model`, `wizard.ui`, `wizard.agent` and `wizard.fs` are wired to the
   implementations Wizard already had -- the same HTTP client and SSRF guard as
@@ -76,6 +84,16 @@ Nothing below is released yet and the plugin API is not stable.
 
 ### Fixed
 
+- **A web search read an unbounded response.** Three of the five search backends
+  point at an operator-supplied `base_url`, and the search path handed its
+  response straight to `.text()`/`.json()`, which read to EOF -- while the fetch
+  path next to it had always capped. Search responses are now capped at 2 MB and
+  *refused* past it rather than truncated, because a truncated result page parses
+  to no results and reports success.
+- **A redirect chain could outrun its timeout by ten times.** `FETCH_TIMEOUT`
+  was applied per `send()`, so ten hops under a nominal 30-second budget could
+  run for five minutes. Both redirect walkers now take a wall-clock budget for
+  the whole chain.
 - **A plugin capability did not mean what it said.** `filesystem` and `process`
   each opened the full Lua standard library, and the narrowing that takes the
   other one's names back left `package` in place. So a plugin that declared
