@@ -1790,6 +1790,40 @@ Arc<ServerSpinner>` is six lines and lets them keep the spinner and hand a clone
 down. The alternative was a lifetime on the trait, which is a lifetime on every
 implementor forever, to save six lines once.
 
+### The numbers
+
+The default leg went **2609 → 2620**: nine tests arrived with the two new seams
+(three on the gateway plugin's registrations, one on the two-names finding in
+`entrypoint`, two on `server`'s own seam, one tying the descriptor's claim to
+the registered service, one on the menu-filter bug, one real-binary test for
+`wizard gateway status`), one more for `on_path`, and one net-zero move.
+
+The `--no-default-features` leg went **2178 → 2064**, which is −114 and is
+arithmetic rather than a regression. Counted by name off `cargo test -- --list`
+on both trees:
+
+| left that leg | count |
+| --- | --- |
+| `gateway::tests` | 40 |
+| `gateway::telegram::tests` | 24 |
+| `server::tests` | 24 |
+| `gateway::setup::tests` | 13 |
+| `gateway::format::tests` | 10 |
+| `local_setup::tests` | 6 |
+| `gateway::service::tests` | 2 |
+| `gateway::none::tests` | 2 |
+| **total** | **121** |
+
+and seven arrived: two on `server`'s seam, two in `platform::host`, one in
+`config::tests`, one in `plugins::tests`, one in `tests/cli.rs`. Two of the 121
+are *moves into core* rather than departures — `local_port_accepts_loopback_hosts_only`
+went from `server::tests` to `platform::host::tests`, and the group-chat warning
+from `gateway::setup::tests` to `config::tests` — so the honest reading is 119
+tests now behind a feature, five genuinely new, and two that changed module. The
+gateway accounts for 91 of the 119 and the llama.cpp runtime for 30, which is
+what it looks like when a subsystem with 24 of its own transport tests stops
+being compiled into a build that has no transport.
+
 ### Proving it
 
 `contrib/check-tool-plugins.sh` grew a `without gateway` leg: seven now. It is
