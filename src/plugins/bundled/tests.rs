@@ -307,11 +307,7 @@ async fn the_tool_runs_in_the_directory_the_call_names() {
 
     let out = call(&kernel, "git_status", json!({}), &elsewhere).await;
     assert!(!out.is_error, "{}", out.content);
-    assert!(
-        out.content.contains("?? only-here.txt"),
-        "{}",
-        out.content
-    );
+    assert!(out.content.contains("?? only-here.txt"), "{}", out.content);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +339,12 @@ impl ScriptedHost {
 
 #[async_trait]
 impl HostBridge for ScriptedHost {
-    async fn http(&self, _method: &str, _url: &str, _body: Option<String>) -> anyhow::Result<String> {
+    async fn http(
+        &self,
+        _method: &str,
+        _url: &str,
+        _body: Option<String>,
+    ) -> anyhow::Result<String> {
         anyhow::bail!("the git plugin does not fetch")
     }
 

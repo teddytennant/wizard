@@ -1048,3 +1048,167 @@ and it exists because the combinations that matter here are ones that script
 never builds: `graph` left out **with the GUI present**, which is the only way
 to catch `src/native/graph/` reaching for an absent plugin, and `tool-web` left
 out with everything else present. Four legs.
+
+## As built: the first Lua plugin, and what it cost
+
+`git_status` and `git_diff` were `src/tools/git.rs` and are now
+`src/plugins/lua/git/`, in Lua, behind `--features tool-git`. That file is
+deleted. This is the first of the ~28 subsystems the migration earmarks for
+Lua to actually go, and the interesting part is not the plugin — it is the
+four things the bridge could not do, each of which every remaining port would
+have hit.
+
+### Why git and not `interview`, `publish` or `memory`
+
+Those three were the candidates on the list, and all three were read before
+this one was picked. None of them is Lua-shaped today, and the reasons are
+different enough to be worth writing down, because they are the three shapes
+that will keep coming up.
+
+**`interview` needs the surface, not the machine.** Its body is
+`AgentEvent::Interview { questions, gate }` on the turn's channel, then a park
+on a `oneshot` until the TUI's modal answers or the channel closes. `wizard.ui`
+has `notify` and nothing else, so porting it means inventing a *two-way*
+UI call — and the plugin would still need the agent's omakase flag, and the
+tool is registered by `Agent::new` and re-registered on every mode change
+rather than by the registry. That is three couplings to core, not one.
+
+**`publish` is a twenty-line adapter over something with four consumers.**
+`crate::evolve::publish` is where the work is, and `/publish` in the TUI, in
+the window and in the gateway all call it too. Porting the *tool* means a host
+function whose body is `evolve::publish`, which is Rust with a slower calling
+convention. Porting `evolve::publish` is a different change and a much larger
+one — though it is the most Lua-shaped body in the tree, being almost entirely
+`gh` and `git` invocations.
+
+**`memory` would be a second implementation of an on-disk format.**
+`MemoryStore` has five consumers and one of them is the system prompt's memory
+index. A Lua `memory` would write the frontmatter and derive the project slug
+itself, and the day either changed there would be two places to change. That
+is the failure `src/tools/http.rs` was split out of the web tools to prevent.
+
+**`git` has none of those problems.** Two tools, zero core consumers besides
+the two `registry.register` lines, and every line of the body decides an argv,
+reads an exit code, and formats a string. It needs one field of `ToolContext`
+and no shared type. It is the closest thing in `src/tools/` to what this
+document means by "policy and orchestration".
+
+### How a first-party Lua plugin ships: `include_str!`
+
+`src/plugins/bundled.rs` is `compiled_in()` for Lua — one line per plugin,
+behind the same kind of cargo feature — and each line `include_str!`s both
+`plugin.lua` and `manifest.toml`. The alternative, a directory `install.sh`
+copies into `~/.wizard/plugins/`, fails three ways:
+
+- **`cargo test` would not have it.** A test binary never runs the installer,
+  so the ported tool would be absent from every registry the suite composes and
+  the port would be proven by nothing. Pointing the tests at the developer's
+  own `~/.wizard/plugins` is worse: the suite would then pass or fail on the
+  contents of a home directory.
+- **Neither would `cargo install`, `nix build`, or a downloaded release.** A
+  tool that is present or absent depending on how the binary arrived is not a
+  tool the model can be told about.
+- **A file on disk cannot be first-party.** `PluginSource::FirstParty` is what
+  turns the instruction hook off and the JIT on, and it is a claim about *who
+  wrote this code*. For a file under `~/.wizard` that is "whoever last edited
+  it", so loading one unbounded would make the bound a formality. Shipping in
+  the binary is the only place the claim is true — which is exactly the rule
+  `compiled_in()` already follows.
+
+`~/.wizard/plugins` keeps its meaning: other people's plugins, still bounded.
+
+### They load from `ensure`, not from the kernel
+
+Rust plugins load inside the kernel's `OnceLock`, synchronously. A Lua plugin's
+`apply` is a LuaJIT VM and a script, and `lua::load_source` is `async` — it
+spawns the VM's task and awaits its first answer — so there is no synchronous
+door into it and adding one would be a `block_on` inside a `OnceLock`
+initializer that some callers reach from inside a runtime.
+
+So `bundled::ensure()` is an idempotent async latch, called from `boot` (which
+every surface goes through) **and from `agent::build_tool_registry`** (which
+every agent-bearing surface *and every test that composes a registry* goes
+through). The second is the load-bearing one: nothing calls `boot` in a test
+binary, and a first-party tool nobody could test is not a tool that should
+ship. `mcp serve` and `harness export` run after `boot` and need nothing extra;
+their *tests* call `ensure` themselves and would otherwise have agreed with
+themselves about a bundle the real export never writes.
+
+### Four gaps in the host bridge, all of them general
+
+Each of these was a thing the Rust tool did that no Lua tool could, and none of
+them is git-specific.
+
+**A Lua tool could not see its `ToolContext`.** `LuaTool::execute` took
+`_ctx: &ToolContext` and dropped it. Thirteen of that struct's sixteen fields
+are Rust handles a Lua value cannot be, and they reach a plugin through
+`wizard.*` if they reach it at all — but `cwd` is a path, it is what every
+path-taking tool resolves against, and a tool that does not get it operates on
+the wrong directory without failing. The tool body now takes a second argument,
+a table, and `cwd` is the one thing in it.
+
+**`wizard.process.run` collapses the outcome.** It takes a shell line and
+answers `Ok(output)` or `Err("exited 3")`, which is right for "do this and tell
+me if it worked" and wrong for every tool that branches on an exit code: `git
+status` exits 128 outside a repository and the message the model needs is on
+stderr. `wizard.process.exec{ argv = {...}, cwd = ..., timeout_ms = ... }`
+returns `{ stdout, stderr, code, timed_out }` and judges nothing. It is argv
+and not a command line for a second reason: `git_diff`'s path comes from the
+model, and a shell line would mean quoting it correctly in Lua, forever.
+
+**A Lua tool had one output budget and native tools have four.** The wrapper
+applied `MAX_OUTPUT_BYTES` and that was all a plugin could get, so a ported
+`git_diff` would have spent 30 KB of the window where the native one spent 16.
+`wizard.limits` carries the compiled-in numbers and `wizard.truncate` is
+`truncate_output` — the same head/tail framing and the same spill file, rather
+than a `string.sub` in every plugin that would lose both.
+
+**A Lua tool could not report a failure without editing the text.** The only
+channel was an `error:` prefix in the content, which would have put a marker
+word in front of git's own `fatal: not a git repository`. A tool body may now
+return `{ content = ..., is_error = true }`; a bare string still follows the
+prefix convention, and `error()` from Lua still means the tool *broke* rather
+than that it worked and has bad news.
+
+One smaller correction, in the same place: **Lua has no empty object.**
+`properties = {}` is a table with no entries and mlua serialises it as `[]`, so
+a tool with no arguments would advertise an array where its schema says object.
+`object_schema` repairs it, because the spelling that triggers it is the
+natural one and the failure arrives from a provider, mid-turn, inside somebody
+else's error message.
+
+### What changed for the model, honestly
+
+The two tools keep their names, their descriptions to the character, their
+schemas, their `ReadOnly` access class and their output down to
+`"(clean working tree)"` and `"No changes."` — `src/plugins/bundled/tests.rs`
+is `src/tools/git.rs`'s test module pointed at the Lua implementation, running
+real git in a temp directory through the real `WizardHost`.
+
+Two things are not identical. **Their position in the roster moved**: plugin
+tools are appended after the native, scripted and MCP ones, so `git_status` is
+no longer seventh in the list the model is shown. That is inherent to the
+architecture and already true of the web tools. And **a malformed argument is a
+different error type**: `serde` refused `staged: 5` before the native tool ran,
+as `ToolError::InvalidArgs`; the Lua tool checks the type itself and raises,
+which arrives as `ToolError::Execution`. The model sees a message either way
+and no test covered the distinction, but it is a difference.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` gained a `without tool-git` leg. It matters for
+a reason the other legs do not have: this plugin's tools are registered by a
+script that only runs once `ensure` has been awaited, so the leg is what proves
+that leaving it out costs two tool names rather than a compile error in the
+four places that assert what the roster holds — `plugins`, `mcp`, `harness`
+and `tools::registry`.
+
+The default test count went 2586 → 2591: nine tests left with `src/tools/git.rs`
+and fourteen arrived in `src/plugins/bundled/tests.rs`. The
+`--no-default-features` count went 2378 → 2369, which is those same nine, since
+that leg no longer compiles the plugin's test module either.
+
+## Half of the migration this does not clear: `todo`
+
+`src/tools/todo.rs` was attempted next and **should stay Rust**. The reasoning,
+and the rule that follows from it, is in the section below.

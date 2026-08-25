@@ -537,7 +537,11 @@ mod tests {
                 "web",
                 &["web_fetch", "web_search", "x_search"],
             ),
-            (cfg!(feature = "tool-git"), "git", &["git_status", "git_diff"]),
+            (
+                cfg!(feature = "tool-git"),
+                "git",
+                &["git_status", "git_diff"],
+            ),
         ];
 
         // The Lua half does not load with the kernel — see `bundled` — so a

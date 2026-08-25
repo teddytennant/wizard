@@ -19,6 +19,12 @@
 #   - `tool-web` left out with everything else present, which catches a core
 #     module — or another plugin — that took a dependency on the web tools
 #     rather than on `src/tools/http.rs`.
+#   - `tool-git` left out with everything else present. This is the first
+#     *Lua* plugin, and it fails in a way the others cannot: its tools are
+#     registered by a script that only runs once `plugins::bundled::ensure`
+#     has been awaited, so the leg proves that leaving it out costs two tool
+#     names and not a compile error in the four places that assert what the
+#     roster holds (`plugins`, `mcp`, `harness`, `tools::registry`).
 #
 # Usage: contrib/check-tool-plugins.sh [--build-only]
 set -uo pipefail
@@ -101,6 +107,7 @@ leg() {
 
 # Leave-one-out, against an otherwise-stock feature set.
 leg "without tool-web" --features "$(without tool-web)"
+leg "without tool-git" --features "$(without tool-git)"
 leg "without graph" --features "$(without graph)"
 
 # The GUI is where `graph` is actually consumed, so both sides of it need a
@@ -120,4 +127,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\nFAILED: a plugin whose removal breaks the build is not a plugin\n' >&2
     exit 1
 fi
-printf '\nboth tool plugins are independently removable\n'
+printf '\nevery tool plugin is independently removable\n'
