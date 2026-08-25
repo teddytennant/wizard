@@ -459,7 +459,9 @@ impl HostBridge for WizardHost {
     /// non-zero exit is an outcome here, not an error. A plugin that ports a
     /// native tool has to make that call itself — `git status` outside a
     /// repository exits 128 and the message the model needs is on stderr, and
-    /// `grep` exits 1 for "no matches", which is not a failure either.
+    /// `grep` exits 1 for "no matches", which is not a failure either. A
+    /// program that is not installed is the same kind of fact, so a spawn that
+    /// fails comes back as an outcome too; see the arm below.
     ///
     /// Output comes back uncapped, unlike [`Self::run`]'s. It is not
     /// unbounded — the runner's capture buffer holds a head and a tail and
@@ -499,14 +501,51 @@ impl HostBridge for WizardHost {
             .clamp(Duration::from_secs(1), MAX_EXEC_TIMEOUT);
         let label = format!("wizard.process.exec({plugin})");
 
-        let result = crate::tools::shell::run_command_cancellable(
+        let result = match crate::tools::shell::run_command_cancellable(
             &label,
             process,
             timeout,
             ctx.cancel.as_ref(),
         )
         .await
-        .map_err(anyhow::Error::new)?;
+        {
+            Ok(result) => result,
+            // A program that never started is an *outcome*, and this call is
+            // the one that reports rather than judges. A ported tool has to be
+            // able to render "gh is not installed, here is where to get it"
+            // the way its Rust original did with `Command::…status().is_ok()`,
+            // and it cannot render anything if the absence of a program
+            // arrives as `error()` — that reaches the model as "the tool
+            // broke", which is the one message it will retry rather than read.
+            //
+            // The exit codes are the shell's, because the shell is where
+            // everybody has already learnt them: 127 for a program that is not
+            // there, 126 for one that is and would not run. The reason is on
+            // stderr, flattened, so what the plugin renders is the `io::Error`
+            // and not a category.
+            //
+            // An interruption is deliberately *not* folded in here. It has no
+            // `io::Error` under it, so it stays an error, which is what a
+            // cancelled turn must look like: a plugin that read Ctrl-C as an
+            // exit code would go on to the next step of whatever it was doing.
+            Err(crate::tools::ToolError::Execution { source, .. })
+                if source.downcast_ref::<std::io::Error>().is_some() =>
+            {
+                let kind = source
+                    .downcast_ref::<std::io::Error>()
+                    .map(std::io::Error::kind);
+                let code = match kind {
+                    Some(std::io::ErrorKind::NotFound) => 127,
+                    _ => 126,
+                };
+                return Ok(crate::kernel::ExecOutcome {
+                    stderr: format!("{program}: {source:#}"),
+                    code: Some(code),
+                    ..crate::kernel::ExecOutcome::default()
+                });
+            }
+            Err(err) => return Err(anyhow::Error::new(err)),
+        };
 
         Ok(crate::kernel::ExecOutcome {
             stdout: result.stdout,

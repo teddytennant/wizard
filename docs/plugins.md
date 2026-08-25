@@ -1677,7 +1677,7 @@ a change in itself: the summary string used to be written out in four places
 (the tool, the TUI, the window, the gateway) with the CLI printing a fifth,
 labelled variant of the same four facts. There is one now, in the plugin.
 
-### Two gaps in the host bridge, both general, both closed
+### Three gaps in the host bridge, all general, all closed
 
 **`wizard.process.exec` clamped a plugin's timeout to `[shell].timeout_secs`,
 and that made every port a thirty-second port.** The clamp read as
@@ -1697,6 +1697,22 @@ plugin's budget as given now, bounded by `tools::tasks::BACKGROUND_TIMEOUT` —
 the number that already bounds every command this process starts and does not
 wait for. `wizard.process.run` keeps `[shell]`'s budget, because `run` really
 is the shell tool's foreground call under another name.
+
+**A program that was not installed arrived as a broken tool.**
+`wizard.process.exec` turned a spawn failure into an `Err`, which reaches the
+model as "tool 'publish' failed" — the one message it will retry rather than
+read. The Rust it replaced decided whether `gh` was there with
+`Command::new("gh").arg("--version").status().is_ok()` and answered with
+install instructions. A ported tool cannot branch on an exit code it never
+gets, and this is not `publish`'s problem: `git_status` on a machine with no
+git had it too, silently, because nobody runs that machine.
+
+So a spawn that fails is an outcome now, with the shell's exit codes — 127 for
+a program that is not there, 126 for one that is and would not run — and the
+`io::Error` on stderr. An *interruption* is deliberately not folded in: it has
+no `io::Error` under it, so it stays an error, because a plugin that read
+Ctrl-C as an exit code would carry on to the next step of whatever it was
+doing.
 
 **A plugin could not find out where Wizard keeps its own state.** `wizard.fs`
 is confined to the project root without `filesystem`, and `~/.wizard` is not
@@ -1764,6 +1780,16 @@ to have been authenticated by a person.
 
 **Its position in the roster moved**, as the web and git tools' did: plugin
 tools are appended after the native, scripted and MCP ones.
+
+**The schema has no `"required": []`.** It has no `required` key at all, which
+is the same schema to every tool-calling API. The spelling matters because Lua
+has one table type: `required = {}` is a table with no entries and comes back
+as the JSON *object* `{}`, which is not an empty array and is not valid there.
+`object_schema` repairs the mirror-image case at `properties`, where an object
+was what was wanted; there is no repair for a key whose empty value should be
+an array, and for a key that carries no information when empty the honest fix
+is to leave it out. A plugin that genuinely needs an empty JSON array
+somewhere still cannot write one.
 
 **`ensure_source` no longer hand-writes one sentence.** The Rust read the
 directory so it could say "exists but does not look like a Wizard checkout";

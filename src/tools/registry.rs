@@ -66,7 +66,8 @@ impl ToolRegistry {
     ///
     /// **Native is not the whole tool set.** `web_fetch`, `web_search` and
     /// `x_search` are `src/plugins/web.rs`; `git_status` and `git_diff` are
-    /// `src/plugins/lua/git/`, in Lua. All five arrive through
+    /// `src/plugins/lua/git/` and `publish` is `src/plugins/lua/publish/`,
+    /// both in Lua. All six arrive through
     /// [`crate::plugins::install_tools_into`], which
     /// [`crate::agent::build_tool_registry`] and `mcp serve` both call. A
     /// caller that wants the set the model actually sees wants one of those
