@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::config::{Config, Mode, ProviderKind};
+use crate::config::{Config, Mode};
 use crate::dispatch::Dispatcher;
 use crate::hooks::HookEngine;
 use crate::images::{ImageRef, ImageStore};
@@ -496,11 +496,14 @@ pub(crate) async fn absorb_images(
 /// errors classify themselves; unknown errors (mid-stream drops surface as
 /// plain `anyhow` context chains) stay transient for robustness.
 pub(crate) fn error_is_transient(err: &anyhow::Error) -> bool {
+    // One downcast, not one per backend. Every provider puts a
+    // `ProviderError` at the head of its `anyhow` chain — Ollama's `typed()`
+    // wraps its own error type under one deliberately, and the two
+    // classifications are the same predicate over the same statuses — so the
+    // second arm this used to carry could never be reached, and adding one per
+    // plugin is exactly the thing a plugin boundary exists to stop.
     if let Some(provider) = err.downcast_ref::<crate::llm::ProviderError>() {
         return provider.is_transient();
-    }
-    if let Some(ollama) = err.downcast_ref::<crate::llm::ollama::OllamaError>() {
-        return ollama.is_transient();
     }
     true
 }
@@ -927,7 +930,38 @@ impl Agent {
             .history
             .push(ChatMessage::system(agent.compose_system_prompt()));
         agent.history.extend(prior);
+        agent.bind_host(None);
         Ok(agent)
+    }
+
+    /// Publish this agent to the process's plugin host bridge, so a Lua
+    /// plugin's `wizard.model`, `wizard.agent` and `wizard.ui` have something
+    /// to reach.
+    ///
+    /// Here rather than in each surface for the same reason
+    /// [`crate::plugins::boot`] is called from `crate::run`: every
+    /// agent-bearing surface builds an `Agent`, and the surfaces that would be
+    /// forgotten are the headless ones nobody watches start up. Called again
+    /// whenever the published half changes — `/model`, `/fusion`, and the top
+    /// of every turn, which is when the event channel is known.
+    ///
+    /// A no-op in a process whose kernel carries some other bridge, which is
+    /// every kernel a test builds for itself.
+    fn bind_host(&self, events: Option<&mpsc::Sender<AgentEvent>>) {
+        let mut ctx = self.ctx.clone();
+        if let Some(events) = events {
+            ctx.events = Some(events.clone());
+        }
+        crate::plugins::host::bind(crate::plugins::host::Binding {
+            ctx,
+            client: Arc::clone(&self.client),
+            model: self.model.clone(),
+            spawn: self
+                .dispatcher
+                .registry()
+                .get(subagent::SPAWN_SUBAGENT_TOOL_NAME)
+                .cloned(),
+        });
     }
 
     /// Current personality mode.
@@ -1320,6 +1354,7 @@ impl Agent {
         self.llm_breaker = breaker::LlmBreaker::new();
         self.refresh_system_prompt();
         self.sync_code_mode();
+        self.bind_host(None);
     }
 
     /// Shared handle on the background-subagent registry, so a surface can
@@ -1441,6 +1476,7 @@ impl Agent {
         self.native_tools = native_tools;
         self.refresh_system_prompt();
         self.sync_code_mode();
+        self.bind_host(None);
     }
 
     /// Replace the skill set mid-session (`/reload`) and rebuild the system
@@ -1615,7 +1651,7 @@ impl Agent {
                 endpoint: &provider.base_url,
                 usd_per_mtok_in: provider.usd_per_mtok_in,
                 usd_per_mtok_out: provider.usd_per_mtok_out,
-                self_hosted: crate::usage::self_hosted(provider.kind),
+                self_hosted: crate::usage::self_hosted(&provider.kind),
             },
         );
         let record = crate::usage::UsageRecord {
@@ -1771,7 +1807,7 @@ fn read_memory_index(project_root: &Path) -> Option<String> {
 /// load skills, and open/create the session.
 ///
 /// This is the shared agent-construction path used by the sovereign headless
-/// runner ([`crate::headless::run`]), the ACP server ([`crate::acp`]) and the
+/// runner ([`crate::headless::run`]), the ACP server (`wizard acp`, a plugin) and the
 /// messaging gateway ([`crate::gateway`]). `resume` reopens the latest session
 /// instead of starting a new one. Each builds exactly one agent, so each lets
 /// this path connect the MCP servers for it.
@@ -1850,6 +1886,24 @@ pub async fn build_tool_registry(
     if let Err(err) = base.attach_mcp(manager).await {
         tracing::warn!("attaching MCP tools failed: {err}");
     }
+    // Plugin tools last of the three sources, so a plugin can deliberately take
+    // over a name — the same precedence a scripted tool already has over a
+    // native one, and the reason `docs/plugins.md` can call replacing a builtin
+    // a supported thing to do rather than a hack. Before the harness overrides
+    // rather than after, so a bundle's description rewrites apply to a plugin's
+    // tools exactly as they do to everything else.
+    //
+    // `base` rather than the scoped registry below: it is what subagents are
+    // scoped from and what a `run_code` program reaches, so putting them here
+    // is what gives every one of those surfaces the same tool set.
+    // The Lua plugins that ship in the binary have to be *loaded* before their
+    // tools can be copied out, and loading a Lua plugin is async, so it cannot
+    // happen inside the kernel's `OnceLock` the way the Rust half does. This is
+    // the call, and it is here rather than in `crate::run` because here is what
+    // a test reaches too: `boot` also calls it, but nothing calls `boot` in a
+    // test binary, and a first-party tool nobody could test is not shipped.
+    crate::plugins::bundled::ensure().await;
+    crate::plugins::install_tools_into(&mut base);
     base.apply_harness_overrides();
 
     let subagents_dir = Config::subagents_dir()?;
@@ -1926,27 +1980,12 @@ async fn build_headless_agent_inner(
     let client = active
         .build()
         .with_context(|| format!("building provider '{}'", active.name))?;
-    // llama.cpp gets a lifecycle hand: when nothing answers, Wizard starts
-    // the server itself, showing spawn/load progress on a spinner (plain
-    // stderr lines when stderr is not a terminal).
-    if active.kind == ProviderKind::LlamaCpp {
-        let wait = crate::progress::ServerSpinner::start();
-        let outcome = crate::server::ensure_running(&active, &wait).await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
-    // Ollama's analog: a configured tag that is not pulled yet is pulled now
-    // (loopback hosts only — never download onto a remote server).
-    if active.kind == ProviderKind::Ollama && crate::server::local_port(&active.base_url).is_some()
-    {
-        let wait =
-            crate::progress::ServerSpinner::start_with("Checking the local model…", "model ready");
-        let outcome = crate::llm::ollama::OllamaClient::new(active.base_url.clone())
-            .ensure_model(&model, &wait)
-            .await;
-        wait.finish(outcome.is_ok());
-        outcome?;
-    }
+    // Whatever this backend needs before it can answer: llama.cpp spawns its
+    // server when nothing answers, Ollama pulls a tag that is not on the
+    // server yet, every hosted backend needs nothing. `model` rather than
+    // `active.model` because a `/model` override has to pull the tag this
+    // agent will actually ask for.
+    active.prepare(&model).await?;
     client
         .health()
         .await
@@ -1956,7 +1995,7 @@ async fn build_headless_agent_inner(
     if !native_tools {
         // Never `println!`. Every surface reaches this path, and two of them
         // own stdout as a protocol transport: the ACP server frames JSON-RPC
-        // on it (`crate::acp`) and `--output-format json` frames the run
+        // on it (`wizard acp`) and `--output-format json` frames the run
         // there. A bare line on stdout corrupts both, so the notice goes to
         // stderr, which no surface parses.
         eprintln!("using the JSON tool protocol for '{model}'");

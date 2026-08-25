@@ -4,7 +4,7 @@
 > no way to open it: the window has no mesh button, no `Screen::Mesh` and no
 > `Message::Graph`. It was too unfinished to ship, and it is held for a later
 > release. Everything below describes what it does when it is wired back in —
-> `src/native/graph/mod.rs` lists the four seams that do that. The mesh itself
+> `src/plugins/native/graph/mod.rs` lists the four seams that do that. The mesh itself
 > is unaffected: `wizard peers` works, and [mesh.md](mesh.md) is current.
 
 The mesh, drawn. One screen in the native GUI (`--features native`) that answers
@@ -77,7 +77,7 @@ blocked one identically. Filled against hollow is not a hue.
 **Trust never implies liveness.** A peer a human trusted, that is not answering,
 draws exactly as un-live as a stranger that is not answering; all its trust buys
 it is a heavier rim. This is enforced rather than asserted: `Liveness::is_live()`
-is consulted in exactly one place (`src/native/graph/paint.rs`,
+is consulted in exactly one place (`src/plugins/native/graph/paint.rs`,
 `node_paint`), and `nothing_reads_as_up_without_is_live` walks every combination
 of trust, liveness and node kind the model can produce, in both shipped themes,
 and requires that the interior is the canvas colour **iff** the node is not up.
@@ -187,6 +187,18 @@ pretends they exist yet.
 |---|---|
 | `src/graph/model.rs` | the mesh as drawable data; liveness decided once, honestly |
 | `src/graph/layout.rs` | the force model as deterministic arithmetic, with pinning and hit testing |
+| `src/plugins/native/graph/paint.rs` | liveness and trust as ink, and the single `is_live()` gate |
+| `src/plugins/native/graph/viewport.rs` | the one transform between the layout's world and the canvas's pixels |
+| `src/plugins/native/graph/view.rs` | every decision a gesture implies, in a struct with no widget in it |
+| `src/plugins/native/graph/canvas.rs` | the `canvas::Program`: edges, nodes, labels, gestures |
+| `src/plugins/native/graph/inspector.rs` | one node, in words |
+| `src/plugins/native/graph/mod.rs` | the screen: state, messages, the settle subscription, revoke |
+
+The split between the last four and the first two is the point: nothing in
+`src/graph/` links a GUI crate, and nothing in `src/plugins/native/graph/` decides
+anything about the mesh. See also [`mesh.md`](mesh.md) and
+| `src/plugins/graph/model.rs` | the mesh as drawable data; liveness decided once, honestly |
+| `src/plugins/graph/layout.rs` | the force model as deterministic arithmetic, with pinning and hit testing |
 | `src/native/graph/paint.rs` | liveness and trust as ink, and the single `is_live()` gate |
 | `src/native/graph/viewport.rs` | the one transform between the layout's world and the canvas's pixels |
 | `src/native/graph/view.rs` | every decision a gesture implies, in a struct with no widget in it |
@@ -195,6 +207,14 @@ pretends they exist yet.
 | `src/native/graph/mod.rs` | the screen: state, messages, the settle subscription, revoke |
 
 The split between the last four and the first two is the point: nothing in
-`src/graph/` links a GUI crate, and nothing in `src/native/graph/` decides
-anything about the mesh. See also [`mesh.md`](mesh.md) and
+`src/plugins/graph/` links a GUI crate, and nothing in `src/native/graph/`
+decides anything about the mesh.
+
+That split is now a cargo feature as well as a directory. The model and the
+layout are the `graph` plugin (`--features graph`, on by default) and the six
+files under `src/native/graph/` are gated on it in step, so a window built
+without it is a window with no explorer — which is the window that ships today,
+since the screen is not yet reachable from the UI. See
+[`plugins.md`](plugins.md) for why a plugin that registers nothing through
+`Ctx` is still a plugin, and also [`mesh.md`](mesh.md) and
 [`native-gui.md`](native-gui.md).

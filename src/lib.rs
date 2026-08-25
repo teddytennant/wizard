@@ -5,7 +5,6 @@
 //! (native + LuaJIT-scripted + MCP) and tiered self-extension.
 //! See `docs/architecture.md` for the full design.
 
-pub mod acp;
 pub mod agent;
 pub mod app;
 pub mod checkpoint;
@@ -17,20 +16,12 @@ pub mod config;
 pub mod credentials;
 pub mod dispatch;
 pub mod doctor;
+pub mod entrypoint;
 pub mod event;
 pub mod evolve;
-pub mod fleet;
 pub mod gates;
 pub mod gateway;
 pub mod git_util;
-pub mod graph;
-// The agent core the native window is built on (sessions, config store, git,
-// OAuth). It used to carry a browser GUI too — an axum server and a JavaScript
-// page — and was compiled into every build for it. That surface is gone, and
-// with it the reason: the window is now the only caller, so the module follows
-// it behind the same feature. See `docs/native-gui.md`.
-#[cfg(feature = "native")]
-pub mod gui;
 pub mod hardware;
 pub mod harness;
 pub mod headless;
@@ -39,17 +30,18 @@ pub mod image_view;
 pub mod images;
 pub mod import_claude;
 pub mod instructions;
+pub mod kernel;
 pub mod llm;
 pub mod local_setup;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
-pub mod mesh;
-#[cfg(feature = "native")]
-pub mod native;
 pub mod onboarding;
 pub mod output;
 pub mod platform;
+// Compiled-in plugins and the process kernel they load into. The one module
+// core is allowed to name, because it is the table rather than a plugin.
+pub mod plugins;
 pub mod progress;
 pub mod registry_client;
 pub mod schedule;
@@ -58,6 +50,7 @@ pub mod session_registry;
 pub mod skills;
 pub mod skin;
 pub mod sync;
+pub(crate) mod text;
 pub mod theme;
 pub mod tools;
 pub mod transcript;
@@ -81,6 +74,21 @@ use crate::config::Mode;
 /// limit); every other mode exits 0 on success. Hard errors surface as `Err`
 /// and exit 1 from `main`.
 pub async fn run(mut cli: cli::Cli) -> Result<i32> {
+    // Bring the plugin kernel up before anything can dispatch. It is here,
+    // above the chain rather than inside a surface, because the seventeen arms
+    // below are every way into Wizard there is — the TUI, `wizard -p`, the
+    // gateway, ACP, `mcp serve`, fleet, doctor, the scheduler — and they must
+    // all get the same plugin set. Wiring each one separately would be
+    // seventeen places to forget, and the forgotten ones are the headless
+    // surfaces nobody watches.
+    //
+    // `--cwd` is passed rather than applied: each arm does its own chdir
+    // further down, and the kernel needs the project root now, to confine a
+    // sandboxed plugin's file helpers to the directory the user actually
+    // meant. Nothing here can fail — a plugin that will not load is a warning
+    // in the log; see `plugins::boot`.
+    plugins::boot(cli.cwd.as_deref()).await;
+
     // Top-level flags are not global: the self-contained subcommands below
     // read none of them (only --cwd). Reject the combination loudly instead
     // of silently dropping the flags (`wizard --plan fleet run` must not run
@@ -141,14 +149,20 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // The window opens existing sessions and builds agents lazily per chat, so
     // it loads config directly (defaults on a fresh install) and never
     // onboards — startup must not depend on a reachable provider.
+    //
+    // The window is a plugin, so this arm names a *string* and not a module.
+    // `plugins::boot` above has already loaded whatever this build compiled
+    // in, and `entrypoint::installed` is the same `inject`-returns-`None`
+    // shape a missing provider `kind` has: absent means a sentence, never a
+    // link error. There is no `#[cfg]` here on purpose — the arm reads the
+    // same on every build, and the difference between them is one lookup.
     if let Some(cli::Command::Gui { native: _ }) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        #[cfg(feature = "native")]
-        {
+        if let Some(window) = entrypoint::installed(entrypoint::GUI) {
             let config = config::Config::load()?;
-            return native::run(config).await.map(|()| 0);
+            return window.run(config).await;
         }
         // Two routes, and naming both matters: `wizard app` shipped for a
         // year telling people to rebuild, while the release page carried a
@@ -160,7 +174,6 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // was deleted. A headless box is reached by running the TUI over SSH,
         // by `wizard -p`, by an ACP editor, or through the Telegram gateway —
         // none of which need a window or a port.
-        #[cfg(not(feature = "native"))]
         anyhow::bail!(
             "this build has no native GUI — it was built without the `native` feature.\n\
              \n\
@@ -182,12 +195,24 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // ACP server: an editor drives Wizard over stdin/stdout, so it must not
     // onboard or open a TUI. Loads config directly (defaults on a fresh
     // install) like the window, then serves until the client closes the pipe.
+    //
+    // A plugin too, and looked up the same way — the difference from the
+    // window above is only in the `None` arm, because `acp` is on by default
+    // and needs no install advice beyond the flag.
     if let Some(cli::Command::Acp) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
+        let Some(server) = entrypoint::installed(entrypoint::ACP) else {
+            return Err(entrypoint::absent(
+                entrypoint::ACP,
+                "acp",
+                "It is the Agent Client Protocol server: an editor (Zed, Neovim, Emacs) \
+                 drives Wizard over stdio and gets the same agent the TUI does.",
+            ));
+        };
         let config = config::Config::load()?;
-        return acp::run(config).await.map(|()| 0);
+        return server.run(config).await;
     }
 
     // Evolution history: reads ~/.wizard/evolution.jsonl and touches the
@@ -277,15 +302,31 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         };
     }
 
-    // Fleet dispatches before the normal flow too, but `fleet run` loads
-    // config itself (its planning and synthesis turns drive a real
-    // in-process agent); `fleet status` / `fleet stop` only touch the
-    // project's `.wizard/fleet/` directory.
+    // Fleet dispatches before the normal flow too, but it loads no config
+    // here: `fleet run` loads its own (its planning and synthesis turns drive
+    // a real in-process agent), and `fleet status` / `fleet stop` only touch
+    // the project's `.wizard/fleet/` directory. So this is the one entrypoint
+    // whose argument is the parsed subcommand rather than a `Config` — the
+    // lookup below is `Entrypoint<FleetCmd>` and reads identically only
+    // because inference takes the type from the `.run(cmd)` two lines down.
+    // See `entrypoint::Entrypoint` for why the argument is a type parameter.
+    //
+    // It also keeps its own exit code: `fleet stop` with nothing running says
+    // so in one line and exits 1, which is neither an error nor a success.
     if let Some(cli::Command::Fleet { cmd }) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        return fleet::run(cmd.clone()).await;
+        let Some(fleet) = entrypoint::installed(entrypoint::FLEET) else {
+            return Err(entrypoint::absent(
+                entrypoint::FLEET,
+                "fleet",
+                "It decomposes a mission into independent tasks and runs them as parallel \
+                 headless workers, each on its own branch in its own git worktree, then \
+                 merges the branches back.",
+            ));
+        };
+        return fleet.run(cmd.clone()).await;
     }
 
     // The registry client and the mesh peer store are self-contained in the
@@ -295,8 +336,30 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     if let Some(cli::Command::Skills { cmd }) = &cli.command {
         return registry_client::run_cli(cmd.clone()).await;
     }
-    if let Some(cli::Command::Peers { cmd }) = &cli.command {
-        return mesh::cli::run(cmd.clone()).await;
+    // `wizard peers` is the second CLI subcommand whose body ships in a
+    // plugin, and the first that carries arguments. Core parsed `peers` and
+    // nothing after it; the vector goes to whoever registered the tree. Same
+    // shape as `wizard gui` above: a string, a lookup, and a sentence when
+    // nothing answers.
+    if let Some(cli::Command::Peers { args }) = &cli.command {
+        if let Some(peers) = entrypoint::installed_subcommand(entrypoint::PEERS) {
+            return peers.run(args.clone()).await;
+        }
+        anyhow::bail!(
+            "this build has no mesh — it was built without the `mesh` feature.\n\
+             \n\
+             The mesh is what `wizard peers` administers: peer identity, the QUIC\n\
+             transport under it, and the trust decisions that let another machine watch\n\
+             a session here. Without it there are no peers to list, nothing to bind, and\n\
+             `[mesh]` in config.toml does nothing.\n\
+             \n\
+             Rebuild with it:\n\
+             \n\
+                 cargo install --path . --features mesh\n\
+             \n\
+             It is on by default, so a stock `cargo install --path .` has it. See\n\
+             docs/mesh.md."
+        );
     }
 
     // `wizard resume` is the subcommand spelling of `--resume`, so unlike
@@ -335,13 +398,22 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         } else {
             llm::oauth_callback::PasteChannel::Disabled
         };
+        // `chatgpt` is gated because its whole sign-in lives in the plugin
+        // (`crate::plugins::chatgpt::oauth`) and a build without that feature
+        // has nothing to sign into. `xai` is not, because its token store is
+        // core: `web_search` and `generate_image` authenticate with it whatever
+        // chat backend is configured, so signing in stays useful even where
+        // `kind = "xai"` resolves to nothing. See `src/plugins/xai.rs`.
         return match provider.as_str() {
             "xai" => llm::xai_oauth::login(|line: &str| println!("{line}"), paste, false)
                 .await
                 .map(|()| 0),
-            "chatgpt" => llm::chatgpt_oauth::login(|line: &str| println!("{line}"), paste)
-                .await
-                .map(|()| 0),
+            #[cfg(feature = "provider-chatgpt")]
+            "chatgpt" => {
+                crate::plugins::chatgpt::oauth::login(|line: &str| println!("{line}"), paste)
+                    .await
+                    .map(|()| 0)
+            }
             other => {
                 anyhow::bail!("unknown login provider '{other}' (supported: xai, chatgpt)")
             }

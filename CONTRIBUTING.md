@@ -28,7 +28,7 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Required if you touch `src/native/` — the native GUI is off by default, so
+Required if you touch `src/plugins/native/` — the native GUI is off by default, so
 nothing above compiles a line of it, and it ships as its own release asset
 (`wizard-native-*`). CI runs both:
 

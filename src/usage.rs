@@ -15,8 +15,8 @@
 //! which is exactly backwards.
 //!
 //! One caveat worth knowing when reading the numbers: the OAuth
-//! subscription backends ([`ProviderKind::ChatgptOauth`],
-//! [`ProviderKind::XaiOauth`]) are not billed per token at all, so their
+//! subscription backends ([`ProviderKind::CHATGPT_OAUTH`],
+//! [`ProviderKind::XAI_OAUTH`]) are not billed per token at all, so their
 //! cost is what the same tokens *would* have cost on the metered API rather
 //! than money that left an account.
 
@@ -791,19 +791,15 @@ pub struct PricedTurn {
 /// Whether a backend runs on the user's own hardware, where tokens cost
 /// electricity rather than dollars.
 ///
-/// Exhaustive on purpose: a new backend has to declare which side of the bill
-/// it is on rather than inheriting "free" from a wildcard arm.
-pub fn self_hosted(kind: ProviderKind) -> bool {
-    match kind {
-        ProviderKind::LlamaCpp | ProviderKind::Ollama => true,
-        ProviderKind::Openai
-        | ProviderKind::Anthropic
-        | ProviderKind::OpenRouter
-        | ProviderKind::Xai
-        | ProviderKind::XaiOauth
-        | ProviderKind::ChatgptOauth
-        | ProviderKind::Cloudflare => false,
-    }
+/// The backend still declares which side of the bill it is on rather than
+/// inheriting "free" from a wildcard — it is just that it now declares it once,
+/// on its own descriptor, instead of in an exhaustive match here that a new
+/// backend had to remember to edit. A kind nothing has registered is billed:
+/// "unknown" must never read as "free", because the number this feeds is a
+/// dollar figure a user acts on.
+pub fn self_hosted(kind: &ProviderKind) -> bool {
+    crate::llm::registry::installed(kind)
+        .is_some_and(|descriptor| descriptor.credentials().is_local())
 }
 
 /// The host a base URL addresses, lowercased — the seller [`SELLER_PRICES`]
@@ -2132,11 +2128,18 @@ mod tests {
         assert_eq!(plain.source, PriceSource::Local);
         assert!((plain.usd - 0.0).abs() < f64::EPSILON);
 
-        assert!(self_hosted(ProviderKind::LlamaCpp));
-        assert!(self_hosted(ProviderKind::Ollama));
-        assert!(!self_hosted(ProviderKind::Anthropic));
-        assert!(!self_hosted(ProviderKind::Openai));
-        assert!(!self_hosted(ProviderKind::ChatgptOauth));
+        // `self_hosted` reads the descriptor's `Credentials`, so a kind whose
+        // plugin this build left out answers `false` — correctly, since there
+        // is no such backend to be self-hosted.
+        #[cfg(feature = "provider-llamacpp")]
+        assert!(self_hosted(&ProviderKind::LLAMACPP));
+        #[cfg(feature = "provider-ollama")]
+        assert!(self_hosted(&ProviderKind::OLLAMA));
+        assert!(!self_hosted(&ProviderKind::ANTHROPIC));
+        assert!(!self_hosted(&ProviderKind::OPENAI));
+        assert!(!self_hosted(&ProviderKind::CHATGPT_OAUTH));
+        // An unregistered kind is billed, not free.
+        assert!(!self_hosted(&ProviderKind::new("not-installed")));
     }
 
     #[test]

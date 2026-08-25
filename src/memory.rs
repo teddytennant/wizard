@@ -318,11 +318,12 @@ fn flatten(description: &str) -> String {
     // session. A page that talks the model into saving one memory gets
     // persistence, which is the reason to be strict here and not in a renderer.
     //
-    // Same predicate the mesh uses, so there is one audited answer to "what is
-    // invisible" rather than two that drift.
+    // `crate::text`'s predicate, which the mesh's sanitiser and the web
+    // plugin's `defang` also use, so there is one audited answer to "what is
+    // invisible" rather than three that drift.
     description
         .chars()
-        .filter(|ch| !crate::mesh::is_invisible(*ch))
+        .filter(|ch| !crate::text::is_invisible(*ch))
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect::<String>()
         .split_whitespace()

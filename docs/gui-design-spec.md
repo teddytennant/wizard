@@ -1,7 +1,7 @@
 # Wizard GUI design spec
 
 *A design record, not a manual.* This is the brief the window was drawn from, kept because
-the code still cites it: `src/native/theme.rs`, `font.rs`, `widget/chrome.rs` and
+the code still cites it: `src/plugins/native/theme.rs`, `font.rs`, `widget/chrome.rs` and
 `widget/markdown.rs` name it as the place their chrome values are specified. For what
 `wizard gui` actually is and how to run it, read [`native-gui.md`](native-gui.md), which
 also links back here.
@@ -142,7 +142,7 @@ it, no grid of tiles, no tagline under anything.
   send a message to yet. Pick → one short form (model, API key, base URL where it matters) →
   save, probe, chat. "Skip" is available and honest about the consequence. Subscription
   sign-in (`xai`, `chatgpt`) opens the provider's consent page in your browser and captures
-  the loopback callback (`src/gui/oauth.rs`); the same flows also work from a terminal with
+  the loopback callback (`src/plugins/gui/oauth.rs`); the same flows also work from a terminal with
   `wizard --login xai|chatgpt`. Once signed in, the provider simply appears in the list.
 - **Settings** (gear, sidebar header) manages the same providers afterwards: which is active,
   test, edit, remove, add, plus the GUI's step limit. Each row states where its key comes

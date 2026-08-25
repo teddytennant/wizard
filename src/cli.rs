@@ -409,9 +409,28 @@ pub enum Command {
     /// (`[mesh.routes]`, or mDNS on the same LAN) and `[mesh] listen = true`
     /// on that machine, which is off by default. Nothing here listens. See
     /// docs/mesh.md.
+    //
+    // Everything after `peers` crosses unparsed, because the tree behind it is
+    // the mesh plugin's and one of its arguments is a type core must not name:
+    // `trust` takes the peer store's own three-state `clap::ValueEnum`, derived
+    // on the store's type precisely so a second spelling here cannot drift into
+    // a fourth state. See `crate::entrypoint::Subcommand`.
+    //
+    // `disable_help_flag` is load-bearing rather than tidy. Without it clap
+    // answers `wizard peers --help` *here*, with a usage line reading
+    // `wizard peers [ARGS]...` and no mention of the eight subcommands that
+    // actually exist. Help for this tree is the plugin's to print, and these
+    // three lines of rationale are `//` rather than `///` for the same reason:
+    // an argument about where a boundary goes is not what somebody typing
+    // `--help` came for.
+    #[command(disable_help_flag = true)]
     Peers {
-        #[command(subcommand)]
-        cmd: PeersCmd,
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "ARGS"
+        )]
+        args: Vec<String>,
     },
 
     /// Install and enable the OS dependencies the `computer` tool needs for
@@ -508,117 +527,6 @@ pub enum SkillsCmd {
     /// standard library each entry runs under. Read from the receipts beside
     /// the installs themselves, so deleting an install deletes its record.
     List,
-}
-
-/// `wizard peers` subcommands. Self-contained in the sense `sync` is: no
-/// config beyond `[mesh]`, no onboarding, no LLM. They read and write
-/// ~/.wizard/mesh/peers.json and ~/.wizard/node.key.
-///
-/// Five of them touch nothing else (`list`, `address`, `add`, `trust`,
-/// `forget`); three reach a peer over the network (`ping`, `refresh`,
-/// `watch`), which needs a route and a listening far end. **None of them
-/// listens**: this surface dials, so running `wizard peers` while a session
-/// holds `[mesh] listen` open does not fight it for the port.
-///
-/// The security posture is the module's ([`crate::mesh`]) and this surface
-/// does not soften it. A pasted address lands at [`crate::mesh::Trust::Known`],
-/// which may neither be sent work nor submit any; `accepts_work` is false
-/// until this machine says otherwise; trust is a three-state decision a human
-/// makes and nothing infers it from how a peer behaves; and a blocked peer is
-/// never contacted, which is why there is no command here that reaches out to
-/// one.
-#[derive(Debug, Clone, clap::Subcommand)]
-pub enum PeersCmd {
-    /// List the peers on this machine with their trust state and presence.
-    /// Reads the local store only: presence is when this machine last
-    /// observed the peer, never a live probe, so a peer that went dark two
-    /// minutes ago reads as stale rather than as online.
-    List,
-
-    /// Print this machine's own mesh address and fingerprint, the text
-    /// another machine pastes into `wizard peers add`. Mints
-    /// ~/.wizard/node.key on first use.
-    Address,
-
-    /// Add a peer from a pasted address.
-    ///
-    /// Adding is not a decision: the peer lands at `known`, which is approved
-    /// for nothing. Re-adding a peer does not change what was decided about
-    /// it either, so pasting a blocked peer's address again does not unblock
-    /// it.
-    Add {
-        /// The peer's address (`wiz1...`), as printed by
-        /// `wizard peers address` on that machine.
-        address: String,
-    },
-
-    /// Record what this machine has decided about a peer.
-    ///
-    /// Moving away from `trusted` also drops anything live for that peer in
-    /// the same call, because a revocation that leaves a stream running has
-    /// revoked nothing.
-    Trust {
-        /// The peer: its full address, or a unique prefix of one. An
-        /// ambiguous prefix is refused rather than resolved to the first
-        /// match.
-        peer: String,
-
-        /// blocked (never contacted), known (approved for nothing), or
-        /// trusted (may exchange work, within its limits).
-        #[arg(value_enum)]
-        state: crate::mesh::Trust,
-    },
-
-    /// Drop a peer's record entirely.
-    ///
-    /// Not the same as blocking. A forgotten address pasted in again lands at
-    /// `known`, so forgetting a blocked peer discards the decision that was
-    /// keeping it out; use `trust <peer> blocked` when that is what you meant.
-    Forget {
-        /// The peer: its full address, or a unique prefix of one.
-        peer: String,
-    },
-
-    /// Ask a peer whether it is there, and how long the round trip took.
-    ///
-    /// The one command whose answer is a fact about *now* rather than about
-    /// the store. It needs a route (`[mesh.routes]`, or mDNS on the same
-    /// LAN) and a listener on the far end. A blocked peer is not contacted.
-    Ping {
-        /// The peer: its full address, or a unique prefix of one.
-        peer: String,
-    },
-
-    /// Fetch a peer's announcement and fold it into the local store.
-    ///
-    /// What fills in a peer's name and capability: a pasted address carries
-    /// neither, so until a peer is refreshed it renders as its own address.
-    /// The record is written to disk before this returns, and the peer is
-    /// marked seen at the moment it answered.
-    Refresh {
-        /// The peer: its full address, or a unique prefix of one.
-        peer: String,
-    },
-
-    /// Watch a trusted peer's live session stream.
-    ///
-    /// Read-only in both senses: this cannot drive the peer's session, and
-    /// nothing arriving on the stream drives this one. Trusted peers only,
-    /// on both machines — the far end decides separately whether this one may
-    /// watch it.
-    ///
-    /// Every line the peer wrote is marked with the peer's address, and every
-    /// line wizard wrote is marked `wizard`. Runs until the stream ends (the
-    /// peer revoked it, or the connection dropped) or Ctrl-C.
-    Watch {
-        /// The peer: its full address, or a unique prefix of one.
-        peer: String,
-
-        /// Stop after this many events instead of running until the stream
-        /// ends.
-        #[arg(long, value_name = "N")]
-        limit: Option<usize>,
-    },
 }
 
 /// `wizard sync` subcommands. Self-contained like update: no config load
@@ -1505,64 +1413,39 @@ mod tests {
     }
 
     #[test]
-    fn peers_subcommands_parse() {
-        let cli = parse(&["peers", "list"]).expect("peers list parses");
-        assert!(matches!(
-            cli.command,
-            Some(Command::Peers {
-                cmd: PeersCmd::List
-            })
-        ));
-
-        let cli = parse(&["peers", "address"]).expect("peers address parses");
-        assert!(matches!(
-            cli.command,
-            Some(Command::Peers {
-                cmd: PeersCmd::Address
-            })
-        ));
-
-        let cli = parse(&["peers", "add", "wiz1abc"]).expect("peers add parses");
-        let Some(Command::Peers {
-            cmd: PeersCmd::Add { address },
-        }) = cli.command
-        else {
-            panic!("expected peers add");
-        };
-        assert_eq!(address, "wiz1abc");
-
-        let cli = parse(&["peers", "forget", "wiz1abc"]).expect("peers forget parses");
-        assert!(matches!(
-            cli.command,
-            Some(Command::Peers {
-                cmd: PeersCmd::Forget { .. }
-            })
-        ));
-    }
-
-    #[test]
-    fn peer_trust_takes_exactly_the_three_recorded_states() {
-        // The three states are the model's, not this surface's: a fourth
-        // spelling here would be a CLI that can express a decision the store
-        // cannot record.
-        for (raw, expected) in [
-            ("blocked", crate::mesh::Trust::Blocked),
-            ("known", crate::mesh::Trust::Known),
-            ("trusted", crate::mesh::Trust::Trusted),
+    fn peers_takes_its_whole_argument_list_unparsed() {
+        // Everything after `peers` reaches the plugin verbatim, hyphens
+        // included. This is the whole of core's half of `wizard peers`: the
+        // eight subcommands, the trust states and their validation live in
+        // `plugins::mesh::cli`, which is where the store's own enum is.
+        for (args, expected) in [
+            (vec!["peers", "list"], vec!["list"]),
+            (vec!["peers", "address"], vec!["address"]),
+            (vec!["peers", "add", "wiz1abc"], vec!["add", "wiz1abc"]),
+            (
+                vec!["peers", "trust", "wiz1abc", "trusted"],
+                vec!["trust", "wiz1abc", "trusted"],
+            ),
+            (
+                vec!["peers", "watch", "wiz1abc", "--limit", "3"],
+                vec!["watch", "wiz1abc", "--limit", "3"],
+            ),
+            // `--help` is the interesting one: swallowing it here would print
+            // core's one-line description of a tree it cannot describe.
+            (vec!["peers", "--help"], vec!["--help"]),
         ] {
-            let cli = parse(&["peers", "trust", "wiz1abc", raw]).expect("trust state parses");
-            let Some(Command::Peers {
-                cmd: PeersCmd::Trust { peer, state },
-            }) = cli.command
-            else {
-                panic!("expected peers trust");
+            let cli = parse(&args).expect("peers parses");
+            let Some(Command::Peers { args: passed }) = cli.command else {
+                panic!("expected peers, got {:?}", cli.command);
             };
-            assert_eq!(peer, "wiz1abc");
-            assert_eq!(state, expected);
+            assert_eq!(passed, expected, "{args:?}");
         }
-        let err = parse(&["peers", "trust", "wiz1abc", "allowed"])
-            .expect_err("a state the store cannot hold must be rejected");
-        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+
+        // No arguments at all is legal here and is the plugin's error to
+        // report, not this parser's: a required-subcommand check in core
+        // would be core knowing how many subcommands there are.
+        let cli = parse(&["peers"]).expect("bare peers parses");
+        assert!(matches!(cli.command, Some(Command::Peers { args }) if args.is_empty()));
     }
 
     #[test]

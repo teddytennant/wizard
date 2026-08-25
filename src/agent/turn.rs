@@ -1464,6 +1464,10 @@ impl Agent {
         // turn must not kill this one.
         self.cancel.clear();
         self.usage.begin_turn();
+        // Republish to the plugin host bridge now that the turn's event
+        // channel exists, so a plugin's `wizard.ui.notify` lands in *this*
+        // turn's transcript rather than in the log.
+        self.bind_host(Some(&events));
         let result = match self.turn_inner(input, &images, &events).await {
             Ok(reason) => {
                 let _ = emit(&events, AgentEvent::Done { reason }).await;
