@@ -2166,11 +2166,15 @@ mod tests {
         assert!(error_text(&drain(&mut rx)).contains("config.toml"));
     }
 
-    /// `/server` manages the local llama-server. On a provider that is not
-    /// llama.cpp there is no server to manage, and it says so instead of probing
-    /// a URL that answers for something else.
+    /// `/server` manages a backend that brings its own process. On one that
+    /// does not there is nothing to manage, and it says so instead of probing a
+    /// URL that answers for something else.
+    ///
+    /// The sentence is `crate::server::not_managed`'s and names no backend, so
+    /// this asserts the shape rather than the word "llama": the same line is
+    /// what a build with no local backend compiled in prints.
     #[tokio::test]
-    async fn server_refuses_when_the_provider_is_not_llamacpp() {
+    async fn server_refuses_when_the_provider_brings_no_server() {
         let cwd = tempfile::tempdir().unwrap();
         let mut agent = test_agent(cwd.path());
         let shared = shared();
@@ -2189,7 +2193,12 @@ mod tests {
         });
 
         command_in(&mut agent, &shared, &config, "server", "status").await;
-        assert!(error_text(&drain(&mut rx)).contains("local llama-server"));
+        let said = error_text(&drain(&mut rx));
+        assert!(said.contains("openai"), "{said}");
+        assert!(
+            said.contains("model server running on this machine"),
+            "{said}"
+        );
     }
 
     /// A command the *window* owns, submitted here by mistake, is answered —

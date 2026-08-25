@@ -89,7 +89,7 @@ pub struct Answers {
     pub gateway_token_env: Option<String>,
     /// Allowed inbound chat IDs (Telegram only). The list is closed: an empty
     /// list allows **nobody**, which is the shipped default (see
-    /// [`crate::gateway::is_authorized`]). Leaving this empty ships a gateway
+    /// the gateway's `is_authorized`). Leaving this empty ships a gateway
     /// that refuses every message, not one that answers everyone.
     pub gateway_allowed_chat_ids: Vec<i64>,
     /// Personality mode.
@@ -213,7 +213,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
 
 /// Parse a comma-separated list of numeric chat IDs. Whitespace and empty
 /// entries are ignored; an empty input yields an empty list, which the gateway
-/// reads as "allow nobody" (see [`crate::gateway::is_authorized`]) and warns
+/// reads as "allow nobody" (see the gateway plugin's `is_authorized`) and warns
 /// about in the summary. A non-numeric entry is an error naming the offending
 /// token.
 pub fn parse_chat_ids(input: &str) -> Result<Vec<i64>, String> {

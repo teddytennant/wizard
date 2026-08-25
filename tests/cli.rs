@@ -780,6 +780,46 @@ fn harness_export_writes_a_complete_bundle() {
     assert!(stdout.contains("exported harness bundle"), "{stdout}");
 }
 
+/// `wizard gateway <verb>` reaches the gateway plugin, or says which build it is
+/// not in.
+///
+/// The gateway is the first plugin to own two entrypoints, and they are two
+/// *names* rather than one name at two argument types, because the service
+/// registry keys on the name alone — see `entrypoint::GATEWAY_SERVICE`. A unit
+/// test asserts both registrations and both argument types; only a process can
+/// prove that `crate::run`'s dispatch arm looks one of them up successfully,
+/// since a lookup at the wrong name or the wrong type reads exactly like a
+/// plugin that was never compiled in.
+///
+/// `gateway status` rather than `gateway setup`, which is interactive, and
+/// rather than `--gateway`, which dispatches after config load and then does
+/// not return until Ctrl-C. The present-build assertion is deliberately weak:
+/// whatever a host's service supervisor says — installed, not installed, or "no
+/// systemd here" — it must not be the absent sentence. What is proven is that
+/// the lookup found a body, not what that body thinks of this machine.
+#[test]
+fn the_gateway_admin_surface_reaches_the_plugin_or_says_it_is_absent() {
+    let home = TempDir::new();
+
+    let run = run_wizard(&home.0, &["gateway", "status"], &[]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    if !cfg!(feature = "gateway") {
+        assert!(!run.status.success(), "{said}");
+        assert!(said.contains("--features gateway"), "{said}");
+        return;
+    }
+
+    assert!(
+        !said.contains("not in this build"),
+        "`wizard gateway status` did not reach the plugin: {said}"
+    );
+}
+
 /// `wizard peers` reaches the mesh plugin, or says which build it is not in.
 ///
 /// The one thing a unit test cannot check about this subcommand: whether the
