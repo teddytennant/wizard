@@ -475,9 +475,14 @@ fn toggle_ultra(agent: &mut Agent, ctx: &mut CommandCtx<'_>) {
     }
 }
 
-/// `/server [status|start|stop]`: the local llama-server's lifecycle. It is a
+/// `/server [status|start|stop]`: a local model server's lifecycle. It is a
 /// process on this machine, and the window runs on that machine — the same
 /// command, answering into the chat instead of onto a status line.
+///
+/// Every word about what is being started comes back from
+/// [`crate::server::LocalServer`]; what stays here is the two gates (does the
+/// active backend own a process, and is the thing that runs it in this build)
+/// and the choice of `notice` versus `error`, which is this surface's to make.
 async fn server_command(action: ServerAction, config: &Config, shared: &Arc<TaskShared>) {
     let provider = config.active();
     if !provider
@@ -486,76 +491,28 @@ async fn server_command(action: ServerAction, config: &Config, shared: &Arc<Task
     {
         return error(
             shared,
-            format!(
-                "'/server' manages the local llama-server; the active provider '{}' is {}",
-                provider.name, provider.kind
-            ),
+            crate::server::not_managed(&provider.name, provider.kind.as_str()),
         );
     }
+    let Some(managed) = crate::server::installed() else {
+        return error(shared, crate::server::absent());
+    };
     match action {
-        ServerAction::Status => {
-            let spawned = crate::server::spawned_pid()
-                .map(|pid| format!(" (PID {pid}, started by wizard)"))
-                .unwrap_or_default();
-            let text = match crate::server::probe(&provider.base_url).await {
-                crate::server::Health::Ready => {
-                    format!("llama-server at {}: ready{spawned}", provider.base_url)
-                }
-                crate::server::Health::Loading => format!(
-                    "llama-server at {}: loading its model{spawned}",
-                    provider.base_url
-                ),
-                crate::server::Health::Down => format!(
-                    "llama-server at {}: not running — start it with /server start",
-                    provider.base_url
-                ),
-            };
-            notice(shared, text);
-        }
+        ServerAction::Status => notice(shared, managed.status(&provider).await),
         ServerAction::Start => {
-            if crate::server::probe(&provider.base_url).await == crate::server::Health::Ready {
-                return notice(
-                    shared,
-                    format!("llama-server at {} is already running", provider.base_url),
-                );
-            }
-            notice(
-                shared,
-                format!("starting llama-server at {}…", provider.base_url),
-            );
             let progress = NoticeProgress {
                 shared: Arc::clone(shared),
             };
-            match crate::server::ensure_running(&provider, &progress).await {
-                Ok(()) => notice(
-                    shared,
-                    format!("llama-server at {} is ready", provider.base_url),
-                ),
-                Err(err) => error(shared, format!("could not start llama-server: {err:#}")),
+            match managed.start(provider, Box::new(progress)).await {
+                Ok(line) => notice(shared, line),
+                Err(line) => error(shared, line),
             }
         }
-        ServerAction::Stop => {
-            let text = match crate::server::stop() {
-                Ok(crate::server::StopOutcome::Stopped(pid)) => {
-                    format!("stopped llama-server (PID {pid})")
-                }
-                Ok(crate::server::StopOutcome::NotRecorded) => {
-                    "wizard has not started a llama-server — nothing to stop".to_string()
-                }
-                Ok(crate::server::StopOutcome::NotRunning(pid)) => {
-                    format!("llama-server (PID {pid}) already exited")
-                }
-                Ok(crate::server::StopOutcome::NotOurs { pid, name }) => {
-                    format!("refusing to stop PID {pid}: it is '{name}', not llama-server")
-                }
-                Err(err) => format!("could not stop llama-server: {err:#}"),
-            };
-            notice(shared, text);
-        }
+        ServerAction::Stop => notice(shared, managed.stop()),
     }
 }
 
-/// [`crate::server::Progress`] adapter for `/server start`: the server's status
+/// [`crate::progress::Progress`] adapter for `/server start`: the server's status
 /// lines and download milestones arrive in the chat as notices.
 /// The byte guard outlives the borrow that opened it (`Box<dyn ByteProgress>` is
 /// `'static`), which is why this holds the task by handle rather than by
@@ -564,12 +521,12 @@ struct NoticeProgress {
     shared: Arc<TaskShared>,
 }
 
-impl crate::server::Progress for NoticeProgress {
+impl crate::progress::Progress for NoticeProgress {
     fn status(&self, line: &str) {
         notice(&self.shared, line.to_string());
     }
 
-    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn crate::server::ByteProgress> {
+    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn crate::progress::ByteProgress> {
         Box::new(NoticeBytes {
             shared: Arc::clone(&self.shared),
             label: label.to_string(),
@@ -591,7 +548,7 @@ struct NoticeBytes {
     last_percent: std::sync::atomic::AtomicU64,
 }
 
-impl crate::server::ByteProgress for NoticeBytes {
+impl crate::progress::ByteProgress for NoticeBytes {
     fn inc(&self, n: u64) {
         use std::sync::atomic::Ordering;
         let written = self.written.fetch_add(n, Ordering::Relaxed) + n;

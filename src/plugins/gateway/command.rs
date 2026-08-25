@@ -488,79 +488,44 @@ impl CommandSurface for GatewaySurface<'_, '_> {
         }
     }
 
-    /// `/server [status|start|stop]`: the local llama-server's lifecycle. It is
+    /// `/server [status|start|stop]`: a local model server's lifecycle. It is
     /// a process on the machine running the gateway, which is the machine the
     /// chat is driving — the same command, answering into a message.
     ///
     /// A start streams its progress to the journal through the same spinner a
     /// headless build uses (plain lines when stderr is not a terminal, which
     /// under systemd it never is); the chat gets the outcome, because there is
-    /// no transcript here to trickle percentages into.
+    /// no transcript here to trickle percentages into. The spinner is shared
+    /// rather than handed over because the closing tick is this surface's to
+    /// draw — see the `Arc<ServerSpinner>` impl in [`crate::progress`].
     async fn server(&mut self, action: ServerAction) {
         let provider = self.ctx.config.active();
         if !provider
             .descriptor()
             .is_some_and(|descriptor| descriptor.manages_local_server())
         {
-            return self.say(format!(
-                "'/server' manages the local llama-server; the active provider '{}' is {}",
-                provider.name, provider.kind
+            return self.say(crate::server::not_managed(
+                &provider.name,
+                provider.kind.as_str(),
             ));
         }
-        match action {
-            ServerAction::Status => {
-                let spawned = crate::server::spawned_pid()
-                    .map(|pid| format!(" (PID {pid}, started by wizard)"))
-                    .unwrap_or_default();
-                let text = match crate::server::probe(&provider.base_url).await {
-                    crate::server::Health::Ready => {
-                        format!("llama-server at {}: ready{spawned}", provider.base_url)
-                    }
-                    crate::server::Health::Loading => format!(
-                        "llama-server at {}: loading its model{spawned}",
-                        provider.base_url
-                    ),
-                    crate::server::Health::Down => format!(
-                        "llama-server at {}: not running — start it with /server start",
-                        provider.base_url
-                    ),
-                };
-                self.say(text);
-            }
+        let Some(managed) = crate::server::installed() else {
+            return self.say(crate::server::absent());
+        };
+        let text = match action {
+            ServerAction::Status => managed.status(&provider).await,
             ServerAction::Start => {
-                if crate::server::probe(&provider.base_url).await == crate::server::Health::Ready {
-                    return self.say(format!(
-                        "llama-server at {} is already running",
-                        provider.base_url
-                    ));
-                }
-                let wait = crate::progress::ServerSpinner::start();
-                let outcome = crate::server::ensure_running(&provider, &wait).await;
+                let wait = std::sync::Arc::new(crate::progress::ServerSpinner::start());
+                let outcome = managed
+                    .start(provider, Box::new(std::sync::Arc::clone(&wait)))
+                    .await;
                 wait.finish(outcome.is_ok());
-                let text = match outcome {
-                    Ok(()) => format!("llama-server at {} is ready", provider.base_url),
-                    Err(err) => format!("could not start llama-server: {err:#}"),
-                };
-                self.say(text);
+                match outcome {
+                    Ok(line) | Err(line) => line,
+                }
             }
-            ServerAction::Stop => {
-                let text = match crate::server::stop() {
-                    Ok(crate::server::StopOutcome::Stopped(pid)) => {
-                        format!("stopped llama-server (PID {pid})")
-                    }
-                    Ok(crate::server::StopOutcome::NotRecorded) => {
-                        "wizard has not started a llama-server — nothing to stop".to_string()
-                    }
-                    Ok(crate::server::StopOutcome::NotRunning(pid)) => {
-                        format!("llama-server (PID {pid}) already exited")
-                    }
-                    Ok(crate::server::StopOutcome::NotOurs { pid, name }) => {
-                        format!("refusing to stop PID {pid}: it is '{name}', not llama-server")
-                    }
-                    Err(err) => format!("could not stop llama-server: {err:#}"),
-                };
-                self.say(text);
-            }
-        }
+            ServerAction::Stop => managed.stop(),
+        };
+        self.say(text);
     }
 }

@@ -1042,18 +1042,19 @@ impl CommandContext<'_> {
             }
         };
         *self.client = client;
-        // A switch to llama.cpp may target a server that is not up yet:
-        // kick off the auto-start in the background (the rebuild below
-        // proceeds regardless; probes fall back until the model loads).
+        // A switch to a backend that brings its own process may target one
+        // that is not up yet: kick off the auto-start in the background (the
+        // rebuild below proceeds regardless; probes fall back until the model
+        // loads). Silent here rather than announced — the plugin's own
+        // "starting…" line arrives a moment later through the progress sink,
+        // and saying it twice in two wordings is worse than saying it once in
+        // the words of whatever is actually starting.
         if provider
             .descriptor()
             .is_some_and(|descriptor| descriptor.manages_local_server())
-            && server::probe(&provider.base_url).await == server::Health::Down
+            && let Some(managed) = server::installed()
+            && managed.is_down(&provider).await
         {
-            self.app.notice(format!(
-                "llama-server at {} is not running — starting it…",
-                provider.base_url
-            ));
             self.start_server_task(provider.clone());
         }
         let model = self.app.config.active().model;
@@ -1465,82 +1466,68 @@ impl CommandContext<'_> {
     async fn server_command(&mut self, action: ServerAction) {
         match action {
             ServerAction::Status => self.server_status().await,
-            ServerAction::Start => self.server_start().await,
+            ServerAction::Start => self.server_start(),
             ServerAction::Stop => self.server_stop(),
         }
     }
 
-    /// The active provider when it is llama.cpp; otherwise a notice that
-    /// `/server` does not apply.
-    fn llamacpp_provider(&mut self) -> Option<ProviderConfig> {
+    /// The active provider and the thing that manages its process, when both
+    /// exist; otherwise a notice saying why `/server` has nothing to act on.
+    ///
+    /// Two questions, and neither of them names a backend. The descriptor's
+    /// `manages_local_server` is the registry's answer to "does this kind bring
+    /// a process with it", and [`server::installed`] is the kernel's answer to
+    /// "is the thing that runs it in this build". They come from the same
+    /// plugin, so they agree; the second is checked anyway, because a `None`
+    /// that reads as a sentence costs one line and an `expect` that fires reads
+    /// as a crash.
+    fn local_server(&mut self) -> Option<(ProviderConfig, Arc<server::LocalServerHandle>)> {
         let provider = self.app.config.active();
-        if provider
+        if !provider
             .descriptor()
             .is_some_and(|descriptor| descriptor.manages_local_server())
         {
-            Some(provider)
-        } else {
-            self.app.notice(format!(
-                "the active provider '{}' is {} — /server only manages a local llama.cpp server",
-                provider.name, provider.kind
-            ));
-            None
+            self.app
+                .notice(server::not_managed(&provider.name, provider.kind.as_str()));
+            return None;
+        }
+        match server::installed() {
+            Some(managed) => Some((provider, managed)),
+            None => {
+                self.app.notice(server::absent());
+                None
+            }
         }
     }
 
     async fn server_status(&mut self) {
-        let Some(provider) = self.llamacpp_provider() else {
+        let Some((provider, managed)) = self.local_server() else {
             return;
         };
-        let spawned = server::spawned_pid()
-            .map(|pid| format!(" (PID {pid}, started by wizard)"))
-            .unwrap_or_default();
-        let line = match server::probe(&provider.base_url).await {
-            server::Health::Ready => {
-                format!("llama-server at {}: ready{spawned}", provider.base_url)
-            }
-            server::Health::Loading => format!(
-                "llama-server at {}: loading its model{spawned}",
-                provider.base_url
-            ),
-            server::Health::Down => format!(
-                "llama-server at {}: not running — start it with /server start",
-                provider.base_url
-            ),
-        };
+        let line = managed.status(&provider).await;
         self.app.notice(line);
     }
 
-    async fn server_start(&mut self) {
-        let Some(provider) = self.llamacpp_provider() else {
+    /// `/server start`: hand it to the background and get out of the way.
+    ///
+    /// The whole of what used to be here — the already-running check, the
+    /// "starting…" line, the readiness wording — is the plugin's now, including
+    /// the short-circuit: an already-running server answers `Ok` with a line
+    /// saying so, which is the same shape as having started one. The composer
+    /// stays live throughout, which matters because the slow path here can be
+    /// a multi-gigabyte download.
+    fn server_start(&mut self) {
+        let Some((provider, _)) = self.local_server() else {
             return;
         };
-        if server::probe(&provider.base_url).await == server::Health::Ready {
-            self.app.notice(format!(
-                "llama-server at {} is already running",
-                provider.base_url
-            ));
-            return;
-        }
-        self.app
-            .notice(format!("starting llama-server at {}…", provider.base_url));
         self.start_server_task(provider);
     }
 
     fn server_stop(&mut self) {
-        let message = match server::stop() {
-            Ok(server::StopOutcome::Stopped(pid)) => format!("stopped llama-server (PID {pid})"),
-            Ok(server::StopOutcome::NotRecorded) => {
-                "wizard has not started a llama-server — nothing to stop".to_string()
-            }
-            Ok(server::StopOutcome::NotRunning(pid)) => {
-                format!("llama-server (PID {pid}) already exited")
-            }
-            Ok(server::StopOutcome::NotOurs { pid, name }) => {
-                format!("refusing to stop PID {pid}: it is '{name}', not llama-server")
-            }
-            Err(err) => format!("could not stop llama-server: {err:#}"),
+        let Some((_, managed)) = self.local_server() else {
+            return;
         };
+        let message = managed.stop();
         self.app.notice(message);
     }
 
@@ -1602,17 +1589,26 @@ impl CommandContext<'_> {
     }
 
     /// Background half of `/server start` (and the post-switch auto-start):
-    /// ensure a llama-server is running for `provider`, streaming progress
-    /// into the transcript as notices.
+    /// bring the local server up for `provider`, streaming progress into the
+    /// transcript as notices.
+    ///
+    /// The lookup happens inside the task rather than being passed in, so the
+    /// two callers do not each have to carry a handle for something that might
+    /// take minutes. Both have already been through
+    /// [`local_server`](Self::local_server) and so the `None` here is only
+    /// reachable if the plugin unloaded between the two, which is a case with
+    /// nothing to say about it.
     fn start_server_task(&self, provider: ProviderConfig) {
         let notify = self.events.sender();
         tokio::spawn(async move {
+            let Some(managed) = server::installed() else {
+                return;
+            };
             let progress = NoticeProgress {
                 notify: notify.clone(),
             };
-            let message = match server::ensure_running(&provider, &progress).await {
-                Ok(()) => format!("llama-server at {} is ready", provider.base_url),
-                Err(err) => format!("llama-server: {err:#}"),
+            let message = match managed.start(provider, Box::new(progress)).await {
+                Ok(line) | Err(line) => line,
             };
             let _ = notify.send(Event::Notice(message)).await;
         });
@@ -1857,7 +1853,7 @@ impl CommandSurface for CommandContext<'_> {
     }
 }
 
-/// [`crate::server::Progress`] adapter for the TUI's `/server start`: relays
+/// [`crate::progress::Progress`] adapter for the TUI's `/server start`: relays
 /// status lines and download milestones into the transcript as notices (the
 /// callback is sync, so each line is sent from its own task). Byte progress
 /// is throttled to whole-percent steps, the way the plain-terminal download
@@ -1875,12 +1871,12 @@ impl NoticeProgress {
     }
 }
 
-impl server::Progress for NoticeProgress {
+impl crate::progress::Progress for NoticeProgress {
     fn status(&self, line: &str) {
         Self::notice(&self.notify, line.to_string());
     }
 
-    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn server::ByteProgress> {
+    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn crate::progress::ByteProgress> {
         Box::new(NoticeBytes {
             notify: self.notify.clone(),
             label: label.to_string(),
@@ -1901,7 +1897,7 @@ struct NoticeBytes {
     last_percent: std::sync::atomic::AtomicU64,
 }
 
-impl server::ByteProgress for NoticeBytes {
+impl crate::progress::ByteProgress for NoticeBytes {
     fn inc(&self, n: u64) {
         use std::sync::atomic::Ordering;
         let written = self.written.fetch_add(n, Ordering::Relaxed) + n;

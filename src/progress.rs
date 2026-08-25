@@ -1,9 +1,18 @@
-//! Progress reporting for Wizard's plain-terminal surfaces.
+//! Progress reporting: the shape of it, and the plain-terminal implementation.
 //!
-//! The interactive genie TUI draws its own spinner (`src/ui/mod.rs`); everything
-//! here covers the paths that print to a normal terminal instead — headless
-//! sovereign turns, fleet workers, and llama-server startup waits — with
-//! one shared look: the TUI's braille frames, white accent, dim text.
+//! Two halves, and the split matters because a plugin depends on the first. The
+//! *shape* is [`Progress`] and [`ByteProgress`] — how any surface says "this is
+//! going to take a while, here is how far it has got" — and it is core because
+//! its implementors and its callers are scattered on both sides of the plugin
+//! boundary: the TUI, the window and the gateway each implement one that writes
+//! into a transcript, the Ollama plugin reports a model pull through it, and
+//! llama.cpp's GGUF downloader reports a multi-gigabyte fetch through it.
+//!
+//! The *implementation* below is the plain-terminal one. The interactive genie
+//! TUI draws its own spinner (`src/ui/mod.rs`); everything here covers the paths
+//! that print to a normal terminal instead — headless sovereign turns, fleet
+//! workers, and llama-server startup waits — with one shared look: the TUI's
+//! braille frames, white accent, dim text.
 //!
 //! All drawing goes to stderr and indicatif hides itself when stderr is not
 //! a terminal, so piped or redirected runs see no escape sequences; status
@@ -16,7 +25,39 @@ use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-use crate::server::{ByteProgress, Progress};
+/// A surface's sink for slow work it did not ask for a spinner about.
+///
+/// The two traits live here rather than beside the one subsystem that made
+/// them, for the reason [`crate::tools::http`] holds the HTTP client rather
+/// than the web tools: five things implement or consume this and only one of
+/// them is a llama-server. [`ServerSpinner`] below is the plain-terminal
+/// implementation, the TUI, the window and the gateway each supply one that
+/// writes into a transcript, the Ollama plugin reports a model pull through
+/// it, and llama.cpp's GGUF downloader reports through it too. A build with no
+/// local backend at all still has all of that except the last.
+///
+/// `status` reports a one-line update; `bytes` opens a determinate byte-counted
+/// phase whose guard is ticked with [`ByteProgress::inc`] and restores the
+/// prior UI on finish or drop.
+pub trait Progress: Send + Sync {
+    /// Report a one-line status update.
+    fn status(&self, line: &str);
+    /// Begin a byte-counted download phase. `total` is the expected byte
+    /// count when the server advertised a `Content-Length`, `None` for an
+    /// indeterminate stream.
+    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn ByteProgress>;
+}
+
+/// A determinate byte-counted phase opened by [`Progress::bytes`]. Dropping
+/// the guard restores the surface's prior UI; [`ByteProgress::finish`] does
+/// the same after recording a closing message.
+pub trait ByteProgress: Send {
+    /// Account for `n` more bytes transferred.
+    fn inc(&self, n: u64);
+    /// Close the phase, optionally leaving `msg` as the surface's status
+    /// (an empty `msg` means no closing message).
+    fn finish(self: Box<Self>, msg: &str);
+}
 
 /// Braille frames matching the TUI spinner of the house skin (`WIZARD` in
 /// `src/skin/mod.rs`; the TUI reads whichever skin is active), plus a final
@@ -217,6 +258,25 @@ impl ServerSpinner {
         } else {
             self.bar.finish_and_clear();
         }
+    }
+}
+
+/// A spinner two callers share: one reports through it, the other finishes it.
+///
+/// [`crate::server::LocalServer::start`] takes an owned `Box<dyn Progress>`,
+/// because the surfaces that background it need a future that outlives the
+/// call. The plain-terminal callers still want to say
+/// [`ServerSpinner::finish`] afterwards — the closing tick is theirs to draw,
+/// since only they know the wait is over — so they keep an
+/// [`Arc`](std::sync::Arc) and hand a clone of it down. Six lines rather than a
+/// second lifetime on the trait.
+impl Progress for std::sync::Arc<ServerSpinner> {
+    fn status(&self, line: &str) {
+        ServerSpinner::status(self, line);
+    }
+
+    fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn ByteProgress> {
+        ServerSpinner::bytes(self, label, total)
     }
 }
 

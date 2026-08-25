@@ -936,7 +936,7 @@ pub fn plan_local_auto(
 /// Model tags an installed Ollama already has pulled (empty when Ollama is
 /// absent, its server is down, or the listing fails).
 fn installed_ollama_models() -> Vec<String> {
-    if !crate::server::on_path("ollama") {
+    if !crate::platform::host::on_path("ollama") {
         return Vec::new();
     }
     let Ok(output) = std::process::Command::new("ollama").arg("list").output() else {
