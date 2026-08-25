@@ -6,7 +6,7 @@
 //!
 //! The chat transport is a plugin; this is not, and the split is by consumer
 //! rather than by subject. Five of the six things that read this module are
-//! not the chat provider: `tools/web.rs` authenticates xAI's server-side
+//! not the chat provider: `plugins/web.rs` authenticates xAI's server-side
 //! **search** API with these tokens and `tools/image.rs` its **image** API —
 //! both core tools, both reaching for xAI whatever backend is configured —
 //! `sync.rs` backs the token file up, and onboarding and `app/prompts.rs` ask

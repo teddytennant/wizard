@@ -97,7 +97,7 @@ impl ProviderKind {
 //     is not this change.
 //   - `tools/image.rs` picks an image endpoint per backend. That belongs on a
 //     capability the descriptor does not have yet; see the module docs there.
-//   - `tools/web.rs` and `tools/image.rs` reach xAI's search and image APIs,
+//   - `plugins/web.rs` and `tools/image.rs` reach xAI's search and image APIs,
 //     which are not chat and so are not behind a `kind` at all.
 //
 // Every provider is now a plugin, so each of these constants names a kind that

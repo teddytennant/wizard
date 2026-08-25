@@ -88,6 +88,8 @@ default = [
   "provider-ollama",
   "provider-openai",
   "provider-xai",
+  "graph",
+  "tool-web",
 ]
 
 # Anthropic Messages API. `kind = "anthropic"`.
@@ -114,6 +116,30 @@ provider-ollama = []
 # `kind = "openrouter"`. The wire machinery itself is `llm::wire` and stays in
 # core — five backends build on it, so it is infrastructure, not a plugin.
 provider-openai = []
+
+# The mesh graph explorer: `MeshGraph` (a `PeerStore` turned into something
+# drawable, with liveness decided once and honestly) and a deterministic force
+# layout over it. `src/plugins/graph/`.
+#
+# The only plugin that registers nothing through `Ctx`, because what it
+# produces is a data model rather than a tool, a command or a provider; see
+# `GraphPlugin`. Its one consumer is the GUI's explorer screen
+# (`src/native/graph/`), which is gated on this feature in step, so a build
+# without it is a window with no explorer -- which is the window that ships
+# today, since `src/native/mod.rs` records that screen as deferred and not yet
+# reachable.
+graph = []
+
+# `web_fetch`, `web_search` and `x_search`. `src/plugins/web.rs`.
+#
+# The HTTP plumbing under them is *not* here: the client, the SSRF guard, the
+# hand-walked redirect chain and the body cap are `src/tools/http.rs` and stay
+# in core, because a Lua plugin's `wizard.http` and `generate_image`'s
+# downloader are the other two callers and neither has anything to do with
+# whether the model can call `web_fetch`. Same split as `llm::wire` against
+# `plugins::openai`. Leaving this out costs three tools and nothing else: the
+# registry does not hold them, so the model is not told about them.
+tool-web = []
 
 # xAI Grok, by API key (`kind = "xai"`) and by account sign-in
 # (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:

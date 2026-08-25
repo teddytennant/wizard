@@ -34,12 +34,12 @@ use tokio::sync::Mutex;
 
 use super::view::{CapabilityFilter, GraphView};
 use super::{Explorer, Message, paint};
-use crate::graph::{Liveness, MeshGraph, NodeKey, NodeKind};
 use crate::mesh::peer::synthetic_store;
 use crate::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, Node, PeerStore, PeerText, Trust,
 };
 use crate::native::theme::Palette;
+use crate::plugins::graph::{Liveness, MeshGraph, NodeKey, NodeKind};
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

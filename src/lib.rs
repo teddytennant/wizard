@@ -23,7 +23,6 @@ pub mod fleet;
 pub mod gates;
 pub mod gateway;
 pub mod git_util;
-pub mod graph;
 // The agent core the native window is built on (sessions, config store, git,
 // OAuth). It used to carry a browser GUI too — an axum server and a JavaScript
 // page — and was compiled into every build for it. That surface is gone, and
@@ -62,6 +61,7 @@ pub mod session_registry;
 pub mod skills;
 pub mod skin;
 pub mod sync;
+pub(crate) mod text;
 pub mod theme;
 pub mod tools;
 pub mod transcript;

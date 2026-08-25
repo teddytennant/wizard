@@ -77,8 +77,13 @@ pub mod llamacpp;
 pub mod ollama;
 #[cfg(feature = "provider-openai")]
 pub mod openai;
+#[cfg(feature = "tool-web")]
+pub mod web;
 #[cfg(feature = "provider-xai")]
 pub mod xai;
+
+#[cfg(feature = "graph")]
+pub mod graph;
 
 use std::cell::Cell;
 use std::panic::AssertUnwindSafe;
@@ -118,6 +123,10 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(openai::OpenAiPlugin::new()));
     #[cfg(feature = "provider-xai")]
     plugins.push(Arc::new(xai::XaiPlugin::new()));
+    #[cfg(feature = "tool-web")]
+    plugins.push(Arc::new(web::WebPlugin::new()));
+    #[cfg(feature = "graph")]
+    plugins.push(Arc::new(graph::GraphPlugin::new()));
     plugins
 }
 
@@ -459,6 +468,107 @@ mod tests {
             let descriptor = registry::installed(&kind).expect("installed");
             assert_eq!(descriptor.kind().as_str(), id);
             assert!(!descriptor.display_name().is_empty(), "{id}");
+        }
+    }
+
+    /// The tool half of "delete any one plugin", asserted in both directions.
+    ///
+    /// A provider that is absent still has a `kind` string a user can type, so
+    /// [`registry::unknown`] is its degrade path. A tool has no equivalent: an
+    /// absent tool must be **absent from the roster**, because the roster is
+    /// what the model is told it can call. Advertising a tool that cannot run
+    /// costs a turn to discover, in the middle of somebody's work, and there is
+    /// no error message that makes that acceptable.
+    ///
+    /// So this asserts the kernel's slot rather than a message, and the row is
+    /// written out rather than derived from [`compiled_in`] for the reason the
+    /// provider table gives: a plugin that quietly stopped registering one of
+    /// its three tools would still be in `compiled_in`.
+    #[test]
+    fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
+        /// `(cargo feature is on, plugin name, tools it registers)`.
+        const EXPECTED: &[(bool, &str, &[&str])] = &[(
+            cfg!(feature = "tool-web"),
+            "web",
+            &["web_fetch", "web_search", "x_search"],
+        )];
+
+        let kernel = kernel();
+        let registered = kernel.tool_names();
+        for (compiled_in, name, tools) in EXPECTED {
+            for tool in *tools {
+                assert_eq!(
+                    registered.iter().any(|n| n == tool),
+                    *compiled_in,
+                    "tool '{tool}' from plugin '{name}'"
+                );
+            }
+        }
+
+        // And nothing reached the kernel's tool slot that no row accounts for.
+        // The kernel tests register their own tools into their own kernels, so
+        // this reads the process one, which only `compiled_in` writes.
+        for name in &registered {
+            assert!(
+                EXPECTED
+                    .iter()
+                    .any(|(on, _, tools)| *on && tools.contains(&name.as_str())),
+                "tool '{name}' is in the process kernel but no compiled-in plugin claims it"
+            );
+        }
+    }
+
+    /// The half that matters to the model: a plugin tool reaches the registry
+    /// every agent-bearing surface composes from, and an absent one leaves no
+    /// trace in it.
+    ///
+    /// [`install_tools_into`] is the only bridge, and `build_tool_registry`
+    /// and `mcp serve` are its only callers, so asserting it here covers both
+    /// without standing up an agent.
+    #[test]
+    fn plugin_tools_reach_the_agents_registry_and_only_when_compiled_in() {
+        let mut registry = ToolRegistry::with_native_tools();
+        let native = registry.len();
+        let installed = install_tools_into(&mut registry);
+        assert_eq!(registry.len(), native + installed);
+
+        let advertised: Vec<String> = registry
+            .specs()
+            .into_iter()
+            .map(|spec| spec.function.name)
+            .collect();
+        for tool in ["web_fetch", "web_search", "x_search"] {
+            assert_eq!(
+                advertised.iter().any(|name| name == tool),
+                cfg!(feature = "tool-web"),
+                "{tool} in the advertised roster"
+            );
+        }
+    }
+
+    /// `graph` registers nothing, on purpose, and that has to stay true by
+    /// assertion rather than by nobody having noticed.
+    ///
+    /// It is the one plugin whose product is a data model — see
+    /// [`graph::GraphPlugin`] — so the day it grows a tool or a command is the
+    /// day that decision should be made deliberately rather than found in a
+    /// diff. The plugin still has to *load*, which
+    /// [`every_compiled_in_plugin_is_loaded`] covers.
+    #[test]
+    #[cfg(feature = "graph")]
+    fn the_graph_plugin_loads_and_registers_nothing() {
+        let kernel = kernel();
+        assert!(kernel.loaded().iter().any(|id| id.as_str() == "graph"));
+        let manifest = graph::GraphPlugin::new();
+        assert!(
+            manifest.manifest().capabilities.is_empty(),
+            "arithmetic over a store the caller holds needs no grant"
+        );
+        for name in kernel.tool_names() {
+            assert!(!name.starts_with("graph"), "{name}");
+        }
+        for name in kernel.command_names() {
+            assert!(!name.starts_with("graph"), "{name}");
         }
     }
 

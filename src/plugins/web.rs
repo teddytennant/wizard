@@ -1,311 +1,81 @@
-//! Native web tools: `web_fetch` (URL → markdown/text), `web_search`
-//! (pluggable search backends), and `x_search` (X/Twitter via xAI).
+//! The web tools, as a plugin: `web_fetch` (URL to markdown/text),
+//! `web_search` (pluggable backends) and `x_search` (X/Twitter through xAI),
+//! registered through [`Ctx::tool`] and compiled behind `--features tool-web`.
 //!
-//! All three are [`ToolAccess::ReadOnly`], so they stay available in plan
-//! mode. Settings live in `[web]` in `config.toml` (see
-//! [`WebConfig`](crate::config::WebConfig)), carried into the tools via
-//! [`ToolContext::web`](super::ToolContext). Fetches are SSRF-guarded:
-//! requests to anything outside the routable public internet — see
-//! [`ip_is_local`] for the full list — are rejected unless
-//! `allow_local = true`. Search API keys are read from the environment at
-//! call time and never stored. `x_search` always uses xAI (OAuth session or
-//! API key) and does not depend on `[web] search_backend`.
+//! A dependency audit picked this one because core does not reference it at
+//! all: nothing outside `src/tools/registry.rs` named the three tool types,
+//! and the registry names every tool. What the audit also found is why this
+//! file is smaller than the `src/tools/web.rs` it came out of — the HTTP
+//! plumbing underneath the tools has three callers and only one of them is a
+//! tool.
+//!
+//! # Where the line is drawn, and why there
+//!
+//! [`crate::tools::http`] keeps the client, the SSRF guard, the hand-walked
+//! redirect chain and the body cap. This file keeps the three tools, the
+//! HTML-to-markdown reader, and the five search backends.
+//!
+//! The test is *who else would lose the code*. A Lua plugin's `wizard.http`
+//! (`src/plugins/host.rs`) is that client and that guard reached from another
+//! caller, and `generate_image` (`src/tools/image.rs`) walks the same redirect
+//! chain with a stricter hop rule. Neither has anything to do with whether the
+//! model can call `web_fetch`, and a build with `--no-default-features` still
+//! grants `Capability::Network` and still downloads images. Moving the
+//! plumbing here would mean those two silently lost their SSRF guard on the
+//! day somebody left this feature out — which is exactly the failure the
+//! plugin boundary is supposed to make impossible rather than merely
+//! unlikely.
+//!
+//! This is the same split `src/llm/wire.rs` and `src/plugins/openai/` already
+//! made: protocol machinery several unrelated callers share is core, and the
+//! vendor-facing thing built on it is the plugin. `docs/plugins.md` states the
+//! rule as "a shared transport that lived inside one plugin would be a
+//! dependency edge between plugins".
+//!
+//! # The one entanglement that had to be cut
+//!
+//! `defang` reached into `crate::mesh` for its "what draws as nothing"
+//! predicate. `mesh` is on its way out of core too, so that was a
+//! plugin-to-plugin edge waiting to happen; the table moved down into
+//! [`crate::text`] and both callers ask core. Nothing about the table changed
+//! — what is invisible is a property of Unicode, not of the mesh.
+//!
+//! # What is still core about the web
+//!
+//! `[web]` in `config.toml` ([`WebConfig`](crate::config::WebConfig)) and its
+//! `ToolContext::web` carrier. `allow_local` and `fetch_max_bytes` are
+//! promises about what the *process* does on the network — the host bridge
+//! honours them with no web tool compiled in at all — rather than settings for
+//! one tool. A build without `tool-web` still reads them and still obeys them.
+//!
+//! All three tools are [`ToolAccess::ReadOnly`], so they stay available in
+//! plan mode. Search API keys are read from the environment at call time and
+//! never stored. `x_search` always uses xAI (OAuth session or API key) and
+//! does not depend on `[web] search_backend`.
 
-use std::net::IpAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
+use crate::llm::wire::TokenSource;
+use crate::llm::xai_oauth::{self, XaiTokenSource};
+use crate::tools::http::{
+    HopScheme, MAX_REDIRECTS, REDIRECT_BUDGET, USER_AGENT, check_url, defang,
+    get_following_redirects, read_capped, web_client,
+};
+use crate::tools::{
     MAX_OUTPUT_BYTES, Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args,
     truncate_output,
 };
-use crate::llm::wire::TokenSource;
-use crate::llm::xai_oauth::{self, XaiTokenSource};
-
-/// Whole-request timeout for fetches and searches.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Desktop browser user agent (some sites block obvious bots outright).
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
-                          Chrome/124.0.0.0 Safari/537.36";
 
 /// Default number of search results.
 const DEFAULT_SEARCH_COUNT: usize = 5;
 
 /// Hard cap on requested search results.
 const MAX_SEARCH_COUNT: usize = 10;
-
-// ---------------------------------------------------------------------------
-// SSRF guard
-// ---------------------------------------------------------------------------
-
-/// Whether an address is one the web tools must not reach: anything that is
-/// not a routable public internet host.
-///
-/// `Ipv4Addr::is_private` alone is not that set. It covers exactly RFC1918 —
-/// 10/8, 172.16/12, 192.168/16 — and the interesting addresses on a real
-/// deployment live outside it. `100.64.0.0/10` (carrier-grade NAT) is the
-/// worst of them: `100.100.100.200` is Alibaba Cloud's instance metadata
-/// endpoint, and Kubernetes and EKS routinely put pod and service CIDRs in
-/// that range, so "private" in the RFC1918 sense let a fetch walk straight
-/// into the cluster.
-///
-/// Blocked, then:
-/// - IPv4: `0.0.0.0/8` (this network), `10.0.0.0/8`, `100.64.0.0/10` (CGNAT),
-///   `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24` (IETF
-///   protocol assignments), `192.168.0.0/16`, `198.18.0.0/15` (benchmarking),
-///   `224.0.0.0/4` (multicast) and `240.0.0.0/4` (reserved, which is where
-///   the `255.255.255.255` broadcast address lives).
-/// - IPv6: `::`, `::1`, `fc00::/7` (unique local), `fe80::/10` (link local),
-///   `ff00::/8` (multicast), the whole NAT64 allocation `64:ff9b::/32` (which
-///   holds the well-known prefix `64:ff9b::/96` and the local-use
-///   `64:ff9b:1::/48`), and any address carrying an IPv4 one — both the mapped
-///   form `::ffff:127.0.0.1` and the deprecated compatible form `::7f00:1` —
-///   which is judged by the IPv4 rules above.
-fn ip_is_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || a == 0 // 0.0.0.0/8, "this network" (0.0.0.0 included)
-                || (a == 100 && (64..128).contains(&b)) // CGNAT 100.64.0.0/10
-                || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
-                || (a == 198 && (b == 18 || b == 19)) // benchmarking 198.18.0.0/15
-                || v4.is_multicast() // 224.0.0.0/4
-                || a >= 240 // reserved 240.0.0.0/4, incl. 255.255.255.255
-        }
-        IpAddr::V6(v6) => {
-            // Order matters. `to_ipv4` accepts the whole of `::/96`, so `::1`
-            // converts to `0.0.0.1` and `::` to `0.0.0.0`; settling both as
-            // IPv6 first keeps loopback from being judged as some other host.
-            if v6.is_loopback() || v6.is_unspecified() {
-                return true;
-            }
-            // `to_ipv4`, not `to_ipv4_mapped`: the mapped form is only half of
-            // it. `::7f00:1` is IPv4-compatible rather than mapped, so
-            // `to_ipv4_mapped` returned `None` for it and loopback went
-            // through under the IPv6 rules, which say nothing about `::/96`.
-            if let Some(v4) = v6.to_ipv4() {
-                return ip_is_local(IpAddr::V4(v4));
-            }
-            let segments = v6.segments();
-            // The NAT64 allocation, 64:ff9b::/32 — all of it, not only the two
-            // prefixes defined inside it (64:ff9b::/96, the well-known one,
-            // and 64:ff9b:1::/48, for local use). Both embed an IPv4 address
-            // that the translator dials on our behalf, so the v6 literal says
-            // nothing about where the packet lands. The rest of the /32 is
-            // unassigned, so blocking it costs nothing and needs no revisit if
-            // another translation prefix is carved out of it later.
-            if segments[0] == 0x0064 && segments[1] == 0xff9b {
-                return true;
-            }
-            v6.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
-                || (segments[0] & 0xffc0) == 0xfe80 // link local fe80::/10
-        }
-    }
-}
-
-/// Whether a hostname is a local name: `localhost` or `*.local` (mDNS).
-fn host_is_local_name(host: &str) -> bool {
-    let host = host.trim_end_matches('.');
-    host.eq_ignore_ascii_case("localhost")
-        || (host.len() >= 6 && host[host.len() - 6..].eq_ignore_ascii_case(".local"))
-}
-
-/// Synchronous URL checks: scheme, literal IPs, and local hostnames. Used
-/// before the request and inside the redirect policy (which cannot resolve
-/// DNS asynchronously).
-fn check_url_sync(url: &reqwest::Url, allow_local: bool) -> Result<(), String> {
-    match url.scheme() {
-        "http" | "https" => {}
-        other => {
-            return Err(format!(
-                "unsupported URL scheme '{other}' (only http and https are allowed)"
-            ));
-        }
-    }
-    let Some(host) = url.host_str() else {
-        return Err("URL has no host".to_string());
-    };
-    if allow_local {
-        return Ok(());
-    }
-    let blocked = format!(
-        "fetching local/private address '{host}' is blocked \
-         (set [web] allow_local = true in config.toml to permit)"
-    );
-    // Literal IPs (IPv6 literals come bracketed in URLs).
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = bare.parse::<IpAddr>() {
-        if ip_is_local(ip) {
-            return Err(blocked);
-        }
-        return Ok(());
-    }
-    if host_is_local_name(host) {
-        return Err(blocked);
-    }
-    Ok(())
-}
-
-/// Full SSRF check: the synchronous checks plus DNS resolution of domain
-/// hosts, rejecting any URL whose host resolves to a local/private address.
-///
-/// Shared with [`crate::tools::image`], which downloads model-supplied URLs
-/// and needs the same guard; there is one implementation of "is this address
-/// reachable-but-forbidden" so the two cannot drift.
-pub(crate) async fn check_url(url: &reqwest::Url, allow_local: bool) -> Result<(), String> {
-    check_url_sync(url, allow_local)?;
-    if allow_local {
-        return Ok(());
-    }
-    let Some(host) = url.host_str() else {
-        return Err("URL has no host".to_string());
-    };
-    // Literal IPs were already checked synchronously.
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    if bare.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|err| format!("could not resolve host '{host}': {err}"))?;
-    for addr in addrs {
-        if ip_is_local(addr.ip()) {
-            return Err(format!(
-                "host '{host}' resolves to local/private address {} — blocked \
-                 (set [web] allow_local = true in config.toml to permit)",
-                addr.ip()
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Follow redirects by hand, running the **full** SSRF check on every hop.
-///
-/// reqwest's redirect policy is a synchronous callback, so it can only reach
-/// `check_url_sync` — which returns `Ok` for any host that is not a literal IP
-/// or a `localhost`/`*.local` name, without resolving anything. That is the
-/// whole guard bypassed in one hop: fetch `http://blog.attacker.com/post`,
-/// which resolves publicly and passes; it answers `302 Location:
-/// http://meta.attacker.com/…`, whose `A` record is `169.254.169.254`; the sync
-/// check sees a hostname, follows, and the cloud metadata service — instance
-/// credentials and all — lands in the model's context. Public wildcard-DNS
-/// services make the `127.0.0.1` variant a one-liner.
-///
-/// So the client is told not to redirect at all, and this walks the chain
-/// instead, awaiting `check_url` (which resolves) before each hop. There is
-/// still a TOCTOU window between our resolution and reqwest's, which no
-/// userspace check can close without owning the connector; narrowing the hole
-/// from "any hostname" to "a rebinding race" is the part that is achievable
-/// here.
-const MAX_REDIRECTS: usize = 10;
-
-/// Which schemes a redirect chain is allowed to use.
-///
-/// [`check_url_sync`] accepts `http` and `https` both, which is the right rule
-/// for `web_fetch`: the model named a URL and gets whatever that URL leads to,
-/// cleartext included, and the result is text in a transcript.
-///
-/// It is the wrong rule for the image downloader. There the *provider* names
-/// the URL, the bytes are written to the user's disk, and `generate_image`
-/// checked the scheme of the first URL only — so `https://cdn/…` answering
-/// `302 Location: http://host/x.png` was fetched in cleartext, and the
-/// promise in `docs/image.md` that these downloads are "over HTTPS only" was
-/// true of exactly one hop.
-/// This governs the URLs the *chain* names. The starting URL is the caller's
-/// to vet — it came from somewhere this function knows nothing about — and
-/// `download_image` refuses a non-https one before it gets here.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum HopScheme {
-    /// `http` and `https` are both acceptable, the `web_fetch` rule.
-    Any,
-    /// `https` only; a redirect that downgrades ends the chain with an error.
-    HttpsOnly,
-}
-
-impl HopScheme {
-    fn allows(self, url: &reqwest::Url) -> Result<(), String> {
-        if self == HopScheme::HttpsOnly && url.scheme() != "https" {
-            return Err(format!(
-                "refusing to follow a redirect to '{url}': https is required on every hop"
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub(crate) async fn get_following_redirects(
-    client: &reqwest::Client,
-    start: reqwest::Url,
-    allow_local: bool,
-    scheme: HopScheme,
-) -> Result<reqwest::Response, String> {
-    let mut url = start;
-    for _ in 0..=MAX_REDIRECTS {
-        let response = client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|err| format!("fetch failed: {err}"))?;
-
-        if !response.status().is_redirection() {
-            return Ok(response);
-        }
-        let Some(location) = response
-            .headers()
-            .get(reqwest::header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-        else {
-            // A 3xx with nowhere to go is the response.
-            return Ok(response);
-        };
-        // Relative locations are legal and common.
-        let next = url
-            .join(location)
-            .map_err(|err| format!("redirect to invalid url '{location}': {err}"))?;
-        scheme.allows(&next)?;
-        check_url(&next, allow_local).await?;
-        url = next;
-    }
-    Err("too many redirects".to_string())
-}
-
-/// Builder for any client whose redirects must be walked by hand rather than
-/// followed by reqwest — see [`get_following_redirects`]. Leaving reqwest's
-/// default follow-10 policy in place is the whole SSRF guard bypassed, because
-/// the policy callback is synchronous and cannot resolve DNS, so every caller
-/// that fetches an untrusted URL starts from here.
-pub(crate) fn no_redirect_client_builder(timeout: Duration) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .connect_timeout(Duration::from_secs(10))
-}
-
-/// HTTP client for the web tools: desktop UA and a 30s timeout. Redirects are
-/// **not** followed here — see [`get_following_redirects`]. It used to take
-/// `allow_local`, for a redirect policy that no longer lives here.
-///
-/// `pub(crate)` because a Lua plugin's `wizard.http` is the web tool's policy
-/// reached from another caller, not a second web tool: same UA, same budget,
-/// same refusal to follow a redirect without re-resolving it. A private client
-/// here would have meant a second one over there, and the second one is always
-/// the one that forgets the redirect rule.
-pub(crate) fn web_client() -> Result<reqwest::Client, reqwest::Error> {
-    no_redirect_client_builder(FETCH_TIMEOUT)
-        .user_agent(USER_AGENT)
-        .build()
-}
 
 // ---------------------------------------------------------------------------
 // HTML → readable markdown
@@ -494,6 +264,24 @@ fn is_challenge_page(html: &str) -> bool {
         || (html.contains("just a moment") && html.contains("enable javascript and cookies"))
 }
 
+/// Whether a content type is textual enough to return verbatim. An absent
+/// content type is treated as text.
+///
+/// The web tool's question, not the transport's: a plugin calling
+/// `wizard.http` gets whatever the endpoint sent, and `generate_image` wants
+/// bytes. Only `web_fetch` has to decide whether to put a body in front of a
+/// model as prose.
+fn is_texty(content_type: &str) -> bool {
+    content_type.is_empty()
+        || content_type.starts_with("text/")
+        || content_type.contains("json")
+        || content_type.contains("xml")
+        || content_type.contains("javascript")
+        || content_type.contains("yaml")
+        || content_type.contains("toml")
+        || content_type.contains("x-www-form-urlencoded")
+}
+
 // ---------------------------------------------------------------------------
 // web_fetch
 // ---------------------------------------------------------------------------
@@ -558,6 +346,7 @@ impl Tool for WebFetchTool {
             url.clone(),
             allow_local,
             HopScheme::Any,
+            REDIRECT_BUDGET,
         )
         .await
         {
@@ -635,82 +424,46 @@ impl Tool for WebFetchTool {
     }
 }
 
-/// Strip what an arbitrary page should not be able to draw with.
-///
-/// A fetched body is the most hostile text this program handles — anyone can
-/// author one — and it went straight into the transcript, the session JSONL and
-/// `--output-format stream-json` as a bare `String`. Peer text, which comes from
-/// somebody the user explicitly trusted, goes through a newtype that cannot be
-/// bypassed; web text had nothing.
-///
-/// Nothing repaints a terminal today, and that is worth stating precisely
-/// rather than leaving as luck: ratatui filters control-containing graphemes
-/// when it fills its buffer, so the TUI is covered by a dependency's
-/// implementation detail with no test in this repo asserting it. Headless
-/// `print!` has no such cover. Either way the escape belongs nowhere
-/// downstream, so it is removed at the boundary it enters through.
-///
-/// Deliberately gentler than the mesh's sanitiser: this keeps newlines and
-/// tabs, because a fetched page is *content* the model is meant to read and
-/// collapsing its layout would damage the thing the tool exists to deliver.
-/// What goes is the set that draws nothing and moves things: C0 and C1 controls
-/// other than `\n`/`\t`, and the invisible/bidi set that
-/// [`crate::mesh::is_invisible`] already defines — reused rather than
-/// re-listed, so there is one audited answer to "what is invisible" instead of
-/// two that can drift.
-pub(crate) fn defang(text: &str) -> String {
-    text.chars()
-        .filter(|ch| !crate::mesh::is_invisible(*ch))
-        .map(|ch| match ch {
-            '\n' | '\t' => ch,
-            ch if ch.is_control() => ' ',
-            ch => ch,
-        })
-        .collect()
-}
-
-/// Whether a content type is textual enough to return verbatim. An absent
-/// content type is treated as text.
-fn is_texty(content_type: &str) -> bool {
-    content_type.is_empty()
-        || content_type.starts_with("text/")
-        || content_type.contains("json")
-        || content_type.contains("xml")
-        || content_type.contains("javascript")
-        || content_type.contains("yaml")
-        || content_type.contains("toml")
-        || content_type.contains("x-www-form-urlencoded")
-}
-
-/// Stream a response body, stopping after `cap` bytes. Returns the (possibly
-/// capped) body and whether the cap cut anything off.
-///
-/// `pub(crate)` for the same reason as [`web_client`]: `fetch_max_bytes` is a
-/// `[web]` setting, and a caller that reads the body some other way is a
-/// caller that does not honour it.
-pub(crate) async fn read_capped(
-    response: reqwest::Response,
-    cap: usize,
-) -> Result<(Vec<u8>, bool), reqwest::Error> {
-    let mut body: Vec<u8> = Vec::new();
-    let mut capped = false;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if body.len() + chunk.len() > cap {
-            let room = cap - body.len();
-            body.extend_from_slice(&chunk[..room]);
-            capped = true;
-            break;
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok((body, capped))
-}
-
 // ---------------------------------------------------------------------------
 // web_search
 // ---------------------------------------------------------------------------
+
+/// Byte cap on a search endpoint's response body.
+///
+/// The fetch path has honoured `[web] fetch_max_bytes` since it was written;
+/// this path had no cap at all, because `.text()` and `.json()` read to EOF
+/// and a search backend's reply "is JSON we asked for" was treated as a reason
+/// to trust its length. Three of the five backends are reached over a URL the
+/// operator can point anywhere (`base_url`), the DuckDuckGo one parses
+/// arbitrary HTML, and none of them needs a megabyte: ten results with a
+/// three-hundred-character snippet each is single-digit kilobytes. So the cap
+/// is generous enough that no honest endpoint sees it and small enough that a
+/// hostile one cannot spend the process's memory.
+///
+/// Separate from `fetch_max_bytes` because that setting is the model's budget
+/// for page *content* it will read, and this is a parser's budget for a
+/// protocol reply the model never sees.
+const SEARCH_MAX_BYTES: usize = 2_000_000;
+
+/// Read a search response as text, refusing one that runs past the cap.
+///
+/// Refusing rather than truncating: a truncated search page parses to fewer
+/// results, or to none, and reports success. Every other failure on this path
+/// was made loud for that exact reason (see [`send_following_redirects`]), and
+/// a silent short read is the same bug wearing a different hat.
+async fn capped_text(response: reqwest::Response) -> anyhow::Result<String> {
+    let (bytes, capped) = read_capped(response, SEARCH_MAX_BYTES).await?;
+    if capped {
+        anyhow::bail!("search endpoint's response exceeded {SEARCH_MAX_BYTES} bytes");
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// [`capped_text`] for a JSON body. A capped JSON body would fail to parse
+/// anyway; this says *why* instead of blaming the endpoint's syntax.
+async fn capped_json(response: reqwest::Response) -> anyhow::Result<Value> {
+    Ok(serde_json::from_str(&capped_text(response).await?)?)
+}
 
 /// One search hit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -746,7 +499,29 @@ pub trait SearchBackend: Send + Sync {
 /// the request's credentials — an API key in a header or in the JSON body —
 /// are never replayed to a host the operator did not name. A hop off the host
 /// is an error. The point of this function is that it is never silence.
+///
+/// `budget` bounds the whole walk rather than each hop, for the reason
+/// [`REDIRECT_BUDGET`] gives.
 async fn send_following_redirects<F>(
+    client: &reqwest::Client,
+    start: reqwest::Url,
+    budget: Duration,
+    build: F,
+) -> anyhow::Result<reqwest::Response>
+where
+    F: Fn(&reqwest::Client, reqwest::Url) -> reqwest::RequestBuilder + Send,
+{
+    match tokio::time::timeout(budget, walk_search_redirects(client, start, build)).await {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "search endpoint did not answer within {}s (following redirects)",
+            budget.as_secs()
+        ),
+    }
+}
+
+/// [`send_following_redirects`] without the budget, so the budget can wrap it.
+async fn walk_search_redirects<F>(
     client: &reqwest::Client,
     start: reqwest::Url,
     build: F,
@@ -871,11 +646,11 @@ impl SearchBackend for DuckDuckGoHtml {
     async fn search(&self, query: &str, count: usize) -> anyhow::Result<Vec<SearchResult>> {
         let client = web_client()?;
         let url = reqwest::Url::parse(&self.base_url)?;
-        let response = send_following_redirects(&client, url, |client, url| {
+        let response = send_following_redirects(&client, url, REDIRECT_BUDGET, |client, url| {
             client.get(url).query(&[("q", query)])
         })
         .await?;
-        let html = response.text().await?;
+        let html = capped_text(response).await?;
         Ok(parse_duckduckgo_html(&html, count))
     }
 }
@@ -959,7 +734,7 @@ impl SearchBackend for BraveSearch {
         let client = web_client()?;
         let url = reqwest::Url::parse(&format!("{}/res/v1/web/search", self.base_url))?;
         let requested = count.to_string();
-        let response = send_following_redirects(&client, url, |client, url| {
+        let response = send_following_redirects(&client, url, REDIRECT_BUDGET, |client, url| {
             client
                 .get(url)
                 .header("X-Subscription-Token", &self.api_key)
@@ -967,7 +742,7 @@ impl SearchBackend for BraveSearch {
                 .query(&[("q", query), ("count", requested.as_str())])
         })
         .await?;
-        let body: Value = response.json().await?;
+        let body: Value = capped_json(response).await?;
         let results = body["web"]["results"]
             .as_array()
             .map(|results| {
@@ -1020,10 +795,11 @@ impl SearchBackend for TavilySearch {
             "query": query,
             "max_results": count,
         });
-        let response =
-            send_following_redirects(&client, url, |client, url| client.post(url).json(&request))
-                .await?;
-        let body: Value = response.json().await?;
+        let response = send_following_redirects(&client, url, REDIRECT_BUDGET, |client, url| {
+            client.post(url).json(&request)
+        })
+        .await?;
+        let body: Value = capped_json(response).await?;
         let results = body["results"]
             .as_array()
             .map(|results| {
@@ -1077,7 +853,7 @@ impl SearchBackend for ExaSearch {
             "numResults": count,
             "contents": { "text": { "maxCharacters": 300 } },
         });
-        let response = send_following_redirects(&client, url, |client, url| {
+        let response = send_following_redirects(&client, url, REDIRECT_BUDGET, |client, url| {
             client
                 .post(url)
                 .header("x-api-key", &self.api_key)
@@ -1085,7 +861,7 @@ impl SearchBackend for ExaSearch {
                 .json(&request)
         })
         .await?;
-        let body: Value = response.json().await?;
+        let body: Value = capped_json(response).await?;
         let results = body["results"]
             .as_array()
             .map(|results| {
@@ -1134,7 +910,7 @@ impl SearchBackend for SerperSearch {
         let client = web_client()?;
         let url = reqwest::Url::parse(&format!("{}/search", self.base_url))?;
         let request = json!({ "q": query, "num": count });
-        let response = send_following_redirects(&client, url, |client, url| {
+        let response = send_following_redirects(&client, url, REDIRECT_BUDGET, |client, url| {
             client
                 .post(url)
                 .header("X-API-KEY", &self.api_key)
@@ -1142,7 +918,7 @@ impl SearchBackend for SerperSearch {
                 .json(&request)
         })
         .await?;
-        let body: Value = response.json().await?;
+        let body: Value = capped_json(response).await?;
         let results = body["organic"]
             .as_array()
             .map(|results| {
@@ -1383,7 +1159,7 @@ impl XaiSearch {
             break response.error_for_status()?;
         };
 
-        let payload: Value = response.json().await?;
+        let payload: Value = capped_json(response).await?;
         // Some errors arrive as HTTP 200 with an `error` envelope.
         if let Some(message) = payload["error"]["message"].as_str() {
             anyhow::bail!("xAI {} error: {message}", self.server_tool.label());
@@ -1882,6 +1658,57 @@ impl Tool for XSearchTool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// the plugin
+// ---------------------------------------------------------------------------
+
+/// `web`: the three tools, and nothing else.
+pub struct WebPlugin {
+    manifest: PluginManifest,
+}
+
+impl WebPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "web".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Fetch and search the web".to_string(),
+                capabilities: vec![Capability::Network],
+                optional_deps: Vec::new(),
+                // Not in `pi`: `docs/plugins.md` defines that profile as
+                // "minimal plus a local provider, JIT tuned, no mesh, no GUI,
+                // no web".
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for WebPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for WebPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    /// Three registrations and no fallback. A tool the model is told about but
+    /// cannot run is worse than an absent one: it burns a turn discovering
+    /// that, and it does so in the middle of somebody's work. So a build
+    /// without this feature advertises nothing here, and the model's tool list
+    /// is exactly what the build can do.
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.tool(std::sync::Arc::new(WebFetchTool))?;
+        ctx.tool(std::sync::Arc::new(WebSearchTool))?;
+        ctx.tool(std::sync::Arc::new(XSearchTool))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -1891,300 +1718,6 @@ mod tests {
 
     use super::*;
     use crate::config::WebConfig;
-
-    // -- SSRF guard -----------------------------------------------------------
-
-    #[test]
-    fn local_ips_are_detected() {
-        for ip in [
-            "127.0.0.1",
-            "127.8.8.8",
-            "10.0.0.1",
-            "10.255.255.255",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.0.1",
-            "192.168.255.255",
-            "169.254.0.1",
-            "0.0.0.0",
-            "::1",
-            "fe80::1",
-            "fc00::1",
-            "fd12:3456::1",
-            "::ffff:127.0.0.1",
-            "::ffff:10.0.0.1",
-        ] {
-            assert!(ip_is_local(ip.parse().unwrap()), "{ip} is local");
-        }
-        for ip in [
-            "8.8.8.8",
-            "1.1.1.1",
-            "172.32.0.1",
-            "172.15.0.1",
-            "2606:4700::1111",
-        ] {
-            assert!(!ip_is_local(ip.parse().unwrap()), "{ip} is public");
-        }
-    }
-
-    #[test]
-    fn local_hostnames_are_detected() {
-        assert!(host_is_local_name("localhost"));
-        assert!(host_is_local_name("LOCALHOST"));
-        assert!(host_is_local_name("localhost."));
-        assert!(host_is_local_name("printer.local"));
-        assert!(host_is_local_name("nas.Local"));
-        assert!(!host_is_local_name("example.com"));
-        assert!(!host_is_local_name("local"));
-        assert!(!host_is_local_name("notlocal.com"));
-    }
-
-    /// A redirect to a private address is refused, not followed.
-    ///
-    /// This is the SSRF hole the manual redirect walk exists to close.
-    /// reqwest's redirect policy is a *synchronous* callback, so it could only
-    /// reach `check_url_sync`, which returns `Ok` for any host that is not a
-    /// literal IP or a `localhost`/`*.local` name — without resolving it. One
-    /// hop through a public hostname that resolves privately was enough to
-    /// reach the cloud metadata service and put its credentials in the model's
-    /// context.
-    ///
-    /// A real listener on loopback stands in for "resolves privately": the
-    /// server is reached only if the redirect is followed, and the assertion is
-    /// that it is not.
-    /// A fetched page cannot carry terminal escapes or invisible text into the
-    /// transcript.
-    ///
-    /// This is the most hostile text the program handles — anyone can author a
-    /// page — and it used to arrive as a bare `String` and go straight into the
-    /// transcript, the session JSONL and `stream-json`. Peer text, which comes
-    /// from somebody the user explicitly trusted, has always gone through a
-    /// newtype that cannot be bypassed.
-    ///
-    /// Newlines and tabs survive on purpose: a page is content the model is
-    /// meant to read, and collapsing its layout would damage the thing the tool
-    /// exists to deliver.
-    #[test]
-    fn a_fetched_page_cannot_carry_escapes_or_invisible_text() {
-        // A cursor-moving CSI, a title-setting OSC, and a C1 introducer.
-        let hostile = "before\u{1b}[2J\u{1b}]0;pwned\u{7}\u{9b}31mafter";
-        let clean = defang(hostile);
-        assert!(
-            !clean
-                .chars()
-                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
-            "a control character survived: {clean:?}"
-        );
-        assert!(
-            clean.contains("before") && clean.contains("after"),
-            "{clean:?}"
-        );
-
-        // Trojan-source bidi and zero-width joiners, which draw nothing and
-        // reorder what is read.
-        let sneaky = "let admin = \u{202e}false\u{202c};\u{200b}\u{2060}";
-        let clean = defang(sneaky);
-        assert!(!clean.contains('\u{202e}'), "{clean:?}");
-        assert!(!clean.contains('\u{200b}'), "{clean:?}");
-        assert!(clean.contains("let admin = false;"), "{clean:?}");
-
-        // Layout the model needs is untouched.
-        let page = "# Title\n\n- one\n- two\n\n\tindented\n";
-        assert_eq!(defang(page), page, "newlines and tabs must survive");
-    }
-
-    #[tokio::test]
-    async fn a_redirect_to_a_private_address_is_refused() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let secret = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let secret_addr = secret.local_addr().expect("addr");
-        let reached = Arc::new(AtomicUsize::new(0));
-        let seen = Arc::clone(&reached);
-        tokio::spawn(async move {
-            while let Ok((mut sock, _)) = secret.accept().await {
-                seen.fetch_add(1, Ordering::SeqCst);
-                let mut buf = [0u8; 1024];
-                let _ = sock.read(&mut buf).await;
-                let _ = sock
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nSECRET")
-                    .await;
-            }
-        });
-
-        // The hop that redirects. It is itself on loopback, so the test runs
-        // with `allow_local = true` for the first request and relies on the
-        // *redirect* being checked with the real policy.
-        let hop = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let hop_addr = hop.local_addr().expect("addr");
-        tokio::spawn(async move {
-            while let Ok((mut sock, _)) = hop.accept().await {
-                let mut buf = [0u8; 1024];
-                let _ = sock.read(&mut buf).await;
-                let body = format!(
-                    "HTTP/1.1 302 Found\r\nLocation: http://{secret_addr}/creds\r\nContent-Length: 0\r\n\r\n"
-                );
-                let _ = sock.write_all(body.as_bytes()).await;
-            }
-        });
-
-        let client = web_client().expect("client");
-        let start = reqwest::Url::parse(&format!("http://{hop_addr}/start")).expect("url");
-        let result = get_following_redirects(&client, start, false, HopScheme::Any).await;
-
-        assert!(
-            result.is_err(),
-            "the redirect to a private address must be refused"
-        );
-        assert_eq!(
-            reached.load(Ordering::SeqCst),
-            0,
-            "the private listener was contacted — the redirect was followed"
-        );
-
-        // What the run above does *not* prove, said plainly: its hop target is
-        // a literal IP, which the old synchronous check caught too. The actual
-        // hole was a *hostname* that resolves privately, and reproducing that
-        // needs DNS this suite must not depend on. So the resolving check being
-        // the one on the redirect path is asserted from the source instead —
-        // swapping it back for `check_url_sync` is the regression, and it would
-        // not fail either of the assertions above.
-        let source =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tools/web.rs"))
-                .expect("this file");
-        let walk = source
-            .split_once("async fn get_following_redirects")
-            .expect("the redirect walk exists")
-            .1;
-        let body = walk.split_once("\nfn ").map_or(walk, |(body, _)| body);
-        assert!(
-            body.contains("check_url(&next, allow_local).await"),
-            "the redirect walk must await the resolving check, not the sync one"
-        );
-    }
-
-    #[tokio::test]
-    async fn check_url_rejects_private_ranges_and_local_names() {
-        for url in [
-            "http://127.0.0.1/",
-            "http://127.0.0.1:8080/path",
-            "http://10.1.2.3/",
-            "http://172.16.0.1/",
-            "http://192.168.1.1/",
-            "http://169.254.169.254/latest/meta-data/",
-            "http://[::1]/",
-            "http://localhost/",
-            "http://localhost:3000/",
-            "http://printer.local/",
-        ] {
-            let parsed = reqwest::Url::parse(url).unwrap();
-            let err = check_url(&parsed, false).await.expect_err(url);
-            assert!(err.contains("blocked"), "{url}: {err}");
-        }
-    }
-
-    /// The ranges that are not routable public internet, and that
-    /// `Ipv4Addr::is_private` says nothing about.
-    ///
-    /// RFC1918 is three prefixes; "somewhere a fetch must not go" is a great
-    /// many more. The one that mattered was `100.64.0.0/10`: `is_private`
-    /// returned false for `100.100.100.200`, which is Alibaba Cloud's instance
-    /// metadata endpoint, and Kubernetes and EKS habitually allocate pod and
-    /// service CIDRs out of the same block — so a `web_fetch`, or a
-    /// `generate_image` download, could read cluster-internal services. The
-    /// rest are cheap to block and were equally open.
-    #[tokio::test]
-    async fn check_url_rejects_the_ranges_that_are_not_the_public_internet() {
-        for (url, what) in [
-            ("http://100.64.0.1/", "CGNAT 100.64.0.0/10, low end"),
-            ("http://100.100.100.200/", "Alibaba Cloud instance metadata"),
-            ("http://100.127.255.255/", "CGNAT 100.64.0.0/10, high end"),
-            (
-                "http://192.0.0.1/",
-                "IETF protocol assignments 192.0.0.0/24",
-            ),
-            ("http://198.18.0.1/", "benchmarking 198.18.0.0/15"),
-            ("http://198.19.255.255/", "benchmarking 198.18.0.0/15"),
-            ("http://224.0.0.1/", "multicast 224.0.0.0/4"),
-            ("http://239.255.255.250/", "SSDP multicast"),
-            ("http://240.0.0.1/", "reserved 240.0.0.0/4"),
-            ("http://255.255.255.255/", "broadcast"),
-            ("http://0.0.0.0/", "unspecified"),
-            ("http://0.0.0.1/", "this network 0.0.0.0/8"),
-            ("http://[::7f00:1]/", "IPv4-compatible IPv6 loopback"),
-            ("http://[::ffff:7f00:1]/", "IPv4-mapped IPv6 loopback"),
-            ("http://[::ffff:6440:1]/", "IPv4-mapped CGNAT"),
-            ("http://[64:ff9b::7f00:1]/", "NAT64 well-known prefix"),
-            ("http://[64:ff9b:1::1]/", "NAT64 local-use prefix"),
-            (
-                "http://[64:ff9b:beef::1]/",
-                "the rest of the NAT64 allocation 64:ff9b::/32",
-            ),
-            ("http://[ff02::1]/", "IPv6 all-nodes multicast"),
-        ] {
-            let parsed = reqwest::Url::parse(url).unwrap();
-            let err = check_url(&parsed, false).await.expect_err(what);
-            assert!(err.contains("blocked"), "{what} ({url}): {err}");
-        }
-    }
-
-    /// And the neighbours of those ranges are still reachable — a guard that
-    /// blocks the public internet is not a guard, it is an outage.
-    #[tokio::test]
-    async fn check_url_still_allows_the_addresses_next_door() {
-        for (url, what) in [
-            ("http://100.63.255.255/", "just below CGNAT"),
-            ("http://100.128.0.1/", "just above CGNAT"),
-            ("http://192.0.1.1/", "just above 192.0.0.0/24"),
-            ("http://198.17.255.255/", "just below the benchmark range"),
-            ("http://198.20.0.1/", "just above the benchmark range"),
-            ("http://223.255.255.255/", "just below multicast"),
-            ("http://1.1.1.1/", "a public resolver"),
-            ("http://[2606:4700:4700::1111]/", "a public IPv6 resolver"),
-            ("http://[64:ff9a::1]/", "just below the NAT64 prefix"),
-        ] {
-            let parsed = reqwest::Url::parse(url).unwrap();
-            check_url(&parsed, false).await.expect(what);
-        }
-    }
-
-    #[tokio::test]
-    async fn check_url_allows_local_when_configured() {
-        for url in [
-            "http://127.0.0.1:8080/",
-            "http://localhost/",
-            "http://10.0.0.1/",
-        ] {
-            let parsed = reqwest::Url::parse(url).unwrap();
-            check_url(&parsed, true).await.expect(url);
-        }
-    }
-
-    #[tokio::test]
-    async fn check_url_rejects_non_http_schemes_even_when_local_is_allowed() {
-        for url in ["ftp://example.com/", "file:///etc/passwd", "gopher://x/"] {
-            let parsed = reqwest::Url::parse(url).unwrap();
-            for allow_local in [false, true] {
-                let err = check_url(&parsed, allow_local)
-                    .await
-                    .expect_err("non-http scheme rejected");
-                assert!(err.contains("unsupported URL scheme"), "{url}: {err}");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn check_url_allows_public_ip_literals_without_dns() {
-        // A public IP literal needs no DNS resolution to pass.
-        let parsed = reqwest::Url::parse("http://8.8.8.8/").unwrap();
-        check_url(&parsed, false).await.expect("public IP allowed");
-    }
 
     // -- local fixture server -------------------------------------------------
 
@@ -3305,5 +2838,83 @@ mod tests {
         assert_eq!(XSearchTool.access(), ToolAccess::ReadOnly);
         assert!(XSearchTool.description().contains("X"));
         assert_eq!(XSearchTool.parameters()["required"], json!(["query"]));
+    }
+
+    /// A search response past the cap is an error, not a short read.
+    ///
+    /// The fetch path has honoured `[web] fetch_max_bytes` since it was
+    /// written; this path read to EOF, because `.text()` and `.json()` do and
+    /// nobody asked how long a search reply could be. Three of the five
+    /// backends point at an operator-supplied `base_url` and the DuckDuckGo one
+    /// parses whatever HTML comes back, so "it is a reply to a request we made"
+    /// was never a bound.
+    ///
+    /// Erroring rather than truncating for the reason
+    /// [`send_following_redirects`] gives about silence: a truncated search
+    /// page parses to fewer results, or none, and reports success.
+    #[tokio::test]
+    async fn a_search_response_past_the_cap_is_refused_rather_than_truncated() {
+        let body = "x".repeat(SEARCH_MAX_BYTES + 1);
+        let addr = serve(http_response("text/html", &body)).await;
+        let backend = DuckDuckGoHtml::with_base_url(format!("http://{addr}/html/"));
+        let err = backend.search("rust", 5).await.expect_err("past the cap");
+        assert!(
+            err.to_string().contains("exceeded"),
+            "the cap must say so: {err}"
+        );
+    }
+
+    /// The search chain gets the same wall-clock budget the fetch chain does.
+    ///
+    /// Separate from the fetch-side test because this is a second walker —
+    /// [`send_following_redirects`] rebuilds the request per hop so the query
+    /// can be de-duplicated — and a budget added to one and not the other is
+    /// exactly the drift two walkers invite.
+    #[tokio::test]
+    async fn a_search_redirect_chain_is_bounded_in_wall_clock() {
+        let hop = Duration::from_millis(120);
+        let addr = serve_slow_search_redirect_loop(hop).await;
+        let client = web_client().expect("client");
+        let url = reqwest::Url::parse(&format!("http://{addr}/html/")).expect("url");
+
+        let began = std::time::Instant::now();
+        let err =
+            send_following_redirects(&client, url, Duration::from_millis(250), |client, url| {
+                client.get(url).query(&[("q", "rust")])
+            })
+            .await
+            .expect_err("the walk must end on its budget");
+        let elapsed = began.elapsed();
+
+        assert!(err.to_string().contains("did not answer within"), "{err}");
+        assert!(
+            elapsed < hop * (MAX_REDIRECTS as u32),
+            "the walk ran for {elapsed:?}, which is the whole chain rather than the budget"
+        );
+    }
+
+    /// A search endpoint that redirects to itself forever, `delay` per hop.
+    /// Same host every time, so [`hop_stays_home`] keeps following it.
+    async fn serve_slow_search_redirect_loop(delay: Duration) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture server");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    let _ = socket.read(&mut buf).await;
+                    tokio::time::sleep(delay).await;
+                    let response = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://{addr}/html/\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        addr
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! It exists as its own module for a reason that is not tidiness. The layout is
 //! `f64` and unbounded; the canvas is `f32` and bounded by whatever the window
-//! is this frame; and [`Layout::hit_test`](crate::graph::Layout::hit_test)
+//! is this frame; and [`Layout::hit_test`](crate::plugins::graph::Layout::hit_test)
 //! takes **world** coordinates, so a click cannot be answered without inverting
 //! whatever the drawing did. A renderer that computes the forward map inline in
 //! `draw` and the inverse inline in `update` has written the same arithmetic
@@ -16,13 +16,13 @@
 //! A world point and a scale, not a matrix. The camera is a pan and a uniform
 //! zoom and it will never be anything else: there is no rotation in a graph
 //! explorer, and a non-uniform zoom would make a circular node an ellipse and
-//! [`node_radius`](crate::graph::layout::node_radius) a lie. Two numbers and a
+//! [`node_radius`](crate::plugins::graph::layout::node_radius) a lie. Two numbers and a
 //! point say exactly that and nothing more, which is also why
 //! [`Viewport::to_world`] can be written down rather than inverted numerically.
 //!
 //! # Why the scale is clamped
 //!
-//! [`Layout::bounds`](crate::graph::Layout::bounds) is documented never to be
+//! [`Layout::bounds`](crate::plugins::graph::Layout::bounds) is documented never to be
 //! `NaN`, but it *can* be [`Rect::EMPTY`], and a fit against a zero-width box
 //! is a division by zero. Clamping into `[MIN_SCALE, MAX_SCALE]` turns every
 //! degenerate input into a picture rather than into an infinity that empties
@@ -31,7 +31,7 @@
 
 use iced::{Point as Screen, Size, Vector};
 
-use crate::graph::{Point as World, Rect};
+use crate::plugins::graph::{Point as World, Rect};
 
 /// Smallest pixels-per-world-unit the camera will hold.
 ///
@@ -54,9 +54,9 @@ pub const MAX_SCALE: f64 = 8.0;
 /// sees, because "no peers yet" is where everyone starts.
 ///
 /// One is the natural size and not an arbitrary cap: a node is
-/// [`BASE_RADIUS`](crate::graph::layout::BASE_RADIUS) = 9 world units, so it
+/// [`BASE_RADIUS`](crate::plugins::graph::layout::BASE_RADIUS) = 9 world units, so it
 /// draws as an 18-pixel dot (25 for the local one), and
-/// [`LayoutParams::ideal_edge`](crate::graph::LayoutParams) puts linked nodes
+/// [`LayoutParams::ideal_edge`](crate::plugins::graph::LayoutParams) puts linked nodes
 /// 70 apart — a readable picture at any node count. [`MAX_SCALE`] still
 /// governs the wheel, so zooming *in* past this is a thing the operator may
 /// ask for. It is only not a thing the camera does on its own.
@@ -65,7 +65,7 @@ pub const FIT_MAX_SCALE: f64 = 1.0;
 /// Fraction of the canvas a fitted graph is allowed to fill.
 ///
 /// The remainder is the margin the labels hang in: a node's dot is inside
-/// [`Layout::bounds`](crate::graph::Layout::bounds) and the text beside it is
+/// [`Layout::bounds`](crate::plugins::graph::Layout::bounds) and the text beside it is
 /// not, so a fit with no slack clips every name on the rim.
 pub const FIT_FILL: f64 = 0.82;
 
@@ -147,7 +147,7 @@ impl Viewport {
         (world_length * self.scale) as f32
     }
 
-    /// The world slop [`Layout::hit_test`](crate::graph::Layout::hit_test)
+    /// The world slop [`Layout::hit_test`](crate::plugins::graph::Layout::hit_test)
     /// should be given, so that a click lands within [`HIT_SLOP_PIXELS`] of the
     /// drawn dot whatever the zoom is.
     pub fn hit_slop(&self) -> f64 {

@@ -9,7 +9,7 @@
 //!
 //! | Namespace | Reached through |
 //! | --- | --- |
-//! | `wizard.http` | [`crate::tools::web`]'s client, SSRF guard and body cap |
+//! | `wizard.http` | [`crate::tools::http`]'s client, SSRF guard and body cap |
 //! | `wizard.process` | [`crate::tools::shell::run_command_cancellable`] |
 //! | `wizard.model` | the agent's live [`LlmProvider`], billed to its tracker |
 //! | `wizard.ui` | the turn's [`AgentEvent`] channel |
@@ -19,8 +19,8 @@
 //! A second HTTP client is a second place to forget that reqwest's redirect
 //! policy is synchronous and therefore cannot re-resolve a hop, which is the
 //! whole SSRF guard bypassed; so `wizard.http` calls
-//! [`web_client`](crate::tools::web::web_client) and
-//! [`get_following_redirects`](crate::tools::web::get_following_redirects)
+//! [`web_client`](crate::tools::http::web_client) and
+//! [`get_following_redirects`](crate::tools::http::get_following_redirects)
 //! rather than reqwest. And a second subagent spawner is a second place to get
 //! the pane events, the read-only gate, the shared breaker and the
 //! foreground/background cancellation split wrong; so `wizard.agent.spawn`
@@ -200,16 +200,17 @@ impl HostBridge for WizardHost {
         let method = method.to_ascii_uppercase();
 
         let fetch = async {
-            crate::tools::web::check_url(&url, allow_local)
+            crate::tools::http::check_url(&url, allow_local)
                 .await
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
-            let client = crate::tools::web::web_client()?;
+            let client = crate::tools::http::web_client()?;
             let response = match method.as_str() {
-                "GET" => crate::tools::web::get_following_redirects(
+                "GET" => crate::tools::http::get_following_redirects(
                     &client,
                     url.clone(),
                     allow_local,
-                    crate::tools::web::HopScheme::Any,
+                    crate::tools::http::HopScheme::Any,
+                    crate::tools::http::REDIRECT_BUDGET,
                 )
                 .await
                 .map_err(|err| anyhow::anyhow!("{err}"))?,
@@ -237,7 +238,7 @@ impl HostBridge for WizardHost {
             };
 
             let status = response.status();
-            let (bytes, capped) = crate::tools::web::read_capped(response, cap).await?;
+            let (bytes, capped) = crate::tools::http::read_capped(response, cap).await?;
             let mut text = String::from_utf8_lossy(&bytes).into_owned();
             if capped {
                 text.push_str(&format!("\n... [response capped at {cap} bytes]"));
@@ -245,10 +246,10 @@ impl HostBridge for WizardHost {
             if !status.is_success() {
                 anyhow::bail!(
                     "{method} {url} returned HTTP {status}: {}",
-                    crate::tools::web::defang(&text)
+                    crate::tools::http::defang(&text)
                 );
             }
-            Ok(crate::tools::web::defang(&text))
+            Ok(crate::tools::http::defang(&text))
         };
 
         tokio::select! {

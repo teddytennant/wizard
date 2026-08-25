@@ -25,7 +25,7 @@
 //! that matters.
 //!
 //! Trust is on a channel of its own for the reason the module header of
-//! [`crate::graph::model`] gives: trust must never imply liveness. A trusted
+//! [`crate::plugins::graph::model`] gives: trust must never imply liveness. A trusted
 //! peer that has not answered is drawn hollow like any other silent node, and
 //! the only thing its trust buys it is a heavier rim.
 //!
@@ -39,9 +39,9 @@
 
 use iced::Color;
 
-use crate::graph::{GraphNode, Liveness};
 use crate::mesh::{EdgeKind, Trust};
 use crate::native::theme::Palette;
+use crate::plugins::graph::{GraphNode, Liveness};
 use crate::theme::Token;
 
 /// Rim weight, in world units, for a peer whose trust is merely recorded.
@@ -210,8 +210,8 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::graph::{MeshGraph, NodeKey, NodeKind};
     use crate::mesh::{Capability, Identity, Node, PeerStore, PeerText};
+    use crate::plugins::graph::{MeshGraph, NodeKey, NodeKind};
 
     fn palette(name: &str) -> Palette {
         match name {

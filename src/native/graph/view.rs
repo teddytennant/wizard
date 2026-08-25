@@ -11,9 +11,9 @@
 //!
 //! The plan's bar is 60fps at fifty nodes, but the *interesting* number is what
 //! a graph costs once it is still, and the honest answer has to be zero. So the
-//! timer that drives [`crate::graph::Layout::step`] is a subscription that
+//! timer that drives [`crate::plugins::graph::Layout::step`] is a subscription that
 //! [`GraphView::needs_step`] switches off, and `needs_step` is the layout's own
-//! [`kinetic_energy`](crate::graph::Layout::kinetic_energy) against
+//! [`kinetic_energy`](crate::plugins::graph::Layout::kinetic_energy) against
 //! [`SETTLE_ENERGY`].
 //!
 //! Kinetic energy alone is not sufficient and the gap is worth writing down,
@@ -26,7 +26,7 @@
 //!
 //! # Following, then not
 //!
-//! The viewport fits [`Layout::bounds`](crate::graph::Layout::bounds) when the
+//! The viewport fits [`Layout::bounds`](crate::plugins::graph::Layout::bounds) when the
 //! screen opens, and keeps re-fitting while the simulation is still moving,
 //! because the bounds on the first frame are the bounds of a seeded scatter and
 //! not of a graph. The first pan, zoom or drag ends that: from then on the
@@ -34,8 +34,8 @@
 
 use iced::{Point as Screen, Size, Vector};
 
-use crate::graph::{Layout, MeshGraph, NodeKey, Point as World};
 use crate::mesh::CapabilityKind;
+use crate::plugins::graph::{Layout, MeshGraph, NodeKey, Point as World};
 
 use super::viewport::Viewport;
 
@@ -381,9 +381,9 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::graph::{Liveness, NodeKind};
     use crate::mesh::peer::synthetic_store;
     use crate::mesh::{Capability, Identity, Node, PeerStore, Trust};
+    use crate::plugins::graph::{Liveness, NodeKind};
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

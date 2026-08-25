@@ -10,6 +10,10 @@ pub mod computer;
 pub mod evolve;
 pub mod file;
 pub mod git;
+/// The client, the SSRF guard, the redirect walk and the body cap. Core, and
+/// shared by the web plugin, the image downloader and a Lua plugin's
+/// `wizard.http`; see the module doc for where that line is drawn.
+pub mod http;
 pub mod image;
 pub mod interview;
 pub mod lua;
@@ -24,7 +28,6 @@ pub mod spill;
 pub mod subagent_tasks;
 pub mod tasks;
 pub mod todo;
-pub mod web;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

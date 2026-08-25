@@ -42,7 +42,10 @@ a `kind`, the OpenAI-protocol client five backends build on, the loopback
 redirect both sign-ins come back on, and the xAI token store two core *tools*
 authenticate with — not the providers),
 `src/ui/`, `src/app/`, `src/skin/`,
-`src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry}.rs`,
+`src/event.rs`, `src/dispatch.rs`, `src/tools/{mod,registry,http}.rs` (the tool
+trait, the one lookup, and the HTTP client/SSRF guard/redirect walk/body cap
+that the web tools, the image downloader and a Lua plugin's `wizard.http` all
+go through), `src/text.rs`,
 `src/config.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
 
 Two rules keep the boundary honest, and CI enforces both:
@@ -591,7 +594,7 @@ once each is a plugin, an edge that makes deleting one break the other. RFC
 **`src/llm/xai_oauth.rs`** — the token store, the sign-in flow and
 `XaiTokenSource` — is the interesting one, because it *is* xAI's and it is
 still core. The split is by consumer rather than by subject: five of the six
-things that read it are not the chat provider. `tools/web.rs` authenticates
+things that read it are not the chat provider. `plugins/web.rs` authenticates
 xAI's server-side **search** API with those tokens and `tools/image.rs` its
 **image** API — both core tools, both reaching for xAI whatever chat backend is
 configured — `sync.rs` backs the token file up, and onboarding and
@@ -707,7 +710,7 @@ second place to forget that reqwest's redirect policy is synchronous and
 therefore cannot re-resolve a hop — which is the entire SSRF guard bypassed —
 and a second subagent spawner is a second place to get the pane events, the
 read-only gate, the shared breaker and the foreground/background cancellation
-split wrong. Three functions in `src/tools/web.rs` widened to `pub(crate)` and
+split wrong. Three functions in what was then `src/tools/web.rs` widened to `pub(crate)` and
 one new entry point beside `run_command`; that was the whole cost.
 
 **The live agent arrives through a slot, and that is a real limitation.** Four
@@ -770,5 +773,137 @@ failed: exited 3" rather than as "tool '...' failed".
   its own change.
 - **The host bridge is still `UnwiredHost`.** A Lua plugin that calls
   `wizard.http` or `wizard.model` gets an error naming the reason.
-- **Nothing that is not a provider has gone through the door yet.** The
-  thirteen earmarked commands are still built-ins.
+- **No *command* has gone through the door yet.** The thirteen earmarked ones
+  are still built-ins.
+
+## As built: two subsystems that are not providers
+
+`graph` and `tool-web` are the first plugins that are not a backend, and they
+were picked by the same dependency audit that picked anthropic: the two
+cheapest splits left. What they cost was not the move.
+
+### `tool-web`, and where the line through `web.rs` is
+
+`src/tools/web.rs` was 3.3k lines with **zero** core references — no module
+outside `src/tools/registry.rs` named `WebFetchTool`, `WebSearchTool` or
+`XSearchTool`, and the registry names every tool. On the audit's numbers it was
+a lift-and-shift.
+
+It is not, and the reason is the half of that file that is not a tool. Three
+callers share it and only one of them is the web tool:
+
+| caller | what it needs | why it is not the web tool's business |
+| --- | --- | --- |
+| `plugins/host.rs` | `web_client`, `check_url`, `get_following_redirects`, `read_capped` | `Capability::Network` is granted on builds with no web tool; the promise that grant makes lives here |
+| `tools/image.rs` | the same walk, with `HopScheme::HttpsOnly` | `generate_image` downloads a provider-named URL to the user's disk |
+| `plugins/web.rs` | all of it | the tools |
+
+So the file split in two. `src/tools/http.rs` is core and holds the client, the
+SSRF guard, the hand-walked redirect chain and the body cap; `src/plugins/web.rs`
+holds the three tools, the HTML reader and the five search backends. This is
+`src/llm/wire.rs` against `src/plugins/openai/` again — shared protocol
+machinery in core, the vendor-facing thing in the plugin — and the argument is
+the same one this document already makes about a shared transport inside one
+plugin being an edge between plugins.
+
+Putting the plumbing in the plugin would have been worse than untidy. A build
+without `tool-web` would have kept `wizard.http` and `generate_image` and lost
+their SSRF guard, which is a security property disappearing as a side effect of
+a cargo flag: exactly the failure the boundary exists to make impossible rather
+than merely unlikely. There is also a specific reason not to have two copies —
+reqwest's redirect policy is a *synchronous* callback and therefore cannot
+re-resolve a hop, so any client that keeps the default follow-10 policy has
+bypassed the whole guard. One place gets that right and everybody starts from
+it.
+
+`[web]` in `config.toml` stays core for the same reason: `allow_local` and
+`fetch_max_bytes` are promises about what this *process* does on the network,
+not settings for one tool, and a build without the plugin still reads and obeys
+them.
+
+**A missing tool degrades differently from a missing provider, and that is the
+whole point.** An absent `kind` still has a string a user can type, so
+`registry::unknown` names it and lists what is installed. An absent tool has no
+such affordance: the only correct behaviour is to be *absent from the roster*,
+because the roster is what the model is told it can call, and a tool advertised
+but unrunnable costs a turn to discover in the middle of somebody's work.
+`plugins::a_tool_is_registered_exactly_when_its_plugin_is_compiled_in` and
+`plugin_tools_reach_the_agents_registry_and_only_when_compiled_in` assert both
+halves.
+
+Two consumers had to stop assuming "native" meant "all". `harness export` now
+composes native + plugin tools, so a bundle describes what its binary can do
+(a build without `tool-web` exports no `web_fetch.md`, and `tests/cli.rs`
+expects that). `mcp`'s `RESERVED_TOOL_NAMES` went the other way and keeps the
+three web names *unconditionally*: the list is about names, and a name Wizard
+can register must not be claimable by an MCP server on a stripped build, or it
+would work until somebody rebuilt with the feature on. Core holding the string
+while never naming the type is the `ProviderKind::ANTHROPIC` rule.
+
+### `graph`, and the first plugin that registers nothing
+
+`src/graph/` is 2.6k lines with one outgoing edge (to `mesh`) and one consumer
+(`src/native/`). It moved to `src/plugins/graph/` behind `--features graph`,
+on by default.
+
+Its `apply` is empty, and that is a decision rather than an omission. `Ctx`
+registers the four things a plugin hands the *kernel* — a tool, a command, a
+provider, an event handler — and what this plugin produces is a `MeshGraph` and
+a `Layout` over it, which one screen constructs by name. There is no
+registration for "a type another module builds", and providing a service nobody
+injects in order to have a line in that function would be decoration.
+`the_graph_plugin_loads_and_registers_nothing` pins it, so the day it grows a
+tool is a deliberate day.
+
+It is a plugin in the two senses this document says are load-bearing: it is
+behind a cargo feature and can be left out, and no core module names it. Its
+consumer, `src/native/graph/`, is gated on the same feature — not on `native`
+alone — because a plugin whose removal breaks the build is not a plugin. That
+costs nothing today: `src/native/mod.rs` records the explorer screen as
+"deferred, not reachable", so `--features native` without `graph` is the window
+that already ships. `tests/graph_explorer.rs` is
+`#![cfg(all(feature = "native", feature = "graph"))]` and compiles to nothing
+without either.
+
+### `crate::mesh::is_invisible` became `crate::text::is_invisible`
+
+`defang` reached into `mesh` for the "what does a renderer draw as nothing"
+table, and `memory.rs` did too. With the web tools becoming a plugin and `mesh`
+on its way out of core, that was a plugin-to-plugin edge waiting to happen. The
+table moved down into `src/text.rs` and all three callers ask core; nothing
+about it changed, because what is invisible is a property of Unicode rather
+than of the mesh. The bidi-table assertion moved with it, which is where a test
+of a table belongs.
+
+### Two bugs in the old `web.rs`, fixed on the way past
+
+Both were found while wiring the host bridge, both predate this change, and
+both are in the code the split was already rewriting.
+
+**The search path had no size cap at all.** The fetch path has honoured
+`fetch_max_bytes` since it was written; `send_following_redirects` handed its
+response to `.text()` or `.json()`, which read to EOF. Three of the five
+backends point at an operator-supplied `base_url` and the DuckDuckGo one parses
+whatever HTML comes back, so "it is a reply to a request we made" was never a
+bound. `SEARCH_MAX_BYTES` is 2 MB and the read *refuses* rather than truncates,
+for the reason that function's own doc comment gives about silence: a truncated
+search page parses to fewer results, or none, and reports success.
+
+**`FETCH_TIMEOUT` was per-`send()`, not per chain.** A reqwest client timeout is
+per request and a chain is `MAX_REDIRECTS + 1` requests, so a server that
+answered each hop just inside thirty seconds could run for five minutes under a
+budget every caller and every doc comment called thirty — and a hostile server
+picks both the hop count and the delay, which makes it the cheapest way there
+is to pin an agent turn. Both walkers now take an explicit `budget` and wrap the
+loop in it; `generate_image` passes its own, longer one. The tests assert the
+clock and not only the message, because running out of *redirects* also returns
+an error and would satisfy a message-only test while taking the full unbudgeted
+time.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` is `check-provider-plugins.sh` for these two,
+and it exists because the combinations that matter here are ones that script
+never builds: `graph` left out **with the GUI present**, which is the only way
+to catch `src/native/graph/` reaching for an absent plugin, and `tool-web` left
+out with everything else present. Four legs.
