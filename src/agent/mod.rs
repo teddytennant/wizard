@@ -1807,7 +1807,7 @@ fn read_memory_index(project_root: &Path) -> Option<String> {
 /// load skills, and open/create the session.
 ///
 /// This is the shared agent-construction path used by the sovereign headless
-/// runner ([`crate::headless::run`]), the ACP server ([`crate::acp`]) and the
+/// runner ([`crate::headless::run`]), the ACP server (`wizard acp`, a plugin) and the
 /// messaging gateway ([`crate::gateway`]). `resume` reopens the latest session
 /// instead of starting a new one. Each builds exactly one agent, so each lets
 /// this path connect the MCP servers for it.
@@ -1988,7 +1988,7 @@ async fn build_headless_agent_inner(
     if !native_tools {
         // Never `println!`. Every surface reaches this path, and two of them
         // own stdout as a protocol transport: the ACP server frames JSON-RPC
-        // on it (`crate::acp`) and `--output-format json` frames the run
+        // on it (`wizard acp`) and `--output-format json` frames the run
         // there. A bare line on stdout corrupts both, so the notice goes to
         // stderr, which no surface parses.
         eprintln!("using the JSON tool protocol for '{model}'");

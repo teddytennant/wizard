@@ -15,6 +15,15 @@
 //! without a per-action approval gate, so the server never needs to call the
 //! client back for permission; it advertises no client-side capabilities and
 //! does its own file and shell I/O.
+//!
+//! # As a plugin
+//!
+//! Behind `--features acp`, on by default, which is also what gates the
+//! `agent-client-protocol` dependency: a build without this feature does not
+//! link the protocol crate at all. Core parses `wizard acp` and looks the
+//! *body* up by name; see [`AcpPlugin`] at the bottom of this file and
+//! [`crate::entrypoint`] for why a subcommand's body is a service rather than
+//! a slash command.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -37,6 +46,8 @@ use tokio::sync::{Mutex, mpsc};
 use crate::agent::session::Session;
 use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanVerdict};
 use crate::config::Config;
+use crate::entrypoint::{self, Entrypoint};
+use crate::kernel::{Capability, Ctx, Plugin, PluginManifest, Service};
 use crate::mcp::McpManager;
 use crate::tools::CommandDispatch;
 
@@ -462,6 +473,81 @@ fn internal<E: std::fmt::Display>(err: E) -> acp::Error {
     acp::Error::internal_error()
 }
 
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// The ACP server, as a plugin.
+///
+/// The registration sits at the bottom of this file rather than in a
+/// `plugin.rs` beside it, which is where the window's lives. The rule that
+/// split them is length, not principle: `src/plugins/native/` is sixteen
+/// thousand lines across two dozen files and its twenty-line contract with
+/// core would be lost in them. This file is one screen of scrolling and its
+/// contract is the last thing in it, which is where a reader looks.
+pub struct AcpPlugin {
+    manifest: PluginManifest,
+}
+
+impl AcpPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                name: "acp".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "`wizard acp`: an Agent Client Protocol server over stdio, for \
+                              editors that embed Wizard"
+                    .to_string(),
+                // Everything a headless agent can do, because that is what a
+                // `session/new` builds — and this surface runs its tools with
+                // no per-action approval gate, so the editor never sees a
+                // permission prompt and the process does its own file and
+                // shell I/O. `Ui` is the transcript: every agent event becomes
+                // a `session/update` the editor paints.
+                //
+                // Declared, not enforced; see `native/plugin.rs`.
+                capabilities: vec![
+                    Capability::Filesystem,
+                    Capability::Process,
+                    Capability::Network,
+                    Capability::Model,
+                    Capability::Ui,
+                    Capability::Agent,
+                ],
+                optional_deps: Vec::new(),
+                // `docs/plugins.md` puts ACP in `server` by name: an editor on
+                // a laptop driving a checkout on a headless box over stdio is
+                // exactly the machine that has no window and wants this.
+                profiles: vec!["full".to_string(), "server".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for AcpPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Plugin for AcpPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    /// One entrypoint and nothing else. There is no tool and no slash command
+    /// to add: everything an ACP session runs is a built-in applied to that
+    /// session's own agent, and the protocol is the surface rather than an
+    /// extension of the ones that stay in.
+    fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        ctx.provide(
+            entrypoint::ACP,
+            Service::native(Entrypoint::new(entrypoint::ACP, run)),
+        );
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +637,40 @@ mod tests {
         let cut = truncate(&long, TOOL_OUTPUT_CAP);
         assert!(cut.ends_with("… (truncated)"));
         assert!(cut.len() < long.len());
+    }
+
+    /// `apply` registers the one thing it claims to, under the name and the
+    /// argument type core looks it up with. A kernel of its own rather than
+    /// the process one, so this still means something in a binary where some
+    /// other test already booted plugins.
+    #[test]
+    fn applying_the_plugin_registers_the_acp_entrypoint() {
+        let kernel = crate::kernel::Kernel::new(crate::kernel::KernelOptions::default());
+        kernel
+            .load(std::sync::Arc::new(AcpPlugin::new()))
+            .expect("the acp plugin loads");
+        let found = kernel
+            .services()
+            .inject_as::<Entrypoint<Config>>(entrypoint::ACP)
+            .expect("the server registered its entrypoint");
+        assert_eq!(found.name(), entrypoint::ACP);
+    }
+
+    /// Unloading takes it back, so a reload does not leave two servers
+    /// answering to one name.
+    #[tokio::test]
+    async fn unloading_the_plugin_withdraws_the_entrypoint() {
+        let kernel = crate::kernel::Kernel::new(crate::kernel::KernelOptions::default());
+        let id = kernel
+            .load(std::sync::Arc::new(AcpPlugin::new()))
+            .expect("the acp plugin loads");
+        kernel.unload(&id).await.expect("it unloads");
+        assert!(
+            kernel
+                .services()
+                .inject_as::<Entrypoint<Config>>(entrypoint::ACP)
+                .is_none(),
+            "the entrypoint outlived the plugin that registered it"
+        );
     }
 }

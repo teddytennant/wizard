@@ -81,6 +81,8 @@ build = "build.rs"
 # carries `xai` and `xaioauth`, and `openai` carries `openai` and `openrouter`.
 # See `docs/plugins.md` and `src/plugins/mod.rs`.
 default = [
+  "acp",
+  "fleet",
   "provider-anthropic",
   "provider-chatgpt",
   "provider-cloudflare",
@@ -91,6 +93,30 @@ default = [
   "graph",
   "tool-web",
 ]
+
+# `wizard acp`: the Agent Client Protocol server that lets Zed, Neovim and
+# Emacs embed Wizard over stdio. `src/plugins/acp.rs`.
+#
+# The only plugin feature that gates a *dependency*: `agent-client-protocol` has
+# exactly one consumer and a build without this feature does not link the crate
+# at all, which is most of what leaving it out is worth. Core keeps parsing the
+# subcommand either way — `clap` owns `wizard acp` and `--help` still lists it —
+# so an absent server is a sentence naming this flag rather than a missing verb.
+acp = ["dep:agent-client-protocol"]
+
+# `wizard fleet`: one planning turn decomposes a mission into independent
+# tasks, up to N headless `wizard --mode sovereign` children run them in
+# parallel over git worktrees, and a synthesis turn merges the branches back.
+# `src/plugins/fleet/`. See docs/fleet.md.
+#
+# What stays in core when this is left out is what other things use or would
+# use: `src/git_util.rs` (async git plumbing), `progress::fleet_bars` (a
+# progress *style*, and styles live in one file), and `[fleet]` in
+# `config.toml`, which follows `[web]` — a config section is a promise about
+# what this process does, and a build without the plugin still parses and
+# round-trips one rather than rejecting somebody's file over a section it
+# cannot run.
+fleet = []
 
 # Anthropic Messages API. `kind = "anthropic"`.
 provider-anthropic = []
@@ -197,7 +223,9 @@ async-trait = "0.1"
 
 # Agent Client Protocol server (`wizard acp`): embeds Wizard in ACP editors
 # (Zed, Neovim, Emacs). ACP 2.0 owns stdio via its `Stdio` transport.
-agent-client-protocol = "2.0.0"
+# Optional, behind the `acp` feature (on by default): `src/plugins/acp.rs` is
+# its only consumer, so a build without that plugin should not link it.
+agent-client-protocol = { version = "2.0.0", optional = true }
 
 # Ollama HTTP (rustls so the binary has no OpenSSL link dependency)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

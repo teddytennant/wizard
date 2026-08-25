@@ -1,7 +1,7 @@
 //! Integration test for `wizard acp`: its stdout is the JSON-RPC transport,
 //! so nothing else may ever be written there.
 //!
-//! The ACP server frames newline-delimited JSON-RPC on stdout ([`wizard::acp`]
+//! The ACP server frames newline-delimited JSON-RPC on stdout (`wizard::plugins::acp`
 //! hands `tokio::io::stdout()` straight to the protocol crate). Every surface
 //! shares one agent-construction path (`agent::build_headless_agent_*`), and
 //! that path used to `println!` two different things: the "using the JSON tool
@@ -20,7 +20,13 @@
 //! nothing, so the session fails at `build()` and never reaches the transport
 //! this is watching. That degrade is asserted in
 //! `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
-#![cfg(feature = "provider-ollama")]
+//!
+//! And it needs `acp`, because the server is a plugin too: without it the
+//! subprocess this drives prints one sentence about the missing feature and
+//! exits, so every assertion below would be about the wrong program. That
+//! degrade has its own assertion in
+//! `plugins::an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in`.
+#![cfg(all(feature = "provider-ollama", feature = "acp"))]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
