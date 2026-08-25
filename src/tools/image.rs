@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args, resolve_path};
 use crate::config::{Config, ProviderKind};
-use crate::llm::openai::TokenSource;
+use crate::llm::wire::TokenSource;
 use crate::llm::xai_oauth::{self, XaiTokenSource};
 
 /// Whole-request timeout for image generation (model work is slower than chat).
@@ -341,56 +341,63 @@ impl Tool for GenerateImageTool {
 fn resolve_endpoint() -> Result<ImageEndpoint, String> {
     if let Ok(config) = Config::load() {
         let provider = config.active();
-        match provider.kind {
-            ProviderKind::XaiOauth => {
-                if xai_signed_in() {
-                    let source = XaiTokenSource::new()
-                        .map_err(|err| format!("opening the xAI OAuth token store: {err:#}"))?;
-                    return Ok(ImageEndpoint {
-                        base_url: provider.base_url,
-                        is_xai: true,
-                        auth: ImageAuth::Oauth(source),
-                    });
-                }
-                // Active is OAuth but no session — try key fallbacks below with
-                // this provider's base URL first if a key exists.
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    true,
-                    Some(xai_oauth::DEFAULT_KEY_ENV),
-                    &["xai", &provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+        // Still branching on specific kinds, and it is the one place in this
+        // refactor where that could not become a descriptor lookup. The
+        // question here is "does this backend serve an image API, and under
+        // which credential" — a *capability*, which the descriptor does not
+        // carry. Adding an image field to it to satisfy one tool would put a
+        // second, image-shaped protocol on a type whose whole job is the chat
+        // one; the right shape is a service the provider plugin provides and
+        // this tool injects, and that is the next phase. Until then this reads
+        // the ids directly, and the `if` chain rather than a `match` is only
+        // because a kind is a string now and strings are not patterns.
+        if provider.kind == ProviderKind::XAI_OAUTH {
+            if xai_signed_in() {
+                let source = XaiTokenSource::new()
+                    .map_err(|err| format!("opening the xAI OAuth token store: {err:#}"))?;
+                return Ok(ImageEndpoint {
+                    base_url: provider.base_url,
+                    is_xai: true,
+                    auth: ImageAuth::Oauth(source),
+                });
             }
-            ProviderKind::Xai => {
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    true,
-                    provider
-                        .api_key_env
-                        .as_deref()
-                        .or(Some(xai_oauth::DEFAULT_KEY_ENV)),
-                    &["xai", &provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+            // Active is OAuth but no session — try key fallbacks below with
+            // this provider's base URL first if a key exists.
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                true,
+                Some(xai_oauth::DEFAULT_KEY_ENV),
+                &["xai", &provider.name],
+            ) {
+                return Ok(endpoint);
             }
-            ProviderKind::Openai | ProviderKind::OpenRouter => {
-                let default_env = match provider.kind {
-                    ProviderKind::OpenRouter => Some(crate::llm::openrouter::DEFAULT_KEY_ENV),
-                    _ => Some("OPENAI_API_KEY"),
-                };
-                if let Some(endpoint) = api_key_endpoint(
-                    &provider.base_url,
-                    is_xai_base_url(&provider.base_url),
-                    provider.api_key_env.as_deref().or(default_env),
-                    &[&provider.name],
-                ) {
-                    return Ok(endpoint);
-                }
+        } else if provider.kind == ProviderKind::XAI {
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                true,
+                provider
+                    .api_key_env
+                    .as_deref()
+                    .or(Some(xai_oauth::DEFAULT_KEY_ENV)),
+                &["xai", &provider.name],
+            ) {
+                return Ok(endpoint);
             }
-            _ => {}
+        } else if provider.kind == ProviderKind::OPENAI || provider.kind == ProviderKind::OPENROUTER
+        {
+            let default_env = if provider.kind == ProviderKind::OPENROUTER {
+                Some(crate::llm::registry::defaults::OPENROUTER_KEY_ENV)
+            } else {
+                Some("OPENAI_API_KEY")
+            };
+            if let Some(endpoint) = api_key_endpoint(
+                &provider.base_url,
+                is_xai_base_url(&provider.base_url),
+                provider.api_key_env.as_deref().or(default_env),
+                &[&provider.name],
+            ) {
+                return Ok(endpoint);
+            }
         }
     }
 
@@ -590,15 +597,15 @@ async fn materialize_image(
 /// Separate from the client that talks to the configured generation endpoint,
 /// and for one reason: the endpoint is the user's own configuration, while the
 /// URL in its response is attacker-influenced text that this process is about
-/// to fetch. So it gets [`web::no_redirect_client_builder`], which turns
+/// to fetch. So it gets [`http::no_redirect_client_builder`], which turns
 /// reqwest's automatic follow-10 off; the chain is walked by hand instead so
 /// every hop is SSRF-checked.
 fn download_client() -> Result<reqwest::Client, reqwest::Error> {
-    crate::tools::web::no_redirect_client_builder(GENERATE_TIMEOUT).build()
+    crate::tools::http::no_redirect_client_builder(GENERATE_TIMEOUT).build()
 }
 
 /// Download image bytes from a temporary generation URL. SSRF-guarded: https
-/// only, and the full [`web::check_url`] check — which resolves DNS — on the
+/// only, and the full [`http::check_url`] check — which resolves DNS — on the
 /// URL and on every redirect it leads through.
 ///
 /// The old guard here was neither. It matched local *names* and literal
@@ -617,7 +624,7 @@ async fn download_image(client: &reqwest::Client, url: &str) -> anyhow::Result<V
             parsed.scheme()
         );
     }
-    crate::tools::web::check_url(&parsed, false)
+    crate::tools::http::check_url(&parsed, false)
         .await
         .map_err(|reason| anyhow::anyhow!("refusing to download image: {reason}"))?;
     read_image_body(client, parsed).await
@@ -634,11 +641,15 @@ async fn download_image(client: &reqwest::Client, url: &str) -> anyhow::Result<V
 /// generic hop check allows `http` and `https` both — right for `web_fetch`,
 /// wrong for this.
 async fn read_image_body(client: &reqwest::Client, url: reqwest::Url) -> anyhow::Result<Vec<u8>> {
-    let response = crate::tools::web::get_following_redirects(
+    let response = crate::tools::http::get_following_redirects(
         client,
         url,
         false,
-        crate::tools::web::HopScheme::HttpsOnly,
+        crate::tools::http::HopScheme::HttpsOnly,
+        // The download's own budget, not the web tools' 30s: image generation
+        // endpoints are slow and this walk is part of a call the user is
+        // already waiting minutes for.
+        GENERATE_TIMEOUT,
     )
     .await
     .map_err(|reason| anyhow::anyhow!("image download failed: {reason}"))?;

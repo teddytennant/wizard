@@ -9,7 +9,7 @@ mod prompts;
 mod recover;
 mod runtime;
 mod session;
-mod tee;
+pub mod tee;
 mod term;
 #[cfg(test)]
 mod tests;
@@ -18,10 +18,10 @@ mod transcript;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
 pub use runtime::run_tui;
-pub use tee::MeshTee;
+pub use tee::{SessionTee, TeeFactory};
 pub use term::restore_terminal_best_effort;
 pub use transcript::{
-    LOCAL_MARKER, PaneStatus, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
+    LOCAL_MARKER, PaneStatus, PeerAddress, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
     TranscriptView,
 };
 
@@ -39,7 +39,7 @@ use serde_json::Value;
 use crate::agent::{Agent, AgentEvent, DoneReason, PlanVerdict, ultra};
 // The built-in command table and its parser live in [`crate::commands`].
 use crate::commands::CustomCommand;
-use crate::commands::{COMMANDS, ProviderAction, SlashCommand, UltraAction};
+use crate::commands::{ProviderAction, SlashCommand, Surface, UltraAction};
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::event::Event;
 use crate::image_view::ImageCache;
@@ -223,8 +223,10 @@ pub struct App {
     pub should_quit: bool,
     /// Tick counter driving the busy spinner.
     pub tick: u64,
-    /// Matching commands (builtin [`COMMANDS`] plus custom commands) for the
-    /// current `/input`, shown as the suggestion popup.
+    /// Matching commands for the current `/input`, shown as the suggestion
+    /// popup: everything [`crate::commands::available`] offers this surface —
+    /// the built-in table and whatever plugins registered — plus the
+    /// workspace's own custom commands.
     pub suggestions: Vec<Suggestion>,
     /// Highlighted row in `suggestions`.
     pub suggestion_index: usize,
@@ -373,14 +375,16 @@ pub struct App {
     /// only on the first message. Cleared once a turn completes successfully —
     /// the provider has proven itself, so a transient blip self-heals.
     pub provider_health_error: Option<String>,
-    /// This session's tee onto the mesh, when this node is listening.
+    /// This session's events on their way off this machine, when some plugin
+    /// has somewhere to send them.
     ///
-    /// `None` for a default install, and `None` is the shipped default: a peer
-    /// watches this node by dialling it, so with `[mesh] listen` off nobody can
-    /// subscribe and a tee would be a socket bound for a stream nobody can
-    /// open. See [`MeshTee`], which is also where the one call to
-    /// [`crate::mesh::Mesh::publish_turn`] lives.
-    pub mesh: Option<MeshTee>,
+    /// `None` for a default install, and `None` is the shipped default twice
+    /// over: a build without the mesh has nothing registered to open one, and
+    /// a build with it still answers `None` unless `[mesh] listen` is on,
+    /// because a peer watches this node by dialling it and a tee for a stream
+    /// nobody can open is a socket bound for nothing. A `dyn` rather than the
+    /// plugin's type — see [`tee`] for why core does not name it.
+    pub mesh: Option<Box<dyn SessionTee>>,
 }
 
 impl App {
@@ -1171,9 +1175,10 @@ impl App {
                 }
                 // Substitute the account id into the base-URL template
                 // (e.g. `.../accounts/{account_id}/ai/v1`).
-                prompt.base_url = prompt
-                    .base_url
-                    .replace(crate::llm::cloudflare::ACCOUNT_ID_PLACEHOLDER, &value);
+                prompt.base_url = prompt.base_url.replace(
+                    crate::llm::registry::defaults::CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER,
+                    &value,
+                );
             }
             PromptField::BaseUrl => prompt.base_url = value,
             PromptField::Model => prompt.model = value,
@@ -1714,8 +1719,11 @@ impl App {
             self.suggestion_index = 0;
             return;
         }
-        // Builtins in display order, then custom commands (already sorted).
-        let candidates: Vec<Suggestion> = COMMANDS
+        // Builtins in display order, then plugin commands by name, then custom
+        // commands (already sorted). Anything this surface cannot run is left
+        // out rather than offered and then refused — the window dims those
+        // instead, because it has the room to.
+        let candidates: Vec<Suggestion> = crate::commands::available(Surface::Tui)
             .iter()
             .map(Suggestion::from)
             .chain(self.custom_commands.iter().map(Suggestion::from))
@@ -3109,7 +3117,8 @@ impl App {
                             )))
                         }
                         PickerKind::ProviderType => {
-                            use crate::llm::{cloudflare, openrouter, xai_oauth};
+                            use crate::llm::registry::defaults;
+                            use crate::llm::xai_oauth;
                             use std::collections::VecDeque;
                             match picker.selected {
                                 // xAI sign-in: run the OAuth flow; login()
@@ -3123,7 +3132,7 @@ impl App {
                                 // xAI API key.
                                 1 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Xai,
+                                        kind: ProviderKind::XAI,
                                         name: "xai".to_string(),
                                         base_url: xai_oauth::DEFAULT_BASE_URL.to_string(),
                                         model: xai_oauth::DEFAULT_MODEL.to_string(),
@@ -3135,9 +3144,9 @@ impl App {
                                 // it alongside the key.
                                 2 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::OpenRouter,
+                                        kind: ProviderKind::OPENROUTER,
                                         name: "openrouter".to_string(),
-                                        base_url: openrouter::DEFAULT_BASE_URL.to_string(),
+                                        base_url: defaults::OPENROUTER_BASE_URL.to_string(),
                                         model: String::new(),
                                         api_key: None,
                                         queue: VecDeque::from([
@@ -3151,10 +3160,11 @@ impl App {
                                 // GLM 5.2 and can be changed later via /model.
                                 3 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Cloudflare,
+                                        kind: ProviderKind::CLOUDFLARE,
                                         name: "cloudflare".to_string(),
-                                        base_url: cloudflare::BASE_URL_TEMPLATE.to_string(),
-                                        model: cloudflare::DEFAULT_MODEL.to_string(),
+                                        base_url: defaults::CLOUDFLARE_BASE_URL_TEMPLATE
+                                            .to_string(),
+                                        model: defaults::CLOUDFLARE_MODEL.to_string(),
                                         api_key: None,
                                         queue: VecDeque::from([
                                             PromptField::AccountId,
@@ -3165,7 +3175,7 @@ impl App {
                                 // OpenAI — model + key.
                                 4 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: "openai".to_string(),
                                         base_url: "https://api.openai.com/v1".to_string(),
                                         model: String::new(),
@@ -3179,7 +3189,7 @@ impl App {
                                 // Anthropic — model + key.
                                 5 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Anthropic,
+                                        kind: ProviderKind::ANTHROPIC,
                                         name: "claude".to_string(),
                                         base_url: "https://api.anthropic.com".to_string(),
                                         model: String::new(),
@@ -3194,7 +3204,7 @@ impl App {
                                 // prompted, starting with the name.
                                 6 => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: String::new(),
                                         base_url: String::new(),
                                         model: String::new(),
@@ -3216,7 +3226,7 @@ impl App {
                                         .get(index - PROVIDER_TYPES.len())
                                     {
                                         self.begin_provider_prompt(ProviderPrompt {
-                                            kind: ProviderKind::Openai,
+                                            kind: ProviderKind::OPENAI,
                                             name: preset.name.to_string(),
                                             base_url: preset.base_url.to_string(),
                                             model: preset.default_model().to_string(),
@@ -3467,7 +3477,7 @@ impl App {
                 self.suggestions[self.suggestion_index.min(self.suggestions.len() - 1)].clone();
             // An exactly-typed command always runs as typed; otherwise Enter
             // completes the highlighted suggestion first.
-            let exact = COMMANDS.iter().any(|command| command.name == typed)
+            let exact = crate::commands::is_known(&typed)
                 || self.custom_commands.iter().any(|c| c.name == typed);
             if !exact && typed != spec.name {
                 let takes_args = spec.takes_args;
@@ -3990,7 +4000,7 @@ impl App {
         // session-start hook, a background task reporting in, a subagent run —
         // and a tee hung off the turn alone would show a watcher a session that
         // went silent between turns. What crosses is not decided here: see
-        // [`MeshTee::publish`].
+        // [`SessionTee::publish`] and whatever implements it.
         if let Some(mesh) = &self.mesh {
             mesh.publish(&event);
         }

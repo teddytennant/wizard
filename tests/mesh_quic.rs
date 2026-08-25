@@ -4,7 +4,7 @@
 //!
 //! # Why this file exists next to the unit tests
 //!
-//! `src/mesh/quic.rs` tests the transport a piece at a time. This tests it the
+//! `src/plugins/mesh/quic.rs` tests the transport a piece at a time. This tests it the
 //! way it will actually be used: a `Mesh` on each side, holding its own
 //! `PeerStore` and its own trust decisions, with the *whole* stack underneath —
 //! QUIC, mutual TLS over the hand-written certificates, the versioned frame
@@ -36,6 +36,16 @@
 //! of running tests (see [`child_node_entry_point`]). Nothing is shared: not
 //! the runtime, not the allocator, not the identity, not the peer store. That
 //! is the case the release claim rests on, so it is worth the machinery.
+//!
+//! # Why the whole file is behind one `cfg`
+//!
+//! The mesh is a plugin (`--features mesh`, on by default), and
+//! `docs/plugins.md`'s second rule is that deleting any one plugin must leave a
+//! tree that compiles. An integration test naming `wizard::plugins::mesh`
+//! cannot compile without it, so the file compiles to nothing on a build
+//! without the feature — the same shape `tests/graph_explorer.rs` has for
+//! `graph` and `native`.
+#![cfg(feature = "mesh")]
 
 use std::io::BufRead;
 use std::net::SocketAddr;
@@ -44,12 +54,12 @@ use std::time::Duration;
 
 use chrono::Utc;
 use wizard::agent::{AgentEvent, DoneReason};
-use wizard::mesh::consent::TrustLedger;
-use wizard::mesh::node::Identity;
-use wizard::mesh::peer::PeerStore;
-use wizard::mesh::quic::QuicTransport;
-use wizard::mesh::transport::PeerEventKind;
-use wizard::mesh::{Capability, Mesh, NodeId, PeerEvent, Subscription, Transport, Trust};
+use wizard::plugins::mesh::consent::TrustLedger;
+use wizard::plugins::mesh::node::Identity;
+use wizard::plugins::mesh::peer::PeerStore;
+use wizard::plugins::mesh::quic::QuicTransport;
+use wizard::plugins::mesh::transport::PeerEventKind;
+use wizard::plugins::mesh::{Capability, Mesh, NodeId, PeerEvent, Subscription, Transport, Trust};
 
 /// Long enough that a loaded CI machine is not a failure, short enough that a
 /// hang is a test failure rather than a job timeout.
@@ -826,7 +836,7 @@ async fn child_node_entry_point() {
     let at = transport.local_addr().expect("bound");
 
     let mut store = PeerStore::ephemeral();
-    store.add(wizard::mesh::Node::new(parent), Utc::now());
+    store.add(wizard::plugins::mesh::Node::new(parent), Utc::now());
     let mut mesh = Mesh::with_consent(
         Identity::from_seed([seed.parse::<u8>().expect("a seed byte"); 32]),
         store,

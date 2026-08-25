@@ -36,6 +36,13 @@ pub async fn run(scripted: bool) -> Result<()> {
             Err(err) => tracing::warn!("no scripted tools dir: {err:#}"),
         }
     }
+    // The one surface that composes its own registry instead of going through
+    // `agent::build_tool_registry`, so it needs its own line or an MCP client
+    // would see a different tool set than the agent does from the same
+    // install. Unconditional, unlike `scripted`: a plugin was installed
+    // deliberately and `--scripted` gates agent-authored tools, which is a
+    // different question.
+    crate::plugins::install_tools_into(&mut registry);
     let ctx = ToolContext::new(std::env::current_dir()?);
 
     let mut reader = BufReader::new(tokio::io::stdin());

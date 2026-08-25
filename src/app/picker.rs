@@ -1,10 +1,11 @@
 //! Popup pickers, command suggestions, the status bar, and mouse selection.
 
-use crate::commands::{COMMANDS, CommandSpec, CustomCommand};
+use crate::commands::{CustomCommand, Listing};
 use crate::config::{Mode, StepBudget};
 
-/// One row in the suggestion popup: a builtin [`CommandSpec`] or a custom
-/// command loaded from `~/.wizard/commands/` / `<project>/.wizard/commands/`.
+/// One row in the suggestion popup: a [`Listing`] — built-in or plugin, the
+/// popup does not care which — or a custom command loaded from
+/// `~/.wizard/commands/` / `<project>/.wizard/commands/`.
 #[derive(Debug, Clone)]
 pub struct Suggestion {
     pub name: String,
@@ -16,13 +17,13 @@ pub struct Suggestion {
     pub takes_args: bool,
 }
 
-impl From<&CommandSpec> for Suggestion {
-    fn from(spec: &CommandSpec) -> Self {
+impl From<&Listing> for Suggestion {
+    fn from(row: &Listing) -> Self {
         Self {
-            name: spec.name.to_string(),
-            args: spec.args.to_string(),
-            description: spec.description.to_string(),
-            takes_args: spec.takes_args,
+            name: row.name.clone(),
+            args: row.args.clone(),
+            description: row.description.clone(),
+            takes_args: row.takes_args,
         }
     }
 }
@@ -46,11 +47,16 @@ impl From<&CustomCommand> for Suggestion {
     }
 }
 
-/// True when `name` is a builtin command word ([`COMMANDS`] plus the parse
-/// aliases that have no table entry). Unknown words fall through to the
-/// model as a normal prompt.
+/// True when `name` is a command word this build knows: a builtin table row,
+/// one of the parse aliases with no row of its own, or a plugin registration.
+/// Unknown words fall through to the model as a normal prompt.
+///
+/// Plugin commands are included because the question this answers is "does a
+/// bad argument here deserve a usage notice, or is it just a prompt starting
+/// with a slash", and a registered `/name` deserves the notice exactly as much
+/// as `/rewind` does.
 pub(super) fn is_builtin_command(name: &str) -> bool {
-    COMMANDS.iter().any(|spec| spec.name == name) || matches!(name, "q" | "exit")
+    crate::commands::is_known(name)
 }
 
 /// What an open [`Picker`] selects.

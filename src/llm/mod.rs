@@ -2,18 +2,14 @@
 //! (not the OpenAI-compatible shim). Shared by the agent loop, the tool
 //! registry, and the TUI.
 
-pub mod anthropic;
-pub mod chatgpt;
-pub mod chatgpt_oauth;
-pub mod cloudflare;
 pub mod compat;
 pub mod fusion;
-pub mod llamacpp;
 pub mod oauth_callback;
-pub mod ollama;
-pub mod openai;
-pub mod openrouter;
 pub mod provider;
+pub mod registry;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub mod wire;
 pub mod xai_oauth;
 
 use std::cell::Cell;
@@ -25,7 +21,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
 /// Boxed stream of [`ChatChunk`]s yielded by every provider's `chat_stream`.
-/// Shared across [`llamacpp`], [`ollama`], [`openai`], and [`anthropic`].
+/// Shared by [`wire`] and by every provider plugin.
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatChunk>> + Send>>;
 
 /// How long to wait for a TCP connection before giving up. Reaching the peer
@@ -76,6 +72,11 @@ thread_local! {
 /// runs to completion synchronously on this thread, so the scope covers
 /// exactly the clients it creates, and the previous locality is restored even
 /// if `build` panics.
+///
+/// The only caller is the llama.cpp plugin, so a build without it has nothing
+/// to flip the locality for — dead code, not a mistake. The tests below still
+/// exercise the scope itself either way.
+#[cfg_attr(not(feature = "provider-llamacpp"), allow(dead_code))]
 pub(crate) fn with_local_inference_timeouts<T>(build: impl FnOnce() -> T) -> T {
     struct Restore(Locality);
     impl Drop for Restore {
@@ -1553,7 +1554,7 @@ pub struct ChatChunk {
     ///
     /// **This is the seam for an image-generating endpoint.** A provider that
     /// receives image content while streaming (an `image_url` part, a
-    /// `b64_json` payload — see [`openai::decode_sse`] for the working
+    /// `b64_json` payload — see [`wire::decode_sse`] for the working
     /// example) decodes it into an [`Image`] and emits it here, on the chunk
     /// it arrived in; the chunk may carry images, text, tool calls, or any
     /// combination. The agent loop accumulates them onto the assistant
@@ -1626,46 +1627,6 @@ impl CacheTokens {
     /// Whether the provider reported any cache activity at all.
     pub fn is_empty(self) -> bool {
         self.read == 0 && self.write == 0
-    }
-}
-
-/// Fixtures shared by the provider adapters' tests.
-#[cfg(test)]
-pub(crate) mod testing {
-    use std::time::Duration;
-
-    /// One-shot HTTP responder on loopback: accepts a single connection,
-    /// reads the request, writes `response` verbatim and closes. Enough to
-    /// drive a provider's real failure path, headers included, without
-    /// taking a mock-HTTP dependency. Returns the server root to point a
-    /// provider at (no trailing slash, no `/v1`).
-    pub(crate) async fn one_shot_http_server(response: &'static str) -> String {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("bind loopback");
-        let port = listener.local_addr().expect("local addr").port();
-        tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            if let Ok((mut socket, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = socket.read(&mut buf).await;
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.flush().await;
-                // Drain the rest of the request before dropping the socket:
-                // closing one that still has unread bytes in its receive
-                // buffer sends an RST, which would tear down the reply the
-                // client has not read yet and make the test flaky.
-                let _ = tokio::time::timeout(Duration::from_millis(500), async {
-                    while let Ok(read) = socket.read(&mut buf).await {
-                        if read == 0 {
-                            break;
-                        }
-                    }
-                })
-                .await;
-            }
-        });
-        format!("http://127.0.0.1:{port}")
     }
 }
 

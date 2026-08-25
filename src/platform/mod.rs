@@ -62,7 +62,7 @@
 //! files still reach for `std::os::unix` directly: `git_util`, `server`,
 //! `local_setup`, `schedule`, `instructions`, `tools/lua`, `gui/ws`,
 //! `gui/server`, `gateway/telegram`, `mesh/node`, `llm/xai_oauth`,
-//! `llm/chatgpt_oauth`, `agent/mod` and `app/mod`. Every one of them has a
+//! `plugins/chatgpt/oauth`, `agent/mod` and `app/mod`. Every one of them has a
 //! home here now, and the conversions are mechanical:
 //!
 //! - `std::os::unix::fs::symlink` becomes [`paths::symlink`].

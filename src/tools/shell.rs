@@ -349,15 +349,48 @@ pub(crate) async fn run_command(
     command: Command,
     timeout: Duration,
 ) -> Result<CommandResult, ToolError> {
-    run_command_with(tool, command, timeout, OnTimeout::Kill).await
+    run_capturing(tool, command, timeout, OnTimeout::Kill, None).await
 }
 
 /// [`run_command`] with an explicit policy for outliving the budget.
 pub(crate) async fn run_command_with(
     tool: &str,
+    command: Command,
+    timeout: Duration,
+    on_timeout: OnTimeout<'_>,
+) -> Result<CommandResult, ToolError> {
+    run_capturing(tool, command, timeout, on_timeout, None).await
+}
+
+/// [`run_command`], additionally ended by the turn's cancel handle.
+///
+/// The timeout is a budget, not an interrupt: a plugin's `wizard.process.run`
+/// under a two-minute build would ignore Ctrl-C for two minutes, which is the
+/// exact complaint [`ToolContext::cancel`](crate::tools::ToolContext::cancel)
+/// exists to answer. Dropping the future would not do either — `kill_on_drop`
+/// reaps the shell and leaves whatever it forked, so the cancel arm has to be
+/// inside, where [`kill_group`] is.
+///
+/// The existing capture callers keep their signatures and pass no handle:
+/// `execute` has its own cancellation story (an interactive run observes the
+/// handle while it is parked on a human), and the git/search/scripted callers
+/// run short commands whose result is the whole point of the call.
+pub(crate) async fn run_command_cancellable(
+    tool: &str,
+    command: Command,
+    timeout: Duration,
+    cancel: Option<&crate::agent::CancelHandle>,
+) -> Result<CommandResult, ToolError> {
+    run_capturing(tool, command, timeout, OnTimeout::Kill, cancel).await
+}
+
+/// The one capture body behind the three entry points above.
+async fn run_capturing(
+    tool: &str,
     mut command: Command,
     timeout: Duration,
     on_timeout: OnTimeout<'_>,
+    cancel: Option<&crate::agent::CancelHandle>,
 ) -> Result<CommandResult, ToolError> {
     command
         .stdin(Stdio::null())
@@ -377,15 +410,32 @@ pub(crate) async fn run_command_with(
     let stderr = Pipe::new(child.stderr.take());
 
     let started = Instant::now();
-    let exited = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => Some(status.code()),
-        Ok(Err(err)) => {
+    // `biased` so a handle that is already raised wins against a child that
+    // has already exited: an interrupted caller wants the interruption
+    // reported, not a race decided by scheduling order.
+    let exited = tokio::select! {
+        biased;
+        () = crate::agent::cancelled(cancel) => {
+            kill_group(&mut child).await;
+            // Drained rather than dropped so the readers stop before the
+            // error goes back up; the bytes themselves have nowhere to go,
+            // because an interrupted call has no result to put them in.
+            let _ = tokio::join!(stdout.finish(DRAIN_GRACE), stderr.finish(DRAIN_GRACE));
             return Err(ToolError::Execution {
                 tool: tool.to_string(),
-                source: anyhow::Error::new(err).context("failed to wait for process"),
+                source: anyhow::anyhow!("interrupted"),
             });
         }
-        Err(_) => None,
+        waited = tokio::time::timeout(timeout, child.wait()) => match waited {
+            Ok(Ok(status)) => Some(status.code()),
+            Ok(Err(err)) => {
+                return Err(ToolError::Execution {
+                    tool: tool.to_string(),
+                    source: anyhow::Error::new(err).context("failed to wait for process"),
+                });
+            }
+            Err(_) => None,
+        },
     };
 
     if let Some(code) = exited {

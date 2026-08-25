@@ -324,7 +324,7 @@ impl AgentEvent {
     /// The distinction only matters once an event can arrive from somewhere
     /// else. A report is a thing to render; a request is a thing to obey, and
     /// obeying one that came off a socket is letting a peer drive this
-    /// machine's menu. [`crate::mesh::turn::PeerTurn`] refuses to carry
+    /// machine's menu. The mesh's `PeerTurn` refuses to carry
     /// anything that answers `true` here.
     ///
     /// **The match is exhaustive on purpose, with no wildcard arm.** The rule
@@ -581,7 +581,7 @@ type ConsoleSlot = (Arc<AtomicBool>, mpsc::Sender<ConsoleInput>);
 /// Serializes as its number, for the same reason and with the same consequence
 /// as [`PlanGate`]: a console is a live child process in the process that
 /// spawned it, and a peer or a replayed recording holding the number can claim
-/// nothing. `crate::mesh::turn` voids it to ticket 0 on the way out, so
+/// nothing. `crate::plugins::mesh::turn` voids it to ticket 0 on the way out, so
 /// watching a peer's session never becomes typing into a peer's shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConsoleGate(u64);

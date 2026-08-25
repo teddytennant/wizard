@@ -91,6 +91,7 @@ fn version_prints_name_and_version() {
     assert!(stdout.starts_with("wizard "), "got: {stdout}");
 }
 
+#[cfg(feature = "provider-ollama")]
 #[test]
 fn unreachable_ollama_provider_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -133,6 +134,11 @@ fn unreachable_ollama_provider_fails_with_actionable_error() {
     );
 }
 
+/// The three tests below drive a real binary against a local backend, so
+/// each needs its plugin compiled in: without it the config resolves to a kind
+/// nothing answers to and the error is the registry's, not the transport's.
+/// That degrade is asserted in `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn unreachable_llamacpp_host_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -179,6 +185,7 @@ fn write_config(home: &Path, contents: &str) {
     std::fs::write(dir.join("config.toml"), contents).expect("write config.toml");
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn fresh_config_resolves_to_the_llamacpp_provider() {
     let home = TempDir::new();
@@ -204,6 +211,7 @@ fn fresh_config_resolves_to_the_llamacpp_provider() {
     );
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn legacy_ollama_config_resolves_to_llamacpp() {
     let home = TempDir::new();
@@ -738,9 +746,16 @@ fn harness_export_writes_a_complete_bundle() {
         .expect("bundle has system_prompt.md");
     assert!(!prompt.trim().is_empty(), "exported prompt is non-empty");
 
-    // One description file per native tool, contents matching the compiled
-    // defaults' non-empty guarantee.
-    for tool in ["read_file", "write_file", "execute", "web_search"] {
+    // One description file per compiled-in tool, contents matching the compiled
+    // defaults' non-empty guarantee. `web_search` is a plugin tool
+    // (`--features tool-web`), so it is only expected when this build has it:
+    // the bundle describes what the binary can do, not what some other build
+    // could.
+    let mut tools = vec!["read_file", "write_file", "execute"];
+    if cfg!(feature = "tool-web") {
+        tools.push("web_search");
+    }
+    for tool in tools {
         let path = bundle.join("tool_descriptions").join(format!("{tool}.md"));
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("bundle has tool_descriptions/{tool}.md"));
@@ -763,4 +778,56 @@ fn harness_export_writes_a_complete_bundle() {
     );
     assert!(bundle.join("HARNESS.md").is_file(), "bundle guide exported");
     assert!(stdout.contains("exported harness bundle"), "{stdout}");
+}
+
+/// `wizard peers` reaches the mesh plugin, or says which build it is not in.
+///
+/// The one thing a unit test cannot check about this subcommand: whether the
+/// two clap parsers — core's, which takes an unparsed vector, and the plugin's,
+/// which takes eight subcommands and a three-state trust enum — actually meet
+/// in a running binary. `src/cli.rs` proves the arguments cross unchanged and
+/// `plugins::mesh::cli` proves what they mean; only a process can prove the
+/// lookup in between finds anything.
+///
+/// Both sides are asserted against the same feature flag, so the leg in
+/// `contrib/check-tool-plugins.sh` that builds without the mesh checks the
+/// degrade path rather than skipping it.
+#[test]
+fn peers_reaches_the_mesh_plugin_or_says_it_is_absent() {
+    let home = TempDir::new();
+
+    let listed = run_wizard(&home.0, &["peers", "list"], &[]);
+    let stdout = String::from_utf8_lossy(&listed.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&listed.stderr).to_string();
+
+    if !cfg!(feature = "mesh") {
+        assert!(!listed.status.success(), "{stdout}{stderr}");
+        assert!(stderr.contains("this build has no mesh"), "{stderr}");
+        return;
+    }
+
+    assert!(listed.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no peers on this machine"), "{stdout}");
+
+    // The plugin's parser, not core's: the usage line and the eight
+    // subcommands are what somebody sees after mistyping one. Core's
+    // passthrough variant would have printed `wizard peers [ARGS]...` and
+    // listed nothing, which is why `disable_help_flag` is on it.
+    let help = run_wizard(&home.0, &["peers", "--help"], &[]);
+    let help_text = String::from_utf8_lossy(&help.stdout).to_string();
+    assert!(help.status.success(), "{help_text}");
+    for subcommand in [
+        "list", "address", "add", "trust", "forget", "ping", "refresh", "watch",
+    ] {
+        assert!(help_text.contains(subcommand), "{subcommand}: {help_text}");
+    }
+
+    // A trust state the store cannot record is refused by the store's own
+    // enum, reached through core's passthrough. This is the assertion the
+    // whole `Subcommand` seam exists for: core cannot name `Trust`, so this
+    // list can only have come from the plugin.
+    let bad = run_wizard(&home.0, &["peers", "trust", "wiz1abc", "allowed"], &[]);
+    let refusal = String::from_utf8_lossy(&bad.stderr).to_string();
+    assert!(!bad.status.success(), "{refusal}");
+    assert!(refusal.contains("blocked, known, trusted"), "{refusal}");
 }

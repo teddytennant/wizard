@@ -89,7 +89,7 @@ pub enum Stdlib {
 ///
 /// The cost is real and is the accepted trade: a registry tool cannot read a
 /// file outside the project, cannot shell out, and cannot even ask the clock.
-fn sandboxed_libs() -> StdLib {
+pub(crate) fn sandboxed_libs() -> StdLib {
     StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::BIT | StdLib::JIT
 }
 
@@ -808,7 +808,7 @@ pub(crate) fn install_print_into(lua: &Lua, stdout: &Arc<Mutex<String>>) -> mlua
 
 /// Blank every [`BLANKED_GLOBALS`] name. Setting an already-absent global to
 /// `nil` is a no-op, so this is safe to run over any library set.
-fn blank_globals(lua: &Lua) -> mlua::Result<()> {
+pub(crate) fn blank_globals(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
     for name in BLANKED_GLOBALS {
         globals.set(name, LuaValue::Nil)?;

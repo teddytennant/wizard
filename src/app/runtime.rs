@@ -63,7 +63,7 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     // A cloud provider's health probe was skipped at startup (it would block the
     // first paint); run_tui runs it in the background below. Local providers
     // already proved themselves in startup_client (and loaded the model).
-    let active_is_cloud = !is_local_kind(config.active().kind);
+    let active_is_cloud = !is_local_kind(&config.active().kind);
 
     let project_root = std::env::current_dir().context("resolving project root")?;
 
@@ -198,31 +198,26 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     // Register this session so other sessions' /dashboard can see it.
     crate::session_registry::write(&app.session_record());
 
-    // Join the mesh, if `[mesh] listen` says a peer could watch this node.
+    // Open this session's tee, if some plugin registered one and it is
+    // configured to listen.
     //
     // After the session id, because every event the tee publishes is stamped
     // with it and a watcher demuxes on it. A failure is a notice rather than a
     // fatal: the port being taken (another Wizard is already listening, most
-    // likely) is a reason not to be watchable, not a reason not to work.
-    match super::MeshTee::join(&app.config, &app.session_id).await {
+    // likely) is a reason not to be watchable, not a reason not to work. The
+    // wording of both the success and the failure is the plugin's; see
+    // `app::tee`.
+    match super::tee::join(&app.config, &app.session_id).await {
         Ok(Some(tee)) => {
-            let at = tee
-                .listening_at()
-                .map_or_else(|_| "?".to_string(), |at| at.to_string());
-            // Said out loud, always. A socket this process opened because a
-            // config file asked it to is exactly the thing a user should not
-            // have to go and check for.
-            app.notice(format!(
-                "mesh: listening on {at} as {} — trusted peers may watch this session",
-                tee.address()
-            ));
+            // Said out loud, always, and in the tee's own words: a socket this
+            // process opened because a config file asked it to is exactly the
+            // thing a user should not have to go and check for, and core does
+            // not know what was opened.
+            app.notice(tee.joined_notice());
             app.mesh = Some(tee);
         }
         Ok(None) => {}
-        Err(err) => app.notice(format!(
-            "mesh: not listening — {err:#}\n\
-             this session runs normally; no peer can watch it"
-        )),
+        Err(err) => app.notice(format!("{err:#}")),
     }
     // `wizard agents` opens straight into the dashboard.
     if matches!(cli.command, Some(crate::cli::Command::Agents)) {

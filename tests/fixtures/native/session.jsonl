@@ -6,7 +6,7 @@
 // list with emphasis in it, a block quote, a tool call, its result, and a system
 // note that a resumed conversation has to replay as a notice.
 //
-// `//` lines are skipped by the loader in src/native/tests.rs. Regenerate the
+// `//` lines are skipped by the loader in src/plugins/native/tests.rs. Regenerate the
 // snapshot beside it (not this file) with WIZARD_BLESS_SNAPSHOTS=1.
 {"role":"user","content":[{"type":"text","text":"the build hangs on a stale lock — fix it"}]}
 {"role":"assistant","content":[{"type":"text","text":"Found a stale lock file and removed it. Here is the guard that replaces it:\n\n```rust\nfn main() {\n    let lock = Lock::acquire()?;\n\n    println!(\"held\");\n}\n```\n\nNotes:\n\n- the lock is released on drop\n- **no** timeout is applied\n\n> A crash still leaves the file, which is why the guard checks the pid.\n"},{"type":"tool_use","id":"call_1","function":{"name":"execute","arguments":{"command":"rm -f .lock"}}}]}
