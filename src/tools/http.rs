@@ -29,11 +29,13 @@
 //! policy in place has bypassed the entire guard. There is one place that gets
 //! that right and everybody starts from it.
 //!
-//! Settings come from `[web]` in `config.toml`
-//! ([`WebConfig`](crate::config::WebConfig)) — `allow_local` and
-//! `fetch_max_bytes` are read here, not in the plugin, because they are
-//! promises about what this process will do on the network rather than about
-//! what one tool does.
+//! `[web]` in `config.toml` ([`WebConfig`](crate::config::WebConfig)) stays
+//! core for the same reason the code here does. `allow_local` and
+//! `fetch_max_bytes` are promises about what this *process* does on the
+//! network — the host bridge honours both with no web tool compiled in at all
+//! — rather than settings for one tool, so a build without `tool-web` still
+//! reads them and still obeys them. They arrive here as arguments, from
+//! whichever caller holds the config.
 
 use std::net::IpAddr;
 use std::time::Duration;
