@@ -36,10 +36,10 @@ use wizard::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, NodeId, PeerEvent, PeerEventKind, PeerStore,
     Subscription, Transport, Trust,
 };
+use wizard::plugins::graph::{Liveness, MeshGraph, NodeKey};
 use wizard::plugins::native::graph::paint::node_paint;
 use wizard::plugins::native::graph::revoke_and_rebuild;
 use wizard::plugins::native::theme::Palette;
-use wizard::plugins::graph::{Liveness, MeshGraph, NodeKey};
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

@@ -32,9 +32,9 @@ use iced::widget::{button, column, container, row, space, text};
 use iced::{Border, Element, Length, Padding};
 
 use crate::mesh::{CapabilityKind, NodeId};
+use crate::plugins::graph::{GraphNode, Inspection, NodeKey, NodeKind};
 use crate::plugins::native::theme::Palette;
 use crate::plugins::native::widget::chrome;
-use crate::plugins::graph::{GraphNode, Inspection, NodeKey, NodeKind};
 use crate::theme::Token;
 
 use super::view::CapabilityFilter;

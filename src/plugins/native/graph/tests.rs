@@ -38,8 +38,8 @@ use crate::mesh::peer::synthetic_store;
 use crate::mesh::{
     Capability, Identity, LoopbackTransport, Mesh, Node, PeerStore, PeerText, Trust,
 };
-use crate::plugins::native::theme::Palette;
 use crate::plugins::graph::{Liveness, MeshGraph, NodeKey, NodeKind};
+use crate::plugins::native::theme::Palette;
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0).expect("timestamp")

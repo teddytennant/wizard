@@ -87,8 +87,8 @@ use iced::{Element, Length, Padding, Point as Screen, Size, Subscription, Task};
 use tokio::sync::Mutex;
 
 use crate::mesh::{Mesh, NodeId, Trust};
-use crate::plugins::native::theme::Palette;
 use crate::plugins::graph::{Liveness, MeshGraph, NodeKey};
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 use canvas::GraphCanvas;

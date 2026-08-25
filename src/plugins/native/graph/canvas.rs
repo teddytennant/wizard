@@ -27,9 +27,9 @@ use iced::mouse;
 use iced::widget::canvas::{self, Action, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Point as Screen, Rectangle, Renderer, Size, Theme};
 
-use crate::plugins::native::theme::Palette;
 use crate::plugins::graph::layout::node_radius;
 use crate::plugins::graph::{GraphNode, NodeKind};
+use crate::plugins::native::theme::Palette;
 
 use super::paint::{filtered, halo_reach, link_paint, node_paint};
 use super::view::GraphView;

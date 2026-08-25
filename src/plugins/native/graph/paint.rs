@@ -40,8 +40,8 @@
 use iced::Color;
 
 use crate::mesh::{EdgeKind, Trust};
-use crate::plugins::native::theme::Palette;
 use crate::plugins::graph::{GraphNode, Liveness};
+use crate::plugins::native::theme::Palette;
 use crate::theme::Token;
 
 /// Rim weight, in world units, for a peer whose trust is merely recorded.
