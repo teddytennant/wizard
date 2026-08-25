@@ -91,6 +91,7 @@ default = [
   "graph",
   "mesh",
   "tool-web",
+  "tool-git",
 ]
 
 # Anthropic Messages API. `kind = "anthropic"`.
@@ -164,6 +165,22 @@ mesh = ["dep:quinn", "dep:rustls", "dep:mdns-sd"]
 # `plugins::openai`. Leaving this out costs three tools and nothing else: the
 # registry does not hold them, so the model is not told about them.
 tool-web = []
+
+# `git_status` and `git_diff`. `src/plugins/lua/git/`, and the first plugin
+# that is written in Lua rather than in Rust.
+#
+# It ships inside the binary — `include_str!` in `src/plugins/bundled.rs` —
+# rather than as a file `install.sh` copies to `~/.wizard/plugins`, so it is
+# present in a `cargo test`, in a `cargo install`, and in a downloaded release
+# alike. That is also what lets it run as `PluginSource::FirstParty`
+# (unbounded, JIT on): first-party is a claim about who wrote the code, and it
+# is only true of bytes nobody outside this repository can edit.
+#
+# Leaving it out costs two tools and nothing else: the registry does not hold
+# them, so the model is not told about them. `git` itself is still what the
+# `/diff` sidebar and the GUI shell out to; those are `src/app/command.rs` and
+# `src/plugins/gui/git.rs` and have never gone through the tool.
+tool-git = []
 
 # xAI Grok, by API key (`kind = "xai"`) and by account sign-in
 # (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:

@@ -1896,6 +1896,13 @@ pub async fn build_tool_registry(
     // `base` rather than the scoped registry below: it is what subagents are
     // scoped from and what a `run_code` program reaches, so putting them here
     // is what gives every one of those surfaces the same tool set.
+    // The Lua plugins that ship in the binary have to be *loaded* before their
+    // tools can be copied out, and loading a Lua plugin is async, so it cannot
+    // happen inside the kernel's `OnceLock` the way the Rust half does. This is
+    // the call, and it is here rather than in `crate::run` because here is what
+    // a test reaches too: `boot` also calls it, but nothing calls `boot` in a
+    // test binary, and a first-party tool nobody could test is not shipped.
+    crate::plugins::bundled::ensure().await;
     crate::plugins::install_tools_into(&mut base);
     base.apply_harness_overrides();
 

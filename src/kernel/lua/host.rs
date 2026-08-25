@@ -66,6 +66,13 @@ use crate::commands::{CommandFuture, CommandHandler, PluginCommand};
 /// that slept for a day would look exactly like one that had wedged.
 const MAX_SLEEP: Duration = Duration::from_secs(60);
 
+/// Budget a `wizard.process.exec` gets when it names none.
+///
+/// The same figure `[shell]`'s foreground default is, which is also the
+/// ceiling the host clamps to, so a plugin that says nothing gets exactly what
+/// the shell tool's callers get.
+const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Everything one plugin's VM owns.
 pub(crate) struct VmState {
     pub(crate) lua: Lua,
@@ -277,6 +284,8 @@ fn install_host(lua: &Lua, ctx: &Ctx, caps: &CapabilitySet) -> mlua::Result<()> 
     })?;
     wizard.set("log", log)?;
 
+    install_output_budget(lua, &wizard)?;
+
     if caps.contains(Capability::Network) {
         let http = lua.create_table()?;
         for (name, method) in [("get", "GET"), ("post", "POST"), ("put", "PUT")] {
@@ -340,10 +349,105 @@ fn install_host(lua: &Lua, ctx: &Ctx, caps: &CapabilitySet) -> mlua::Result<()> 
             async move { host.run(&plugin, &command).await.map_err(external) }
         })?;
         process.set("run", run)?;
+
+        let host = ctx.host();
+        let plugin = ctx.name().to_string();
+        let exec = lua.create_async_function(move |lua, spec: Table| {
+            let host = Arc::clone(&host);
+            let plugin = plugin.clone();
+            let request = exec_request(&spec);
+            async move {
+                let outcome = host.exec(&plugin, request?).await.map_err(external)?;
+                let table = lua.create_table()?;
+                table.set("stdout", outcome.stdout)?;
+                table.set("stderr", outcome.stderr)?;
+                // Nil rather than a sentinel for both of these. `code = -1`
+                // for "signalled" is a number a plugin will compare against
+                // zero and get wrong; `nil` is a value Lua's own `if` already
+                // reads as "no answer".
+                match outcome.code {
+                    Some(code) => table.set("code", code)?,
+                    None => table.set("code", LuaValue::Nil)?,
+                }
+                match outcome.timed_out {
+                    Some(secs) => table.set("timed_out", secs)?,
+                    None => table.set("timed_out", LuaValue::Nil)?,
+                }
+                Ok(table)
+            }
+        })?;
+        process.set("exec", exec)?;
         wizard.set("process", process)?;
     }
 
     Ok(())
+}
+
+/// One `wizard.process.exec{ argv = {...}, cwd = ..., timeout_ms = ... }`.
+///
+/// Every failure here is a refusal rather than a default, because the two
+/// mistakes available are both silent: an `argv` given as a string runs a
+/// program whose name contains spaces and fails as "no such file", and an
+/// empty `argv` would otherwise become a request the host has to reject with
+/// less context than this has.
+fn exec_request(spec: &Table) -> mlua::Result<crate::kernel::ExecRequest> {
+    let argv: Table = spec.get("argv").map_err(|_| {
+        mlua::Error::external(
+            "wizard.process.exec needs argv = { 'program', 'arg', ... }; a shell line goes to \
+             wizard.process.run",
+        )
+    })?;
+    let argv: Vec<String> = argv
+        .sequence_values::<String>()
+        .collect::<mlua::Result<_>>()?;
+    if argv.is_empty() {
+        return Err(mlua::Error::external(
+            "wizard.process.exec was given an empty argv",
+        ));
+    }
+    let cwd: Option<String> = spec.get("cwd").ok().filter(|s: &String| !s.is_empty());
+    let millis: Option<u64> = spec.get("timeout_ms").ok();
+    Ok(crate::kernel::ExecRequest {
+        argv,
+        cwd: cwd.map(std::path::PathBuf::from),
+        timeout: millis.map_or(DEFAULT_EXEC_TIMEOUT, Duration::from_millis),
+    })
+}
+
+/// `wizard.truncate` and `wizard.limits`: the context-window budgets, and the
+/// one function that applies them.
+///
+/// Ungated. `truncate_output` can spill to the session's scratch file, which
+/// is the one thing here that touches a disk, and it is not a way around
+/// `filesystem`: the plugin picks neither the path nor the filename, the bytes
+/// written are its own return value on its way to the model, and it cannot
+/// read any of it back. Gating it would mean a `filesystem` grant on every
+/// plugin that wanted its output framed the way a native tool's is.
+///
+/// It is here at all because a ported tool cannot preserve its behaviour
+/// without it. A native tool picks a budget per *answer* — `git_diff` caps a
+/// diff at [`MAX_DIFF_BYTES`] and its stderr at [`MAX_ERROR_BYTES`] — and the
+/// only cap a Lua tool had was the blanket [`MAX_OUTPUT_BYTES`] that
+/// [`LuaTool::execute`] applies on the way out. A plugin that had to invent
+/// its own numbers would drift from the native ones the first time either
+/// moved, and a plugin that wrote its own `string.sub` would lose the head/tail
+/// framing and the spill file with it.
+fn install_output_budget(lua: &Lua, wizard: &Table) -> mlua::Result<()> {
+    let limits = lua.create_table()?;
+    limits.set("output", MAX_OUTPUT_BYTES)?;
+    limits.set("diff", crate::tools::MAX_DIFF_BYTES)?;
+    limits.set("search", crate::tools::MAX_SEARCH_BYTES)?;
+    limits.set("listing", crate::tools::MAX_LISTING_BYTES)?;
+    limits.set("error", crate::tools::MAX_ERROR_BYTES)?;
+    wizard.set("limits", limits)?;
+
+    let truncate = lua.create_function(|_, (text, max_bytes): (String, Option<usize>)| {
+        Ok(truncate_output(
+            text,
+            max_bytes.unwrap_or(MAX_OUTPUT_BYTES).max(1),
+        ))
+    })?;
+    wizard.set("truncate", truncate)
 }
 
 /// Carry a host error into Lua as a plain string.
@@ -407,7 +511,7 @@ fn tool_fn(
         let description: String = spec.get("description").unwrap_or_default();
         let parameters = match spec.get::<LuaValue>("parameters") {
             Ok(LuaValue::Nil) | Err(_) => empty_schema(),
-            Ok(value) => lua_to_json(lua, value)?,
+            Ok(value) => object_schema(lua_to_json(lua, value)?),
         };
         let access = match spec.get::<String>("access").as_deref() {
             Ok("read_only") => ToolAccess::ReadOnly,
@@ -704,6 +808,51 @@ fn empty_schema() -> Value {
     serde_json::json!({ "type": "object", "properties": {} })
 }
 
+/// Repair the one place Lua's single table type loses information on the way
+/// to a JSON Schema.
+///
+/// Lua has no empty *object*: `{}` is a table with no entries, and a serializer
+/// has to guess. mlua guesses array, which is right far more often than not and
+/// is exactly wrong here — `properties = {}` becomes `"properties": []`, and a
+/// tool-calling API handed an array where the schema says object either rejects
+/// the whole request or, worse, accepts it and tells the model the tool takes
+/// unspecified arguments.
+///
+/// Fixed rather than documented as a plugin author's problem, because the
+/// spelling that triggers it is the natural one: a tool with no arguments
+/// writes `parameters = { type = "object", properties = {} }`, and the failure
+/// arrives from a provider, mid-turn, in somebody else's error message.
+fn object_schema(mut schema: Value) -> Value {
+    if schema.as_array().is_some_and(Vec::is_empty) {
+        return empty_schema();
+    }
+    if let Some(properties) = schema.get_mut("properties")
+        && properties.as_array().is_some_and(Vec::is_empty)
+    {
+        *properties = Value::Object(serde_json::Map::new());
+    }
+    schema
+}
+
+/// The second argument a tool body is called with: as much of the
+/// [`ToolContext`] as can cross into Lua.
+///
+/// Which is one field, and saying why matters more than the field does.
+/// `ToolContext` is sixteen, and thirteen of them are Rust handles a Lua value
+/// cannot be: a `Sender<AgentEvent>`, a `CancelHandle`, two task registries,
+/// the checkpoint and image stores, the todo list the TUI renders. Those reach
+/// a plugin — when they reach one at all — through `wizard.*`, where the host
+/// holds the handle and Lua holds only the call. `cwd` is different: it is a
+/// path, it is what every path-taking tool resolves against, and a tool that
+/// does not get it silently operates on the wrong directory rather than
+/// failing.
+///
+/// A table rather than a bare string so the day a second field is portable it
+/// is one line here and no change to any plugin's signature.
+fn tool_context(ctx: &ToolContext) -> Value {
+    serde_json::json!({ "cwd": ctx.cwd.to_string_lossy() })
+}
+
 /// A tool whose body is a Lua function in a plugin's VM.
 struct LuaTool {
     name: String,
@@ -736,31 +885,67 @@ impl Tool for LuaTool {
         ToolKind::Scripted
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let value = self
             .handle
-            .call(self.func, vec![args])
+            .call(self.func, vec![args, tool_context(ctx)])
             .await
             .map_err(|source| ToolError::Execution {
                 tool: self.name.clone(),
                 source,
             })?;
 
-        let content = match value {
-            Value::Null => String::new(),
-            Value::String(text) => text,
-            other => other.to_string(),
-        };
+        let (content, declared) = tool_result(value);
         // The `error:` convention scripted tools already use, so a plugin tool
-        // and a scripted tool report a soft failure the same way.
-        let trimmed = content.trim_start();
-        let is_error = trimmed.starts_with("error:") || trimmed.starts_with("Error:");
+        // and a scripted tool report a soft failure the same way. It is the
+        // *fallback*: a plugin that said which it was gets what it said.
+        let is_error = declared.unwrap_or_else(|| {
+            let trimmed = content.trim_start();
+            trimmed.starts_with("error:") || trimmed.starts_with("Error:")
+        });
         let content = truncate_output(content, MAX_OUTPUT_BYTES);
         Ok(if is_error {
             ToolOutput::error(content)
         } else {
             ToolOutput::ok(content)
         })
+    }
+}
+
+/// What a tool body returned: the text, and whether it said it was a failure.
+///
+/// Three shapes, and the third is the reason this is a function.
+///
+/// - a string is the content;
+/// - `nil` is empty content;
+/// - `{ content = "...", is_error = true }` is a [`ToolOutput`] spelled out.
+///
+/// Without the third, the only way for a Lua tool to report a failure is the
+/// `error:` prefix, which puts a marker word into the text the model reads.
+/// That is fine for a scripted tool somebody wrote this morning and wrong for
+/// a ported one: `git_status` outside a repository answers with git's own
+/// `fatal: not a git repository`, marked as an error and otherwise verbatim,
+/// and there is no prefix that could be added to it without changing what the
+/// model is told. `error()` from Lua is not the same thing either — that is a
+/// tool that *broke*, and this is a tool that worked and has bad news.
+///
+/// Any other table is still JSON, as it was, so a plugin returning structured
+/// data is unaffected unless it happens to have a string `content` key — which
+/// is the one collision, and the one spelling this protocol could not avoid
+/// without inventing a marker key nobody would guess.
+fn tool_result(value: Value) -> (String, Option<bool>) {
+    match value {
+        Value::Null => (String::new(), None),
+        Value::String(text) => (text, None),
+        Value::Object(map) if map.get("content").is_some_and(Value::is_string) => {
+            let content = map
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            (content, map.get("is_error").and_then(Value::as_bool))
+        }
+        other => (other.to_string(), None),
     }
 }
 

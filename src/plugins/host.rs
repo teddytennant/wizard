@@ -427,6 +427,71 @@ impl HostBridge for WizardHost {
             ),
         }
     }
+
+    /// One program by argv, through the same runner, reported rather than
+    /// judged.
+    ///
+    /// The difference from [`Self::run`] is the whole reason this exists: a
+    /// non-zero exit is an outcome here, not an error. A plugin that ports a
+    /// native tool has to make that call itself — `git status` outside a
+    /// repository exits 128 and the message the model needs is on stderr, and
+    /// `grep` exits 1 for "no matches", which is not a failure either.
+    ///
+    /// Output comes back uncapped, unlike [`Self::run`]'s. It is not
+    /// unbounded — the runner's capture buffer holds a head and a tail and
+    /// drops the middle at two megabytes — but no *context-window* budget is
+    /// applied here, because that budget belongs to the answer and this is not
+    /// the answer yet. A native tool caps once, at the end, choosing the cap
+    /// from what it is about to say; capping here as well would frame the same
+    /// text twice and put two truncation markers in one diff. The plugin caps
+    /// through `wizard.truncate`, which is also where the spill file belongs,
+    /// because that string is the one the model reads.
+    async fn exec(
+        &self,
+        plugin: &str,
+        request: crate::kernel::ExecRequest,
+    ) -> anyhow::Result<crate::kernel::ExecOutcome> {
+        let Some((program, args)) = request.argv.split_first() else {
+            anyhow::bail!("wizard.process.exec needs an argv with at least a program in it");
+        };
+        let ctx = self.context();
+
+        // A relative cwd resolves against the host's directory, which is the
+        // agent's project root or the kernel's. An absolute one is taken as
+        // given: `Capability::Process` already grants `os.execute`, so a
+        // confinement here would be a fence with an open gate beside it, and
+        // one that stopped a plugin running a tool against a directory the
+        // *model* named.
+        let cwd = match request.cwd {
+            Some(path) if path.is_absolute() => path,
+            Some(path) => ctx.cwd.join(path),
+            None => ctx.cwd.clone(),
+        };
+
+        let mut process = tokio::process::Command::new(program);
+        process.args(args).current_dir(&cwd);
+        let timeout = request.timeout.clamp(
+            Duration::from_secs(1),
+            Duration::from_secs(ctx.shell.timeout_secs.max(1)),
+        );
+        let label = format!("wizard.process.exec({plugin})");
+
+        let result = crate::tools::shell::run_command_cancellable(
+            &label,
+            process,
+            timeout,
+            ctx.cancel.as_ref(),
+        )
+        .await
+        .map_err(anyhow::Error::new)?;
+
+        Ok(crate::kernel::ExecOutcome {
+            stdout: result.stdout,
+            stderr: result.stderr,
+            code: result.code,
+            timed_out: result.timed_out,
+        })
+    }
 }
 
 /// Bind the running agent to the process host bridge.

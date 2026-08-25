@@ -149,6 +149,20 @@ impl HostBridge for RecordingHost {
         self.record(format!("run {plugin} {command}"));
         Ok(format!("ran {command}"))
     }
+
+    async fn exec(
+        &self,
+        plugin: &str,
+        request: super::ExecRequest,
+    ) -> anyhow::Result<super::ExecOutcome> {
+        let argv = request.argv.join(" ");
+        self.record(format!("exec {plugin} {argv}"));
+        Ok(super::ExecOutcome {
+            stdout: format!("ran {argv}"),
+            code: Some(0),
+            ..super::ExecOutcome::default()
+        })
+    }
 }
 
 /// A kernel rooted in a temp directory, so a plugin's file helpers and its

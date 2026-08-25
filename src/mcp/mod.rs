@@ -1296,8 +1296,8 @@ impl Tool for McpTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn reserved_tool_names_match_the_native_registry() {
+    #[tokio::test]
+    async fn reserved_tool_names_match_the_native_registry() {
         use std::collections::BTreeSet;
 
         let mut compiled: HashSet<&str> = vec![
@@ -1307,7 +1307,10 @@ mod tests {
         .into_iter()
         .collect();
         // Native *and* plugin, because both are compiled in and both are ones
-        // an MCP server would be shadowing.
+        // an MCP server would be shadowing. The Lua plugins have to be loaded
+        // before they are in the kernel to be copied out of; nothing calls
+        // `plugins::boot` in a test binary.
+        crate::plugins::bundled::ensure().await;
         let mut registry = crate::tools::registry::ToolRegistry::with_native_tools();
         crate::plugins::install_tools_into(&mut registry);
         let specs = registry.specs();
@@ -1327,13 +1330,13 @@ mod tests {
         // the extras have to be exactly the tools of the plugins this build
         // does not have, and nothing else.
         let extra: BTreeSet<&str> = reserved.difference(&compiled).copied().collect();
-        let absent: BTreeSet<&str> = if cfg!(feature = "tool-web") {
-            BTreeSet::new()
-        } else {
-            ["web_fetch", "web_search", "x_search"]
-                .into_iter()
-                .collect()
-        };
+        let mut absent: BTreeSet<&str> = BTreeSet::new();
+        if !cfg!(feature = "tool-web") {
+            absent.extend(["web_fetch", "web_search", "x_search"]);
+        }
+        if !cfg!(feature = "tool-git") {
+            absent.extend(["git_status", "git_diff"]);
+        }
         assert_eq!(
             extra, absent,
             "a reserved name that no compiled-in tool claims must be a plugin tool this \

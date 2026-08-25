@@ -25,15 +25,19 @@
 //!   [`crate::llm::registry`] reach it from `ProviderConfig::build` — a unit
 //!   test, `wizard doctor`, the settings sheet's probe — none of which hold a
 //!   kernel handle or, in some cases, a runtime.
-//! - **Lua plugins load once, from [`boot`], at the top of [`crate::run`].**
-//!   They are files: a `read_dir`, then a VM and a script per plugin. That is
-//!   real work, it is async, and it must happen exactly once for the process
-//!   rather than on whichever code path happened to touch a plugin first.
+//! - **Lua plugins load once, asynchronously, and in two groups.** Building a
+//!   plugin's VM is real work and [`crate::kernel::lua::load_source`] is
+//!   `async`, so neither group can go inside the `OnceLock`. The *bundled*
+//!   ones ship in the binary and load from [`bundled::ensure`], which [`boot`]
+//!   calls and so does [`crate::agent::build_tool_registry`] — see [`bundled`]
+//!   for why the second caller is the load-bearing one. The *user's* load from
+//!   [`boot`] alone: a `read_dir` of `~/.wizard/plugins`, then a VM and a
+//!   script per directory.
 //!
 //! Launch cost of the whole thing on a machine with no plugins installed is
-//! one `read_dir` that returns `ENOENT`. With plugins installed it is one
-//! LuaJIT VM per plugin, which is the cost the user asked for by installing
-//! them.
+//! one LuaJIT VM per bundled plugin plus one `read_dir` that returns `ENOENT`.
+//! With plugins installed it is one more VM each, which is the cost the user
+//! asked for by installing them.
 //!
 //! # Why [`boot`] is called from `run` and not from a surface
 //!
@@ -65,6 +69,7 @@
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+pub mod bundled;
 pub mod host;
 
 #[cfg(feature = "provider-chatgpt")]
@@ -247,6 +252,13 @@ pub async fn boot(project_root: Option<&Path>) {
         let _ = PROJECT_ROOT.set(root.to_path_buf());
     }
     let kernel = kernel();
+    // The plugins that ship in the binary, before the ones that arrived by
+    // being dropped in a directory. Order is the conflict policy: the first
+    // claim on a tool name wins, so a user plugin cannot silently take
+    // `git_diff` out from under the model by being alphabetically earlier.
+    // (It is also its own latch, so a surface that reaches
+    // `build_tool_registry` before `boot` does not load them twice.)
+    bundled::ensure().await;
     // `set` is the latch: exactly one caller gets `Ok`, so a second `boot`
     // (a test, a surface that calls it defensively) is a no-op rather than a
     // second copy of every user plugin failing to claim its own tool names.
@@ -526,15 +538,29 @@ mod tests {
     /// written out rather than derived from [`compiled_in`] for the reason the
     /// provider table gives: a plugin that quietly stopped registering one of
     /// its three tools would still be in `compiled_in`.
-    #[test]
-    fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
+    #[tokio::test]
+    async fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
         /// `(cargo feature is on, plugin name, tools it registers)`.
-        const EXPECTED: &[(bool, &str, &[&str])] = &[(
-            cfg!(feature = "tool-web"),
-            "web",
-            &["web_fetch", "web_search", "x_search"],
-        )];
+        ///
+        /// `git` is Lua and `web` is Rust, and the row is the same row: the
+        /// kernel does not distinguish them, which is the claim
+        /// `docs/plugins.md` opens with.
+        const EXPECTED: &[(bool, &str, &[&str])] = &[
+            (
+                cfg!(feature = "tool-web"),
+                "web",
+                &["web_fetch", "web_search", "x_search"],
+            ),
+            (
+                cfg!(feature = "tool-git"),
+                "git",
+                &["git_status", "git_diff"],
+            ),
+        ];
 
+        // The Lua half does not load with the kernel — see `bundled` — so a
+        // test that asserts what the process kernel holds has to ask for it.
+        bundled::ensure().await;
         let kernel = kernel();
         let registered = kernel.tool_names();
         for (compiled_in, name, tools) in EXPECTED {
@@ -567,8 +593,9 @@ mod tests {
     /// [`install_tools_into`] is the only bridge, and `build_tool_registry`
     /// and `mcp serve` are its only callers, so asserting it here covers both
     /// without standing up an agent.
-    #[test]
-    fn plugin_tools_reach_the_agents_registry_and_only_when_compiled_in() {
+    #[tokio::test]
+    async fn plugin_tools_reach_the_agents_registry_and_only_when_compiled_in() {
+        bundled::ensure().await;
         let mut registry = ToolRegistry::with_native_tools();
         let native = registry.len();
         let installed = install_tools_into(&mut registry);

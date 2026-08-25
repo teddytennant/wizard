@@ -1,7 +1,8 @@
 //! Tool system: the [`Tool`] trait implemented by native tools
-//! ([`file`], [`shell`], [`git`]), agent-authored [`scripted`] tools, and
-//! MCP tools (`crate::mcp`). All three present a uniform interface through
-//! [`registry::ToolRegistry`], so the model calls them identically.
+//! ([`file`], [`shell`]), agent-authored [`scripted`] tools, MCP tools
+//! (`crate::mcp`) and plugin tools (`crate::plugins`, Rust or Lua). All four
+//! present a uniform interface through [`registry::ToolRegistry`], so the
+//! model calls them identically.
 
 pub mod code;
 pub mod command;
@@ -9,7 +10,6 @@ pub mod compact;
 pub mod computer;
 pub mod evolve;
 pub mod file;
-pub mod git;
 /// The client, the SSRF guard, the redirect walk and the body cap. Core, and
 /// shared by the web plugin, the image downloader and a Lua plugin's
 /// `wizard.http`; see the module doc for where that line is drawn.
@@ -381,7 +381,7 @@ pub enum ToolError {
 /// below take less.
 pub(crate) const MAX_OUTPUT_BYTES: usize = 30_000;
 
-/// Cap for `git_diff`.
+/// Cap for the `git` plugin's `git_diff`.
 ///
 /// A diff is the one summary output that is still worth several thousand
 /// tokens, because the model is usually about to act on every hunk in it. 16
@@ -398,7 +398,7 @@ pub(crate) const MAX_DIFF_BYTES: usize = 16_000;
 /// subsequent step.
 pub(crate) const MAX_SEARCH_BYTES: usize = 12_000;
 
-/// Cap for listings: `list_files`, `git_status`.
+/// Cap for listings: `list_files`, and the `git` plugin's `git_status`.
 ///
 /// Paths, one per line. 8 KB holds several hundred of them, comfortably more
 /// than the entry caps these tools already apply, and a working tree with more

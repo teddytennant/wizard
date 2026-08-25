@@ -1263,3 +1263,69 @@ async fn a_capability_grant_does_not_smuggle_in_native_code_loading() {
         "a filesystem grant must not reach the native-library loader: {reached}"
     );
 }
+
+/// A plugin's state belongs to the *process*, not to a session, and there is
+/// currently no way for it to belong to a session.
+///
+/// One VM per plugin per process (see the module docs), one `LuaTool` handle
+/// copied into every agent's registry, so `local store` is shared by every
+/// agent alive at once — a fleet run, a gateway serving two chats, a subagent
+/// and its parent. This test drives that with two [`ToolContext`]s, which is
+/// what two sessions look like from a tool's side.
+///
+/// It is here as a *limit*, not as a feature. It is what decided that
+/// `src/tools/todo.rs` stays Rust: the todo list is per-agent by construction
+/// (`Agent::clear` swaps the `Arc`, and `subagent::spawn` hands a plain
+/// subagent a fresh empty list precisely so its scratch todos cannot reach the
+/// parent's), and a plugin cannot express any of that. Every port should ask
+/// this question first: **is the state this tool keeps per-process or
+/// per-session?** Per-process is Lua-shaped. Per-session is not, until a
+/// plugin can hold a VM or a store per agent.
+#[tokio::test]
+async fn a_plugins_state_is_per_process_and_cannot_be_per_session() {
+    let dir = TempDir::new("lua-session-scope");
+    let kernel = kernel_in(&dir.path);
+    load(
+        &kernel,
+        "scratch",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            local store = "(empty)"
+            ctx:tool {
+              name = "scratch",
+              execute = function(args)
+                if args.set then store = args.set end
+                return store
+              end,
+            }
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("loads");
+
+    let tool = kernel.tool("scratch").expect("registered");
+    // Two sessions, each with its own tool context, exactly as two agents in
+    // one process have.
+    let first = crate::tools::ToolContext::new(dir.path.join("session-a"));
+    let second = crate::tools::ToolContext::new(dir.path.join("session-b"));
+
+    let wrote = tool
+        .execute(serde_json::json!({ "set": "session A's work" }), &first)
+        .await
+        .expect("the tool ran");
+    assert_eq!(wrote.content, "session A's work");
+
+    let read = tool
+        .execute(serde_json::json!({}), &second)
+        .await
+        .expect("the tool ran");
+    assert_eq!(
+        read.content, "session A's work",
+        "a second session reads the first session's state; a plugin has no per-session store"
+    );
+}

@@ -1196,3 +1196,297 @@ person's. `tests/cli.rs` runs the real binary against both sides of the flag.
 - **The other three surfaces are still core.** `wizard acp`, `wizard gateway`
   and `mcp serve` are each one `Entrypoint` registration, and none of them is
   behind a feature yet.
+## As built: the first Lua plugin, and what it cost
+
+`git_status` and `git_diff` were `src/tools/git.rs` and are now
+`src/plugins/lua/git/`, in Lua, behind `--features tool-git`. That file is
+deleted. This is the first of the ~28 subsystems the migration earmarks for
+Lua to actually go, and the interesting part is not the plugin — it is the
+four things the bridge could not do, each of which every remaining port would
+have hit.
+
+### Why git and not `interview`, `publish` or `memory`
+
+Those three were the candidates on the list, and all three were read before
+this one was picked. None of them is Lua-shaped today, and the reasons are
+different enough to be worth writing down, because they are the three shapes
+that will keep coming up.
+
+**`interview` needs the surface, not the machine.** Its body is
+`AgentEvent::Interview { questions, gate }` on the turn's channel, then a park
+on a `oneshot` until the TUI's modal answers or the channel closes. `wizard.ui`
+has `notify` and nothing else, so porting it means inventing a *two-way*
+UI call — and the plugin would still need the agent's omakase flag, and the
+tool is registered by `Agent::new` and re-registered on every mode change
+rather than by the registry. That is three couplings to core, not one.
+
+**`publish` is a twenty-line adapter over something with four consumers.**
+`crate::evolve::publish` is where the work is, and `/publish` in the TUI, in
+the window and in the gateway all call it too. Porting the *tool* means a host
+function whose body is `evolve::publish`, which is Rust with a slower calling
+convention. Porting `evolve::publish` is a different change and a much larger
+one — though it is the most Lua-shaped body in the tree, being almost entirely
+`gh` and `git` invocations.
+
+**`memory` would be a second implementation of an on-disk format.**
+`MemoryStore` has five consumers and one of them is the system prompt's memory
+index. A Lua `memory` would write the frontmatter and derive the project slug
+itself, and the day either changed there would be two places to change. That
+is the failure `src/tools/http.rs` was split out of the web tools to prevent.
+
+**`git` has none of those problems.** Two tools, zero core consumers besides
+the two `registry.register` lines, and every line of the body decides an argv,
+reads an exit code, and formats a string. It needs one field of `ToolContext`
+and no shared type. It is the closest thing in `src/tools/` to what this
+document means by "policy and orchestration".
+
+### How a first-party Lua plugin ships: `include_str!`
+
+`src/plugins/bundled.rs` is `compiled_in()` for Lua — one line per plugin,
+behind the same kind of cargo feature — and each line `include_str!`s both
+`plugin.lua` and `manifest.toml`. The alternative, a directory `install.sh`
+copies into `~/.wizard/plugins/`, fails three ways:
+
+- **`cargo test` would not have it.** A test binary never runs the installer,
+  so the ported tool would be absent from every registry the suite composes and
+  the port would be proven by nothing. Pointing the tests at the developer's
+  own `~/.wizard/plugins` is worse: the suite would then pass or fail on the
+  contents of a home directory.
+- **Neither would `cargo install`, `nix build`, or a downloaded release.** A
+  tool that is present or absent depending on how the binary arrived is not a
+  tool the model can be told about.
+- **A file on disk cannot be first-party.** `PluginSource::FirstParty` is what
+  turns the instruction hook off and the JIT on, and it is a claim about *who
+  wrote this code*. For a file under `~/.wizard` that is "whoever last edited
+  it", so loading one unbounded would make the bound a formality. Shipping in
+  the binary is the only place the claim is true — which is exactly the rule
+  `compiled_in()` already follows.
+
+`~/.wizard/plugins` keeps its meaning: other people's plugins, still bounded.
+
+### They load from `ensure`, not from the kernel
+
+Rust plugins load inside the kernel's `OnceLock`, synchronously. A Lua plugin's
+`apply` is a LuaJIT VM and a script, and `lua::load_source` is `async` — it
+spawns the VM's task and awaits its first answer — so there is no synchronous
+door into it and adding one would be a `block_on` inside a `OnceLock`
+initializer that some callers reach from inside a runtime.
+
+So `bundled::ensure()` is an idempotent async latch, called from `boot` (which
+every surface goes through) **and from `agent::build_tool_registry`** (which
+every agent-bearing surface *and every test that composes a registry* goes
+through). The second is the load-bearing one: nothing calls `boot` in a test
+binary, and a first-party tool nobody could test is not a tool that should
+ship. `mcp serve` and `harness export` are dispatch arms of `crate::run`, which is
+below `boot`, so they need nothing extra; their *tests* call `ensure`
+themselves and would otherwise have agreed with themselves about a bundle the
+real export never writes.
+
+### Four gaps in the host bridge, all of them general
+
+Each of these was a thing the Rust tool did that no Lua tool could, and none of
+them is git-specific.
+
+**A Lua tool could not see its `ToolContext`.** `LuaTool::execute` took
+`_ctx: &ToolContext` and dropped it. Thirteen of that struct's sixteen fields
+are Rust handles a Lua value cannot be, and they reach a plugin through
+`wizard.*` if they reach it at all — but `cwd` is a path, it is what every
+path-taking tool resolves against, and a tool that does not get it operates on
+the wrong directory without failing. The tool body now takes a second argument,
+a table, and `cwd` is the one thing in it.
+
+**`wizard.process.run` collapses the outcome.** It takes a shell line and
+answers `Ok(output)` or `Err("exited 3")`, which is right for "do this and tell
+me if it worked" and wrong for every tool that branches on an exit code: `git
+status` exits 128 outside a repository and the message the model needs is on
+stderr. `wizard.process.exec{ argv = {...}, cwd = ..., timeout_ms = ... }`
+returns `{ stdout, stderr, code, timed_out }` and judges nothing. It is argv
+and not a command line for a second reason: `git_diff`'s path comes from the
+model, and a shell line would mean quoting it correctly in Lua, forever.
+
+**A Lua tool had one output budget and native tools have four.** The wrapper
+applied `MAX_OUTPUT_BYTES` and that was all a plugin could get, so a ported
+`git_diff` would have spent 30 KB of the window where the native one spent 16.
+`wizard.limits` carries the compiled-in numbers and `wizard.truncate` is
+`truncate_output` — the same head/tail framing and the same spill file, rather
+than a `string.sub` in every plugin that would lose both.
+
+**A Lua tool could not report a failure without editing the text.** The only
+channel was an `error:` prefix in the content, which would have put a marker
+word in front of git's own `fatal: not a git repository`. A tool body may now
+return `{ content = ..., is_error = true }`; a bare string still follows the
+prefix convention, and `error()` from Lua still means the tool *broke* rather
+than that it worked and has bad news.
+
+One smaller correction, in the same place: **Lua has no empty object.**
+`properties = {}` is a table with no entries and mlua serialises it as `[]`, so
+a tool with no arguments would advertise an array where its schema says object.
+`object_schema` repairs it, because the spelling that triggers it is the
+natural one and the failure arrives from a provider, mid-turn, inside somebody
+else's error message.
+
+### What changed for the model, honestly
+
+The two tools keep their names, their descriptions to the character, their
+schemas, their `ReadOnly` access class and their output down to
+`"(clean working tree)"` and `"No changes."` — `src/plugins/bundled/tests.rs`
+is `src/tools/git.rs`'s test module pointed at the Lua implementation, running
+real git in a temp directory through the real `WizardHost`.
+
+Two things are not identical. **Their position in the roster moved**: plugin
+tools are appended after the native, scripted and MCP ones, so `git_status` is
+no longer seventh in the list the model is shown. That is inherent to the
+architecture and already true of the web tools. And **a malformed argument is a
+different error type**: `serde` refused `staged: 5` before the native tool ran,
+as `ToolError::InvalidArgs`; the Lua tool checks the type itself and raises,
+which arrives as `ToolError::Execution`. The model sees a message either way
+and no test covered the distinction, but it is a difference.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` gained a `without tool-git` leg. It matters for
+a reason the other legs do not have: this plugin's tools are registered by a
+script that only runs once `ensure` has been awaited, so the leg is what proves
+that leaving it out costs two tool names rather than a compile error in the
+four places that assert what the roster holds — `plugins`, `mcp`, `harness`
+and `tools::registry`.
+
+The default test count went 2586 → 2593: nine tests left with `src/tools/git.rs`,
+fourteen arrived in `src/plugins/bundled/tests.rs`, and two more came out of
+the `todo` attempt below. The `--no-default-features` count went 2378 → 2371 —
+the same nine out, and only the two unconditional ones back in, since that leg
+no longer compiles the plugin's test module.
+
+One wart in the gate itself, found by tripping it: the ratchet compared the
+*passed* count against the baseline, so a run where the known lockfile flake
+fired reported both "known flake, carry on" and "test count went backwards" one
+test below the line. A flaked test is one the suite still has. It counts
+`passed + the known flake` now.
+
+## `todo` was attempted, and should stay Rust
+
+`src/tools/todo.rs` is the case that decides whether the rest of the migration
+is feasible, because it is coupled to core in both directions: `AgentEvent`
+carries `Vec<TodoItem>`, three TUI renderers and the GUI rail match on
+`TodoStatus`, and `ToolContext` holds the list. So the question is the good
+one — **can a plugin own the tool's logic while core keeps the types the UI
+draws?** — and the answer is a spike that was built, run, and thrown away.
+
+### What the spike was
+
+`HostBridge::set_state(plugin, key, value)` / `get_state`, gated on
+`Capability::Ui`, with `"todos"` the only key: deserialize to `TodoList`, write
+`binding.ctx.todos`, send `AgentEvent::TodoUpdated`. Then `todo` as a Lua
+plugin holding no state of its own, reading and writing through those. About
+eighty lines of Lua and forty of Rust.
+
+**It works, in the narrow sense.** The output is byte-identical, and the list
+lands in the `ToolContext::todos` the band draws from:
+
+```
+WRITE => Ok("todo list updated — 1/3 done\n✓ first\n▸ second\n☐ third")
+READ  => Ok("✓ first\n▸ second\n☐ third")
+CORE  => [TodoItem { content: "first", status: Completed }, ...]
+```
+
+The event fires, core keeps the types, the glyphs are the same glyphs. Every
+question about *rendering* answers yes.
+
+### The three that answer no
+
+**A host call answers from the bound agent, not from the calling tool
+context.** These are different objects: `host::bind` is per-agent and set at
+`Agent::new`, on `set_model`, on `set_client` and at the top of each turn,
+while a `ToolContext` is per call. The spike, with two sessions in one process:
+
+```
+A's list => [TodoItem { content: "A's work", status: Pending }]
+B's list => [TodoItem { content: "B's work", status: Pending }]
+A reads  => Ok("☐ B's work")
+```
+
+Session A asked for its todo list and was handed session B's. This document
+already records "last binder wins" as a limitation of `wizard.model`, where it
+is an accounting error. For session state it is a correctness error, and the
+surfaces it breaks — a fleet run, a gateway serving two chats — are exactly the
+ones with nobody watching.
+
+**Unbound, the tool stops existing.** The Rust tool works with no agent at all,
+because it reads the list off the context it was handed. The Lua one:
+
+```
+UNBOUND read => Err("tool 'todo' failed: wizard.ui needs a running agent
+                     to read session state, and no agent is attached ...")
+```
+
+That is `mcp serve`, and direct registry execution, and every test that calls a
+tool without standing up an agent.
+
+**And it breaks subagents in a way a user would see.**
+`subagent::spawn` gives a plain (non-fork) subagent a *fresh* `TodoList::new()`,
+deliberately, so its scratch todos cannot reach the parent. A forked one shares
+the parent's `Arc`. That distinction lives in the `ToolContext` the subagent
+runs with, which a plugin cannot see — so under the port every subagent writes
+the parent's list, and the user's todo band fills with a subagent's working
+notes mid-turn.
+
+Two more, smaller: `Agent::clear` resets the list by **swapping the `Arc`**, and
+no event is emitted that a plugin could subscribe to; and `wizard.ui.set_state`
+would be a host call whose key is one tool's name and whose payload is one core
+type, which is the "Rust with a slower calling convention" this document
+opens by refusing.
+
+### The verdict
+
+`todo` stays Rust. It is not a hard port — it is a port that is *possible*
+and wrong, which is the more expensive kind, because the spike passes its own
+tests and the failures are in the sessions nobody is looking at.
+
+The gap is not the todo tool's. It is that **a Lua plugin is process-scoped and
+a session is not.** One kernel per process, one VM per plugin, one `LuaTool`
+handle copied into every agent's registry, and one host binding shared by all
+of them. `local store` in a plugin is shared by every agent alive at once, and
+a host call cannot tell which agent asked. Two tests pin this so the next port
+finds it rather than rediscovering it:
+`kernel::lua::tests::a_plugins_state_is_per_process_and_cannot_be_per_session`
+and
+`plugins::host::tests::a_host_call_answers_from_the_bound_agent_not_from_the_calling_tool_context`.
+
+### The rule the rest of the migration should use
+
+Ask two questions of a subsystem before porting it, in this order.
+
+**1. Is its state per-process or per-session?** Per-process — a cache, a
+config-derived table, a registry of things the machine has — is Lua-shaped.
+Per-session is not, and no amount of host API fixes it while the VM is shared:
+what would fix it is a VM (or at least a store) per agent, which is a kernel
+change with a real cost, since it means N LuaJIT states for a fleet of N.
+
+**2. Does core hold a type it needs, or only a string?** Core may hold the text
+a user types — this is already the `ProviderKind::ANTHROPIC` rule — but a tool
+whose payload is a core *type* the UI matches on exhaustively is a tool whose
+host call would be that type's constructor with JSON in front of it.
+
+By those two, of the subsystems the migration earmarks:
+
+**Genuinely Lua-shaped.** Anything whose whole body is "decide an argv, read an
+exit code, format a string", which `git` has now proven end to end:
+`evolve::publish`'s `gh`/`git` orchestration, the scheduler's cron arithmetic,
+`doctor`'s checks, skill and harness bundle loading, `hooks.toml` matching (the
+bus already subsumes it), and the read-only reporting tools. Also anything
+already reachable through a `wizard.*` namespace that exists —
+`web_search`'s five backends are `wizard.http` and a parser.
+
+**Should stay Rust.** Anything whose state is a session's: `todo`, `tasks` and
+`subagent_tasks` (registries the agent constructs and the surfaces poll),
+`compact` (it is intercepted by the agent loop before `execute` is even
+reached), `plan` and `interview` (two-way conversations with a surface, through
+typed events with gates on them), `spill` and `checkpoint`. Anything whose
+payload is a type core matches on. And, as before, anything that is bytes and
+syscalls.
+
+**Blocked, not decided.** `memory` and `image` are Lua-shaped in body and
+blocked on a service: both need a *core* store reachable from a plugin, and
+`ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
+Lua could invoke is the missing piece, and it is the same piece
+`tools/image.rs`'s four-provider-id branch already needs.

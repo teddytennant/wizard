@@ -525,3 +525,41 @@ async fn a_plugin_subagent_is_refused_when_no_agent_is_bound() {
         .unwrap_err();
     assert!(err.contains("no agent is attached"), "{err}");
 }
+
+/// A host call answers from the **bound agent**, not from the tool context of
+/// the call that made it.
+///
+/// The two are different objects and nothing keeps them in step: `bind` is
+/// per-agent and the tool context is per-call, so a tool invoked with one and
+/// reaching the host gets the other. Here the binding says one directory and
+/// the call says another, and `wizard.process.run` runs in the binding's.
+///
+/// Recorded as a test because it is a real constraint on what can be ported,
+/// and the `todo` port is where it bites: `ToolContext::todos` is the list the
+/// TUI draws, a plain subagent is deliberately given a *fresh* one
+/// (`subagent::spawn`), and a plugin reaching it through the host would write
+/// the bound agent's list from a subagent's call — the parent's todo band
+/// filling up with a subagent's scratch work. Closing the gap means threading
+/// the calling context through `VmRequest` into every `wizard.*` closure,
+/// which capture their host once when the VM is built; that is a kernel change
+/// and not a plugin one.
+#[tokio::test]
+async fn a_host_call_answers_from_the_bound_agent_not_from_the_calling_tool_context() {
+    let dir = TempDir::new("host-binding-scope");
+    let (kernel, host) = fixture(&dir).await;
+
+    let bound_dir = dir.path.join("the-agents-directory");
+    std::fs::create_dir_all(&bound_dir).expect("a directory");
+    let (bound, _client) = binding(ToolContext::new(&bound_dir), "unused");
+    host.bind(bound);
+
+    // `call` executes the tool with a context rooted at the kernel's project
+    // root, which is the *parent* of the bound one.
+    let out = call(&kernel, "p_run", json!({ "command": "pwd" }))
+        .await
+        .expect("pwd ran");
+    assert!(
+        out.trim().ends_with("the-agents-directory"),
+        "the host answered from the binding, not the call: {out}"
+    );
+}

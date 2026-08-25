@@ -113,6 +113,52 @@ pub trait HostBridge: Send + Sync {
     async fn spawn_agent(&self, plugin: &str, task: &str) -> anyhow::Result<String>;
     /// Run a command. Gated on [`Capability::Process`].
     async fn run(&self, plugin: &str, command: &str) -> anyhow::Result<String>;
+    /// Run one program by argv, and hand back what it did rather than a
+    /// verdict on it. Gated on [`Capability::Process`].
+    ///
+    /// This is not a nicer [`Self::run`]; the two answer different questions,
+    /// and a plugin that reimplements a native tool needs this one. `run`
+    /// takes a *shell line* and collapses the outcome into `Ok(output)` or
+    /// `Err("exited 3")`, which is right for "do this thing and tell me if it
+    /// worked" and wrong for every tool that branches on an exit code, reads
+    /// stderr separately, or has to keep a non-zero status's stdout. `git
+    /// status` exits 128 outside a repository and says why on stderr; `git
+    /// diff` exits 0 with an empty stdout when there is nothing to show.
+    ///
+    /// The argv is the second half. A shell line means a plugin builds one by
+    /// pasting a model-supplied path into a string, and the first plugin to
+    /// forget a quote has handed the model a shell. Passing `argv` straight to
+    /// `exec` has no quoting to forget.
+    async fn exec(&self, plugin: &str, request: ExecRequest) -> anyhow::Result<ExecOutcome>;
+}
+
+/// One program to run, from a plugin.
+#[derive(Debug, Clone)]
+pub struct ExecRequest {
+    /// Program and arguments. Never a shell line: `argv[0]` is looked up on
+    /// `PATH` and the rest are passed through untouched.
+    pub argv: Vec<String>,
+    /// Where to run it. Relative paths resolve against the host's working
+    /// directory; `None` means that directory.
+    pub cwd: Option<PathBuf>,
+    /// Budget before the process group is killed. Clamped by the host.
+    pub timeout: std::time::Duration,
+}
+
+/// What a program did.
+///
+/// Every field is what the caller would have got from
+/// [`std::process::Output`], because the point of [`HostBridge::exec`] is that
+/// the *plugin* decides what a given exit code means.
+#[derive(Debug, Clone, Default)]
+pub struct ExecOutcome {
+    pub stdout: String,
+    pub stderr: String,
+    /// Exit status, or `None` when the process was signalled.
+    pub code: Option<i32>,
+    /// Seconds after which it was killed, when it outlived its budget. Set
+    /// *instead of* a code, so a plugin cannot mistake a kill for a clean exit.
+    pub timed_out: Option<u64>,
 }
 
 /// The bridge every kernel gets until a surface attaches a real one.
@@ -147,6 +193,13 @@ impl HostBridge for UnwiredHost {
 
     async fn run(&self, _plugin: &str, command: &str) -> anyhow::Result<String> {
         Err(unwired("wizard.process", &format!("running {command}")))
+    }
+
+    async fn exec(&self, _plugin: &str, request: ExecRequest) -> anyhow::Result<ExecOutcome> {
+        Err(unwired(
+            "wizard.process",
+            &format!("running {}", request.argv.join(" ")),
+        ))
     }
 }
 

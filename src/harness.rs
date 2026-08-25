@@ -229,8 +229,14 @@ mod tests {
     use super::*;
     use crate::agent::subagent::SubagentConfig;
 
-    #[test]
-    fn export_writes_a_complete_bundle() {
+    #[tokio::test]
+    async fn export_writes_a_complete_bundle() {
+        // `export` is synchronous and runs from `crate::run`, which has already
+        // called `plugins::boot`; a test binary has not, so it says so here.
+        // Without this the bundle would be exported and checked against a
+        // registry that was missing the same tools, and would agree with
+        // itself about a bundle the real export never writes.
+        crate::plugins::bundled::ensure().await;
         let dir = tempfile::tempdir().expect("tempdir");
         export(dir.path()).expect("export");
 

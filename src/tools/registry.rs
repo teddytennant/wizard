@@ -18,7 +18,6 @@ use super::command::RunCommandTool;
 use super::compact::CompactTool;
 use super::computer::ComputerTool;
 use super::file::{EditFileTool, ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool};
-use super::git::{GitDiffTool, GitStatusTool};
 use super::image::GenerateImageTool;
 use super::manual::ManualTool;
 use super::memory::MemoryTool;
@@ -60,13 +59,14 @@ impl ToolRegistry {
 
     /// Registry pre-populated with all native tools
     /// (`read_file`, `write_file`, `edit_file`, `list_files`,
-    /// `search_files`, `execute`, `git_status`, `git_diff`, `memory`,
+    /// `search_files`, `execute`, `memory`,
     /// `todo`, `manual`, `generate_image`,
     /// `task_output`, `task_kill`, `subagent_status`, `subagent_kill`,
     /// `run_command`, `compact`, `computer`).
     ///
     /// **Native is not the whole tool set.** `web_fetch`, `web_search` and
-    /// `x_search` are `src/plugins/web.rs` and arrive through
+    /// `x_search` are `src/plugins/web.rs`; `git_status` and `git_diff` are
+    /// `src/plugins/lua/git/`, in Lua. All five arrive through
     /// [`crate::plugins::install_tools_into`], which
     /// [`crate::agent::build_tool_registry`] and `mcp serve` both call. A
     /// caller that wants the set the model actually sees wants one of those
@@ -79,8 +79,6 @@ impl ToolRegistry {
         registry.register(Arc::new(ListFilesTool));
         registry.register(Arc::new(SearchFilesTool));
         registry.register(Arc::new(ExecuteTool));
-        registry.register(Arc::new(GitStatusTool));
-        registry.register(Arc::new(GitDiffTool));
         registry.register(Arc::new(MemoryTool));
         registry.register(Arc::new(TodoTool));
         // The on-demand half of the system prompt (see `crate::tools::manual`).
@@ -404,8 +402,6 @@ mod tests {
                 "list_files",
                 "search_files",
                 "execute",
-                "git_status",
-                "git_diff",
                 "memory",
                 "todo",
                 "manual",
@@ -419,7 +415,7 @@ mod tests {
                 "computer",
             ]
         );
-        assert_eq!(registry.len(), 19);
+        assert_eq!(registry.len(), 17);
         assert!(!registry.is_empty());
 
         for spec in registry.specs() {
@@ -438,8 +434,6 @@ mod tests {
             "read_file",
             "list_files",
             "search_files",
-            "git_status",
-            "git_diff",
             // `todo` mutates only agent-local state, so it stays usable in
             // plan mode.
             "todo",
@@ -605,7 +599,7 @@ mod tests {
             registry.apply_description_overrides(&tmp.0.join("absent")),
             0
         );
-        assert_eq!(registry.len(), 19);
+        assert_eq!(registry.len(), 17);
     }
 
     /// A scripted tool cannot take a built-in's name.
