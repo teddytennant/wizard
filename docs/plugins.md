@@ -1485,6 +1485,13 @@ typed events with gates on them), `spill` and `checkpoint`. Anything whose
 payload is a type core matches on. And, as before, anything that is bytes and
 syscalls.
 
+Two more went on this list later, for reasons this pair of questions does not
+catch: `hardware`, because core consults it synchronously from places that
+cannot await and a Lua service is a value taken at load, and `schedule`,
+because its daemon supervises long-lived children and the host bridge has no
+shape to hold one in. The section at the end of this document is the argument,
+and it adds the two questions that would have caught them.
+
 **Blocked, not decided.** `memory` and `image` are Lua-shaped in body and
 blocked on a service: both need a *core* store reachable from a plugin, and
 `ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
@@ -1621,3 +1628,236 @@ into is gone too) and with everything on.
   right generalization.
 - **Still no *command* has gone through the door.** The thirteen earmarked ones
   are built-ins.
+
+## `hardware` and `schedule` were attempted, and both stay Rust
+
+Both were picked by the rule the `todo` section above ends with, and both pass
+it. `src/hardware.rs` keeps no session state at all — it reports what the
+machine has, which is the *"a registry of things the machine has"* that rule
+names as Lua-shaped. `src/schedule.rs` keeps none either: its state is a TOML
+file and a set of child processes, which is external by definition. Neither
+holds a type the UI matches on exhaustively.
+
+Neither is portable, and the reasons are different from each other and from
+`todo`'s. `todo` failed on *where the state lives*. These two fail on *how core
+reaches the answer* and on *what a plugin would have to reimplement to give
+one*, which are the third and fourth questions and were not being asked.
+
+### `hardware`: core asks synchronously, and a Lua service is a value
+
+`src/hardware.rs` is 1254 lines, of which 618 are its test module. It detects
+GPU VRAM (`nvidia-smi`, `rocm-smi`, `/sys/class/drm`), Apple Silicon's unified
+pool, system RAM (`/proc/meminfo`, `sysctl hw.memsize`) and the cgroup cap, then
+picks a local model tier from the reading. It is consulted from 24 places
+outside the test modules of three core files: `src/server.rs`, `src/onboarding.rs`
+and `src/local_setup.rs`.
+
+**A Lua plugin exports two things and neither is a function core can call.** It
+can `ctx:provide` a value, and it can register a tool. `Ctx::provide` from Lua
+goes through `Service::data(lua_to_json(...))`, so what lands in the registry is
+JSON, taken at the instant `apply` ran; `Service::downcast` on it is `None` by
+construction, because there is no object behind it. A tool is an `async` body
+on the VM's own task. So the two available shapes are *a value computed before
+anybody asked* and *an answer you have to await*.
+
+Core's callers want neither.
+
+```
+src/server.rs:508      spawn(..., crate::hardware::has_gpu())   — `pub fn spawn`,
+                       called from `async fn ensure_running` at line 196
+src/local_setup.rs:183 crate::hardware::has_gpu() && vulkan_loader_present()
+                       — inside an `impl FnOnce() -> bool` thunk, itself called
+                       from `async fn install_llama_server` at line 160
+src/onboarding.rs:970  hardware::suggest_gguf()                 — inside the
+                       blocking crossterm loop under `spawn_blocking`
+```
+
+Two of those three are synchronous code on a tokio worker thread, where
+`block_on` is a panic rather than a slow path. Making them `await` is not one
+edit: `asset_variants_for(os, arch, vulkan: impl FnOnce() -> bool)` takes its
+GPU probe as a thunk *specifically* so a test can hand it a fake, and an async
+thunk there means an async `asset_variants_for`, an async `asset_variants`, and
+a test that has to stand up a runtime to check a list of asset names.
+
+**The other shape is worse than it looks.** Publishing the detection as a value
+at `apply` means running `nvidia-smi` and `rocm-smi` in every process that loads
+the plugin. `bundled::ensure` is awaited from `agent::build_tool_registry`
+(`src/agent/mod.rs:1905`), so that is every agent-bearing surface *and every
+test binary that composes a registry*. Today `detect_memory` is called by
+onboarding, by `server::ensure_running` when it is about to start llama-server,
+and by `local_setup` when it is about to download one — which is to say never,
+for the large majority of sessions, all of which use a cloud provider. The port
+would move that work from "when somebody asks" to "always", and the machines
+where the probe is slowest are exactly the ones that have a GPU driver to
+initialise. (Not measured here: this box has no NVIDIA driver, so the expensive
+case is not one this worktree can time. The structural point stands without a
+number — it is work on a path that currently does none.)
+
+**And the tests do not survive either shape.** This is the argument that
+decides it. `hardware.rs` is 24 tests over 636 lines of code, and the module's
+whole structure exists to make them possible:
+
+```rust
+fn ram_for_os(os: &str, sysctl: impl FnOnce() -> Option<u64>, meminfo: impl FnOnce() -> Option<u64>)
+fn has_unified_memory_on(os: &str, arch: &str) -> bool
+fn detect_memory_from(os: &str, arch: &str, vram: Option<(u64, &str)>, ram: Option<(u64, bool)>)
+fn cap_to_cgroup(total_gb: u64, limit_gb: Option<u64>) -> (u64, bool)
+fn gguf_suggestion_for(detected: Option<&Detected>, ram_gb: Option<u64>)
+```
+
+Every one of them takes its readings as parameters, and the module's own header
+says why: *"That is what makes an Apple Silicon path testable on a Linux CI box:
+without it a swapped match arm passes every test on the host that never takes
+it."* `an_8gb_apple_silicon_mac_lands_on_a_tier_it_can_load`,
+`largest_tier_fitting_below_skips_the_model_that_just_died` and
+`a_budget_below_the_smallest_tier_returns_the_floor_and_says_it_will_not_run`
+are all assertions about machines the CI box is not.
+
+A plugin that publishes one JSON blob computed from the machine it is on has no
+seam to inject a reading into. The internal pure functions stop being reachable,
+and what is left to assert is whatever this host happens to report. Registering
+a tool per pure function to get the seams back is the "Rust with a slower
+calling convention" this document opens by refusing.
+
+**There is no line through the file that improves it, either.** Its two halves
+are *gather impurely* (the probes, ~150 lines, untestable off their own OS by
+construction) and *decide purely* (the tiers, the budgets, the explanations,
+~480 lines, tested exhaustively). Porting only the probes moves the untestable
+quarter and leaves everything behind, for the eager-detection cost and no gain.
+Porting the whole thing takes the testable three quarters and makes them
+untestable. The seam that would have to be the plugin boundary is the one seam
+the module is built around, and a boundary that only carries values cannot
+preserve it.
+
+`hardware` stays Rust, and it does not become a Rust plugin either: a plugin
+that `provide`s a native service closes the sync problem (`inject_as` is a
+downcast and needs no runtime), but `server.rs`, `onboarding.rs` and
+`local_setup.rs` would then all need a degrade path for a `None` that today
+cannot happen, `GGUF_TIERS` would have to become an `Option<&[GgufModel]>` in
+onboarding's picker and in `smallest_gguf_tier`'s error message, and the payoff
+is one cargo flag that removes 636 lines and no dependency at all. That is churn
+in core to serve a plugin nobody would turn off.
+
+### `schedule`: three host namespaces whose only consumer would be this plugin
+
+`src/schedule.rs` is 1293 lines, 431 of them tests. From outside it looks like
+the cleanest split left, and on the audit's numbers it is: **five** core
+references, three of which are `crate::run`'s dispatch arms
+(`schedule::run`, `schedule::run_service`, `schedule::run_daemon`) and two of
+which are `max_hours_duration`, an `f64` validator `--max-hours` uses on the
+headless path and which has nothing to do with scheduling. `croner` has exactly
+one consumer in the tree, so the feature would gate a dependency the way `acp`
+gates `agent-client-protocol`. It is the `entrypoint::Entrypoint<ScheduleCmd>` +
+`entrypoint::Subcommand` shape the fleet already proved.
+
+That is the case for `schedule` being *a plugin*. It is not the case for it
+being a *Lua* plugin, and what is inside decides that.
+
+**The daemon is the subsystem, and it supervises long-lived children.**
+`spawn_job` returns a `RunningJob` holding a `tokio::process::Child`;
+`reap_jobs` `try_wait`s each one every pass, kills the ones past
+`max_hours + KILL_GRACE`, and logs what it reaped; `run_daemon` keeps that
+`Vec<RunningJob>` across iterations and kills all of it on ctrl-c. The host
+bridge has `wizard.process.run` and `wizard.process.exec`, and both are
+run-to-completion: they hand back `{ stdout, stderr, code, timed_out }` when the
+child is already dead. There is no spawn, no poll, no kill, and no handle a Lua
+value could hold. A Lua daemon could only run one job at a time to completion,
+which is not the same program — today's fires jobs concurrently and the kill is
+a backstop *distinct from* the `--max-hours` the child enforces on itself.
+
+**The daemon lock is an fd held for the process lifetime.**
+`acquire_daemon_lock` takes `flock(LOCK_EX | LOCK_NB)` and keeps the `File`
+alive, and its doc comment says exactly why that is the design: *"the kernel
+releases the lock on process exit (including SIGKILL), so no stale-lock cleanup
+is ever needed."* A lock a Lua plugin could hold would be a lock the kernel
+does not release, which is the stale-lock problem this deliberately does not
+have.
+
+**The file format and the cron would each become a second implementation.**
+`ScheduleFile`/`ScheduleEntry` round-trip through `serde` and `toml`, and the
+`prompt` field is arbitrary user text. Writing that back out of Lua means
+quoting TOML correctly, forever, in a language with no TOML writer — the same
+objection that kept `memory` in Rust, where a Lua plugin would have written the
+frontmatter itself. `parse_cron` is `croner` with seconds and years refused;
+reimplementing it in Lua is a second implementation of a spec with DST, name
+forms, ranges, steps and the day-of-month/day-of-week OR rule in it, and
+`schedule add` validates against it, so the CLI and the daemon would have to
+agree about a *third* thing.
+
+Those two are the ones a host bridge could honestly close: `wizard.toml.decode`
+/ `encode` over the `toml` crate, and `wizard.cron.next` over `croner`, are the
+`wizard.truncate` pattern — core's implementation, reached rather than copied,
+so there is only ever one. Child supervision is not: `spawn`, `poll`, `kill` and
+a live handle is a new object model in the host table, and the only plugin that
+would use it is this one. Adding four namespaces so that one subsystem can be
+written in Lua is the trade this document's opening section refuses.
+
+**One more, smaller.** `service_spec()` returns a
+`crate::platform::service::ServiceSpec` — the systemd/launchd description
+`wizard scheduler install` writes. That is a core type a plugin would have to
+construct, which is question 2 with the arrow reversed.
+
+`schedule` stays Rust. Unlike `hardware`, it *should* become a plugin — a Rust
+one, behind `--features schedule`, gating `croner`, registering an
+`Entrypoint<ScheduleCmd>` under `"schedule"` and a `Subcommand` under
+`"scheduler"`, with `max_hours_duration` moving down into core beside the flag
+that uses it. That is a real change and a mechanical one, and nothing in this
+section is an argument against it.
+
+### The rule, with two more questions
+
+The `todo` section asks two questions of a subsystem before porting it. Those
+two are necessary and, on the evidence of these two subsystems, not sufficient.
+Ask four, in this order.
+
+**1. Is its state per-process or per-session?** Unchanged. Per-session is not
+portable while one VM is shared by every agent.
+
+**2. Does core hold a type it needs, or only a string?** Unchanged.
+
+**3. Can core *await* the answer, or is it worth computing before anybody
+asks?** A Lua plugin exports a value taken at load or a body you have to await.
+A subsystem core consults synchronously, from a worker thread, and rarely, fits
+neither: awaiting is impossible where it is called and eager computation is work
+on a path that today does none. `kernel::lua::tests::a_lua_service_is_a_snapshot_and_never_something_core_can_call`
+pins both halves — that what Lua provides is data rather than an object, and
+that injecting it twice runs nothing in the VM.
+
+**4. Is the subsystem's testability built on seams a value cannot carry?** A
+module shaped as *gather impurely, decide purely* — readings passed in as
+parameters so the decision can be tested from a machine that is not the one
+being described — has its seams *inside*. A plugin boundary that carries only a
+computed value puts the seam at the wrong end: the decisions either stay behind
+(and nothing was ported) or cross and lose their fixtures. `hardware.rs` is 24
+tests over 636 lines and every one of them lives on such a seam.
+
+By those four, the subsystems this document earmarks re-sort a little.
+`evolve::publish`'s `gh`/`git` orchestration and `doctor`'s checks still pass
+all four: their answers are already awaited (`publish` is async, `doctor` is a
+surface of its own), and their tests drive them end to end rather than through
+injected readings. The scheduler's *cron arithmetic* — named in the earlier list
+as Lua-shaped — does not, and not because of the arithmetic: it cannot be
+separated from the file format and the daemon that call it without a third
+implementation appearing between them.
+
+### Host-bridge and kernel gaps these two found
+
+- **A Lua plugin cannot expose a callable.** `ctx:provide` from Lua is
+  `Service::data`, so core injects a snapshot. `Ctx::provide` with a callable
+  Lua service is already listed above as the piece `memory` and `image` are
+  blocked on; this is the same gap from the other side, and it would not have
+  been enough on its own, because the callers here also cannot await.
+- **There is no synchronous door into a plugin VM**, and there should not be
+  one: `load_source` is async because the VM is a task, and a `block_on` from a
+  tokio worker is a panic. What is missing is not a door but a rule, which is
+  question 3.
+- **`wizard.process` has no supervised child.** `run` and `exec` are
+  run-to-completion. A plugin that wants to start something, watch it, and kill
+  it has no shape to hold it in.
+- **There is no `wizard.toml`.** `wizard.fs.read`/`write` are strings, so any
+  plugin owning a `.toml` the Rust side also parses writes the format twice.
+  Core already has the `toml` crate; the `wizard.truncate` precedent says expose
+  it rather than let a plugin reimplement it.
+- **The manifest's `capabilities` are declared and, for a bundled plugin,
+  unverifiable in one direction.** Not a gap these two hit in practice, and
+  already recorded under the window's section.

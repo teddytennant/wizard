@@ -1329,3 +1329,85 @@ async fn a_plugins_state_is_per_process_and_cannot_be_per_session() {
         "a second session reads the first session's state; a plugin has no per-session store"
     );
 }
+
+/// What a Lua plugin hands core is a **value**, taken when `apply` ran. It is
+/// never a function core can call later, and it never recomputes on read.
+///
+/// This is the second half of the rule the test above opens. That one asks
+/// where a subsystem's *state* lives; this one asks how core *reaches* the
+/// answer, and it is the question that decided `src/hardware.rs` stays Rust.
+/// Machine detection has no session state at all — it is exactly the
+/// "registry of things the machine has" that `docs/plugins.md` calls
+/// Lua-shaped — but every core caller consults it synchronously and rarely:
+/// `server::spawn` asks whether to offload to a GPU from inside an
+/// `async fn`, `local_setup`'s asset picker asks behind an
+/// `impl FnOnce() -> bool`, and onboarding asks from a blocking crossterm
+/// loop. A Lua plugin can answer either of two ways and neither is that one.
+///
+/// It can publish a value, which is what this test pins — and a value is
+/// computed once, at load, in every process, whether or not anybody was ever
+/// going to ask. For detection that means `nvidia-smi` and `rocm-smi` on every
+/// startup, for a question most sessions never put.
+///
+/// Or it can register a tool, which is an `async` body on a VM task — and
+/// there is no synchronous door into that. `block_on` from a tokio worker is a
+/// panic, and the three call sites above are on worker threads.
+///
+/// So: **per-process state is necessary for a Lua port and not sufficient. The
+/// answer also has to be one core can await, or one worth computing before
+/// anybody asks.** See `docs/plugins.md` on `hardware` and `schedule`.
+#[tokio::test]
+async fn a_lua_service_is_a_snapshot_and_never_something_core_can_call() {
+    let dir = TempDir::new("lua-service-snapshot");
+    let kernel = kernel_in(&dir.path);
+    load(
+        &kernel,
+        "probe",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            -- Stands in for a reading off the machine: gathered here, once,
+            -- because `apply` is the only place a Lua plugin can gather.
+            local reading = 1
+            ctx:provide("reading", { gb = reading })
+            ctx:tool {
+              name = "reprobe",
+              execute = function()
+                reading = reading + 1
+                ctx:provide("reading", { gb = reading })
+                return tostring(reading)
+              end,
+            }
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("loads");
+
+    let service = kernel.services().inject("reading").expect("provided");
+    assert!(
+        !service.is_native(),
+        "a Lua service is data; there is no object behind it for core to call"
+    );
+    assert_eq!(service.as_data(), Some(&json!({ "gb": 1 })));
+
+    // Injecting again re-reads the same stored value. Nothing runs in the VM,
+    // which is the whole point: a service is not a getter.
+    let again = kernel.services().inject("reading").expect("still provided");
+    assert_eq!(again.as_data(), Some(&json!({ "gb": 1 })));
+
+    // The value moves only when the plugin itself runs, and the door into the
+    // VM is `async`. A tool call is one the model makes; core's synchronous
+    // callers have no equivalent.
+    assert_eq!(call(&kernel, "reprobe", json!({})).await, "2");
+    assert_eq!(
+        kernel
+            .services()
+            .inject("reading")
+            .and_then(|service| service.as_data().cloned()),
+        Some(json!({ "gb": 2 })),
+    );
+}
