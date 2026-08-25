@@ -1704,8 +1704,9 @@ model as "tool 'publish' failed" — the one message it will retry rather than
 read. The Rust it replaced decided whether `gh` was there with
 `Command::new("gh").arg("--version").status().is_ok()` and answered with
 install instructions. A ported tool cannot branch on an exit code it never
-gets, and this is not `publish`'s problem: `git_status` on a machine with no
-git had it too, silently, because nobody runs that machine.
+gets, and this is not `publish`'s problem: `git_status` had it too, on any
+machine without git installed. Nobody had reported it because that is not a
+machine anyone runs Wizard on yet.
 
 So a spawn that fails is an outcome now, with the shell's exit codes — 127 for
 a program that is not there, 126 for one that is and would not run — and the
@@ -1853,8 +1854,9 @@ not fail, they hung — see above.
 ## `evolve` was read end to end, and should stay Rust
 
 `src/evolve/mod.rs` was 4,098 lines and was this phase's target: the biggest
-Lua-shaped body left, three session-state references in the whole subsystem,
-and orchestration from top to bottom. By the two questions the `todo` write-up
+Lua-shaped body left, orchestration from top to bottom, and — the number that
+made it look like the obvious next port — two mentions of a session in the
+whole file, both of them in comments. By the two questions the `todo` write-up
 leaves behind — is the state per-session, and does core hold a *type* — it
 looks like a yes. It is a no, and the reasons are five that the two questions
 do not ask.
@@ -1877,9 +1879,10 @@ And the harder half: **`wizard.model` refuses when no agent is bound**, which
 is correct and is documented above — a provider built on the side has no
 tracker, and unmetered spend on the user's key is worse than a clear error.
 `Evolver::complete` builds exactly that provider, from `Config::active()`, on
-purpose, because `wizard --evolve -p "…"` and the scheduler are agentless
-processes. Porting evolve deletes a shipped entrypoint, or grants Lua the
-unmetered spend the bridge exists to refuse.
+purpose, because `wizard --evolve -p "…"` is an agentless process: it is a
+dispatch arm of `crate::run` with no `Agent` anywhere in it. Porting evolve
+either deletes that entrypoint or grants Lua the unmetered spend the bridge
+exists to refuse.
 
 ### 2. Tier 2 needs forty-five minutes of one command and the process it is running in
 
