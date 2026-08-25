@@ -8,9 +8,11 @@
 # A missing provider still has a `kind` string a user can type, so its degrade
 # path is an error message and the leave-one-out build is the whole test. A
 # missing *tool* has no such string: the only correct behaviour is that it is
-# absent from the roster the model is told about. And a missing *library*
-# plugin is only interesting when its consumer is present. So the legs below
-# build combinations the provider script never produces:
+# absent from the roster the model is told about. A missing *surface* has a
+# third path again — its `clap` variant is in core and keeps parsing, so
+# `wizard fleet` still exists and has to say why it cannot run. And a missing
+# *library* plugin is only interesting when its consumer is present. So the
+# legs below build combinations the provider script never produces:
 #
 #   - `graph` left out with the GUI *present*, which is the only way to catch
 #     `src/native/graph/` reaching for a plugin that is not there. Neither
@@ -38,6 +40,14 @@
 #     has been awaited, so the leg proves that leaving it out costs two tool
 #     names and not a compile error in the four places that assert what the
 #     roster holds (`plugins`, `mcp`, `harness`, `tools::registry`).
+#   - `acp` left out, which is also the only build that does not link
+#     `agent-client-protocol` at all — the one plugin feature that gates a
+#     dependency, so it is the one where "removable" includes the dependency
+#     graph and not just the module tree.
+#   - `fleet` left out with everything else present, which catches core
+#     reaching into the fleet for `FleetDirs`, a status row or a state file —
+#     none of which it does today, and all of which would compile fine both
+#     with every feature on and with every feature off.
 #
 # Usage: contrib/check-tool-plugins.sh [--build-only]
 set -uo pipefail
@@ -137,6 +147,8 @@ leg() {
 leg "without tool-web" --features "$(without tool-web)"
 leg "without tool-git" --features "$(without tool-git)"
 leg "without graph" --features "$(without graph)"
+leg "without acp" --features "$(without acp)"
+leg "without fleet" --features "$(without fleet)"
 
 # `graph` goes with it: it enables `mesh`, so dropping only `mesh` from the
 # list leaves it on. This is the leg that proves `App::mesh` degrades to a

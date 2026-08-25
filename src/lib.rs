@@ -5,7 +5,6 @@
 //! (native + LuaJIT-scripted + MCP) and tiered self-extension.
 //! See `docs/architecture.md` for the full design.
 
-pub mod acp;
 pub mod agent;
 pub mod app;
 pub mod checkpoint;
@@ -20,7 +19,6 @@ pub mod doctor;
 pub mod entrypoint;
 pub mod event;
 pub mod evolve;
-pub mod fleet;
 pub mod gates;
 pub mod gateway;
 pub mod git_util;
@@ -164,7 +162,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         }
         if let Some(window) = entrypoint::installed(entrypoint::GUI) {
             let config = config::Config::load()?;
-            return window.run(config).await.map(|()| 0);
+            return window.run(config).await;
         }
         // Two routes, and naming both matters: `wizard app` shipped for a
         // year telling people to rebuild, while the release page carried a
@@ -197,12 +195,24 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // ACP server: an editor drives Wizard over stdin/stdout, so it must not
     // onboard or open a TUI. Loads config directly (defaults on a fresh
     // install) like the window, then serves until the client closes the pipe.
+    //
+    // A plugin too, and looked up the same way — the difference from the
+    // window above is only in the `None` arm, because `acp` is on by default
+    // and needs no install advice beyond the flag.
     if let Some(cli::Command::Acp) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
+        let Some(server) = entrypoint::installed(entrypoint::ACP) else {
+            return Err(entrypoint::absent(
+                entrypoint::ACP,
+                "acp",
+                "It is the Agent Client Protocol server: an editor (Zed, Neovim, Emacs) \
+                 drives Wizard over stdio and gets the same agent the TUI does.",
+            ));
+        };
         let config = config::Config::load()?;
-        return acp::run(config).await.map(|()| 0);
+        return server.run(config).await;
     }
 
     // Evolution history: reads ~/.wizard/evolution.jsonl and touches the
@@ -292,15 +302,31 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         };
     }
 
-    // Fleet dispatches before the normal flow too, but `fleet run` loads
-    // config itself (its planning and synthesis turns drive a real
-    // in-process agent); `fleet status` / `fleet stop` only touch the
-    // project's `.wizard/fleet/` directory.
+    // Fleet dispatches before the normal flow too, but it loads no config
+    // here: `fleet run` loads its own (its planning and synthesis turns drive
+    // a real in-process agent), and `fleet status` / `fleet stop` only touch
+    // the project's `.wizard/fleet/` directory. So this is the one entrypoint
+    // whose argument is the parsed subcommand rather than a `Config` — the
+    // lookup below is `Entrypoint<FleetCmd>` and reads identically only
+    // because inference takes the type from the `.run(cmd)` two lines down.
+    // See `entrypoint::Entrypoint` for why the argument is a type parameter.
+    //
+    // It also keeps its own exit code: `fleet stop` with nothing running says
+    // so in one line and exits 1, which is neither an error nor a success.
     if let Some(cli::Command::Fleet { cmd }) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        return fleet::run(cmd.clone()).await;
+        let Some(fleet) = entrypoint::installed(entrypoint::FLEET) else {
+            return Err(entrypoint::absent(
+                entrypoint::FLEET,
+                "fleet",
+                "It decomposes a mission into independent tasks and runs them as parallel \
+                 headless workers, each on its own branch in its own git worktree, then \
+                 merges the branches back.",
+            ));
+        };
+        return fleet.run(cmd.clone()).await;
     }
 
     // The registry client and the mesh peer store are self-contained in the

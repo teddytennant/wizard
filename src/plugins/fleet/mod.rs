@@ -18,6 +18,27 @@
 //! - `.wizard/fleet/logs/<id>.stdout|stderr` — raw child output
 //! - `.wizard/fleet/heartbeat` — unix timestamp, touched every tick
 //! - `.wizard/fleet/stop` — sentinel written by `fleet stop`
+//!
+//! # As a plugin
+//!
+//! Behind `--features fleet`, on by default. Core parses `wizard fleet` (the
+//! `clap` variants are [`FleetCmd`] in [`crate::cli`], and they keep parsing
+//! on a build without this plugin) and looks the *body* up by name; see
+//! [`plugin`] for the registration and [`crate::entrypoint`] for why a
+//! subcommand's body is a service rather than a slash command.
+//!
+//! Nothing in core reaches in here. What it leans on going the other way is
+//! all core and stays there: [`crate::git_util`] for worktree and ref
+//! plumbing, [`crate::progress::fleet_bars`] for the per-slot spinners, and
+//! `[fleet]` in `config.toml` ([`crate::config::FleetConfig`]) for the
+//! watchdog budget and the synthesis switch. That last one follows `[web]`:
+//! a config section is a promise about what this process does, and a build
+//! without the plugin still parses and round-trips it rather than rejecting
+//! somebody's file for naming a section it cannot run.
+
+mod plugin;
+
+pub use plugin::FleetPlugin;
 
 use std::collections::HashSet;
 use std::fmt::Write as _;

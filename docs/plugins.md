@@ -1490,3 +1490,134 @@ blocked on a service: both need a *core* store reachable from a plugin, and
 `ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
 Lua could invoke is the missing piece, and it is the same piece
 `tools/image.rs`'s four-provider-id branch already needs.
+## As built: two more surfaces, and what three call sites did to `entrypoint.rs`
+
+`wizard acp` and `wizard fleet` went through the door the window opened.
+`src/acp.rs` (0.6k) is `src/plugins/acp.rs` behind `--features acp`;
+`src/fleet/` (2.1k) is `src/plugins/fleet/` behind `--features fleet`. Both on
+by default, both independently removable, and the section above's "the other
+three surfaces are still core" is now down to `wizard gateway` and `mcp serve`.
+
+They were picked for the reason every plugin so far was picked — a dependency
+audit found them the cheapest splits left. `fleet` had **zero** core references
+and `acp` had **two**, one of which was a doc link. Neither move needed a line
+of untangling, which is what made them the right pair to move together: with
+nothing to argue about in the subsystems, the whole of the work was the
+entrypoint abstraction, and three registrations is where the shape of that
+abstraction stops being a guess.
+
+### What the third call site changed
+
+`Entrypoint` was a `Fn(Config) -> Future<Output = Result<()>>` because the two
+surfaces it was designed against both took a config and both returned nothing.
+The third takes neither.
+
+**The argument became a type parameter.** `wizard fleet` is a subcommand
+*tree*, so its body needs the parsed `FleetCmd`, and it loads config itself
+further down — only `fleet run` drives an agent; `status` and `stop` read
+`.wizard/fleet/`. Three ways to absorb that:
+
+- An enum of argument shapes in core. That is core enumerating its plugins
+  again, one variant per surface, which is the `ProviderKind` nine-variant
+  problem in a new place.
+- An `Arc<dyn Any>` the plugin downcasts. Moves a type error from compile time
+  to a silent `None` at run time, in the plugin rather than at the call site.
+- `Entrypoint<A>`, defaulting to `Config`.
+
+The parameter won because it is nearly free: `inject_as` is a `TypeId` downcast
+already, so `Entrypoint<Config>` and `Entrypoint<FleetCmd>` are simply
+different services and the lookup that separates them is the one that was
+already there. `installed::<A>(name)` is the whole of the change at the call
+site, and two of the three arms do not spell `A` at all because inference gets
+it from the `.run(config)` underneath.
+
+It has one sharp edge and it is worth naming: a plugin that registers under the
+right name with the *wrong* argument type is indistinguishable from a plugin
+that was never compiled in, so a build with `--features fleet` would tell the
+user to rebuild with `--features fleet`. That is why
+`an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in` asserts
+the `true` direction as well as the `false` one, and why
+`an_entrypoint_asked_for_under_the_wrong_argument_type_is_absent` pins the edge
+itself rather than leaving it as a comment.
+
+**The return became `Result<i32>`, with two constructors.** `wizard fleet stop`
+on a project where nothing is running prints one plain sentence and exits 1.
+That is neither a failure — there is no backtrace worth printing and nothing
+went wrong — nor a success a script should branch on, and only the plugin can
+make that call. The alternative was the plugin returning `Err` to get a
+non-zero exit, which changes what the user reads in order to keep a signature
+uniform. So `Entrypoint::new` keeps the `Result<()>` shape and holds core's one
+opinion (a surface with nothing to report exits 0), and `Entrypoint::with_status`
+takes the exit code from the surface. The window and the ACP server use the
+first; the fleet uses the second. `src/lib.rs` lost its two `.map(|()| 0)`s.
+
+### A third degrade path
+
+An absent provider still has a `kind` a user can type, so it degrades to a
+named error. An absent tool must vanish from the roster, because the roster is
+what the model is told it can call. An absent **surface** can do neither: the
+`clap` variant is core and keeps parsing whatever the feature set, so
+`wizard fleet --help` still lists the subcommand and somebody will still type
+it. It degrades to a sentence naming the flag that brings it back —
+`entrypoint::absent`, which two of the three arms share.
+
+`wizard gui` does not share it and keeps its own longer message, because its
+feature is off by default and the window ships as a separate release asset: a
+build flag offered as the sole route to a thing that is one `curl` away is how
+`wizard app` spent a year telling people to compile iced. The other two are on
+in every published binary, so "which flag, and rebuild" is the whole of the
+advice worth giving.
+
+### What stayed in core
+
+Three things that look like they should have moved with the fleet.
+
+**`src/cli.rs` keeps `FleetCmd`.** Parsing `wizard fleet run -n 3 -p "..."` is
+the CLI's job, it has to keep parsing on a build with no fleet plugin — so
+`wizard --plan fleet status` is still rejected for naming `--plan` beside a
+subcommand rather than for an unknown verb — and `--help` has to keep listing
+it. Core holds the *arguments* for the same reason it holds the *name*: they
+are what the user types.
+
+**`src/git_util.rs` and `progress::fleet_bars`.** Async git plumbing and a
+progress style. The fleet is their only caller today, and the argument against
+moving them is `llm::wire`'s: a shared helper that lives inside one plugin is
+an edge between plugins waiting to be drawn, and the next thing that wants a
+worktree or a bar per slot would have to reach into the fleet for it.
+
+**`[fleet]` in `config.toml`.** `FleetConfig` follows `[web]` exactly: a config
+section is a promise about what this process does, and a build without the
+plugin still parses and round-trips one rather than rejecting somebody's file
+over a section it cannot run. `doctor`'s redaction allowlist keeps the key for
+the same reason.
+
+### `acp` is the first plugin feature that gates a dependency
+
+`agent-client-protocol` has exactly one consumer, so it is
+`{ version = "2.0.0", optional = true }` and `acp = ["dep:agent-client-protocol"]`.
+A build without the feature does not link the protocol crate at all, which is
+most of what leaving it out is worth — and it makes `acp` the one leg where
+"removable" means the dependency graph and not only the module tree.
+
+`tests/acp.rs` is `#![cfg(all(feature = "provider-ollama", feature = "acp"))]`.
+It drives a real `wizard acp` subprocess, and without the plugin that
+subprocess prints one sentence about the missing feature and exits, so every
+assertion in the file would be about the wrong program.
+
+### Proving it
+
+`contrib/check-tool-plugins.sh` grew from four legs to six: `without acp` and
+`without fleet`, each against an otherwise-stock feature set. That is the case
+neither `--no-default-features` nor a default build can see — a core module
+that reached into the fleet compiles with everything off (the module it reached
+into is gone too) and with everything on.
+
+### Still open, specific to this
+
+- **Two surfaces left.** `wizard gateway` and `mcp serve` are the same shape
+  and neither is behind a feature yet. `gateway` is the interesting one: it is
+  a subcommand tree like the fleet, so it is the second customer for the type
+  parameter rather than the first, which is the test of whether that was the
+  right generalization.
+- **Still no *command* has gone through the door.** The thirteen earmarked ones
+  are built-ins.

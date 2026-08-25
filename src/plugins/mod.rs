@@ -67,9 +67,13 @@
 //! [`host`] for what each namespace resolves to and what an unbound process
 //! still answers.
 
+#[cfg(feature = "acp")]
+pub mod acp;
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
 pub mod bundled;
+#[cfg(feature = "fleet")]
+pub mod fleet;
 pub mod host;
 
 #[cfg(feature = "provider-chatgpt")]
@@ -131,6 +135,11 @@ use crate::tools::registry::ToolRegistry;
 /// the reason `docs/plugins.md`'s first rule is a rule rather than an
 /// observation — `src/lib.rs` used to call `native::run` and `mesh::cli::run`
 /// by name, and `src/app/` held a `MeshTee` in a field.
+/// Seven of them are providers. Three are *surfaces* — the window, the ACP
+/// server and the fleet — and they are the reason `docs/plugins.md`'s first
+/// rule is a rule rather than an observation: `src/lib.rs` used to call
+/// `native::run`, `acp::run` and `fleet::run` by name, and the entrypoints
+/// they register are what replaced those three calls.
 //
 // Built by pushing rather than as a `vec![]` literal because every line is
 // `#[cfg]`-gated, and an attribute on an element of a vec literal is not
@@ -139,12 +148,16 @@ use crate::tools::registry::ToolRegistry;
 #[allow(unused_mut, clippy::vec_init_then_push)]
 fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
+    #[cfg(feature = "acp")]
+    plugins.push(Arc::new(acp::AcpPlugin::new()));
     #[cfg(feature = "provider-anthropic")]
     plugins.push(Arc::new(anthropic::AnthropicPlugin::new()));
     #[cfg(feature = "provider-chatgpt")]
     plugins.push(Arc::new(chatgpt::ChatGptPlugin::new()));
     #[cfg(feature = "provider-cloudflare")]
     plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
+    #[cfg(feature = "fleet")]
+    plugins.push(Arc::new(fleet::FleetPlugin::new()));
     #[cfg(feature = "provider-llamacpp")]
     plugins.push(Arc::new(llamacpp::LlamaCppPlugin::new()));
     #[cfg(feature = "native")]
@@ -584,6 +597,59 @@ mod tests {
                 "tool '{name}' is in the process kernel but no compiled-in plugin claims it"
             );
         }
+    }
+
+    /// The surface half of "delete any one plugin": `wizard <name>` finds a
+    /// body exactly on the builds that compiled one in.
+    ///
+    /// A third degrade path, different again from the other two. An absent
+    /// provider still has a `kind` a user can type, so it degrades to a named
+    /// error. An absent tool must vanish from the roster, because the roster
+    /// is what the model is told it can call. An absent *surface* can do
+    /// neither: the `clap` variant is in core and stays parseable whatever the
+    /// feature set, so `wizard acp --help` still lists it and somebody will
+    /// still type it. So it degrades to a sentence naming the flag that brings
+    /// it back — [`crate::entrypoint::absent`] — and the thing this test pins
+    /// is that the lookup behind that sentence is honest in both directions.
+    ///
+    /// The `true` direction is not decoration. A surface registering under the
+    /// right name but the wrong *argument type* fails the `TypeId` downcast
+    /// and is indistinguishable at the call site from a surface that was never
+    /// compiled in, so a build with the feature on would tell the user to
+    /// rebuild with the feature on.
+    #[test]
+    fn an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in() {
+        use crate::entrypoint::{self, Entrypoint};
+
+        let kernel = kernel();
+        let services = kernel.services();
+
+        // Two argument types, so this is two lookups rather than one loop; a
+        // table would have to erase the type that is the whole point of the
+        // assertion. Written out for the same reason the provider and tool
+        // tables are: derived from `compiled_in`, it could only agree with
+        // itself.
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint>(entrypoint::GUI)
+                .map(|entry| entry.name()),
+            cfg!(feature = "native").then_some(entrypoint::GUI),
+            "the window's entrypoint"
+        );
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint>(entrypoint::ACP)
+                .map(|entry| entry.name()),
+            cfg!(feature = "acp").then_some(entrypoint::ACP),
+            "the ACP server's entrypoint"
+        );
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint<crate::cli::FleetCmd>>(entrypoint::FLEET)
+                .map(|entry| entry.name()),
+            cfg!(feature = "fleet").then_some(entrypoint::FLEET),
+            "the fleet's entrypoint"
+        );
     }
 
     /// The half that matters to the model: a plugin tool reaches the registry
