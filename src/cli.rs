@@ -416,6 +416,12 @@ pub enum Command {
     /// express a decision the store cannot record. `--help` reaches the
     /// plugin's parser for the same reason, which is why it is not swallowed
     /// here. See [`crate::entrypoint::Subcommand`].
+    ///
+    /// `disable_help_flag` is what makes that last sentence true: without it
+    /// clap answers `wizard peers --help` here, with a usage line reading
+    /// `wizard peers [ARGS]...` and no mention of the eight subcommands that
+    /// actually exist. Help for this tree is the plugin's to print.
+    #[command(disable_help_flag = true)]
     Peers {
         #[arg(
             trailing_var_arg = true,

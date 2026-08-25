@@ -401,7 +401,7 @@ mod tests {
         assert!(tee.is_none());
     }
 
-    /// The trap named in `src/mesh/consent.rs` and in this module's header, over
+    /// The trap named in `super::consent` and in this module's header, over
     /// two real sockets.
     ///
     /// `Mesh::new` and `Mesh::with_consent` compile the same and, over the

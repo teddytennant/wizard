@@ -96,7 +96,7 @@ desk (`GateDesk` in `src/agent/event.rs`):
    so nothing can type at a dead pipe.
 
 The model never sees an `AgentEvent`, so it cannot claim a console. Over the
-mesh the `gate` field is redacted to ticket 0 (`src/mesh/turn.rs`), which is
+mesh the `gate` field is redacted to ticket 0 (`src/plugins/mesh/turn.rs`), which is
 never issued, so watching a peer's session never becomes typing into a peer's
 shell.
 

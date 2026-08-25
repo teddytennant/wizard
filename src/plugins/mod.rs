@@ -119,10 +119,13 @@ use crate::tools::registry::ToolRegistry;
 /// `docs/plugins.md`, and it is what the `--no-default-features` leg of
 /// `contrib/check-plugin-work.sh` proves.
 ///
-/// Seven of the eight are providers. The eighth, `native`, is a *surface* —
-/// the window — and it is the reason `docs/plugins.md`'s first rule is a rule
-/// rather than an observation: `src/lib.rs` used to call `native::run` by
-/// name, and the entrypoint it registers is what replaced that call.
+/// Seven of them are providers. The rest are not, and each one is a different
+/// shape of seam: `native` registers a `wizard gui` entrypoint, `tool-web`
+/// three tools, `graph` nothing at all, and `mesh` both a `wizard peers`
+/// subcommand tree and the factory `App` opens a session's tee from. They are
+/// the reason `docs/plugins.md`'s first rule is a rule rather than an
+/// observation — `src/lib.rs` used to call `native::run` and `mesh::cli::run`
+/// by name, and `src/app/` held a `MeshTee` in a field.
 //
 // Built by pushing rather than as a `vec![]` literal because every line is
 // `#[cfg]`-gated, and an attribute on an element of a vec literal is not
@@ -608,6 +611,56 @@ mod tests {
         }
         for name in kernel.command_names() {
             assert!(!name.starts_with("graph"), "{name}");
+        }
+    }
+
+    /// The mesh's two seams are present exactly when its feature is, and both
+    /// directions matter.
+    ///
+    /// This is the "delete any one plugin" rule for the plugin that has the
+    /// most to delete. Core reaches the mesh through exactly two names — a
+    /// `wizard peers` subcommand and a session-tee factory — and this asserts
+    /// that on a `mesh` build both answer and on a build without it neither
+    /// does. The silent failure it catches is a `mesh` build where `apply`
+    /// stopped registering one of the two: `wizard peers` would still work
+    /// while every session quietly stopped teeing, or the reverse.
+    ///
+    /// It reads the *process* kernel rather than a fresh one, because what is
+    /// under test is what this binary actually booted.
+    #[test]
+    fn the_meshs_two_seams_are_present_exactly_when_its_plugin_is() {
+        let kernel = kernel();
+        let has_mesh = cfg!(feature = "mesh");
+        assert_eq!(
+            kernel.loaded().iter().any(|id| id.as_str() == "mesh"),
+            has_mesh,
+            "the plugin itself"
+        );
+        assert_eq!(
+            crate::entrypoint::installed_subcommand(crate::entrypoint::PEERS).is_some(),
+            has_mesh,
+            "`wizard peers`"
+        );
+        assert_eq!(
+            kernel
+                .services()
+                .inject_as::<crate::app::TeeFactory>(crate::app::tee::SESSION_TEE)
+                .is_some(),
+            has_mesh,
+            "the session tee"
+        );
+
+        // And nothing else: the mesh is administered from the CLI and teed
+        // from the surface, never called by the model. A `mesh_*` tool would
+        // be a model deciding who may watch this session, which is a trust
+        // decision and therefore a person's.
+        for name in kernel.tool_names() {
+            assert!(!name.starts_with("mesh"), "{name}");
+            assert!(!name.starts_with("peer"), "{name}");
+        }
+        for name in kernel.command_names() {
+            assert!(!name.starts_with("mesh"), "{name}");
+            assert!(!name.starts_with("peer"), "{name}");
         }
     }
 

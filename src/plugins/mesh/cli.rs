@@ -11,7 +11,7 @@
 //!
 //! [`open`] builds the QUIC transport with `[mesh] listen` forced off, whatever
 //! the config says, and that is a decision rather than an oversight. A listener
-//! belongs to a long-running session (see [`crate::app::MeshTee`]): it is the
+//! belongs to a long-running session (see [`super::MeshTee`]): it is the
 //! thing a peer dials to watch a *session*, and there is no session here. A
 //! one-shot command that bound the configured port would also fight the running
 //! TUI for it, so `wizard peers list` would start failing on exactly the
@@ -108,11 +108,30 @@ other machine and paste what it prints into `wizard peers add <address>` here.";
 /// `no_binary_name` because what arrives has already had `wizard peers`
 /// stripped off it: `wizard peers trust <peer> trusted` reaches [`run_args`]
 /// as `["trust", "<peer>", "trusted"]`.
+///
+/// `about` and `long_about` are spelled out rather than left to this doc
+/// comment because clap would otherwise print the paragraph above — an
+/// argument about where a plugin boundary goes — to somebody who typed
+/// `wizard peers --help` wanting to know what `refresh` does. They are the same
+/// two paragraphs `wizard --help` prints for this subcommand, so the two
+/// surfaces cannot drift.
 #[derive(Debug, clap::Parser)]
 #[command(
     name = "wizard peers",
     no_binary_name = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    about = "Mesh peers: other machines running Wizard, what each one advertises, and what \
+             this machine has decided about it.",
+    long_about = "Mesh peers: other machines running Wizard, what each one advertises, and \
+                  what this machine has decided about it. List the store, add a peer by \
+                  pasted address, record a trust decision, forget one — and reach a peer \
+                  over the network: ping it, refresh what it advertises, watch its live \
+                  session.\n\n\
+                  `list` contacts nobody, so its presence column is what this machine last \
+                  observed rather than a live probe; `ping` is the command that makes an \
+                  observation. Reaching a peer needs a route for it here (`[mesh.routes]`, \
+                  or mDNS on the same LAN) and `[mesh] listen = true` on that machine, \
+                  which is off by default. Nothing here listens. See docs/mesh.md."
 )]
 pub struct PeersCli {
     #[command(subcommand)]
@@ -659,7 +678,7 @@ async fn refresh(
 
 /// Watch a trusted peer's live session stream.
 ///
-/// The receiving end of [`crate::app::MeshTee`]. What arrives is
+/// The receiving end of [`super::MeshTee`]. What arrives is
 /// [`crate::agent::AgentEvent`], so it renders through the same
 /// [`crate::transcript::TranscriptModel`] the TUI uses rather than a second
 /// reducer written for peers — see [`PeerStream`], which is that model plus the
@@ -857,6 +876,95 @@ mod tests {
     /// A pasteable address for a deterministic identity.
     fn address_of(seed: u8) -> String {
         Identity::from_seed([seed; 32]).id().address()
+    }
+
+    /// Parse an argument vector the way `wizard peers` hands one over: no
+    /// binary name, no subcommand name, just what followed `peers`.
+    fn parse(args: &[&str]) -> Result<PeersCmd, clap::Error> {
+        PeersCli::try_parse_from(args.iter().copied()).map(|parsed| parsed.cmd)
+    }
+
+    /// The eight subcommands, parsed here rather than in `src/cli.rs`.
+    ///
+    /// This test moved with the enum. Core's half is now one assertion that
+    /// the argument list crosses unchanged
+    /// (`cli::tests::peers_takes_its_whole_argument_list_unparsed`); what the
+    /// arguments *mean* is this file's, because this is where the types are.
+    #[test]
+    fn peers_subcommands_parse() {
+        assert!(matches!(parse(&["list"]).expect("list"), PeersCmd::List));
+        assert!(matches!(
+            parse(&["address"]).expect("address"),
+            PeersCmd::Address
+        ));
+
+        let PeersCmd::Add { address } = parse(&["add", "wiz1abc"]).expect("add") else {
+            panic!("expected add");
+        };
+        assert_eq!(address, "wiz1abc");
+
+        assert!(matches!(
+            parse(&["forget", "wiz1abc"]).expect("forget"),
+            PeersCmd::Forget { .. }
+        ));
+
+        let PeersCmd::Watch { peer, limit } =
+            parse(&["watch", "wiz1abc", "--limit", "3"]).expect("watch")
+        else {
+            panic!("expected watch");
+        };
+        assert_eq!((peer.as_str(), limit), ("wiz1abc", Some(3)));
+    }
+
+    /// The three states are the store's, not this surface's: a fourth spelling
+    /// on the argument-parsing side would be a CLI that can express a decision
+    /// `peers.json` cannot record, which is why [`Trust`] derives `ValueEnum`
+    /// itself instead of being mirrored.
+    ///
+    /// It is also the whole reason `wizard peers` is a plugin subcommand
+    /// rather than a clap tree in core: core cannot name this type.
+    #[test]
+    fn peer_trust_takes_exactly_the_three_recorded_states() {
+        for (raw, expected) in [
+            ("blocked", Trust::Blocked),
+            ("known", Trust::Known),
+            ("trusted", Trust::Trusted),
+        ] {
+            let PeersCmd::Trust { peer, state } =
+                parse(&["trust", "wiz1abc", raw]).expect("trust state parses")
+            else {
+                panic!("expected trust");
+            };
+            assert_eq!((peer.as_str(), state), ("wiz1abc", expected));
+        }
+        let err = parse(&["trust", "wiz1abc", "allowed"])
+            .expect_err("a state the store cannot hold must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    /// `--help` and a misspelled subcommand are answered against *this*
+    /// command, which is the half of the passthrough core cannot check.
+    ///
+    /// The usage line matters: it is what somebody reads after mistyping, and
+    /// on the arrangement this replaced it would have said
+    /// `wizard peers [ARGS]...` and listed nothing.
+    #[test]
+    fn help_and_a_misspelling_are_answered_against_this_tree() {
+        let help = parse(&["--help"]).expect_err("--help is an error carrying the help text");
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        let rendered = help.render().to_string();
+        assert!(rendered.contains("wizard peers"), "{rendered}");
+        for subcommand in [
+            "list", "address", "add", "trust", "forget", "ping", "refresh", "watch",
+        ] {
+            assert!(
+                rendered.contains(subcommand),
+                "{subcommand} missing: {rendered}"
+            );
+        }
+
+        let err = parse(&["lst"]).expect_err("a subcommand that does not exist");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]

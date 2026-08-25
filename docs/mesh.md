@@ -16,7 +16,7 @@ wizard peers watch wiz1AbC…                # render its live session in this t
 
 Those eight are the whole surface; there is no `revoke`, because revoking is what `trust <peer> known|blocked` and `forget` do.
 
-The first five answer out of `~/.wizard` and contact nobody. The last three reach another machine, which needs a route here (`[mesh.routes]`, or mDNS) and `[mesh] listen = true` there. **None of them listens** — but all eight open a socket, and it is worth being exact about which one: every branch builds the same transport with `listen` forced off (`src/mesh/cli.rs:151`), and that binds an *ephemeral* UDP port to dial from (`0.0.0.0:0`, `src/mesh/quic.rs:274`), never the configured one. So `wizard peers list` while a session holds `4242` open does not fight that session for it, and nothing an inbound packet arrives at is listening for it. A bind that fails is fatal only for the three commands that need a machine on the other end.
+The first five answer out of `~/.wizard` and contact nobody. The last three reach another machine, which needs a route here (`[mesh.routes]`, or mDNS) and `[mesh] listen = true` there. **None of them listens** — but all eight open a socket, and it is worth being exact about which one: every branch builds the same transport with `listen` forced off (`src/plugins/mesh/cli.rs:151`), and that binds an *ephemeral* UDP port to dial from (`0.0.0.0:0`, `src/plugins/mesh/quic.rs:274`), never the configured one. So `wizard peers list` while a session holds `4242` open does not fight that session for it, and nothing an inbound packet arrives at is listening for it. A bind that fails is fatal only for the three commands that need a machine on the other end.
 
 ## What ships, and what does not
 
@@ -108,7 +108,7 @@ Commands that take a peer accept the full address or any unique prefix of one. `
 | `known` | yes (`ping`, `refresh`) | no | no |
 | `trusted` | yes | yes | yes |
 
-There is no work column, because there is no work. `Trust::may_send_work` (`src/mesh/peer.rs:105`) is named for the tier that was cut, and the only thing that consults it is a subscription — `Mesh::subscribe` on the watching side (`src/mesh/mod.rs:911`) and the `Watch` frame on the publishing side (`src/mesh/quic.rs:814`). `wizard peers trust <peer> trusted` says as much on the way out: "That is all trust grants: no work is delegated in either direction, and watching is read-only" (`src/mesh/cli.rs:314`).
+There is no work column, because there is no work. `Trust::may_send_work` (`src/plugins/mesh/peer.rs:105`) is named for the tier that was cut, and the only thing that consults it is a subscription — `Mesh::subscribe` on the watching side (`src/plugins/mesh/mod.rs:911`) and the `Watch` frame on the publishing side (`src/plugins/mesh/quic.rs:814`). `wizard peers trust <peer> trusted` says as much on the way out: "That is all trust grants: no work is delegated in either direction, and watching is read-only" (`src/plugins/mesh/cli.rs:314`).
 
 A pasted address lands at `known`. Adding is not a decision, and there is deliberately no `--trusted` flag on `add` that collapses the paste and the decision into one keystroke: a paste is a fact about an address, trust is a claim about a machine, and a human checks the two in different ways.
 
@@ -131,7 +131,7 @@ $ wizard peers watch wiz1AbC…
 watching workshop at wiz1AbC… — every line below marked `wiz1AbC… │` was written by that
 machine; lines marked `wizard │` are wizard's own
 wizard │ wiz1AbC… session "main"
-wiz1AbC… │ ⚙ read_file({"path":"src/mesh/quic.rs"})
+wiz1AbC… │ ⚙ read_file({"path":"src/plugins/mesh/quic.rs"})
 wiz1AbC… │   ✔ 1644 lines
 wiz1AbC… │ the transport already handles this — see the module header.
 wizard │ the stream from wiz1AbC… ended — the peer stopped trusting this machine, this

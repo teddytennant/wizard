@@ -19,6 +19,18 @@
 #   - `tool-web` left out with everything else present, which catches a core
 #     module — or another plugin — that took a dependency on the web tools
 #     rather than on `src/tools/http.rs`.
+#   - `mesh` left out, twice: once headless and once with the GUI present. The
+#     mesh is the one plugin core reaches through *two* seams rather than one
+#     — `wizard peers` (an `entrypoint::Subcommand`) and the session tee (an
+#     `app::tee::TeeFactory`) — and the second of those is on the TUI's hot
+#     path, so a leg without it is what proves `App::mesh` is honestly a
+#     `None` and not a compile error waiting to happen.
+#
+# `mesh` is also the first feature another feature *depends* on: `graph = ["mesh"]`,
+# because a `MeshGraph` is a `PeerStore` turned into something drawable. So
+# leaving `mesh` out means leaving `graph` out too, and `without` alone cannot
+# express that — hence `without_many` below. Dropping `graph` while keeping
+# `mesh` is the other direction and is a leg of its own.
 #
 # Usage: contrib/check-tool-plugins.sh [--build-only]
 set -uo pipefail
@@ -44,6 +56,21 @@ without() {
     local drop=$1 kept=()
     for f in "${DEFAULT_FEATURES[@]}"; do
         [ "$f" = "$drop" ] || kept+=("$f")
+    done
+    (IFS=,; printf '%s' "${kept[*]}")
+}
+
+# Everything in `default` except the named features, comma-joined. Needed
+# because a feature that another feature enables is not removed by dropping it
+# from the list: `--features graph` turns `mesh` back on.
+without_many() {
+    local kept=() f drop keep
+    for f in "${DEFAULT_FEATURES[@]}"; do
+        keep=1
+        for drop in "$@"; do
+            [ "$f" = "$drop" ] && keep=0
+        done
+        [ "$keep" = 1 ] && kept+=("$f")
     done
     (IFS=,; printf '%s' "${kept[*]}")
 }
@@ -103,6 +130,12 @@ leg() {
 leg "without tool-web" --features "$(without tool-web)"
 leg "without graph" --features "$(without graph)"
 
+# `graph` goes with it: it enables `mesh`, so dropping only `mesh` from the
+# list leaves it on. This is the leg that proves `App::mesh` degrades to a
+# `None`, `wizard peers` degrades to a sentence, and quinn/rustls/mdns-sd are
+# genuinely out of the build rather than merely uncalled.
+leg "without mesh" --features "$(without_many mesh graph)"
+
 # The GUI is where `graph` is actually consumed, so both sides of it need a
 # build with the window linked. `--build-only` is not enough here: the
 # `graph_explorer` integration test is `#![cfg(all(native, graph))]` and has to
@@ -110,6 +143,11 @@ leg "without graph" --features "$(without graph)"
 # nothing in the second.
 leg "the window, with the explorer" --features "$(all),native"
 leg "the window, with graph deleted" --features "$(without graph),native"
+
+# The window renders peers, so a mesh-less GUI is the combination most likely
+# to have an edge nobody gated. Neither leg above sees it: `without mesh` has
+# no window and `the window, with graph deleted` still has the mesh.
+leg "the window, with the mesh deleted" --features "$(without_many mesh graph),native"
 
 printf '\n=== removability matrix ===\n'
 for line in "${results[@]}"; do
@@ -120,4 +158,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\nFAILED: a plugin whose removal breaks the build is not a plugin\n' >&2
     exit 1
 fi
-printf '\nboth tool plugins are independently removable\n'
+printf '\nevery non-provider plugin is independently removable\n'
