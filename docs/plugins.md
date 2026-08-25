@@ -1485,6 +1485,13 @@ typed events with gates on them), `spill` and `checkpoint`. Anything whose
 payload is a type core matches on. And, as before, anything that is bytes and
 syscalls.
 
+Two more went on this list later, for reasons this pair of questions does not
+catch: `hardware`, because core consults it synchronously from places that
+cannot await and a Lua service is a value taken at load, and `schedule`,
+because its daemon supervises long-lived children and the host bridge has no
+shape to hold one in. The section at the end of this document is the argument,
+and it adds the two questions that would have caught them.
+
 **Blocked, not decided.** `memory` and `image` are Lua-shaped in body and
 blocked on a service: both need a *core* store reachable from a plugin, and
 `ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
