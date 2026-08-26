@@ -74,9 +74,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rquickjs::prelude::{Async, Opt, Rest};
-use rquickjs::{
-    AsyncContext, Ctx as JsCtx, Exception, Function, Module, Object, Value as JsValue,
-};
+use rquickjs::{AsyncContext, Ctx as JsCtx, Exception, Function, Module, Object, Value as JsValue};
 use serde_json::Value;
 
 use crate::commands::surface::Surface;
@@ -922,15 +920,18 @@ fn surface_named(js: &JsCtx<'_>, command: &str, value: &str) -> rquickjs::Result
 /// Rust with a slower calling convention.
 fn provider_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let plugin = ctx.name().to_string();
-    Function::new(js.clone(), move |cx: JsCtx<'js>, _spec: Opt<JsValue<'js>>| {
-        Err::<(), _>(external(
-            &cx,
-            anyhow::anyhow!(
-                "plugin '{plugin}': a provider cannot be registered from JavaScript. \
+    Function::new(
+        js.clone(),
+        move |cx: JsCtx<'js>, _spec: Opt<JsValue<'js>>| {
+            Err::<(), _>(external(
+                &cx,
+                anyhow::anyhow!(
+                    "plugin '{plugin}': a provider cannot be registered from JavaScript. \
                  Providers are transport code and stay in Rust; see docs/plugins.md."
-            ),
-        ))
-    })
+                ),
+            ))
+        },
+    )
 }
 
 fn on_fn<'js>(
@@ -1040,38 +1041,40 @@ fn plugin_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>>
     let ctx = ctx.clone();
     Function::new(
         js.clone(),
-        Async(move |cx: JsCtx<'js>, name: String, config: Opt<JsValue<'js>>| {
-            let ctx = ctx.clone();
-            let config = config
-                .0
-                .filter(|value| !value.is_undefined() && !value.is_null())
-                .map(|value| js_to_json(&value))
-                .transpose();
-            async move {
-                let config = config?;
-                if name.contains(['/', '\\']) || name.contains("..") {
-                    return Err(external(
-                        &cx,
-                        anyhow::anyhow!(
-                            "'{name}' is not a plugin name; ctx.plugin takes a name under the \
+        Async(
+            move |cx: JsCtx<'js>, name: String, config: Opt<JsValue<'js>>| {
+                let ctx = ctx.clone();
+                let config = config
+                    .0
+                    .filter(|value| !value.is_undefined() && !value.is_null())
+                    .map(|value| js_to_json(&value))
+                    .transpose();
+                async move {
+                    let config = config?;
+                    if name.contains(['/', '\\']) || name.contains("..") {
+                        return Err(external(
+                            &cx,
+                            anyhow::anyhow!(
+                                "'{name}' is not a plugin name; ctx.plugin takes a name under the \
                              plugin directory, not a path"
-                        ),
-                    ));
+                            ),
+                        ));
+                    }
+                    let dir = ctx.kernel().plugin_root().join(&name);
+                    let id = super::load_dir(
+                        ctx.kernel(),
+                        &dir,
+                        PluginSource::Registry,
+                        Some(ctx.id().clone()),
+                        config,
+                    )
+                    .await
+                    .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))?;
+                    ctx.record_child(id.clone());
+                    Ok(id.to_string())
                 }
-                let dir = ctx.kernel().plugin_root().join(&name);
-                let id = super::load_dir(
-                    ctx.kernel(),
-                    &dir,
-                    PluginSource::Registry,
-                    Some(ctx.id().clone()),
-                    config,
-                )
-                .await
-                .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))?;
-                ctx.record_child(id.clone());
-                Ok(id.to_string())
-            }
-        }),
+            },
+        ),
     )
 }
 
