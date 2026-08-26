@@ -6,9 +6,9 @@ provider transport, the terminal UI, and the kernel that wires plugins together
 
 This is the "everything is a plugin" model, adapted to a compiled language. The
 adaptation matters: a plugin here is **either** an in-tree Rust module compiled
-behind a cargo feature, **or** a LuaJIT script loaded at runtime from
-`~/.wizard/plugins/`. The kernel cannot tell the two apart, and no core module
-names a plugin.
+behind a cargo feature, **or** a script loaded at runtime from
+`~/.wizard/plugins/` — LuaJIT or JavaScript. The kernel cannot tell the three
+apart, and no core module names a plugin.
 
 ## Why not "all of it in Lua"
 
@@ -166,6 +166,28 @@ The VM is long-lived — one per plugin, created at load and dropped at unload �
 which is the change from today's scripted tools, where each call gets a fresh
 throwaway VM and can therefore hold no state.
 
+### JavaScript
+
+The same directory, holding `plugin.js` instead. The file is loaded as an ES
+module and default-exports the same shape:
+
+```js
+export default {
+  name: "todo",
+  apply(ctx) {
+    let store = [];
+    ctx.tool({ name: "todo", description: "...", parameters: {...},
+               execute: (args) => render(store) });
+    ctx.on("session_end", () => { store = []; });
+    ctx.effect(() => { store = null; });
+  },
+};
+```
+
+One QuickJS VM per plugin, on the same terms. TypeScript compiles to this —
+`docs/wizard-plugin.d.ts` declares `ctx` and `wizard`, and no compiler ships in
+the binary. See the last section of this document for both.
+
 ## Manifest and capabilities
 
 ```toml
@@ -260,6 +282,23 @@ Inside is Rust. Elsewhere is where Lua wins, and `publish` shows why the win is
 not about the language -- every step of its Rust was a blocking
 `Command::...output()` inside an `async fn`, and crossing the bridge is what put
 it on the cancellable path.
+
+### Pass three: Lua or JavaScript?
+
+Only once pass two has already answered "a script". The two backends are peers
+with one long-lived VM each, the same `Ctx`, the same capabilities and the same
+bound, so most of the time the answer is "whichever the author writes", and
+that is the honest default. One question separates them:
+
+**What crosses the boundary?** If it is a *document* -- JSON in, JSON out, and
+the shape has to survive -- it is JavaScript, because Lua has one table type
+and cannot tell an empty array from an empty object. `json_query` is that case
+and the section at the end of this document is the long version. If it is a
+command line and an exit code, either will do and Lua is smaller.
+
+Everything else that could look like a tie-breaker is not one. Neither backend
+is meaningfully faster than the other at this scale (see the bench), both are
+sandboxed to the same set of grants, and both can `await`.
 
 ### Two traps
 
