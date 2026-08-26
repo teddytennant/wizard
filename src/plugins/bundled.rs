@@ -67,16 +67,31 @@ use tokio::sync::OnceCell;
 use crate::kernel::manifest::{PluginManifest, PluginSource};
 use crate::kernel::{Kernel, lua};
 
-/// One first-party Lua plugin, as it exists in the binary.
+/// Which backend loads a bundled plugin's script.
+///
+/// The kernel cannot tell a Lua plugin from a JavaScript one once either is
+/// loaded — that is the whole point of one `Ctx` — but *loading* has to pick a
+/// VM, and this is where the choice is written down. It is a field on the
+/// table row rather than two tables, so the load order below stays one list
+/// and the first claim on a tool name still wins by position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Language {
+    Lua,
+    #[cfg(feature = "plugin-js")]
+    Js,
+}
+
+/// One first-party scripted plugin, as it exists in the binary.
 struct BundledPlugin {
-    /// Path under `src/plugins/lua/`, used as the chunk name so a Lua
+    /// Path under `src/plugins/`, used as the chunk or module name so a
     /// traceback names a file somebody can open.
     origin: &'static str,
+    language: Language,
     manifest: &'static str,
     script: &'static str,
 }
 
-/// Every Lua plugin this build ships, in load order.
+/// Every scripted plugin this build ships, in load order.
 ///
 /// The only place in the tree that names one, which is the same promise
 /// [`super::compiled_in`] makes about Rust plugins. A build without the
@@ -89,14 +104,23 @@ fn bundled() -> Vec<BundledPlugin> {
     #[cfg(feature = "tool-git")]
     plugins.push(BundledPlugin {
         origin: "src/plugins/lua/git/plugin.lua",
+        language: Language::Lua,
         manifest: include_str!("lua/git/manifest.toml"),
         script: include_str!("lua/git/plugin.lua"),
     });
     #[cfg(feature = "tool-publish")]
     plugins.push(BundledPlugin {
         origin: "src/plugins/lua/publish/plugin.lua",
+        language: Language::Lua,
         manifest: include_str!("lua/publish/manifest.toml"),
         script: include_str!("lua/publish/plugin.lua"),
+    });
+    #[cfg(feature = "tool-json")]
+    plugins.push(BundledPlugin {
+        origin: "src/plugins/js/json/plugin.js",
+        language: Language::Js,
+        manifest: include_str!("js/json/manifest.toml"),
+        script: include_str!("js/json/plugin.js"),
     });
     plugins
 }
@@ -133,17 +157,36 @@ pub(crate) async fn load_into(kernel: &Kernel) {
             }
         };
         let name = manifest.name.clone();
-        match lua::load_source(
-            kernel,
-            manifest,
-            PluginSource::FirstParty,
-            plugin.script,
-            &format!("@{}", plugin.origin),
-            None,
-            None,
-        )
-        .await
-        {
+        let loaded = match plugin.language {
+            // The `@` prefix is mlua's spelling for "this chunk name is a file
+            // path"; QuickJS takes the module name verbatim and needs none.
+            Language::Lua => {
+                lua::load_source(
+                    kernel,
+                    manifest,
+                    PluginSource::FirstParty,
+                    plugin.script,
+                    &format!("@{}", plugin.origin),
+                    None,
+                    None,
+                )
+                .await
+            }
+            #[cfg(feature = "plugin-js")]
+            Language::Js => {
+                crate::kernel::js::load_source(
+                    kernel,
+                    manifest,
+                    PluginSource::FirstParty,
+                    plugin.script,
+                    plugin.origin,
+                    None,
+                    None,
+                )
+                .await
+            }
+        };
+        match loaded {
             Ok(id) => tracing::debug!("bundled plugin '{id}' loaded"),
             Err(err) => tracing::error!("bundled plugin '{name}' did not load: {err:#}"),
         }

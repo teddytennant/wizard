@@ -55,7 +55,7 @@ use super::super::Ctx;
 use super::super::bus::{Event, EventHandler, HandlerFuture, Verdict};
 use super::super::manifest::{Capability, CapabilitySet, PluginSource};
 use super::super::services::Service;
-use super::{Bound, FnId, LuaShutdown, VmHandle, bind};
+use super::{Bound, FnId, VmShutdown, VmHandle, bind};
 use crate::commands::surface::Surface;
 use crate::commands::{CommandFuture, CommandHandler, PluginCommand};
 
@@ -815,7 +815,7 @@ fn config_fn(lua: &Lua, ctx: &Ctx) -> mlua::Result<mlua::Function> {
 /// An error is recorded and the next one runs, matching
 /// [`crate::kernel::lifecycle`]: a plugin gets to leak its own socket, it does
 /// not get to leave the rest of the unload undone.
-pub(crate) async fn run_effects(state: &VmState) -> LuaShutdown {
+pub(crate) async fn run_effects(state: &VmState) -> VmShutdown {
     let effects = {
         let mut held = state.effects.lock().unwrap_or_else(PoisonError::into_inner);
         let mut taken = std::mem::take(&mut *held);
@@ -823,7 +823,7 @@ pub(crate) async fn run_effects(state: &VmState) -> LuaShutdown {
         taken
     };
 
-    let mut shutdown = LuaShutdown::default();
+    let mut shutdown = VmShutdown::default();
     for (label, id) in effects {
         let function = state
             .functions

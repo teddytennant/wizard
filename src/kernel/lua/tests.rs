@@ -1191,7 +1191,7 @@ async fn a_lua_plugin_that_is_dropped_without_a_shutdown_still_stops_its_vm() {
 
 #[test]
 fn a_lua_shutdown_reports_nothing_by_default() {
-    let shutdown = super::LuaShutdown::default();
+    let shutdown = super::VmShutdown::default();
     assert_eq!(shutdown.effects, 0);
     assert!(shutdown.failures.is_empty());
 }

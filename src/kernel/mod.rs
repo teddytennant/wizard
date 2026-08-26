@@ -47,6 +47,8 @@
 
 pub mod bus;
 pub mod ctx;
+#[cfg(feature = "plugin-js")]
+pub mod js;
 pub mod lifecycle;
 pub mod lua;
 pub mod manifest;
@@ -209,6 +211,19 @@ fn unwired(table: &str, what: &str) -> anyhow::Error {
          The plugin kernel is running but no host bridge is attached to it; \
          see docs/plugins.md."
     )
+}
+
+/// What running one plugin VM's teardowns did.
+///
+/// One struct for both scripted backends rather than one per language. An
+/// unload reports the same two facts whichever VM ran the teardowns, and the
+/// alternative — a `LuaShutdown` and a `JsShutdown` with identical fields —
+/// would be two things to keep in step with [`DisposalReport`] and a `match`
+/// in [`Kernel::unload`] that exists only to convert between them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VmShutdown {
+    pub effects: usize,
+    pub failures: Vec<String>,
 }
 
 /// A registration and the plugin that made it.
@@ -559,6 +574,21 @@ impl Kernel {
         lua::load_dir(self, dir, source, None, None).await
     }
 
+    /// Load a JavaScript plugin from a directory holding `manifest.toml` and
+    /// `plugin.js`.
+    ///
+    /// The sibling of [`Kernel::load_lua`], down to the argument list, because
+    /// the two backends are peers: what changes is the file extension and the
+    /// engine behind it, and nothing a plugin can observe through [`Ctx`].
+    #[cfg(feature = "plugin-js")]
+    pub async fn load_js(
+        &self,
+        dir: &Path,
+        source: PluginSource,
+    ) -> Result<PluginId, KernelError> {
+        js::load_dir(self, dir, source, None, None).await
+    }
+
     pub fn host(&self) -> Arc<dyn HostBridge> {
         Arc::clone(&self.inner.host)
     }
@@ -741,8 +771,8 @@ impl Kernel {
                 ..
             } = orphan;
             let report = lifecycle::dispose(&self.inner.slots, &child_id, ledger, |_| None);
-            if let PluginKind::Lua(vm) = kind {
-                vms.push(vm);
+            if kind.has_vm() {
+                vms.push(kind);
             }
             child_reports.insert(child_id, report);
         }
@@ -750,8 +780,8 @@ impl Kernel {
         let mut report = lifecycle::dispose(&self.inner.slots, id, ledger, |child| {
             child_reports.remove(child)
         });
-        if let PluginKind::Lua(vm) = kind {
-            vms.push(vm);
+        if kind.has_vm() {
+            vms.push(kind);
         }
 
         for vm in vms {
