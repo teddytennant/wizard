@@ -1857,6 +1857,17 @@ is the gateway's.
   else. `src/hardware.rs`'s two `[`crate::server`]` links still resolve, since
   that module still exists — they now point at the seam rather than at the
   spawner, which is the wrong target for what those sentences say.
+- **A second flake, and it hangs rather than fails.**
+  `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` does not
+  return when run on its own and passes inside the full suite. It reproduces on
+  `f252267`, before either of these splits, so it is not either one's — but it
+  cost an hour here and will cost the next person one too, because the
+  leave-one-out scripts run filtered subsets and a filter that selects it
+  without selecting whatever unblocks it hangs the whole leg. A hanging gate
+  looks exactly like a slow one. `contrib/check-plugin-work.sh` now says how to
+  recognise it: a `wizard-*` test binary at ~0% CPU with a thread named
+  `plugins::fleet:`.
+
 - **The `/server` command is still a built-in.** Its row, its verbs and its
   parse are core's, and only its body moved. That is the right split — the
   command has to keep existing so it can explain itself on a build with no local

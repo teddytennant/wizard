@@ -69,6 +69,19 @@ printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TE
 if [ "${passed:-0}" -lt 1 ]; then
     bad "the test run reported no results at all (truncated log? build failure?)"
 fi
+# There is a second flake and it is worse than the lockfile one, because it
+# manifests as a *hang* rather than a failure:
+# `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` never
+# returns when it is run on its own (`cargo test --lib -- --exact <that>` sits
+# there past any timeout you give it), and passes when the whole suite runs.
+# Reproduced on `f252267`, before the gateway and llama-server splits, so it is
+# not one of theirs. It matters here because the leave-one-out scripts run
+# filtered subsets: a leg whose filter happens to select that test without
+# selecting whatever unblocks it will hang forever rather than fail, and a
+# hanging gate reads as a busy machine. If a leg stops producing output, check
+# for a `wizard-*` test binary at ~0% CPU with a thread named `plugins::fleet:`
+# before suspecting the code under test.
+#
 # The ratchet counts tests that *exist*, not tests that passed on this run.
 # A flaked test is one the suite still has, so counting only `passed` made a
 # flaked run fail twice: once as the flake, and again as a phantom regression
