@@ -557,14 +557,19 @@ fn describe_failure(reason: StopReason, budget: Duration, err: anyhow::Error) ->
 pub(crate) async fn runtime_for(
     source: PluginSource,
     budget: Duration,
-) -> anyhow::Result<(AsyncRuntime, AsyncContext, Option<Bound>)> {
+) -> anyhow::Result<(AsyncContext, Option<Bound>)> {
     let runtime = AsyncRuntime::new()
         .map_err(|err| anyhow::anyhow!("creating the QuickJS runtime: {err}"))?;
     let bound = bind(&runtime, source, budget).await;
     let context = AsyncContext::full(&runtime)
         .await
         .map_err(|err| anyhow::anyhow!("creating the QuickJS context: {err}"))?;
-    Ok((runtime, context, bound))
+    // The runtime handle is not carried out. `AsyncContext` holds one of its
+    // own -- `ContextOwner` keeps an `AsyncRuntime` beside the raw pointer
+    // precisely so a context cannot outlive its runtime -- so a second handle
+    // in [`host::VmState`] would be a field that documents an invariant
+    // somebody else already enforces.
+    Ok((context, bound))
 }
 
 #[cfg(test)]

@@ -2938,6 +2938,23 @@ type-checked by `tsc --noEmit --checkJs` and installed with no build step. A
 checked-in `.ts` beside a checked-in generated `.js` is two files that can
 disagree, and `include_str!` can only take one of them.
 
+Both were run rather than assumed. `tsc 5.9.3` with
+`--noEmit --checkJs --strict --target es2022` reports nothing on
+`src/plugins/js/json/plugin.js`, and a `.ts` plugin written against the same
+declarations compiles and loads —
+`a_typescript_compilers_output_shape_loads` is that second half in the suite,
+because what `tsc` emits after `export default` is a `const` binding rather
+than an object literal, and QuickJS resolves those two differently.
+
+Two things the declaration file had to get right, both found by running the
+compiler rather than by reading it. It is a **global** declaration file with no
+top-level `import` or `export`, because adding either would turn it into a
+module and take `ctx` and `wizard` back out of scope for exactly the plugin
+that referenced it. And the plugin type is `WizardPlugin`, not `Plugin`,
+because TypeScript's DOM lib already declares a global `Plugin` — and two
+global interfaces sharing a name are *merged* rather than shadowed, so the
+collision would have produced one silently mixed shape rather than an error.
+
 ### Proving it, and what is still open
 
 `contrib/check-tool-plugins.sh` grew two legs. `without tool-json` is the

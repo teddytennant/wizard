@@ -75,7 +75,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rquickjs::prelude::{Async, Opt, Rest};
 use rquickjs::{
-    AsyncContext, AsyncRuntime, Ctx as JsCtx, Function, Module, Object, Value as JsValue,
+    AsyncContext, Ctx as JsCtx, Exception, Function, Module, Object, Value as JsValue,
 };
 use serde_json::Value;
 
@@ -122,11 +122,9 @@ const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Everything one plugin's VM owns.
 ///
-/// The runtime is held rather than merely created because dropping it stops
-/// the engine, and the context is a child of it: the field order is the drop
-/// order, and a context outliving its runtime aborts the process.
+/// No separate runtime handle: `AsyncContext` holds one, so the engine lives
+/// exactly as long as this struct and dropping it stops the VM.
 pub(crate) struct VmState {
-    _runtime: AsyncRuntime,
     context: AsyncContext,
     /// Teardowns, in registration order. Run in reverse at shutdown.
     effects: Arc<Mutex<Vec<(String, FnId)>>>,
@@ -164,7 +162,7 @@ pub(crate) async fn build(
     handle: &VmHandle,
     source: PluginSource,
 ) -> anyhow::Result<VmState> {
-    let (runtime, context, bound) = runtime_for(source, ctx.kernel().call_budget()).await?;
+    let (context, bound) = runtime_for(source, ctx.kernel().call_budget()).await?;
 
     let caps = ctx.capabilities().clone();
     let registry = Registry::new();
@@ -189,7 +187,6 @@ pub(crate) async fn build(
     built?;
 
     Ok(VmState {
-        _runtime: runtime,
         context,
         effects,
         bound,
@@ -481,9 +478,13 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
             let host = ctx.host();
             let function = Function::new(
                 js.clone(),
-                Async(move |url: String, body: Opt<String>| {
+                Async(move |cx: JsCtx<'js>, url: String, body: Opt<String>| {
                     let host = Arc::clone(&host);
-                    async move { host.http(method, &url, body.0).await.map_err(external) }
+                    async move {
+                        host.http(method, &url, body.0)
+                            .await
+                            .map_err(|err| external(&cx, err))
+                    }
                 }),
             )?;
             http.set(name, function)?;
@@ -497,10 +498,14 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
         let plugin = ctx.name().to_string();
         let complete = Function::new(
             js.clone(),
-            Async(move |prompt: String| {
+            Async(move |cx: JsCtx<'js>, prompt: String| {
                 let host = Arc::clone(&host);
                 let plugin = plugin.clone();
-                async move { host.model(&plugin, &prompt).await.map_err(external) }
+                async move {
+                    host.model(&plugin, &prompt)
+                        .await
+                        .map_err(|err| external(&cx, err))
+                }
             }),
         )?;
         model.set("complete", complete)?;
@@ -513,10 +518,14 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
         let plugin = ctx.name().to_string();
         let notify = Function::new(
             js.clone(),
-            Async(move |text: String| {
+            Async(move |cx: JsCtx<'js>, text: String| {
                 let host = Arc::clone(&host);
                 let plugin = plugin.clone();
-                async move { host.notify(&plugin, &text).await.map_err(external) }
+                async move {
+                    host.notify(&plugin, &text)
+                        .await
+                        .map_err(|err| external(&cx, err))
+                }
             }),
         )?;
         ui.set("notify", notify)?;
@@ -529,10 +538,14 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
         let plugin = ctx.name().to_string();
         let spawn = Function::new(
             js.clone(),
-            Async(move |task: String| {
+            Async(move |cx: JsCtx<'js>, task: String| {
                 let host = Arc::clone(&host);
                 let plugin = plugin.clone();
-                async move { host.spawn_agent(&plugin, &task).await.map_err(external) }
+                async move {
+                    host.spawn_agent(&plugin, &task)
+                        .await
+                        .map_err(|err| external(&cx, err))
+                }
             }),
         )?;
         agent.set("spawn", spawn)?;
@@ -545,10 +558,14 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
         let plugin = ctx.name().to_string();
         let run = Function::new(
             js.clone(),
-            Async(move |command: String| {
+            Async(move |cx: JsCtx<'js>, command: String| {
                 let host = Arc::clone(&host);
                 let plugin = plugin.clone();
-                async move { host.run(&plugin, &command).await.map_err(external) }
+                async move {
+                    host.run(&plugin, &command)
+                        .await
+                        .map_err(|err| external(&cx, err))
+                }
             }),
         )?;
         process.set("run", run)?;
@@ -562,7 +579,10 @@ fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rqui
                 let plugin = plugin.clone();
                 let request = exec_request(&spec);
                 async move {
-                    let outcome = host.exec(&plugin, request?).await.map_err(external)?;
+                    let outcome = host
+                        .exec(&plugin, request?)
+                        .await
+                        .map_err(|err| external(&cx, err))?;
                     let result = Object::new(cx.clone())?;
                     result.set("stdout", outcome.stdout)?;
                     result.set("stderr", outcome.stderr)?;
@@ -613,21 +633,26 @@ fn install_fs<'js>(
 
     let fs = Object::new(js.clone())?;
     let read_root = root.clone();
-    let read = Function::new(js.clone(), move |path: String| {
+    let read = Function::new(js.clone(), move |cx: JsCtx<'js>, path: String| {
         let resolved = resolve_plugin_path(&read_root, &path, profile)
-            .map_err(|reason| external(anyhow::anyhow!(reason)))?;
-        std::fs::read_to_string(&resolved).map_err(|err| external(anyhow::anyhow!("{err}")))
+            .map_err(|reason| external(&cx, anyhow::anyhow!(reason)))?;
+        std::fs::read_to_string(&resolved).map_err(|err| external(&cx, anyhow::anyhow!("{err}")))
     })?;
     fs.set("read", read)?;
 
-    let write = Function::new(js.clone(), move |path: String, contents: String| {
-        let resolved = resolve_plugin_path(&root, &path, profile)
-            .map_err(|reason| external(anyhow::anyhow!(reason)))?;
-        if let Some(parent) = resolved.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| external(anyhow::anyhow!("{err}")))?;
-        }
-        std::fs::write(&resolved, contents).map_err(|err| external(anyhow::anyhow!("{err}")))
-    })?;
+    let write = Function::new(
+        js.clone(),
+        move |cx: JsCtx<'js>, path: String, contents: String| {
+            let resolved = resolve_plugin_path(&root, &path, profile)
+                .map_err(|reason| external(&cx, anyhow::anyhow!(reason)))?;
+            if let Some(parent) = resolved.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))?;
+            }
+            std::fs::write(&resolved, contents)
+                .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))
+        },
+    )?;
     fs.set("write", write)?;
 
     wizard.set("fs", fs)
@@ -689,17 +714,22 @@ fn install_output_budget<'js>(js: &JsCtx<'js>, wizard: &Object<'js>) -> rquickjs
 /// runs a program whose name contains spaces, and an empty one becomes a
 /// request the host has to reject with less context than this has.
 fn exec_request(spec: &Object<'_>) -> rquickjs::Result<crate::kernel::ExecRequest> {
+    let cx = spec.ctx();
     let argv: rquickjs::Array = spec.get("argv").map_err(|_| {
-        external(anyhow::anyhow!(
-            "wizard.process.exec needs argv: ['program', 'arg', ...]; a shell line goes to \
-             wizard.process.run"
-        ))
+        external(
+            cx,
+            anyhow::anyhow!(
+                "wizard.process.exec needs argv: ['program', 'arg', ...]; a shell line goes to \
+                 wizard.process.run"
+            ),
+        )
     })?;
     let argv: Vec<String> = argv.iter::<String>().collect::<rquickjs::Result<_>>()?;
     if argv.is_empty() {
-        return Err(external(anyhow::anyhow!(
-            "wizard.process.exec was given an empty argv"
-        )));
+        return Err(external(
+            cx,
+            anyhow::anyhow!("wizard.process.exec was given an empty argv"),
+        ));
     }
     let cwd: Option<String> = spec.get("cwd").ok().filter(|s: &String| !s.is_empty());
     let millis: Option<u64> = spec.get("timeout_ms").ok();
@@ -710,13 +740,22 @@ fn exec_request(spec: &Object<'_>) -> rquickjs::Result<crate::kernel::ExecReques
     })
 }
 
-/// Carry a host error into JavaScript as a plain thrown message.
+/// Carry a host error into JavaScript as a plain thrown `Error`.
 ///
-/// Flattened with `{:#}` rather than `to_string()`, which prints only the
-/// outermost layer. A host call's reason is almost always underneath one, and
-/// a plugin author handed the top half alone has nothing to act on.
-fn external(err: anyhow::Error) -> rquickjs::Error {
-    rquickjs::Error::new_from_js_message("host", "value", format!("{err:#}"))
+/// Two decisions, both about what a *model* ends up reading. A tool that
+/// catches a host refusal and returns its `.message` puts that text straight
+/// into the transcript, so it has to be the sentence and nothing else — and an
+/// `rquickjs::Error` returned from a host function does not do that: it is
+/// thrown as a `TypeError` reading "Error converting from js 'host' into type
+/// 'value': …", which is engine plumbing in front of the part that matters.
+/// `Exception::throw_message` produces an ordinary `Error` whose `.message` is
+/// exactly what was passed.
+///
+/// And it is flattened with `{:#}` rather than `to_string()`, which prints only
+/// the outermost layer. A host call's reason is almost always underneath one,
+/// and a plugin author handed the top half alone has nothing to act on.
+fn external(js: &JsCtx<'_>, err: anyhow::Error) -> rquickjs::Error {
+    Exception::throw_message(js, &format!("{err:#}"))
 }
 
 /// What a QuickJS failure actually said.
@@ -808,9 +847,10 @@ fn tool_fn<'js>(
             _ => ToolAccess::Execute,
         };
         let execute: Function = spec.get("execute").map_err(|_| {
-            external(anyhow::anyhow!(
-                "ctx.tool({{ name: '{name}' }}) has no execute function"
-            ))
+            external(
+                &cx,
+                anyhow::anyhow!("ctx.tool({{ name: '{name}' }}) has no execute function"),
+            )
         })?;
         let func = registry.hold(&cx, execute)?;
 
@@ -822,7 +862,7 @@ fn tool_fn<'js>(
             handle: handle.clone(),
             func,
         }))
-        .map_err(|err| external(anyhow::anyhow!("{err}")))
+        .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))
     })
 }
 
@@ -840,9 +880,10 @@ fn command_fn<'js>(
         let description: String = spec.get("description").unwrap_or_default();
         let args: String = spec.get("args").unwrap_or_default();
         let run: Function = spec.get("run").map_err(|_| {
-            external(anyhow::anyhow!(
-                "ctx.command({{ name: '{name}' }}) has no run function"
-            ))
+            external(
+                &cx,
+                anyhow::anyhow!("ctx.command({{ name: '{name}' }}) has no run function"),
+            )
         })?;
         let func = registry.hold(&cx, run)?;
         let mut command = PluginCommand::new(
@@ -861,12 +902,12 @@ fn command_fn<'js>(
         if let Ok(surfaces) = spec.get::<_, rquickjs::Array>("surfaces") {
             let mut named = Vec::new();
             for value in surfaces.iter::<String>() {
-                named.push(surface_named(&name, &value?)?);
+                named.push(surface_named(&cx, &name, &value?)?);
             }
             command = command.only(&named);
         }
         ctx.command(command)
-            .map_err(|err| external(anyhow::anyhow!("{err}")))
+            .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))
     })
 }
 
@@ -875,14 +916,17 @@ fn command_fn<'js>(
 /// Refuses an unknown name rather than skipping it: the failure mode of
 /// skipping one is a command silently missing from exactly the surface the
 /// author meant to name.
-fn surface_named(command: &str, value: &str) -> rquickjs::Result<Surface> {
+fn surface_named(js: &JsCtx<'_>, command: &str, value: &str) -> rquickjs::Result<Surface> {
     match value {
         "tui" => Ok(Surface::Tui),
         "gui" => Ok(Surface::Gui),
         "gateway" => Ok(Surface::Gateway),
-        other => Err(external(anyhow::anyhow!(
-            "ctx.command({{ name: '{command}' }}) names surface '{other}' (tui|gui|gateway)"
-        ))),
+        other => Err(external(
+            js,
+            anyhow::anyhow!(
+                "ctx.command({{ name: '{command}' }}) names surface '{other}' (tui|gui|gateway)"
+            ),
+        )),
     }
 }
 
@@ -896,11 +940,14 @@ fn surface_named(command: &str, value: &str) -> rquickjs::Result<Surface> {
 /// Rust with a slower calling convention.
 fn provider_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let plugin = ctx.name().to_string();
-    Function::new(js.clone(), move |_spec: Opt<JsValue>| {
-        Err::<(), _>(external(anyhow::anyhow!(
-            "plugin '{plugin}': a provider cannot be registered from JavaScript. \
-             Providers are transport code and stay in Rust; see docs/plugins.md."
-        )))
+    Function::new(js.clone(), move |cx: JsCtx<'js>, _spec: Opt<JsValue<'js>>| {
+        Err::<(), _>(external(
+            &cx,
+            anyhow::anyhow!(
+                "plugin '{plugin}': a provider cannot be registered from JavaScript. \
+                 Providers are transport code and stay in Rust; see docs/plugins.md."
+            ),
+        ))
     })
 }
 
@@ -917,10 +964,13 @@ fn on_fn<'js>(
         js.clone(),
         move |cx: JsCtx<'js>, event: String, callback: Function<'js>, priority: Opt<i32>| {
             let parsed = Event::parse(&event).ok_or_else(|| {
-                external(anyhow::anyhow!(
-                    "'{event}' is not an event; a subscription to a name nothing emits \
-                     would silently never fire"
-                ))
+                external(
+                    &cx,
+                    anyhow::anyhow!(
+                        "'{event}' is not an event; a subscription to a name nothing emits \
+                         would silently never fire"
+                    ),
+                )
             })?;
             let func = registry.hold(&cx, callback)?;
             ctx.on(
@@ -950,8 +1000,9 @@ fn emit_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
                     .transpose()
                     .map(|value| value.unwrap_or(Value::Null));
                 async move {
-                    let event = parsed
-                        .ok_or_else(|| external(anyhow::anyhow!("'{event}' is not an event")))?;
+                    let event = parsed.ok_or_else(|| {
+                        external(&cx, anyhow::anyhow!("'{event}' is not an event"))
+                    })?;
                     let dispatch = ctx.emit(event, payload?).await;
                     let result = Object::new(cx.clone())?;
                     result.set("payload", json_to_js(&cx, &dispatch.payload)?)?;
@@ -1007,7 +1058,7 @@ fn plugin_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>>
     let ctx = ctx.clone();
     Function::new(
         js.clone(),
-        Async(move |name: String, config: Opt<JsValue<'js>>| {
+        Async(move |cx: JsCtx<'js>, name: String, config: Opt<JsValue<'js>>| {
             let ctx = ctx.clone();
             let config = config
                 .0
@@ -1017,10 +1068,13 @@ fn plugin_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>>
             async move {
                 let config = config?;
                 if name.contains(['/', '\\']) || name.contains("..") {
-                    return Err(external(anyhow::anyhow!(
-                        "'{name}' is not a plugin name; ctx.plugin takes a name under the \
-                         plugin directory, not a path"
-                    )));
+                    return Err(external(
+                        &cx,
+                        anyhow::anyhow!(
+                            "'{name}' is not a plugin name; ctx.plugin takes a name under the \
+                             plugin directory, not a path"
+                        ),
+                    ));
                 }
                 let dir = ctx.kernel().plugin_root().join(&name);
                 let id = super::load_dir(
@@ -1031,7 +1085,7 @@ fn plugin_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>>
                     config,
                 )
                 .await
-                .map_err(|err| external(anyhow::anyhow!("{err}")))?;
+                .map_err(|err| external(&cx, anyhow::anyhow!("{err}")))?;
                 ctx.record_child(id.clone());
                 Ok(id.to_string())
             }

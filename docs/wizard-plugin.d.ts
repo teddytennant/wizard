@@ -41,13 +41,24 @@
 //
 // # What is not here
 //
-// No `require`, no `import` of anything but this file's types, no `process`,
-// no `fetch`, no `setTimeout`. A plugin's whole surface is `ctx` and `wizard`,
-// and `wizard` carries only the namespaces the manifest's `capabilities`
-// declared. Everything else about the sandbox is in `src/kernel/js/host.rs`.
+// No `require`, no `import`, no `process`, no `fetch`, no `setTimeout`. A
+// plugin's whole surface is `ctx` and `wizard`, and `wizard` carries only the
+// namespaces the manifest's `capabilities` declared. Everything else about the
+// sandbox is in `src/kernel/js/host.rs`.
+//
+// `console.log`, `.info`, `.debug`, `.warn` and `.error` do exist, and go to
+// Wizard's log rather than to a terminal. They are not declared here because
+// TypeScript's own lib already has them and a second declaration collides with
+// it; the signatures are the ones you expect.
+//
+// This file is a *global* declaration file — no top-level `import` or `export`
+// — so a `/// <reference path=...>` comment is all it takes to see `ctx`,
+// `wizard` and every type below. Adding an `export` to it would turn it into a
+// module and take all of that back out of scope, which is the one edit to
+// resist.
 
 /** JSON, as it crosses the plugin boundary in both directions. */
-export type Json =
+type Json =
   | null
   | boolean
   | number
@@ -56,7 +67,7 @@ export type Json =
   | { [key: string]: Json };
 
 /** A lifecycle event a plugin can subscribe to or publish. */
-export type WizardEvent =
+type WizardEvent =
   | "session_start"
   | "session_end"
   | "user_prompt"
@@ -73,7 +84,7 @@ export type WizardEvent =
   | "config_reload";
 
 /** Where a slash command is allowed to run. */
-export type CommandSurface = "tui" | "gui" | "gateway";
+type CommandSurface = "tui" | "gui" | "gateway";
 
 /**
  * How much a tool is allowed to do, which is what plan mode gates on.
@@ -82,7 +93,7 @@ export type CommandSurface = "tui" | "gui" | "gateway";
  * is read as `"execute"`, the conservative answer. A tool that only reads
  * should say so, or plan mode will refuse it.
  */
-export type ToolAccess = "read_only" | "edit" | "execute";
+type ToolAccess = "read_only" | "edit" | "execute";
 
 /**
  * What a tool body is told about the call, beyond its arguments.
@@ -92,7 +103,7 @@ export type ToolAccess = "read_only" | "edit" | "execute";
  * reach a plugin through `wizard.*` if they reach it at all. `cwd` is
  * different, because it is what every path-taking tool resolves against.
  */
-export interface ToolCall {
+interface ToolCall {
   /** The directory this call is about. Resolve relative paths against it. */
   readonly cwd: string;
 }
@@ -109,7 +120,7 @@ export interface ToolCall {
  * is different and means the tool itself broke. The distinction reaches the
  * model, so it is worth getting right.
  */
-export type ToolResult =
+type ToolResult =
   | string
   | number
   | boolean
@@ -119,7 +130,7 @@ export type ToolResult =
   | { content: string; is_error?: boolean }
   | { [key: string]: Json };
 
-export interface ToolSpec {
+interface ToolSpec {
   /** The name the model calls. Must not collide with a built-in tool. */
   name: string;
   description?: string;
@@ -133,7 +144,7 @@ export interface ToolSpec {
   execute: (args: any, call: ToolCall) => ToolResult | Promise<ToolResult>;
 }
 
-export interface CommandSpec {
+interface CommandSpec {
   /** Typed as `/name`. A name a built-in owns is refused at registration. */
   name: string;
   description?: string;
@@ -150,7 +161,7 @@ export interface CommandSpec {
 }
 
 /** What `ctx.emit` reports back about a dispatch. */
-export interface Dispatch {
+interface Dispatch {
   /** The payload after every handler that rewrote it. */
   payload: Json;
   vetoed: boolean;
@@ -173,7 +184,7 @@ export interface Dispatch {
  * is treated as an observation, so `return {}` from a handler that meant
  * nothing by it does not blank the payload.
  */
-export type Verdict =
+type Verdict =
   | void
   | undefined
   | { payload: Json }
@@ -184,7 +195,7 @@ export type Verdict =
  * JavaScript — so a plugin can be ported between them without being
  * redesigned.
  */
-export interface PluginContext {
+interface PluginContext {
   /** Register a tool the model can call. */
   tool(spec: ToolSpec): void;
 
@@ -252,7 +263,7 @@ export interface PluginContext {
 }
 
 /** `wizard.fs` — read and write files. Always present. */
-export interface WizardFs {
+interface WizardFs {
   /**
    * Read a file as text.
    *
@@ -267,7 +278,7 @@ export interface WizardFs {
 }
 
 /** `wizard.limits` — the byte budgets a native tool applies to its answer. */
-export interface WizardLimits {
+interface WizardLimits {
   /** The blanket cap on any tool's output. */
   output: number;
   /** What a diff gets. Smaller than `output`, on purpose. */
@@ -281,7 +292,7 @@ export interface WizardLimits {
 }
 
 /** `wizard.http` — present only with the `network` capability. */
-export interface WizardHttp {
+interface WizardHttp {
   /** GET a URL and return the body as text. Redirects are followed. */
   get(url: string): Promise<string>;
   /** POST a body. Redirects are *not* followed, to avoid replaying it. */
@@ -291,7 +302,7 @@ export interface WizardHttp {
 }
 
 /** `wizard.model` — present only with the `model` capability. */
-export interface WizardModel {
+interface WizardModel {
   /**
    * One completion, on the user's account, billed to them.
    *
@@ -303,7 +314,7 @@ export interface WizardModel {
 }
 
 /** `wizard.ui` — present only with the `ui` capability. */
-export interface WizardUi {
+interface WizardUi {
   /**
    * Write a line to the transcript. With no turn in front of it this goes to
    * the log rather than failing: a notice's failure mode is nobody hearing it.
@@ -312,13 +323,13 @@ export interface WizardUi {
 }
 
 /** `wizard.agent` — present only with the `agent` capability. */
-export interface WizardAgent {
+interface WizardAgent {
   /** Start a subagent, wait for it, and return what it said. */
   spawn(task: string): Promise<string>;
 }
 
 /** One program to run through `wizard.process.exec`. */
-export interface ExecRequest {
+interface ExecRequest {
   /** Program and arguments. Never a shell line — there is nothing to quote. */
   argv: string[];
   /** Where to run it. Defaults to the host's working directory. */
@@ -328,7 +339,7 @@ export interface ExecRequest {
 }
 
 /** What a program did. No verdict — the plugin decides what a code means. */
-export interface ExecOutcome {
+interface ExecOutcome {
   stdout: string;
   stderr: string;
   /**
@@ -342,7 +353,7 @@ export interface ExecOutcome {
 }
 
 /** `wizard.process` — present only with the `process` capability. */
-export interface WizardProcess {
+interface WizardProcess {
   /**
    * Run a shell line and return its output, throwing if it failed.
    *
@@ -355,7 +366,7 @@ export interface WizardProcess {
 }
 
 /** `wizard.paths` — present only with the `filesystem` capability. */
-export interface WizardPaths {
+interface WizardPaths {
   /** The project root. What a confined `wizard.fs` is confined to. */
   project: string;
   /** `~/.wizard`, or wherever it is redirected to under `cargo test`. */
@@ -374,7 +385,7 @@ export interface WizardPaths {
  * that existed and threw would make that a question you could only answer by
  * catching.
  */
-export interface Wizard {
+interface Wizard {
   /** This plugin's name. */
   readonly plugin: string;
   /** `"quickjs"`. The Lua backend answers `"luajit"` to the same question. */
@@ -400,28 +411,27 @@ export interface Wizard {
   readonly paths?: WizardPaths;
 }
 
-/** What a `plugin.js` default-exports. */
-export interface Plugin {
+/**
+ * What a `plugin.js` default-exports.
+ *
+ * `WizardPlugin` rather than `Plugin` because these declarations are global,
+ * and the DOM lib already has a global `Plugin` (the old `navigator.plugins`
+ * entry). Two global interfaces with one name are *merged* by TypeScript, so
+ * the collision is not a shadowing but a silent mixture of two unrelated
+ * shapes — which is worth one prefix to avoid.
+ */
+interface WizardPlugin {
   /** Should match `name` in `manifest.toml`. */
   name: string;
   /** May be `async`; the load waits for it. */
   apply: (ctx: PluginContext) => void | Promise<void>;
 }
 
-declare global {
-  const wizard: Wizard;
-  /**
-   * The same object `apply` is handed. Reading it from the global is
-   * supported and taking the argument is clearer.
-   */
-  const ctx: PluginContext;
+/** The host surface. Present in every plugin. */
+declare const wizard: Wizard;
 
-  /** `console.log`/`.warn`/`.error` go to Wizard's log, not to a terminal. */
-  const console: {
-    log(...args: unknown[]): void;
-    info(...args: unknown[]): void;
-    debug(...args: unknown[]): void;
-    warn(...args: unknown[]): void;
-    error(...args: unknown[]): void;
-  };
-}
+/**
+ * The same object `apply` is handed. Reading it from the global is supported;
+ * taking the argument is clearer.
+ */
+declare const ctx: PluginContext;

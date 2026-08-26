@@ -1445,3 +1445,62 @@ async fn a_host_refusal_reaches_the_plugin_as_a_readable_sentence() {
         "no engine plumbing in a message a model reads: {message}"
     );
 }
+
+#[tokio::test]
+async fn a_typescript_compilers_output_shape_loads() {
+    // What `tsc --module es2022` emits for a `.ts` plugin is not an object
+    // literal after `export default` — it is a `const` binding exported by
+    // name, which QuickJS resolves through the module's indirect binding
+    // rather than as a value. Nothing else in this file exercises that path,
+    // and it is the one that decides whether "write it in TypeScript, compile
+    // it, install it" actually works.
+    //
+    // The source this was compiled from, verbatim from `tsc 5.9.3` with
+    // `--strict` against `docs/wizard-plugin.d.ts`:
+    //
+    //     const plugin: WizardPlugin = {
+    //       name: "greet",
+    //       apply(ctx: PluginContext) { ... },
+    //     };
+    //     export default plugin;
+    let dir = TempDir::new("js-tsc-shape");
+    let kernel = kernel_in(&dir.path);
+    load(
+        &kernel,
+        "greet",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        const plugin = {
+            name: "greet",
+            apply(ctx) {
+                let greeted = 0;
+                ctx.tool({
+                    name: "greet",
+                    description: "Say hello",
+                    access: "read_only",
+                    parameters: { type: "object", properties: { who: { type: "string" } } },
+                    async execute(args, call) {
+                        greeted += 1;
+                        await wizard.sleep(1);
+                        return `hello ${args.who ?? "world"} (${greeted})`;
+                    },
+                });
+                ctx.effect(() => { greeted = 0; }, "reset the counter");
+            },
+        };
+        export default plugin;
+        "#,
+    )
+    .await
+    .expect("a compiled TypeScript plugin loads");
+
+    assert_eq!(
+        call(&kernel, "greet", json!({ "who": "ada" })).await,
+        "hello ada (1)"
+    );
+    // `??` and optional chaining are what a modern `--target` leaves in place
+    // rather than transpiling away, so a plugin that used them would fail on an
+    // engine that did not have them.
+    assert_eq!(call(&kernel, "greet", json!({})).await, "hello world (2)");
+}

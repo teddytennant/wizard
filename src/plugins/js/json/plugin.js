@@ -25,20 +25,27 @@
 // forty lines because objects, arrays and `undefined` are three different
 // things here. The Lua version needs a table-kind heuristic in every branch.
 //
-// What this must not become is a second implementation of anything. The byte
+// What this must not become is a second implementation of anything. The output
 // budgets are `wizard.limits`, the head/tail framing and the spill file are
 // `wizard.truncate`, and the file read is `wizard.fs.read`, which is confined
 // to the project directory because this plugin declares no `filesystem`
 // capability and does not need one.
 
-/** How much of a document is worth reading into a VM at all.
+/** How large a document is worth parsing, in characters.
  *
  * Not a budget on the *answer* — that is `wizard.limits` — but on the input.
- * `JSON.parse` of a 200 MB file inside a 64 MB VM is an out-of-memory abort
- * with no useful message, and the honest failure is a sentence naming the
- * size. Ten megabytes is far past any config file and far below the ceiling.
+ * `JSON.parse` of a 200 MB document inside a 64 MB VM is an out-of-memory
+ * abort with no useful message, and the honest failure is a sentence naming
+ * the size. Ten million characters is far past any config file and far below
+ * the ceiling.
+ *
+ * Characters rather than bytes, because that is what `String.length` counts
+ * and there is no cheaper honest measure here. It is checked *after* the read,
+ * which does not stop a huge file reaching the heap — `wizard.fs.read` has no
+ * cap of its own — but does stop `JSON.parse` building a second copy of it as
+ * objects, which is the allocation that actually ends the VM.
  */
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const MAX_DOCUMENT_CHARS = 10 * 1024 * 1024;
 
 /** How many matches a wildcard query may return before the answer is a count.
  *
@@ -154,7 +161,8 @@ function select(root, segments) {
         // `hasOwn` rather than `in`, so a document with a key called
         // "constructor" or "toString" answers about itself instead of about
         // Object.prototype.
-        if (Object.hasOwn(node, segment)) next.push(node[segment]);
+        const record = /** @type {Record<string, unknown>} */ (node);
+        if (Object.hasOwn(record, segment)) next.push(record[segment]);
       }
     }
     frontier = next;
@@ -172,9 +180,23 @@ function select(root, segments) {
 function describe(value) {
   if (value === null) return "null";
   if (Array.isArray(value)) return `array of ${value.length}`;
-  const kind = typeof value;
-  if (kind === "object") return `object with ${Object.keys(value).length} keys`;
-  return kind;
+  if (typeof value === "object") {
+    return `object with ${Object.keys(value).length} keys`;
+  }
+  return typeof value;
+}
+
+/**
+ * The failure text for a thrown value, whatever was thrown.
+ *
+ * `catch (err)` gives `unknown`, and a plugin that assumed `err.message`
+ * would report "undefined" the one time somebody threw a string.
+ *
+ * @param {unknown} err
+ * @returns {string}
+ */
+function reason(err) {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -185,9 +207,9 @@ function describe(value) {
  */
 function load(args) {
   if (typeof args.text === "string") {
-    if (args.text.length > MAX_DOCUMENT_BYTES) {
+    if (args.text.length > MAX_DOCUMENT_CHARS) {
       throw new Error(
-        `json_query: text is ${args.text.length} bytes; the limit is ${MAX_DOCUMENT_BYTES}`,
+        `json_query: text is ${args.text.length} characters; the limit is ${MAX_DOCUMENT_CHARS}`,
       );
     }
     return JSON.parse(args.text);
@@ -196,9 +218,9 @@ function load(args) {
     throw new Error("json_query: give either 'path' or 'text'");
   }
   const raw = wizard.fs.read(args.path);
-  if (raw.length > MAX_DOCUMENT_BYTES) {
+  if (raw.length > MAX_DOCUMENT_CHARS) {
     throw new Error(
-      `json_query: ${args.path} is ${raw.length} bytes; the limit is ${MAX_DOCUMENT_BYTES}. ` +
+      `json_query: ${args.path} is ${raw.length} characters; the limit is ${MAX_DOCUMENT_CHARS}. ` +
         "Narrow it with a shell tool first.",
     );
   }
@@ -208,6 +230,7 @@ function load(args) {
 export default {
   name: "json",
 
+  /** @param {PluginContext} ctx */
   apply(ctx) {
     ctx.tool({
       name: "json_query",
@@ -238,6 +261,7 @@ export default {
         },
       },
       access: "read_only",
+      /** @param {{ path?: string, text?: string, query?: string }} args */
       execute(args) {
         args = args || {};
         let document;
@@ -248,7 +272,7 @@ export default {
           // parse. All three are news about the input rather than a broken
           // tool, so they come back as a soft failure with the reason and the
           // model gets to try something else.
-          return { content: String(err && err.message ? err.message : err), is_error: true };
+          return { content: reason(err), is_error: true };
         }
 
         const query = typeof args.query === "string" ? args.query : "";
@@ -256,7 +280,7 @@ export default {
         try {
           segments = parseQuery(query);
         } catch (err) {
-          return { content: String(err.message), is_error: true };
+          return { content: reason(err), is_error: true };
         }
 
         if (segments.length === 0) {
