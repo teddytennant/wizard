@@ -654,15 +654,37 @@ mod tests {
     use super::spill::{SpillSink, hold_sink};
     use super::*;
 
-    /// The one file in a sink directory, and a failure naming what was there
-    /// instead. Every spilling test writes exactly one.
-    fn only_spill_file(dir: &Path) -> PathBuf {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-            .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
-            .map(|entry| entry.expect("a dir entry").path())
-            .collect();
-        assert_eq!(entries.len(), 1, "expected one spill file: {entries:?}");
-        entries.pop().expect("the one entry")
+    /// The spill file a result *names*, taken out of the notice rather than by
+    /// listing the directory.
+    ///
+    /// Listing was the obvious way and it is wrong here. `hold_sink` serialises
+    /// the tests that install a sink, but eleven other files call
+    /// [`truncate_output`] in tests without taking that lock, and a spill from
+    /// any of them lands in whichever sink is installed at that moment -- this
+    /// test's directory. So "exactly one file is in the directory" is an
+    /// assertion about what else the suite happens to be running, which passed
+    /// alone and failed in the full run.
+    ///
+    /// Reading the path back out of the notice is also the stronger check: the
+    /// contract is that the model is told where its bytes went, and a
+    /// directory listing would still pass if the notice named the wrong file.
+    fn named_spill_file(out: &str, dir: &Path) -> PathBuf {
+        let (_, rest) = out
+            .split_once("full result is at ")
+            .unwrap_or_else(|| panic!("no spill notice in: {out:.400}"));
+        // Split on the notice's own next sentence, not on '.': a temp dir is
+        // routinely `/tmp/.tmpXXXX/...`, and the first dot is inside the path.
+        let (path, _) = rest
+            .split_once(". Use read_file")
+            .unwrap_or_else(|| panic!("notice does not end its path: {rest:.200}"));
+        let path = PathBuf::from(path);
+        assert!(
+            path.starts_with(dir),
+            "named a file outside the sink: {} not under {}",
+            path.display(),
+            dir.display()
+        );
+        path
     }
 
     /// One cap for every tool meant one result could inject 30 KB — about
@@ -764,11 +786,7 @@ mod tests {
             out.contains("full result is at "),
             "points somewhere: {out:.400}"
         );
-        let spilled = only_spill_file(&dir);
-        assert!(
-            out.contains(&spilled.display().to_string()),
-            "names the file it wrote"
-        );
+        let spilled = named_spill_file(&out, &dir);
         assert_eq!(
             std::fs::read_to_string(&spilled).expect("read the spill file"),
             text,
