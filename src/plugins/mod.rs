@@ -72,6 +72,7 @@ pub mod acp;
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
 #[cfg(test)]
+#[cfg(any(feature = "tool-git", feature = "tool-publish"))]
 mod bench;
 pub mod bundled;
 #[cfg(feature = "fleet")]
