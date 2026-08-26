@@ -75,6 +75,14 @@ printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TE
 if [ "${passed:-0}" -lt 1 ]; then
     bad "the test run reported no results at all (truncated log? build failure?)"
 fi
+# A third flake was found and *fixed* rather than listed, because it was
+# fixable: `tools::tests::read_file_never_spills` asserted that its own spill
+# directory was empty, and the spill sink is process-wide while `hold_sink`
+# serialises only the tests that install one. So any concurrent test with an
+# oversized tool answer spilled into it, and the failure rate went up with the
+# size of the suite -- it started firing when the JavaScript backend's tests
+# landed and had nothing to do with them. It asserts on the bytes now.
+#
 # There is a second flake and it is worse than the lockfile one, because it
 # manifests as a *hang* rather than a failure:
 # `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` never

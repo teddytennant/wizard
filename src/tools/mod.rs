@@ -905,9 +905,24 @@ mod tests {
             !out.content.contains("full result is at"),
             "no spill pointer in a read result"
         );
+        // And nothing of *this* call's was written to the sink.
+        //
+        // The claim is about these bytes rather than about the directory being
+        // untouched, and that is not fussiness. [`hold_sink`] serialises sink
+        // *installers*; the sink itself is process-wide, so any other test
+        // running concurrently that produces an oversized tool answer spills
+        // into whichever sink is installed — this one. Asserting the directory
+        // is empty made this test fail on what some unrelated test did, at a
+        // rate that depended on how many tests the suite happened to have.
+        let spilled: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .collect();
         assert!(
-            !dir.exists() || std::fs::read_dir(&dir).map(|e| e.count()).unwrap_or(0) == 0,
-            "and nothing written to the sink"
+            !spilled.iter().any(|body| body.contains("line of text")),
+            "read_file's own output must never reach a spill file"
         );
     }
 }
