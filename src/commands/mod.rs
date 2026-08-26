@@ -1000,11 +1000,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "server",
         args: "[status|start|stop]",
-        description: "manage the local llama-server",
+        // Names no backend, because this row exists on builds that have
+        // none: the body is a plugin's (see `crate::server`) and a build
+        // without one answers with a sentence rather than dropping the row.
+        description: "manage a model server running on this machine",
         takes_args: false,
         tui: Execution::Agent,
         gui: Execution::Agent,
-        // The llama-server runs on the operator's machine, which is where the
+        // The model server runs on the operator's machine, which is where the
         // gateway runs too; status/start/stop all report back as text.
         gateway: Execution::Agent,
         agent_arg: "",

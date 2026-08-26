@@ -4,6 +4,15 @@
 //! Rust side — self-update, on-demand llama.cpp install, doctor — makes the
 //! same choices the installer already made. Pure filesystem/env checks; no I/O
 //! beyond reading a few well-known paths and env vars.
+//!
+//! [`on_path`] and [`local_port`] joined them when the llama.cpp runtime became
+//! a plugin. Both were in `src/server.rs`, and neither was ever about
+//! llama-server: what they answer is "does this host have that program" and "is
+//! that address this host", which is what every other function in this file
+//! answers too. Leaving them behind would have meant a build without the local
+//! backend losing onboarding's "is Ollama installed" check and the Ollama
+//! plugin's "is this my machine to pull a model onto" check, neither of which
+//! has anything to do with which local runtime is compiled in.
 
 use std::path::Path;
 
@@ -61,6 +70,53 @@ pub fn termux_prebuilt_hint() -> Option<&'static str> {
     }
 }
 
+/// True when `name` resolves to an executable on `PATH`.
+///
+/// Asked about `ollama` by onboarding, about `vulkaninfo` by llama.cpp's
+/// installer when it is deciding whether a Vulkan build would run here, and
+/// about `llama-server` itself by the spawner. A host question, so it is here
+/// rather than with any one of the three.
+pub fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .any(|candidate| is_executable(&candidate))
+    })
+}
+
+/// True when `path` is a file this user can execute.
+#[cfg(unix)]
+pub fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// True when `path` is a file. Windows has no execute bit to consult.
+#[cfg(not(unix))]
+pub fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// The port of `base_url` when that URL names *this* machine, [`None`] when it
+/// names somebody else's.
+///
+/// Two callers ask the same question for two reasons and both of them are "is
+/// this mine to touch". llama.cpp passes the answer to `llama-server --port`,
+/// because Wizard never spawns a process on behalf of a remote host; Ollama
+/// only wants the [`Option`] itself, because Wizard never downloads a
+/// multi-gigabyte model onto somebody else's disk. One list of loopback
+/// spellings rather than two, since the day the two disagree is the day one of
+/// those promises quietly stops being kept.
+pub fn local_port(base_url: &str) -> Option<u16> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    let local = matches!(
+        url.host_str(),
+        Some("127.0.0.1" | "localhost" | "[::1]" | "::1" | "0.0.0.0")
+    );
+    local.then(|| url.port_or_known_default())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +155,27 @@ mod tests {
             return;
         }
         assert!(!is_termux());
+    }
+
+    /// The loopback list is what keeps two promises: no process spawned on
+    /// somebody else's machine, and no multi-gigabyte download onto somebody
+    /// else's disk. It travelled here from `src/server.rs` with the function.
+    #[test]
+    fn local_port_accepts_loopback_hosts_only() {
+        assert_eq!(local_port("http://127.0.0.1:8080"), Some(8080));
+        assert_eq!(local_port("http://localhost:9000/"), Some(9000));
+        assert_eq!(local_port("http://[::1]:8081"), Some(8081));
+        assert_eq!(local_port("http://localhost"), Some(80), "known default");
+        assert_eq!(local_port("http://10.0.0.5:8080"), None, "remote host");
+        assert_eq!(local_port("http://example.com:8080"), None);
+        assert_eq!(local_port("not a url"), None);
+    }
+
+    /// `on_path` finds something every host running this suite has, and does
+    /// not find a name nothing could plausibly be called.
+    #[test]
+    fn on_path_answers_for_a_program_every_host_has_and_for_one_no_host_does() {
+        assert!(on_path("sh") || on_path("cmd.exe"), "no shell on PATH?");
+        assert!(!on_path("wizard-no-such-program-9f3c1a"));
     }
 }

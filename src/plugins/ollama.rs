@@ -3,10 +3,18 @@
 //!
 //! The readiness hook is the half worth knowing about: `prepare` pulls a
 //! missing model before the first health probe and reports bytes through
-//! [`crate::server::ByteProgress`]. That is a plugin reaching into core for a
-//! progress sink, which is the direction the boundary allows — `src/server.rs`
-//! names no provider, and this file naming it is the same kind of edge as
-//! reaching for the shared HTTP client builder.
+//! [`crate::progress::ByteProgress`], after asking
+//! [`crate::platform::host::local_port`] whether the configured `base_url` is
+//! this machine at all — Wizard does not download a multi-gigabyte model onto
+//! somebody else's disk.
+//!
+//! Both of those used to live in `src/server.rs`, and this file is why they do
+//! not any more. When the llama-server lifecycle became part of the llama.cpp
+//! plugin, leaving them with it would have made "Ollama can report a model
+//! pull" depend on whether a *different* backend was compiled in. They went to
+//! core instead, beside their other callers, and what is left here is a plugin
+//! reaching into core — the direction the boundary allows, and the same kind of
+//! edge as reaching for the shared HTTP client builder.
 //!
 //! Thin `reqwest` wrapper — no `ollama-rs` dependency, keeping the binary
 //! small. Provides a startup health probe, a native-tool-support probe, and
@@ -35,7 +43,7 @@ use crate::kernel::{Capability, Ctx, Plugin, PluginManifest};
 use crate::llm::provider::LlmProvider;
 use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
 use crate::llm::{ChatChunk, ChatOptions, ChatRequest, ChatStream, ProviderError};
-use crate::server::{ByteProgress, Progress};
+use crate::progress::{ByteProgress, Progress};
 
 /// Overall timeout for small control requests (`/api/tags`, `/api/show`).
 /// Chat requests are exempt — generation can legitimately take minutes.
@@ -870,7 +878,7 @@ pub fn descriptor() -> ProviderDescriptor {
         // configured tag that is not on the server yet (onboarding's BYOM
         // pick, a hand-written config) — but Wizard never downloads models
         // onto somebody else's machine, so a remote Ollama is left alone.
-        if crate::server::local_port(&config.base_url).is_none() {
+        if crate::platform::host::local_port(&config.base_url).is_none() {
             return Ok(());
         }
         let wait =
@@ -887,10 +895,10 @@ pub fn descriptor() -> ProviderDescriptor {
 ///
 /// The readiness hook is the interesting half: `prepare` pulls a missing
 /// model before the first health probe, reporting bytes through
-/// [`crate::server::ByteProgress`]. That is a plugin reaching into core
-/// for a progress sink, which is the direction the boundary allows —
-/// `src/server.rs` names no provider, and this file naming it is the same
-/// kind of edge as reaching for the shared HTTP client builder.
+/// [`crate::progress::ByteProgress`] and only when
+/// [`crate::platform::host::local_port`] says the server is on this machine.
+/// Both are core, and this plugin is the reason they are — see the module
+/// docs.
 ///
 /// `network` is declared because that is what this plugin does, even though
 /// the capability set only gates the Lua host bridge today. A manifest that
@@ -1421,7 +1429,7 @@ mod tests {
         fn status(&self, line: &str) {
             self.0.lock().unwrap().push(format!("status:{line}"));
         }
-        fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn crate::server::ByteProgress> {
+        fn bytes(&self, label: &str, total: Option<u64>) -> Box<dyn crate::progress::ByteProgress> {
             self.0
                 .lock()
                 .unwrap()

@@ -196,3 +196,18 @@ It also fails when a telegram token is stored but `gateway.kind` is still `"none
 ```bash
 wizard doctor
 ```
+
+## It is a plugin
+
+The gateway ships behind `--features gateway`, on by default, so every release
+binary has it. Leaving it out is a build somebody assembled deliberately, and on
+one of those both `wizard --gateway` and `wizard gateway <verb>` print a line
+naming the flag that puts them back rather than failing to parse — `clap` owns
+the subcommand either way, so `wizard --help` keeps listing it.
+
+What stays in core when the plugin is gone is the part that outlives it:
+`[gateway]` in `config.toml` still parses and round-trips (a config file that
+was valid yesterday must not stop being valid because of a build flag),
+onboarding still offers to store a bot token, and `wizard doctor` still checks
+the allow-list and still warns about a group chat id in it. See
+`docs/plugins.md`.

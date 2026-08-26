@@ -12,7 +12,9 @@
 //!   `WIZARD_LOCAL=1`.
 //!
 //! Both report through the same [`Progress`] callback the server lifecycle
-//! uses, so the work surfaces in the existing spinner.
+//! uses, so the work surfaces in the existing spinner. That callback is
+//! [`crate::progress`]'s and therefore core's; this file and the process
+//! manager beside it are the llama.cpp plugin's.
 
 use std::path::{Path, PathBuf};
 
@@ -21,7 +23,7 @@ use futures_util::StreamExt;
 
 use crate::config::Config;
 use crate::hardware::GgufModel;
-use crate::server::Progress;
+use crate::progress::Progress;
 
 /// GitHub repo serving prebuilt llama.cpp releases.
 const LLAMACPP_REPO: &str = "ggml-org/llama.cpp";
@@ -213,7 +215,7 @@ fn asset_variants_for(os: &str, arch: &str, vulkan: impl FnOnce() -> bool) -> Ve
 }
 
 fn vulkan_loader_present() -> bool {
-    if crate::server::on_path("vulkaninfo") {
+    if crate::platform::host::on_path("vulkaninfo") {
         return true;
     }
     std::process::Command::new("ldconfig")

@@ -1,12 +1,43 @@
 //! llama.cpp's `llama-server`, as a plugin, behind `--features
 //! provider-llamacpp`.
 //!
-//! The one backend whose process Wizard owns. Spawning it, waiting for it and
-//! stopping it is [`crate::server`] — core, because `/server`, the
-//! `WIZARD_GGUF_PATH` plumbing and the doctor check all reach it — and the
-//! `prepare` hook on the descriptor below is what connects the two. A plugin
-//! reaching into core is the direction the boundary allows; `server.rs` names
-//! no provider.
+//! The one backend whose process Wizard owns, and therefore the one plugin that
+//! is two things: a chat client ([`LlamaCppProvider`], this file) and a process
+//! manager ([`server`], with the on-demand installer under it in [`setup`]).
+//!
+//! # Why those are one plugin and not two
+//!
+//! The process manager was `src/server.rs` and the installer was
+//! `src/local_setup.rs`, both core, and the descriptor's `prepare` hook reached
+//! into them — plugin to core, which the boundary allows. Moving them out of
+//! core turned that into an edge between two plugins, which it does not.
+//!
+//! Three ways out were on the table: a kernel service the provider injects, a
+//! feature dependency in the shape of `graph = ["mesh"]`, or one feature over
+//! both. The third won because the first two both answer a question that turns
+//! out not to be asked: a dependency audit of what actually crossed found that
+//! *nothing* in the process manager is about local servers in general. It
+//! probes `llama-server`'s own `/health`, whose 503 means the GGUF is still
+//! loading; it spawns with `--ctx-size` and `--n-gpu-layers`; it downloads
+//! `ggml-org/llama.cpp` release assets; it refuses to signal a PID whose
+//! process name is not `llama-server`. A seam between that and this file would
+//! be a cargo flag choosing which half of llama.cpp you get, and a build that
+//! chose wrong would keep answering to `kind = "llamacpp"` while quietly no
+//! longer starting anything — degrading in behaviour rather than in presence,
+//! which is the one degrade path `docs/plugins.md` does not have.
+//!
+//! What genuinely was shared went the other way, into core, where the other
+//! callers already were: [`crate::progress::Progress`] (the Ollama plugin
+//! reports a model pull through it, and three surfaces implement it),
+//! `platform::host::on_path` (onboarding asks it about `ollama`) and
+//! `platform::host::local_port` (Ollama asks it whether a `base_url` is this
+//! machine's). None of the three had anything to do with llama.cpp, and leaving
+//! them here would have been the `src/tools/http.rs` mistake: a build without
+//! this plugin losing something that was never its.
+//!
+//! What core kept of the seam itself is [`crate::server`] — a three-method
+//! trait and a name — so `/server` still works on every surface without any of
+//! them naming this plugin.
 //!
 //! `llama-server` exposes the OpenAI-compatible Chat Completions API under
 //! `/v1`, so chat streaming, model listing, and tool support all delegate to
@@ -24,6 +55,9 @@
 //! would only add a key this server never asked for. Leaving it off costs
 //! nothing here: the shared client sends the field only when the module that
 //! owns the endpoint installs a key function, and only `openai` does.
+
+pub mod server;
+pub mod setup;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -242,7 +276,7 @@ pub fn descriptor() -> ProviderDescriptor {
         // progress shows on a plain-terminal spinner (plain stderr lines when
         // stderr is not a terminal).
         let wait = crate::progress::ServerSpinner::start();
-        let outcome = crate::server::ensure_running(&config, &wait).await;
+        let outcome = server::ensure_running(&config, &wait).await;
         wait.finish(outcome.is_ok());
         outcome
     })
@@ -250,11 +284,12 @@ pub fn descriptor() -> ProviderDescriptor {
 
 /// llama.cpp as a kernel plugin.
 ///
-/// The one backend whose process Wizard owns, which is what
-/// `with_local_server` declares and what `/server` acts on. Spawning and
-/// waiting for `llama-server` is [`crate::server`] — core, because the
-/// `/server` command, the GGUF path plumbing and the doctor check all
-/// reach it — and this plugin's `prepare` hook is what connects the two.
+/// Two registrations. The provider descriptor is `kind = "llamacpp"`, and its
+/// `with_local_server` flag is what tells `/server` that this backend has a
+/// process worth acting on. The [`crate::server::LOCAL_SERVER`] service is that
+/// process: spawn, probe, stop, and the on-demand install underneath. They are
+/// registered together because they are the same backend, which is the whole
+/// argument in this file's module docs.
 ///
 /// A build without this feature is a Wizard with no default local
 /// backend: `Config::active` still synthesizes a llama.cpp entry when
@@ -298,6 +333,12 @@ impl Plugin for LlamaCppPlugin {
 
     fn apply(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.provider(descriptor())?;
+        ctx.provide(
+            crate::server::LOCAL_SERVER,
+            crate::kernel::Service::native(crate::server::LocalServerHandle::new(
+                server::LlamaCppServer,
+            )),
+        );
         Ok(())
     }
 }

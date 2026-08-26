@@ -20,7 +20,6 @@ pub mod entrypoint;
 pub mod event;
 pub mod evolve;
 pub mod gates;
-pub mod gateway;
 pub mod git_util;
 pub mod hardware;
 pub mod harness;
@@ -32,7 +31,6 @@ pub mod import_claude;
 pub mod instructions;
 pub mod kernel;
 pub mod llm;
-pub mod local_setup;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
@@ -283,23 +281,30 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     }
 
     // Gateway service management writes a unit under ~/.config/systemd/user
-    // (or ~/Library/LaunchAgents) and talks to the supervisor. The chdir
-    // above is load-bearing here: `install` captures the current directory as
-    // the gateway's project root, and a gateway turn runs in a project.
+    // (or ~/Library/LaunchAgents) and talks to the supervisor. The chdir here
+    // is load-bearing: `install` captures the current directory as the
+    // gateway's project root, and a gateway turn runs in a project. It happens
+    // on this side of the lookup because the plugin is handed a parsed verb
+    // and nothing else — the working directory it should capture is the one
+    // the user typed the command in, not the one the plugin can reconstruct.
     //
-    // `setup` dispatches from the same arm but *not* through
-    // `gateway::service`: it writes no unit and asks the supervisor nothing,
-    // so it has to keep working on the hosts where `service::dispatch` refuses
-    // outright (Termux, a Linux without systemd). Getting a bot configured is
-    // exactly as useful there — you just supervise it yourself.
+    // The second of the gateway's two names; see `entrypoint::GATEWAY_SERVICE`
+    // for why one name could not carry both. This is `wizard fleet`'s shape —
+    // core parses the tree because `--help` has to keep listing the verbs on a
+    // build with no gateway in it, and the parsed `GatewayCmd` is what crosses.
     if let Some(cli::Command::Gateway { cmd }) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        return match cmd {
-            cli::GatewayCmd::Setup => gateway::setup::run().await,
-            cli::GatewayCmd::Service(cmd) => gateway::service::run(*cmd),
+        let Some(admin) = entrypoint::installed(entrypoint::GATEWAY_SERVICE) else {
+            return Err(entrypoint::absent(
+                "gateway",
+                "gateway",
+                "It sets a chat bot up and installs the long-running `wizard --gateway` \
+                 process as a systemd user unit or a launchd agent.",
+            ));
         };
+        return admin.run(*cmd).await;
     }
 
     // Fleet dispatches before the normal flow too, but it loads no config
@@ -480,8 +485,22 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         return evolve::run_cli(config, cli).await.map(|()| 0);
     }
 
+    // `wizard --gateway` is a flag rather than a subcommand for historical
+    // reasons, and it reaches the same door everything else does. The absent
+    // message names `gateway` (the flag the user typed is `--gateway`, and the
+    // feature is spelled without the dashes) and says what the surface would
+    // have done, because a build that dropped it is one somebody assembled on
+    // purpose and the only useful thing to say is which flag puts it back.
     if cli.gateway {
-        return gateway::run(config, cli).await.map(|()| 0);
+        let Some(serve) = entrypoint::installed(entrypoint::GATEWAY) else {
+            return Err(entrypoint::absent(
+                "--gateway",
+                "gateway",
+                "It runs a long-lived headless process that turns each inbound chat message \
+                 into one autonomous agent turn and sends the reply back.",
+            ));
+        };
+        return serve.run(config).await;
     }
 
     // `wizard agents` always opens the TUI dashboard, regardless of the

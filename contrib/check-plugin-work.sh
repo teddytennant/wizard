@@ -17,15 +17,15 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
 # with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
-# and 2618 with `publish`. Raise it when a phase adds tests, so the ratchet
-# keeps ratcheting.
+# 2618 with `publish`, and 2620 with the gateway and the llama-server
+# lifecycle. Raise it when a phase adds tests, so the ratchet keeps ratcheting.
 #
 # 2609 was one below what the tree actually had by then (2610, measured): the
 # acp and fleet plugins landed after that number was written and nobody raised
 # it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
 # until the turn's event channel was released at the end of a turn those three
-# did not fail — they hung.
-BASELINE_TESTS=2618
+# did not fail -- they hung.
+BASELINE_TESTS=2620
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -74,6 +74,19 @@ printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TE
 if [ "${passed:-0}" -lt 1 ]; then
     bad "the test run reported no results at all (truncated log? build failure?)"
 fi
+# There is a second flake and it is worse than the lockfile one, because it
+# manifests as a *hang* rather than a failure:
+# `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` never
+# returns when it is run on its own (`cargo test --lib -- --exact <that>` sits
+# there past any timeout you give it), and passes when the whole suite runs.
+# Reproduced on `f252267`, before the gateway and llama-server splits, so it is
+# not one of theirs. It matters here because the leave-one-out scripts run
+# filtered subsets: a leg whose filter happens to select that test without
+# selecting whatever unblocks it will hang forever rather than fail, and a
+# hanging gate reads as a busy machine. If a leg stops producing output, check
+# for a `wizard-*` test binary at ~0% CPU with a thread named `plugins::fleet:`
+# before suspecting the code under test.
+#
 # The ratchet counts tests that *exist*, not tests that passed on this run.
 # A flaked test is one the suite still has, so counting only `passed` made a
 # flaked run fail twice: once as the flake, and again as a phantom regression

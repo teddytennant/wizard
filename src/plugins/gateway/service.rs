@@ -92,7 +92,7 @@ impl TokenPlan {
         match self {
             TokenPlan::Stored => Ok(None),
             TokenPlan::AdoptFromEnv { var, token } => {
-                crate::credentials::store(crate::gateway::telegram::TOKEN_CREDENTIAL, &token)
+                crate::credentials::store(crate::credentials::GATEWAY_TOKEN, &token)
                     .context("storing the Telegram bot token for the service to read")?;
                 Ok(Some(format!(
                     "copied the bot token from ${var} into {} (mode 0600) — a background \
@@ -138,7 +138,7 @@ fn preflight() -> Result<Vec<String>> {
     let mut notes = Vec::new();
     let var = config.gateway.token_env().to_string();
     let plan = token_plan(
-        crate::credentials::get(crate::gateway::telegram::TOKEN_CREDENTIAL).as_deref(),
+        crate::credentials::get(crate::credentials::GATEWAY_TOKEN).as_deref(),
         std::env::var(&var).ok().as_deref(),
         &var,
     );

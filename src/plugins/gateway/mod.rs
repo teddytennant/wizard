@@ -30,6 +30,7 @@
 pub mod command;
 pub mod format;
 pub mod none;
+pub mod plugin;
 pub mod service;
 pub mod setup;
 pub mod telegram;
@@ -46,7 +47,7 @@ use crate::agent::session::Session;
 use crate::agent::{
     Agent, AgentEvent, CancelHandle, PlanVerdict, build_headless_agent_for_session,
 };
-use crate::cli::Cli;
+use crate::cli::GatewayCmd;
 use crate::config::{Config, GatewayKind, Mode};
 
 /// Telegram's hard cap is 4096 UTF-16 code units; stay well under it.
@@ -242,6 +243,17 @@ pub(crate) fn native_help() -> String {
 /// 1–256 characters. Every current name is already lowercase ASCII; the filter
 /// is defensive, so a future command with a hyphen is dropped from the menu
 /// rather than making `setMyCommands` reject the whole batch.
+///
+/// **The description is filtered on the same terms, and the reason is a
+/// plugin.** The name check has been here since the menu was written; the
+/// description was only truncated at the top end, on the assumption that every
+/// row came from `COMMANDS`, where a table with a blank description would not
+/// have survived review. A plugin's row does not come from that table — it
+/// comes from whatever a `ctx:command` handed the registry, including from a
+/// Lua file the operator installed — so an empty `description` is now a thing
+/// this list can contain, and one of them costs the *entire* menu rather than
+/// its own row. Dropping the row is the only degrade that keeps the other
+/// thirty working, and it matches what the name filter already did.
 pub fn advertised_commands() -> Vec<AdvertisedCommand> {
     let mut offered: Vec<AdvertisedCommand> =
         crate::commands::available(crate::commands::surface::Surface::Gateway)
@@ -253,6 +265,7 @@ pub fn advertised_commands() -> Vec<AdvertisedCommand> {
                         .name
                         .chars()
                         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                    && !row.description.trim().is_empty()
             })
             .map(|row| AdvertisedCommand {
                 description: row.description.chars().take(256).collect(),
@@ -288,33 +301,6 @@ pub fn advertised_commands() -> Vec<AdvertisedCommand> {
 /// [`authorize_inbound`] then re-checks it here, where the refusal is emitted.
 pub fn is_authorized(chat_id: i64, allowed: &[i64]) -> bool {
     allowed.contains(&chat_id)
-}
-
-/// The one warning about allow-listing a group chat, or `None` when every id
-/// in `allowed` is positive.
-///
-/// A negative id is a group or supergroup, and [`is_authorized`] authorises a
-/// *chat*, not a person: the sender is never consulted (the transport parses
-/// it only to print a name during setup). So allow-listing a group admits
-/// every current member and every future one, and anybody in it who can add
-/// people can grant that too — with the sovereign tool set, on this machine.
-///
-/// It lives here, said once, because three surfaces have to say it — the
-/// gateway at startup, `wizard doctor`, and `wizard gateway setup` at the
-/// moment it offers to write the id down — and three copies of a security
-/// warning is three chances for the mildest one to be the one somebody reads.
-/// None of the three refuses: allow-listing a group you control is a
-/// legitimate thing to do deliberately.
-pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
-    let groups: Vec<i64> = allowed.iter().copied().filter(|id| *id < 0).collect();
-    (!groups.is_empty()).then(|| {
-        format!(
-            "{groups:?} look like group chats. The allow-list authorises a chat, not a \
-             person, so every member of those groups — including anyone added later — can \
-             run agent turns on this machine with full tool access. Prefer a one-to-one \
-             chat id."
-        )
-    })
 }
 
 /// The vague reply an unauthorized chat gets. Deliberately says nothing about
@@ -454,7 +440,7 @@ pub fn split_message(text: &str, max: usize) -> Vec<String> {
 /// Project root is `$WIZARD_GATEWAY_CWD` when set (useful for systemd units
 /// whose `WorkingDirectory` is `$HOME`), otherwise the process current
 /// directory.
-pub async fn run(config: Config, _cli: Cli) -> Result<()> {
+pub async fn run(config: Config) -> Result<()> {
     let project_root = gateway_project_root()?;
     match config.gateway.kind {
         GatewayKind::None => none::NoneGateway.poll().await.map(|_| ()),
@@ -474,6 +460,27 @@ fn gateway_project_root() -> Result<std::path::PathBuf> {
         }
     }
     std::env::current_dir().context("determining project root")
+}
+
+/// `wizard gateway <verb>`: set a bot up, or manage the background service.
+///
+/// The whole of what moved out of `crate::run`'s dispatch arm, which now
+/// injects [`entrypoint::GATEWAY_SERVICE`](crate::entrypoint::GATEWAY_SERVICE)
+/// and calls this. Core still parses the tree — [`GatewayCmd`] is a
+/// `clap::Subcommand` in [`crate::cli`] and stays there, so `--help` keeps
+/// listing the verbs on a build with no gateway in it — and what crosses the
+/// boundary is the parsed value. Same split as `wizard fleet`.
+///
+/// `setup` deliberately does *not* go through [`service`]. It writes no unit
+/// and asks the supervisor nothing, so it has to keep working on the hosts
+/// where `service::dispatch` refuses outright (Termux, a Linux with no
+/// systemd). Getting a bot configured is exactly as useful there — you just
+/// supervise it yourself.
+pub async fn run_service(cmd: GatewayCmd) -> Result<i32> {
+    match cmd {
+        GatewayCmd::Setup => setup::run().await,
+        GatewayCmd::Service(cmd) => service::run(cmd),
+    }
 }
 
 /// Drive a gateway: build one sovereign agent, then loop, poll for inbound
@@ -582,7 +589,7 @@ async fn serve(mut gateway: Box<dyn Gateway>, config: Config, project_root: &Pat
         // Given that an allowed message runs a sovereign turn with `execute`,
         // a group id is worth one loud line at the moment it is happening
         // rather than a sentence in a document nobody re-reads.
-        if let Some(warning) = group_chat_warning(&allowed) {
+        if let Some(warning) = crate::config::group_chat_warning(&allowed) {
             println!("warning: {warning}");
         }
     }
@@ -1732,6 +1739,48 @@ mod tests {
         for name in ["vim", "ui", "dashboard"] {
             assert!(!offered.contains(name), "/{name} has nowhere to land here");
         }
+    }
+
+    /// A row Telegram would refuse costs itself and not the menu.
+    ///
+    /// The name half of this filter has always been here. The description half
+    /// was not, and the case that needs it arrived with plugin commands: a
+    /// `ctx:command` — including one from a Lua file somebody installed — can
+    /// register a blank description, `setMyCommands` refuses the whole batch
+    /// over one bad entry, and the operator's symptom is that the chat's
+    /// autocomplete is simply empty. Asserted over a registration rather than
+    /// over a hand-built row, because the point is that this list is no longer
+    /// only `COMMANDS`.
+    #[test]
+    fn a_plugin_row_telegram_would_refuse_is_dropped_and_the_rest_survive() {
+        use crate::commands::PluginCommand;
+        use std::sync::Arc;
+
+        let blank = PluginCommand::new(
+            "blankdesc",
+            "",
+            Arc::new(|_: String| async { Ok(String::new()) }),
+        );
+        crate::commands::plugin::install("gateway-menu-test", blank).expect("a free name");
+
+        let advertised = advertised_commands();
+        assert!(
+            !advertised.iter().any(|row| row.name == "blankdesc"),
+            "a blank description reached setMyCommands"
+        );
+        assert!(
+            advertised.iter().any(|row| row.name == "help"),
+            "the rest of the menu went with it"
+        );
+        for row in &advertised {
+            assert!(
+                (1..=256).contains(&row.description.chars().count()),
+                "/{} still has a description Telegram would refuse",
+                row.name
+            );
+        }
+
+        crate::commands::plugin::uninstall("blankdesc");
     }
 
     /// Chunks are budgeted in UTF-16 code units, which is what Telegram counts.

@@ -1519,3 +1519,35 @@ fn a_real_config_file_round_trips_through_serialization() {
     assert_eq!(reparsed.providers.len(), config.providers.len());
     assert_eq!(reparsed.providers[0].kind, config.providers[0].kind);
 }
+
+/// The group warning fires on a negative id and on nothing else, and the
+/// sentence `wizard doctor` prints is the one the gateway's setup wizard and
+/// its serve loop print.
+///
+/// It lives here rather than with the gateway because the function does: the
+/// warning is about a value core parses on every build, and a build that left
+/// the gateway out must still be able to tell an operator that the allow-list
+/// they are looking at authorises a room rather than a person. Asserting it
+/// from inside the plugin's own test module meant the `--no-default-features`
+/// leg compiled no assertion about it at all.
+#[test]
+fn a_group_id_in_the_allow_list_is_warned_about_and_a_direct_chat_is_not() {
+    let warning = group_chat_warning(&[-1001234567890]).expect("a negative id is a group");
+    assert!(warning.contains("every member"), "{warning}");
+    assert!(warning.contains("full tool access"), "{warning}");
+    assert!(warning.contains("one-to-one"), "{warning}");
+
+    // doctor wraps it in a count prefix and the gateway in "warning: "; both
+    // have to carry it verbatim, which is the whole reason there is one
+    // string rather than one per surface.
+    let config = {
+        let mut config = Config::default();
+        config.gateway.allowed_chat_ids = vec![-1001234567890];
+        config
+    };
+    let check = crate::doctor::check_gateway_allow_list(&config);
+    assert!(check.detail.contains(&warning), "{}", check.detail);
+
+    assert_eq!(group_chat_warning(&[123, 456]), None);
+    assert_eq!(group_chat_warning(&[]), None);
+}

@@ -71,12 +71,6 @@ const SEND_RETRY_MAX_SECS: u64 = 8;
 /// budget the chunk is given up on and said to be given up on.
 const SEND_RETRY_BUDGET: Duration = Duration::from_secs(10);
 
-/// Key the bot token is stored under in `~/.wizard/credentials.toml`.
-/// Onboarding writes it and [`Telegram::connect`] reads it back; naming it in
-/// one place is what stops a paste and a read from drifting apart into a
-/// gateway that reports "token not set" over a token that was pasted.
-pub const TOKEN_CREDENTIAL: &str = "telegram";
-
 /// A connected Telegram bot. Holds the API base URL (with the token embedded)
 /// and the update offset cursor so each update is processed once.
 pub struct Telegram {
@@ -131,7 +125,7 @@ impl Telegram {
     /// actionable error naming both sources and onboarding.
     pub fn connect(config: &GatewayConfig) -> Result<Self> {
         let env_name = config.token_env();
-        let token = crate::credentials::get(TOKEN_CREDENTIAL)
+        let token = crate::credentials::get(crate::credentials::GATEWAY_TOKEN)
             .filter(|t| !t.trim().is_empty())
             .or_else(|| {
                 std::env::var(env_name)

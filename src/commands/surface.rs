@@ -356,7 +356,7 @@ pub trait CommandSurface {
     /// `/ultra`: a council of lenses, on or off.
     async fn toggle_ultra(&mut self);
 
-    /// `/server [status|start|stop]`: the local llama-server's lifecycle.
+    /// `/server [status|start|stop]`: a local model server's lifecycle.
     async fn server(&mut self, action: ServerAction);
 
     // --- what it does to its own window ---

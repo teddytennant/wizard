@@ -1808,7 +1808,7 @@ fn read_memory_index(project_root: &Path) -> Option<String> {
 ///
 /// This is the shared agent-construction path used by the sovereign headless
 /// runner ([`crate::headless::run`]), the ACP server (`wizard acp`, a plugin) and the
-/// messaging gateway ([`crate::gateway`]). `resume` reopens the latest session
+/// messaging gateway (`plugins::gateway`). `resume` reopens the latest session
 /// instead of starting a new one. Each builds exactly one agent, so each lets
 /// this path connect the MCP servers for it.
 pub async fn build_headless_agent(

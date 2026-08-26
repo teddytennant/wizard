@@ -215,7 +215,7 @@ jobs:
   # first: `src/platform/` is where the OS decisions are meant to live, but the
   # tree today still carries roughly 75 `cfg(unix)` / `cfg(windows)` sites
   # across two dozen files outside it, only about ten of which have a
-  # `#[cfg(not(unix))]` arm beside them (src/server.rs's process group,
+  # `#[cfg(not(unix))]` arm beside them (the llama.cpp plugin's process group,
   # src/trust.rs, src/logging.rs, src/credentials.rs and src/config.rs are
   # unpaired), plus a live `#[cfg(target_os = "windows")]` clipboard path in
   # src/app/paste.rs that the platform layer does not know about at all.

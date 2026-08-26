@@ -89,7 +89,7 @@ pub struct Answers {
     pub gateway_token_env: Option<String>,
     /// Allowed inbound chat IDs (Telegram only). The list is closed: an empty
     /// list allows **nobody**, which is the shipped default (see
-    /// [`crate::gateway::is_authorized`]). Leaving this empty ships a gateway
+    /// the gateway's `is_authorized`). Leaving this empty ships a gateway
     /// that refuses every message, not one that answers everyone.
     pub gateway_allowed_chat_ids: Vec<i64>,
     /// Personality mode.
@@ -175,7 +175,7 @@ impl Answers {
 /// `provider_name`, which is what [`crate::config::ProviderConfig`] resolves
 /// against; the web-search key under the backend name the `web_search` tool
 /// resolves at call time; the bot token under
-/// [`crate::gateway::telegram::TOKEN_CREDENTIAL`], which is what the gateway
+/// [`crate::credentials::GATEWAY_TOKEN`], which is what the gateway
 /// reads. A typo in any of those stores the secret where nothing looks for it
 /// and leaves a setup that looks finished and 401s on the first turn, which is
 /// exactly the failure asking for the key was meant to remove. Injecting the
@@ -205,7 +205,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
         &format!("{} API key", answers.web_search_backend),
     );
     persist(
-        crate::gateway::telegram::TOKEN_CREDENTIAL,
+        crate::credentials::GATEWAY_TOKEN,
         answers.gateway_bot_token.as_deref(),
         "Telegram bot token",
     );
@@ -213,7 +213,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
 
 /// Parse a comma-separated list of numeric chat IDs. Whitespace and empty
 /// entries are ignored; an empty input yields an empty list, which the gateway
-/// reads as "allow nobody" (see [`crate::gateway::is_authorized`]) and warns
+/// reads as "allow nobody" (see the gateway plugin's `is_authorized`) and warns
 /// about in the summary. A non-numeric entry is an error naming the offending
 /// token.
 pub fn parse_chat_ids(input: &str) -> Result<Vec<i64>, String> {
@@ -1016,7 +1016,7 @@ pub fn plan_local_auto(
 /// Model tags an installed Ollama already has pulled (empty when Ollama is
 /// absent, its server is down, or the listing fails).
 fn installed_ollama_models() -> Vec<String> {
-    if !crate::server::on_path("ollama") {
+    if !crate::platform::host::on_path("ollama") {
         return Vec::new();
     }
     let Ok(output) = std::process::Command::new("ollama").arg("list").output() else {
@@ -1698,7 +1698,7 @@ fn print_summary(config: &Config) {
 
     if config.gateway.kind == GatewayKind::Telegram {
         let env = config.gateway.token_env();
-        let token_stored = crate::credentials::get(crate::gateway::telegram::TOKEN_CREDENTIAL)
+        let token_stored = crate::credentials::get(crate::credentials::GATEWAY_TOKEN)
             .is_some_and(|t| !t.trim().is_empty());
         if token_stored {
             println!("  • Telegram bot token: stored in ~/.wizard/credentials.toml");
@@ -2459,7 +2459,7 @@ mod tests {
                 ("openai".to_string(), "sk-provider".to_string()),
                 ("brave".to_string(), "brv-secret-key".to_string()),
                 (
-                    crate::gateway::telegram::TOKEN_CREDENTIAL.to_string(),
+                    crate::credentials::GATEWAY_TOKEN.to_string(),
                     "123456:ABC-test-token".to_string()
                 ),
             ]
