@@ -77,7 +77,15 @@ use crate::kernel::{Kernel, lua};
 /// VM, and this is where the choice is written down. It is a field on the
 /// table row rather than two tables, so the load order below stays one list
 /// and the first claim on a tool name still wins by position.
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// `allow(dead_code)` because *either* arm can be unconstructed in a
+/// legitimate build and both combinations are ones
+/// `contrib/check-tool-plugins.sh` actually produces: `without tool-json` has
+/// the JavaScript backend and no JavaScript plugin, and a build with neither
+/// Lua plugin has the reverse. A variant nothing constructs is the honest
+/// state of that build, not a warning to silence at the row.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum Language {
     Lua,
     #[cfg(feature = "plugin-js")]
@@ -205,11 +213,7 @@ pub(crate) async fn load_into(kernel: &Kernel) {
 /// agent-shaped half no bundled plugin asks for.
 #[cfg(all(
     test,
-    any(
-        feature = "tool-git",
-        feature = "tool-publish",
-        feature = "tool-json"
-    )
+    any(feature = "tool-git", feature = "tool-publish", feature = "tool-json")
 ))]
 pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     Kernel::new(crate::kernel::KernelOptions {
@@ -225,10 +229,6 @@ pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
 // from carrying a `mod tests` whose only contents are two unused helpers.
 #[cfg(all(
     test,
-    any(
-        feature = "tool-git",
-        feature = "tool-publish",
-        feature = "tool-json"
-    )
+    any(feature = "tool-git", feature = "tool-publish", feature = "tool-json")
 ))]
 mod tests;

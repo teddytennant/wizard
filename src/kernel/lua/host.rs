@@ -55,7 +55,7 @@ use super::super::Ctx;
 use super::super::bus::{Event, EventHandler, HandlerFuture, Verdict};
 use super::super::manifest::{Capability, CapabilitySet, PluginSource};
 use super::super::services::Service;
-use super::{Bound, FnId, VmShutdown, VmHandle, bind};
+use super::{Bound, FnId, VmHandle, VmShutdown, bind};
 use crate::commands::surface::Surface;
 use crate::commands::{CommandFuture, CommandHandler, PluginCommand};
 

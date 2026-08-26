@@ -221,7 +221,11 @@ async fn an_empty_query_returns_the_whole_document_pretty_printed() {
     assert!(!out.is_error, "{}", out.content);
     let parsed: serde_json::Value = serde_json::from_str(&out.content).expect("valid JSON");
     assert_eq!(parsed, json!({"a": {"b": [1, 2]}}));
-    assert!(out.content.contains('\n'), "pretty-printed: {}", out.content);
+    assert!(
+        out.content.contains('\n'),
+        "pretty-printed: {}",
+        out.content
+    );
 }
 
 #[tokio::test]
@@ -242,7 +246,11 @@ async fn an_empty_array_stays_an_array_and_an_empty_object_stays_an_object() {
     )
     .await;
     assert!(array.content.contains("(array of 0)"), "{}", array.content);
-    assert!(array.content.trim_end().ends_with("[]"), "{}", array.content);
+    assert!(
+        array.content.trim_end().ends_with("[]"),
+        "{}",
+        array.content
+    );
 
     let object = call(
         &kernel,

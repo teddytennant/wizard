@@ -103,9 +103,7 @@ pub(crate) fn json_to_js<'js>(ctx: &Ctx<'js>, value: &Value) -> rquickjs::Result
             // as `1` rather than as `1.0` — which matters because
             // `String(1) !== String(1.0)` is false in JavaScript but
             // `JSON.stringify` of the round trip is not what a reader expects.
-            Some(int) if i32::try_from(int).is_ok() => {
-                JsValue::new_int(ctx.clone(), int as i32)
-            }
+            Some(int) if i32::try_from(int).is_ok() => JsValue::new_int(ctx.clone(), int as i32),
             _ => JsValue::new_float(ctx.clone(), number.as_f64().unwrap_or(f64::NAN)),
         }),
         Value::String(text) => Ok(rquickjs::String::from_str(ctx.clone(), text)?.into_value()),

@@ -90,7 +90,10 @@ async fn a_plugin_holds_state_across_separate_tool_calls() {
     .expect("loads");
 
     assert_eq!(call(&kernel, "todo", json!({"add": "one"})).await, "one");
-    assert_eq!(call(&kernel, "todo", json!({"add": "two"})).await, "one,two");
+    assert_eq!(
+        call(&kernel, "todo", json!({"add": "two"})).await,
+        "one,two"
+    );
     assert_eq!(call(&kernel, "todo", json!({})).await, "one,two");
 }
 
@@ -228,12 +231,7 @@ async fn a_bounded_plugin_is_stopped_and_its_vm_survives() {
     .expect("loads");
 
     let tool_ctx = crate::tools::ToolContext::new(&dir.path);
-    for name in [
-        "spin",
-        "spin_after_await",
-        "spin_in_try",
-        "spin_in_finally",
-    ] {
+    for name in ["spin", "spin_after_await", "spin_in_try", "spin_in_finally"] {
         let tool = kernel.tool(name).expect("registered");
         let started = std::time::Instant::now();
         let err = tool
@@ -548,6 +546,58 @@ async fn all_three_backends_share_one_service_namespace() {
 }
 
 #[tokio::test]
+async fn a_tool_can_emit_to_a_handler_in_its_own_vm() {
+    // The re-entrancy the Lua module's `FuturesUnordered` loop exists for,
+    // asked of the other engine, where the answer was not obvious: an
+    // `AsyncContext` is behind a lock, and a naive reading says the outer call
+    // holds it for the whole of its body. It does not — `WithFuture` drops the
+    // guard every time it parks — so a tool that awaits `ctx.emit` releases the
+    // VM for the handler that emit reaches.
+    //
+    // A timeout rather than a plain assertion, because the failure this guards
+    // against is not a wrong answer. It is a deadlock, and a deadlocked suite
+    // reads as a slow machine.
+    let dir = TempDir::new("js-reentrant");
+    let kernel = kernel_in(&dir.path);
+    load(
+        &kernel,
+        "ringer",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        export default {
+          name: "ringer",
+          apply(ctx) {
+            let seen = 0;
+            ctx.on("turn_start", (event, payload) => {
+              seen += 1;
+              return { payload: { from: payload.from, seen } };
+            });
+            ctx.tool({
+              name: "ring",
+              async execute() {
+                const first = await ctx.emit("turn_start", { from: "the tool" });
+                const second = await ctx.emit("turn_start", { from: "the tool" });
+                return `${first.payload.seen},${second.payload.seen},${first.ran}`;
+              },
+            });
+          },
+        };
+        "#,
+    )
+    .await
+    .expect("loads");
+
+    let tool = kernel.tool("ring").expect("registered");
+    let ctx = crate::tools::ToolContext::new(&dir.path);
+    let out = tokio::time::timeout(Duration::from_secs(10), tool.execute(json!({}), &ctx))
+        .await
+        .expect("a tool emitting into its own VM must not deadlock")
+        .expect("ran");
+    assert_eq!(out.content, "1,2,1");
+}
+
+#[tokio::test]
 async fn a_js_plugin_reads_its_config_slice() {
     let dir = TempDir::new("js-config");
     let kernel = kernel_in(&dir.path);
@@ -828,11 +878,7 @@ async fn a_plugin_without_a_default_export_fails_to_load_cleanly() {
             "export default { name: 'x' };",
             "no `apply` function",
         ),
-        (
-            "syntax",
-            "export default { apply( } ;",
-            "did not parse",
-        ),
+        ("syntax", "export default { apply( } ;", "did not parse"),
         (
             "throws",
             "throw new Error('at module scope');",
@@ -908,7 +954,8 @@ async fn a_provider_cannot_be_registered_from_js() {
     .await
     .expect_err("providers stay in Rust");
     assert!(
-        err.to_string().contains("cannot be registered from JavaScript"),
+        err.to_string()
+            .contains("cannot be registered from JavaScript"),
         "{err}"
     );
     assert!(kernel.provider_names().is_empty());
@@ -947,10 +994,16 @@ async fn a_js_plugin_loads_from_a_directory_and_can_load_a_child() {
 
     let kernel = kernel_in(&dir.path);
     let parent = kernel
-        .load_js(&dir.path.join("plugins").join("parent"), PluginSource::FirstParty)
+        .load_js(
+            &dir.path.join("plugins").join("parent"),
+            PluginSource::FirstParty,
+        )
         .await
         .expect("loads");
-    assert_eq!(call(&kernel, "child_tool", json!({})).await, "child says hello");
+    assert_eq!(
+        call(&kernel, "child_tool", json!({})).await,
+        "child says hello"
+    );
 
     // Unloading the parent takes the child with it, which is what makes
     // `ctx.plugin` safe to use.
@@ -1104,8 +1157,16 @@ async fn the_capability_tables_are_absent_unless_declared() {
             Capability::Network,
             "await wizard.http.get('https://example.com')",
         ),
-        ("mdl", Capability::Model, "await wizard.model.complete('hi')"),
-        ("agt", Capability::Agent, "await wizard.agent.spawn('do it')"),
+        (
+            "mdl",
+            Capability::Model,
+            "await wizard.model.complete('hi')",
+        ),
+        (
+            "agt",
+            Capability::Agent,
+            "await wizard.agent.spawn('do it')",
+        ),
         ("prc", Capability::Process, "await wizard.process.run('ls')"),
     ] {
         let answer = probe(&kernel, name, &[cap], expression).await;
@@ -1120,7 +1181,13 @@ async fn the_capability_tables_are_absent_unless_declared() {
     .await;
     assert_eq!(answer, "sent");
     assert_eq!(
-        probe(&kernel, "pth", &[Capability::Filesystem], "typeof wizard.paths.project").await,
+        probe(
+            &kernel,
+            "pth",
+            &[Capability::Filesystem],
+            "typeof wizard.paths.project"
+        )
+        .await,
         "string"
     );
 
@@ -1350,4 +1417,31 @@ fn write_js_plugin(dir: &TempDir, name: &str, manifest: &str, script: &str) -> s
     std::fs::write(plugin.join("manifest.toml"), manifest).expect("manifest.toml");
     std::fs::write(plugin.join("plugin.js"), script).expect("plugin.js");
     plugin
+}
+
+#[tokio::test]
+async fn a_host_refusal_reaches_the_plugin_as_a_readable_sentence() {
+    // Not decoration. A host error crosses into JavaScript as a thrown value,
+    // and what a plugin's `catch (e) { return e.message }` reads is what the
+    // *model* reads when that plugin reports bad news. An `rquickjs::Error`
+    // carried across renders as "Error converting from js 'host' into type
+    // 'value': ...", which is engine plumbing in front of the sentence that
+    // matters, so a host refusal is thrown as a plain `Error` instead.
+    let dir = TempDir::new("js-refusal");
+    let kernel = kernel_in(&dir.path);
+    let message = probe(
+        &kernel,
+        "reader",
+        &[],
+        "(() => { try { wizard.fs.read('/etc/hostname'); } catch (e) { return e.message; } })()",
+    )
+    .await;
+    assert!(
+        message.starts_with("sandboxed tool may not touch"),
+        "the refusal has to read as itself: {message}"
+    );
+    assert!(
+        !message.contains("converting"),
+        "no engine plumbing in a message a model reads: {message}"
+    );
 }

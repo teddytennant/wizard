@@ -281,8 +281,8 @@ async fn bind(runtime: &AsyncRuntime, source: PluginSource, budget: Duration) ->
                     if stop.load(Ordering::SeqCst) != StopReason::None as u8 {
                         return true;
                     }
-                    let expired = Instant::now()
-                        > *deadline.lock().unwrap_or_else(PoisonError::into_inner);
+                    let expired =
+                        Instant::now() > *deadline.lock().unwrap_or_else(PoisonError::into_inner);
                     if expired {
                         stop.store(StopReason::Time as u8, Ordering::SeqCst);
                     }

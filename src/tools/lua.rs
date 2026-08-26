@@ -912,7 +912,8 @@ pub(crate) fn install_wizard_lib(lua: &Lua, cwd: &Path, stdlib: Stdlib) -> mlua:
 /// out, and an existing path is canonicalized and re-checked so a symlink
 /// planted inside the project cannot point out of it.
 fn resolve_tool_path(cwd: &Path, path: &str, stdlib: Stdlib) -> mlua::Result<PathBuf> {
-    resolve_plugin_path(cwd, path, stdlib).map_err(|reason| mlua::Error::external(anyhow::anyhow!(reason)))
+    resolve_plugin_path(cwd, path, stdlib)
+        .map_err(|reason| mlua::Error::external(anyhow::anyhow!(reason)))
 }
 
 /// [`resolve_tool_path`] with the refusal as a plain sentence rather than an
