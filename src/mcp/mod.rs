@@ -1344,6 +1344,9 @@ mod tests {
         if !cfg!(feature = "tool-publish") {
             absent.extend(["publish"]);
         }
+        if !cfg!(feature = "tool-json") {
+            absent.extend(["json_query"]);
+        }
         assert_eq!(
             extra, absent,
             "a reserved name that no compiled-in tool claims must be a plugin tool this \
