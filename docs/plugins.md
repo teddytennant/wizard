@@ -223,6 +223,55 @@ lifetime rather than one call.
 This is the single highest-risk piece of the design. It is built and proven
 first, alone, before anything is ported.
 
+## Choosing: core, Rust plugin, or Lua plugin
+
+Derived from the ports in this document that worked and the ones that did not,
+rather than decided up front. Read it in two passes, because *plugin or not* and
+*Rust or Lua* are different questions with different answers.
+
+### Pass one: should this be a plugin at all?
+
+| Signal | Then |
+| --- | --- |
+| Nobody would ever build without it | Core. A flag nobody turns off is cost with no payoff |
+| Core calls it synchronously | Core. A plugin answers `await`ed or precomputed, never as a plain call |
+| It owns state belonging to a session | Core. Plugin state is process-scoped -- see the `todo` section |
+| Core matches on its type exhaustively | Core, or move the type down to core first |
+| Its tests inject fakes into pure functions | Core. A boundary that carries only values has nowhere to inject |
+
+`hardware` fails three of these at once, `todo` the third, and both write-ups
+above are the long version.
+
+### Pass two: Rust or Lua?
+
+| Question | Rust plugin | Lua plugin |
+| --- | --- | --- |
+| Where the work happens | In this code: parsing, drawing, crypto | In another process, over HTTP, on disk |
+| How often it is called | Per token, per frame | Per user action, per tool call |
+| What the bridge costs it | ~1.6us matters at that rate | ~1.6us is invisible next to a fork |
+| What crosses the boundary | Rich types core shares | Strings and JSON |
+| What it depends on | Crates | A subprocess |
+| Who should be able to change it | Someone with a Rust toolchain | Someone with a text editor |
+| What an error is | A type core distinguishes | A sentence a person reads |
+| What it owns | Tasks, sockets, a runtime | One async call at a time |
+
+The short form: **does the work happen inside this code, or somewhere else?**
+Inside is Rust. Elsewhere is where Lua wins, and `publish` shows why the win is
+not about the language -- every step of its Rust was a blocking
+`Command::...output()` inside an `async fn`, and crossing the bridge is what put
+it on the cancellable path.
+
+### Two traps
+
+**A low reference count means it *can* move, not that it *should*.** `hardware`
+and `schedule` were both picked off the audit's numbers and both stayed.
+
+**Degrade in presence, never in behaviour.** A plugin left out must produce the
+named "not in this build", not a subtly worse working program. That is why
+`server.rs` folded into `provider-llamacpp` rather than becoming a feature under
+it: the stripped build would still have registered `kind = "llamacpp"` and just
+failed to start anything, which reads to a user as a broken install.
+
 ## Profiles
 
 A profile is a named plugin set. `install.sh` picks one; `~/.wizard/plugins.toml`
