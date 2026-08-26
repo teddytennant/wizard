@@ -329,24 +329,6 @@ pub(crate) async fn run_effects(state: &VmState) -> VmShutdown {
     shutdown
 }
 
-/// Empty this VM's callback array before the context is dropped.
-///
-/// The Lua backend clears its `HashMap<FnId, mlua::Function>` for the same
-/// reason: no handle on a function may outlive the engine it points into.
-/// Here the handles are already inside the engine, so this is belt and
-/// braces — it drops the closures a beat earlier and makes a call that arrives
-/// during teardown fail with "no callback with that id" rather than running.
-pub(crate) fn clear_functions(state: &VmState) {
-    // Best effort: the runtime may already be gone, and there is nothing
-    // useful to do about it if it is.
-    let context = state.context.clone();
-    let _ = futures_util::future::FutureExt::now_or_never(context.async_with(async |js| {
-        if let Ok(table) = js.globals().get::<_, rquickjs::Array>(REGISTRY) {
-            let _ = table.as_object().set("length", 0);
-        }
-    }));
-}
-
 // ---------------------------------------------------------------------------
 // The sandbox
 // ---------------------------------------------------------------------------

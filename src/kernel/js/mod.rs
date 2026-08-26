@@ -498,9 +498,14 @@ async fn vm_task(setup: VmSetup) {
     }
 
     tracing::debug!(plugin = %plugin, "a plugin's JS VM stopped");
-    // Drop the persistent function handles before the context, so no saved
-    // `Function` outlives the runtime it points into.
-    host::clear_functions(&state);
+    // The Lua task ends by clearing its `HashMap<FnId, mlua::Function>`, so
+    // that no handle on a function outlives the `Lua` it points into. There is
+    // nothing to do here: a JS plugin's callbacks live in an array inside its
+    // own context (see `host::REGISTRY`), and dropping `state` drops the
+    // context and the callbacks with it. Naming that is worth more than a
+    // no-op call would be, because the *absence* of the Lua backend's line is
+    // what a reader comparing the two will go looking for.
+    drop(state);
 }
 
 /// One `Invoke`, as a future the loop can hold alongside others.

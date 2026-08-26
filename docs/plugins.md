@@ -2733,12 +2733,17 @@ toolchain, same target directory, otherwise-default features:
 
 | build | `wizard` binary | delta |
 | --- | --- | --- |
-| default features | SIZE_ON | — |
-| default minus `plugin-js`, `tool-json` | SIZE_OFF | SIZE_DELTA |
+| default minus `plugin-js`, `tool-json` | 23,840,360 bytes | — |
+| default features | 25,380,496 bytes | **+1,540,136 (+1.5 MB, +6.5%)** |
 
-A `deno_core`/V8 embedding is more than an order of magnitude past that, because
-what it brings is a JIT, a heap snapshot and a garbage collector tuned for a
-browser tab. Nothing a plugin does here needs any of the three: a plugin decides
+The release profile already sets `strip = true`, so those are stripped
+binaries; `strip -s` on top of them changes nothing, which was checked rather
+than assumed. The 1.5 MB is the whole backend: the QuickJS interpreter,
+`rquickjs`'s bindings, `src/kernel/js/` and the bundled `plugin.js`.
+
+A `deno_core`/V8 embedding is more than an order of magnitude past that —
+tens of megabytes against 1.5 — because what it brings is a JIT, a heap
+snapshot and a garbage collector tuned for a browser tab. Nothing a plugin does here needs any of the three: a plugin decides
 an argv, walks a JSON document, or awaits an HTTP call, and the bench below says
 what that costs.
 
