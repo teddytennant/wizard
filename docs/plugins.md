@@ -2853,10 +2853,37 @@ that do nothing, reached through the same dispatcher, median of 200 calls,
 `--release`.
 
 ```
-BENCH_BLOCK
+=== per-call cost, median of 200 (release) ===
+  rust tool, does nothing       39.000ns
+  lua tool, does nothing         1.529us
+  lua bridge overhead            1.490us
+  js tool, does nothing          1.190us
+  js bridge overhead             1.151us
+
+=== startup, median of 20 ===
+  kernel + bundled plugins     922.813us
 ```
 
-BENCH_PROSE
+**The JavaScript bridge is slightly cheaper than the Lua one**, which was not
+the expected answer and is worth stating plainly rather than rounding away:
+1.15us against 1.49us, both against a 39ns Rust no-op. The likely reason is
+that the Lua side pays for `mlua`'s coroutine trampoline on every call — a
+scripted tool body is driven as an async Lua coroutine whether or not it ever
+yields — where a JavaScript body that returns without awaiting is an ordinary
+call and never allocates a promise. It is not an argument for JavaScript: a
+third of a microsecond is noise beside a `fork`, and the difference is smaller
+than the run-to-run spread on a busy machine.
+
+What the number actually settles is the same thing the Lua row settled. At
+~1.2us a plugin call is invisible next to anything a plugin does — a process
+spawn is thousands of times more, an HTTP request a million — and ruinous
+inside a redraw or a per-token loop. So the "Rust or a script" question is
+unchanged by this backend existing, and `docs/plugins.md`'s answer to it stays
+the same: does the work happen inside this code, or somewhere else?
+
+Loading is measured too, and it is the cost the default-on decision spends:
+0.92ms for the kernel plus all three bundled plugins, which is one LuaJIT
+state, one QuickJS runtime and three scripts.
 
 ### Four places the two engines genuinely differ
 

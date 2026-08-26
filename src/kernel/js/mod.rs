@@ -12,10 +12,12 @@
 //!
 //! The whole argument is size. `--no-default-features` exists because a build
 //! that leaves plugins out is supposed to be *smaller*, and a backend that
-//! costs 40 MB whether or not anybody writes a plugin in it would make that
-//! claim untrue for every stock binary. QuickJS is one C file and an
-//! interpreter; a `deno_core`/V8 embedding is a JIT, a snapshot and a garbage
-//! collector tuned for a browser tab. The measurement is in `docs/plugins.md`.
+//! costs tens of megabytes whether or not anybody writes a plugin in it would
+//! make that claim untrue for every stock binary. Measured: turning this
+//! feature on grows a stripped release binary by **1.54 MB**, from 23,840,360
+//! bytes to 25,380,496. A `deno_core`/V8 embedding is more than an order of
+//! magnitude past that, because what it brings is a JIT, a heap snapshot and a
+//! garbage collector tuned for a browser tab. `docs/plugins.md` has the table.
 //!
 //! The second reason is the sandbox. A subprocess `node` would be simpler to
 //! wire and would put the capability model on the wrong side of a process
@@ -34,8 +36,8 @@
 //! than Lua's for free: the handler makes the interpreter raise an
 //! *uncatchable* error, so `try { while(true){} } catch {}` stops on the
 //! deadline where the Lua equivalent needed `install_stop_guard` to survive a
-//! `pcall`. Verified three ways in [`tests`]: a bare spin, a spin placed after
-//! an `await`, and a spin inside a `try`.
+//! `pcall`. Verified four ways in [`tests`]: a bare spin, a spin placed after
+//! an `await`, a spin inside a `try`, and a spin inside a `try`/`finally`.
 //!
 //! Two things do carry over unchanged. The deadline is per *call*, armed by
 //! [`Bound::arm`] and parked by [`Bound::relax`], because a lifetime deadline
