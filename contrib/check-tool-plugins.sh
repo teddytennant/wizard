@@ -55,6 +55,21 @@
 #     reaching into the fleet for `FleetDirs`, a status row or a state file —
 #     none of which it does today, and all of which would compile fine both
 #     with every feature on and with every feature off.
+#   - `plugin-js` left out, which is the first leg where what is removed is a
+#     *language* rather than a subsystem. Three things have to survive it: the
+#     `rquickjs` dependency genuinely leaves the build (it is `optional`, and
+#     `dep:` from this feature alone), `PluginKind` loses its `Js` variant
+#     without a `match` anywhere going non-exhaustive, and a `plugin.js` in
+#     `~/.wizard/plugins` degrades to a sentence naming the feature rather
+#     than being silently skipped. `tool-json` goes with it — the JS plugin
+#     Wizard ships names `plugin-js` in Cargo.toml, so dropping only the
+#     backend from the list leaves the plugin to turn it back on, which is the
+#     `graph`/`mesh` shape and is why `without_many` exists.
+#   - `tool-json` left out with the backend *present*. The complement, and the
+#     one that catches the thing neither extreme can see: a build with a
+#     JavaScript engine linked and no bundled JavaScript plugin has to leave
+#     `json_query` out of the roster rather than fail to compile, which is the
+#     same claim `without tool-git` makes about the Lua half.
 #   - `gateway` left out with everything else present. It is the first plugin
 #     that owns *two* entrypoints, so it is the first leg where "absent" has
 #     two halves that can disagree: a build where `wizard --gateway` degraded
@@ -176,6 +191,13 @@ leg "without graph" --features "$(without graph)"
 leg "without acp" --features "$(without acp)"
 leg "without fleet" --features "$(without fleet)"
 leg "without gateway" --features "$(without gateway)"
+leg "without tool-json" --features "$(without tool-json)"
+
+# `tool-json` goes with it: it enables `plugin-js`, so dropping only the
+# backend from the list leaves it on. This is the leg that proves `rquickjs` is
+# genuinely out of the build rather than merely uncalled, and that a
+# `plugin.js` in `~/.wizard/plugins` says which feature would run it.
+leg "without plugin-js" --features "$(without_many plugin-js tool-json)"
 
 # `graph` goes with it: it enables `mesh`, so dropping only `mesh` from the
 # list leaves it on. This is the leg that proves `App::mesh` degrades to a

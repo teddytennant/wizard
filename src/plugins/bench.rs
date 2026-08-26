@@ -15,15 +15,22 @@
 //!
 //! # What is separated, and why
 //!
-//! Two tools that do *nothing* -- one Rust, one Lua -- isolate the bridge. The
-//! difference between them is the whole cost of being a plugin: the `mlua`
-//! call, the argument table, the return conversion, and the async hop back.
-//! Nothing else is in the number.
+//! Three tools that do *nothing* -- one Rust, one Lua, one JavaScript --
+//! isolate the bridge. The difference between them is the whole cost of being
+//! a plugin: the engine call, the argument conversion, the return conversion,
+//! and the async hop back. Nothing else is in the number.
 //!
 //! Then one tool that does real work (`git_status`, which forks git) shows the
 //! same bridge cost against a realistic denominator. That second number is the
 //! one that decides how much more can move, because a bridge that costs 50us
 //! is free next to a 5ms fork and ruinous inside a redraw.
+//!
+//! The JavaScript row answers a question the Lua one already settled and
+//! which has to be re-asked of every backend: is this cheap enough that the
+//! architecture's "a plugin loses nothing" claim survives? A number several
+//! times Lua's would not disqualify the backend -- it would narrow what JS
+//! plugins should be used for, and that narrowing belongs in
+//! `docs/plugins.md` rather than in somebody's surprise.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,6 +92,22 @@ return {
 }
 "#;
 
+/// The same nothing again, in JavaScript. A module with a default export, so
+/// this is exactly the shape a real plugin has rather than a fast path.
+#[cfg(feature = "plugin-js")]
+const NULL_JS: &str = r#"
+export default {
+  name: "nulljs",
+  apply(ctx) {
+    ctx.tool({
+      name: "null_js",
+      description: "returns a constant",
+      execute: () => "ok",
+    });
+  },
+};
+"#;
+
 /// Median, not mean: one descheduled iteration is real but not representative,
 /// and a mean lets it rewrite the answer.
 fn median(mut samples: Vec<Duration>) -> Duration {
@@ -134,6 +157,19 @@ async fn what_the_lua_bridge_costs_per_call() {
     .await
     .expect("lua tool loads");
 
+    #[cfg(feature = "plugin-js")]
+    crate::kernel::js::load_source(
+        &kernel,
+        PluginManifest::new("nulljs"),
+        PluginSource::FirstParty,
+        NULL_JS,
+        "bench-null.js",
+        None,
+        None,
+    )
+    .await
+    .expect("js tool loads");
+
     let ctx = ToolContext::new(&dir.path);
     let rust = time_calls(&kernel, "null_rust", json!({}), &ctx).await;
     let lua = time_calls(&kernel, "null_lua", json!({}), &ctx).await;
@@ -142,9 +178,18 @@ async fn what_the_lua_bridge_costs_per_call() {
     println!("  rust tool, does nothing   {rust:>12.3?}");
     println!("  lua tool, does nothing    {lua:>12.3?}");
     println!(
-        "  bridge overhead           {:>12.3?}",
+        "  lua bridge overhead       {:>12.3?}",
         lua.saturating_sub(rust)
     );
+    #[cfg(feature = "plugin-js")]
+    {
+        let js = time_calls(&kernel, "null_js", json!({}), &ctx).await;
+        println!("  js tool, does nothing     {js:>12.3?}");
+        println!(
+            "  js bridge overhead        {:>12.3?}",
+            js.saturating_sub(rust)
+        );
+    }
 }
 
 #[tokio::test]

@@ -255,10 +255,6 @@ impl Bound {
             Instant::now() + Duration::from_secs(365 * 24 * 3600);
         self.stop.store(StopReason::None as u8, Ordering::SeqCst);
     }
-
-    fn reason(&self) -> StopReason {
-        StopReason::from_u8(self.stop.load(Ordering::SeqCst))
-    }
 }
 
 /// Install the deadline on a VM that is going to be bounded, and the memory

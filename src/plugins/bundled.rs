@@ -1,17 +1,20 @@
-//! The Lua half of [`super::compiled_in`]: first-party plugins that ship
+//! The scripted half of [`super::compiled_in`]: first-party plugins that ship
 //! inside the binary.
 //!
 //! [`super::compiled_in`] is the one table naming every Rust plugin. This is
-//! the one table naming every Lua plugin Wizard ships with, and the two are
-//! deliberately the same shape — one line per plugin, each behind the cargo
-//! feature that owns it, and deleting the feature deletes the plugin.
+//! the one table naming every *scripted* plugin Wizard ships with — Lua and
+//! JavaScript alike — and the two are deliberately the same shape: one line
+//! per plugin, each behind the cargo feature that owns it, and deleting the
+//! feature deletes the plugin. Which engine loads a row is a field on the row
+//! ([`Language`]) rather than a second table, so the load order stays one list
+//! and the first claim on a tool name still wins by position.
 //!
 //! # Why `include_str!` and not a directory on disk
 //!
 //! `~/.wizard/plugins/<name>/` already exists and [`super::load_user_plugins`]
-//! already reads it, so the obvious mechanism for shipping a first-party Lua
-//! plugin is for `install.sh` to copy one in there. That was tried on paper
-//! and does not survive three questions.
+//! already reads it, so the obvious mechanism for shipping a first-party
+//! scripted plugin is for `install.sh` to copy one in there. That was tried on
+//! paper and does not survive three questions.
 //!
 //! **`cargo test` would not have it.** A test binary never runs `install.sh`,
 //! so `git_status` would be absent from every registry a test composes, and
@@ -34,18 +37,18 @@
 //! one. Shipping in the binary is the only place the claim is true, which is
 //! exactly the rule [`super::compiled_in`] already follows for Rust.
 //!
-//! So a first-party Lua plugin is `include_str!`d, both halves of it, and the
-//! bytes the kernel loads are the bytes in the repository. `~/.wizard/plugins`
-//! keeps its meaning: it is where *other people's* plugins go, and they stay
-//! bounded.
+//! So a first-party scripted plugin is `include_str!`d, both halves of it, and
+//! the bytes the kernel loads are the bytes in the repository.
+//! `~/.wizard/plugins` keeps its meaning: it is where *other people's* plugins
+//! go, and they stay bounded.
 //!
 //! # When they load
 //!
 //! Rust plugins load inside [`super::kernel`]'s `OnceLock`, synchronously,
-//! because their `apply` is a few map inserts. A Lua plugin's is a LuaJIT VM
-//! and a script, and [`crate::kernel::lua::load_source`] is `async` — it spawns
-//! the VM's task and awaits its first answer. There is no synchronous door
-//! into that, and adding one would mean a `block_on` inside a `OnceLock`
+//! because their `apply` is a few map inserts. A scripted plugin's is a VM and
+//! a script, and both `load_source` functions are `async` — each spawns the
+//! VM's task and awaits its first answer. There is no synchronous door into
+//! that, and adding one would mean a `block_on` inside a `OnceLock`
 //! initializer that some callers reach from inside a runtime.
 //!
 //! So they load from [`ensure`], which is idempotent and is called from the
@@ -129,8 +132,8 @@ fn bundled() -> Vec<BundledPlugin> {
 /// and lose the second copy to a name conflict.
 static LOADED: OnceCell<()> = OnceCell::const_new();
 
-/// Load the bundled Lua plugins into the process kernel. Cheap after the first
-/// call, and safe to call from anywhere with a runtime under it.
+/// Load the bundled scripted plugins into the process kernel. Cheap after the
+/// first call, and safe to call from anywhere with a runtime under it.
 pub async fn ensure() {
     let kernel = super::kernel();
     LOADED.get_or_init(|| load_into(kernel)).await;
@@ -199,8 +202,15 @@ pub(crate) async fn load_into(kernel: &Kernel) {
 /// [`super::host::WizardHost`] unbound is exactly what a plugin gets in a
 /// process with no agent in front of it, so this is not a stub: `exec` runs
 /// real programs through the real runner, and the only thing it lacks is the
-/// agent-shaped half neither bundled plugin asks for.
-#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
+/// agent-shaped half no bundled plugin asks for.
+#[cfg(all(
+    test,
+    any(
+        feature = "tool-git",
+        feature = "tool-publish",
+        feature = "tool-json"
+    )
+))]
 pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     Kernel::new(crate::kernel::KernelOptions {
         project_root: root.to_path_buf(),
@@ -210,9 +220,15 @@ pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     })
 }
 
-// Two plugins now, so the split the line above predicted has happened: each
-// plugin's tests are a module behind its own feature. The `any` is what keeps
-// a build with neither from carrying a `mod tests` whose only contents are two
-// unused helpers.
-#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
+// Three plugins now, in two languages, and each one's tests are a module
+// behind its own feature. The `any` is what keeps a build with none of them
+// from carrying a `mod tests` whose only contents are two unused helpers.
+#[cfg(all(
+    test,
+    any(
+        feature = "tool-git",
+        feature = "tool-publish",
+        feature = "tool-json"
+    )
+))]
 mod tests;

@@ -656,9 +656,9 @@ mod tests {
     async fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
         /// `(cargo feature is on, plugin name, tools it registers)`.
         ///
-        /// `git` and `publish` are Lua and `web` is Rust, and the rows are the
-        /// same rows: the kernel does not distinguish them, which is the claim
-        /// `docs/plugins.md` opens with.
+        /// `web` is Rust, `git` and `publish` are Lua, `json` is JavaScript,
+        /// and the rows are the same rows: the kernel does not distinguish
+        /// them, which is the claim `docs/plugins.md` opens with.
         const EXPECTED: &[(bool, &str, &[&str])] = &[
             (
                 cfg!(feature = "tool-web"),
@@ -671,6 +671,7 @@ mod tests {
                 &["git_status", "git_diff"],
             ),
             (cfg!(feature = "tool-publish"), "publish", &["publish"]),
+            (cfg!(feature = "tool-json"), "json", &["json_query"]),
         ];
 
         // The Lua half does not load with the kernel — see `bundled` — so a

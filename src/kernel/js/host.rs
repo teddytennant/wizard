@@ -148,7 +148,7 @@ impl Registry {
     }
 
     /// Put `function` in this VM's callback array and hand back its index.
-    fn hold(&self, ctx: &JsCtx<'_>, function: Function<'_>) -> rquickjs::Result<FnId> {
+    fn hold<'js>(&self, ctx: &JsCtx<'js>, function: Function<'js>) -> rquickjs::Result<FnId> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let table: rquickjs::Array = ctx.globals().get(REGISTRY)?;
         table.set(id as usize, function)?;
@@ -281,9 +281,15 @@ pub(crate) fn call_function(
                     converted.push(json_to_js(&js, arg)?);
                 }
                 let answer: JsValue = function.call((Rest(converted),))?;
-                let answer = match answer.into_promise() {
-                    Some(promise) => promise.into_future::<JsValue>().await?,
-                    None => answer,
+                // Checked before consuming, because `into_promise` takes
+                // ownership and a non-promise has to survive it untouched.
+                let answer = match answer.is_promise() {
+                    true => answer
+                        .into_promise()
+                        .expect("checked")
+                        .into_future::<JsValue>()
+                        .await?,
+                    false => answer,
                 };
                 js_to_json(&answer)
             })
@@ -364,7 +370,7 @@ fn narrow_globals(js: &JsCtx<'_>) -> rquickjs::Result<()> {
 }
 
 /// Create this VM's callback array, hidden from `Object.keys`.
-fn install_callback_table(js: &JsCtx<'_>) -> rquickjs::Result<()> {
+fn install_callback_table<'js>(js: &JsCtx<'js>) -> rquickjs::Result<()> {
     let table = rquickjs::Array::new(js.clone())?;
     // `prop` with an explicit descriptor rather than `set`, so a plugin
     // enumerating its own globals does not see the host's bookkeeping and a
@@ -386,7 +392,7 @@ fn install_callback_table(js: &JsCtx<'_>) -> rquickjs::Result<()> {
 /// reason: a plugin's VM never ends, so a buffer the host reads afterwards
 /// would be a leak with a `console.log` in front of it. A plugin with
 /// something to tell the *user* asks for `ui` and calls `wizard.ui.notify`.
-fn install_console(js: &JsCtx<'_>, plugin: &str) -> rquickjs::Result<()> {
+fn install_console<'js>(js: &JsCtx<'js>, plugin: &str) -> rquickjs::Result<()> {
     let console = Object::new(js.clone())?;
     for (name, level) in [("log", 0u8), ("info", 0), ("debug", 0), ("warn", 1), ("error", 2)] {
         let plugin = plugin.to_string();
@@ -430,7 +436,7 @@ fn display_value(value: &JsValue<'_>) -> String {
 
 /// Build the `wizard` global: the ungated helpers, then one table per
 /// capability the manifest declared.
-fn install_wizard(js: &JsCtx<'_>, ctx: &Ctx, caps: &CapabilitySet) -> rquickjs::Result<()> {
+fn install_wizard<'js>(js: &JsCtx<'js>, ctx: &Ctx, caps: &CapabilitySet) -> rquickjs::Result<()> {
     let wizard = Object::new(js.clone())?;
     wizard.set("plugin", ctx.name())?;
     // Identity marker, the sibling of `wizard.runtime == "luajit"`. A plugin
@@ -542,14 +548,13 @@ fn install_wizard(js: &JsCtx<'_>, ctx: &Ctx, caps: &CapabilitySet) -> rquickjs::
         let plugin = ctx.name().to_string();
         let exec = Function::new(
             js.clone(),
-            Async(move |js: JsCtx<'_>, spec: Object<'_>| {
+            Async(move |cx: JsCtx<'js>, spec: Object<'js>| {
                 let host = Arc::clone(&host);
                 let plugin = plugin.clone();
                 let request = exec_request(&spec);
-                let js = js.clone();
                 async move {
                     let outcome = host.exec(&plugin, request?).await.map_err(external)?;
-                    let result = Object::new(js.clone())?;
+                    let result = Object::new(cx.clone())?;
                     result.set("stdout", outcome.stdout)?;
                     result.set("stderr", outcome.stderr)?;
                     // `null` rather than a sentinel for both, and the Lua
@@ -558,13 +563,13 @@ fn install_wizard(js: &JsCtx<'_>, ctx: &Ctx, caps: &CapabilitySet) -> rquickjs::
                     // wrong. `null` is falsy and prints as nothing.
                     match outcome.code {
                         Some(code) => result.set("code", code)?,
-                        None => result.set("code", JsValue::new_null(js.clone()))?,
+                        None => result.set("code", JsValue::new_null(cx.clone()))?,
                     }
                     match outcome.timed_out {
                         Some(secs) => result.set("timed_out", secs)?,
-                        None => result.set("timed_out", JsValue::new_null(js.clone()))?,
+                        None => result.set("timed_out", JsValue::new_null(cx.clone()))?,
                     }
-                    Ok::<Object<'_>, rquickjs::Error>(result)
+                    Ok::<Object<'js>, rquickjs::Error>(result)
                 }
             }),
         )?;
@@ -582,9 +587,9 @@ fn install_wizard(js: &JsCtx<'_>, ctx: &Ctx, caps: &CapabilitySet) -> rquickjs::
 /// function the Lua host's `wizard.read_file` goes through. Two copies of that
 /// walk would be two places for a `..` to stop being caught, which is the
 /// argument `src/tools/http.rs` was split out of the web tools to make.
-fn install_fs(
-    js: &JsCtx<'_>,
-    wizard: &Object<'_>,
+fn install_fs<'js>(
+    js: &JsCtx<'js>,
+    wizard: &Object<'js>,
     ctx: &Ctx,
     caps: &CapabilitySet,
 ) -> rquickjs::Result<()> {
@@ -626,18 +631,18 @@ fn install_fs(
 /// length — the short version being that a plugin deriving `~/.wizard` from
 /// the environment sails straight past the temp-directory redirect
 /// `cargo test` installs, and writes to a developer's real config.
-fn install_paths(js: &JsCtx<'_>, wizard: &Object<'_>, ctx: &Ctx) -> rquickjs::Result<()> {
+fn install_paths<'js>(js: &JsCtx<'js>, wizard: &Object<'js>, ctx: &Ctx) -> rquickjs::Result<()> {
     use crate::config::Config;
 
     let paths = Object::new(js.clone())?;
-    paths.set("project", ctx.kernel().project_root().to_string_lossy())?;
+    paths.set("project", ctx.kernel().project_root().to_string_lossy().into_owned())?;
     for (key, path) in [
         ("home", Config::wizard_dir()),
         ("source", Config::source_dir()),
         ("evolution_log", Config::evolution_log_path()),
     ] {
         if let Ok(path) = path {
-            paths.set(key, path.to_string_lossy())?;
+            paths.set(key, path.to_string_lossy().into_owned())?;
         }
     }
     wizard.set("paths", paths)
@@ -650,7 +655,7 @@ fn install_paths(js: &JsCtx<'_>, wizard: &Object<'_>, ctx: &Ctx) -> rquickjs::Re
 /// facts about what a *tool answer* may cost the model rather than about
 /// either engine. A plugin that invented its own would drift from the native
 /// ones the first time either moved.
-fn install_output_budget(js: &JsCtx<'_>, wizard: &Object<'_>) -> rquickjs::Result<()> {
+fn install_output_budget<'js>(js: &JsCtx<'js>, wizard: &Object<'js>) -> rquickjs::Result<()> {
     let limits = Object::new(js.clone())?;
     limits.set("output", MAX_OUTPUT_BYTES)?;
     limits.set("diff", crate::tools::MAX_DIFF_BYTES)?;
@@ -781,7 +786,7 @@ fn tool_fn<'js>(
     let ctx = ctx.clone();
     let handle = handle.clone();
     let registry = registry.clone();
-    Function::new(js.clone(), move |js: JsCtx<'_>, spec: Object<'_>| {
+    Function::new(js.clone(), move |cx: JsCtx<'js>, spec: Object<'js>| {
         let name: String = spec.get("name")?;
         let description: String = spec.get("description").unwrap_or_default();
         let parameters = match spec.get::<_, JsValue>("parameters") {
@@ -801,7 +806,7 @@ fn tool_fn<'js>(
                 "ctx.tool({{ name: '{name}' }}) has no execute function"
             ))
         })?;
-        let func = registry.hold(&js, execute)?;
+        let func = registry.hold(&cx, execute)?;
 
         ctx.tool(Arc::new(JsTool {
             name,
@@ -824,7 +829,7 @@ fn command_fn<'js>(
     let ctx = ctx.clone();
     let handle = handle.clone();
     let registry = registry.clone();
-    Function::new(js.clone(), move |js: JsCtx<'_>, spec: Object<'_>| {
+    Function::new(js.clone(), move |cx: JsCtx<'js>, spec: Object<'js>| {
         let name: String = spec.get("name")?;
         let description: String = spec.get("description").unwrap_or_default();
         let args: String = spec.get("args").unwrap_or_default();
@@ -833,7 +838,7 @@ fn command_fn<'js>(
                 "ctx.command({{ name: '{name}' }}) has no run function"
             ))
         })?;
-        let func = registry.hold(&js, run)?;
+        let func = registry.hold(&cx, run)?;
         let mut command = PluginCommand::new(
             name.clone(),
             description,
@@ -904,14 +909,14 @@ fn on_fn<'js>(
     let registry = registry.clone();
     Function::new(
         js.clone(),
-        move |js: JsCtx<'_>, event: String, callback: Function<'_>, priority: Opt<i32>| {
+        move |cx: JsCtx<'js>, event: String, callback: Function<'js>, priority: Opt<i32>| {
             let parsed = Event::parse(&event).ok_or_else(|| {
                 external(anyhow::anyhow!(
                     "'{event}' is not an event; a subscription to a name nothing emits \
                      would silently never fire"
                 ))
             })?;
-            let func = registry.hold(&js, callback)?;
+            let func = registry.hold(&cx, callback)?;
             ctx.on(
                 parsed,
                 priority.0.unwrap_or(super::super::bus::DEFAULT_PRIORITY),
@@ -920,7 +925,7 @@ fn on_fn<'js>(
                     func,
                 }),
             );
-            Ok(())
+            Ok::<(), rquickjs::Error>(())
         },
     )
 }
@@ -929,7 +934,7 @@ fn emit_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let ctx = ctx.clone();
     Function::new(
         js.clone(),
-        Async(move |js: JsCtx<'_>, event: String, payload: Opt<JsValue<'_>>| {
+        Async(move |cx: JsCtx<'js>, event: String, payload: Opt<JsValue<'js>>| {
             let ctx = ctx.clone();
             let parsed = Event::parse(&event);
             let payload = payload
@@ -937,24 +942,23 @@ fn emit_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
                 .map(|value| js_to_json(&value))
                 .transpose()
                 .map(|value| value.unwrap_or(Value::Null));
-            let js = js.clone();
             async move {
                 let event = parsed
                     .ok_or_else(|| external(anyhow::anyhow!("'{event}' is not an event")))?;
                 let dispatch = ctx.emit(event, payload?).await;
-                let result = Object::new(js.clone())?;
-                result.set("payload", json_to_js(&js, &dispatch.payload)?)?;
+                let result = Object::new(cx.clone())?;
+                result.set("payload", json_to_js(&cx, &dispatch.payload)?)?;
                 result.set("vetoed", dispatch.is_vetoed())?;
                 match dispatch.veto {
                     Some(veto) => {
                         result.set("veto", veto.reason)?;
                         result.set("veto_by", veto.plugin)?;
                     }
-                    None => result.set("veto", JsValue::new_null(js.clone()))?,
+                    None => result.set("veto", JsValue::new_null(cx.clone()))?,
                 }
                 result.set("ran", dispatch.ran)?;
                 result.set("failures", dispatch.failures.len())?;
-                Ok::<Object<'_>, rquickjs::Error>(result)
+                Ok::<Object<'js>, rquickjs::Error>(result)
             }
         }),
     )
@@ -970,14 +974,14 @@ fn provide_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>
 
 fn inject_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let ctx = ctx.clone();
-    Function::new(js.clone(), move |js: JsCtx<'_>, name: String| {
+    Function::new(js.clone(), move |cx: JsCtx<'js>, name: String| {
         // A native service is `undefined` here, which is the same `undefined`
         // an absent one gives — see the `Ctx` module docs. JavaScript cannot
         // call a Rust trait object, and pretending otherwise would only move
         // the failure later.
         match ctx.inject(&name).as_ref().and_then(Service::as_data) {
-            Some(value) => json_to_js(&js, value),
-            None => Ok(JsValue::new_undefined(js.clone())),
+            Some(value) => json_to_js(&cx, value),
+            None => Ok(JsValue::new_undefined(cx.clone())),
         }
     })
 }
@@ -995,7 +999,7 @@ fn plugin_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>>
     let ctx = ctx.clone();
     Function::new(
         js.clone(),
-        Async(move |name: String, config: Opt<JsValue<'_>>| {
+        Async(move |name: String, config: Opt<JsValue<'js>>| {
             let ctx = ctx.clone();
             let config = config
                 .0
@@ -1037,8 +1041,8 @@ fn effect_fn<'js>(js: &JsCtx<'js>, registry: &Registry) -> rquickjs::Result<Func
     let registry = registry.clone();
     Function::new(
         js.clone(),
-        move |js: JsCtx<'_>, dispose: Function<'_>, label: Opt<String>| {
-            let func = registry.hold(&js, dispose)?;
+        move |cx: JsCtx<'js>, dispose: Function<'js>, label: Opt<String>| {
+            let func = registry.hold(&cx, dispose)?;
             let label = label.0.unwrap_or_else(|| format!("js effect #{func}"));
             registry
                 .effects
@@ -1052,7 +1056,7 @@ fn effect_fn<'js>(js: &JsCtx<'js>, registry: &Registry) -> rquickjs::Result<Func
 
 fn config_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let config = ctx.config().clone();
-    Function::new(js.clone(), move |js: JsCtx<'_>| json_to_js(&js, &config))
+    Function::new(js.clone(), move |cx: JsCtx<'js>| json_to_js(&cx, &config))
 }
 
 /// A JSON Schema for a tool that declared no parameters.
