@@ -17,15 +17,16 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
 # with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
-# 2618 with `publish`, and 2620 with the gateway and the llama-server
-# lifecycle. Raise it when a phase adds tests, so the ratchet keeps ratcheting.
+# 2618 with `publish`, 2620 with the gateway and the llama-server lifecycle,
+# and 2685 with the JavaScript backend and its `json_query` plugin. Raise it
+# when a phase adds tests, so the ratchet keeps ratcheting.
 #
 # 2609 was one below what the tree actually had by then (2610, measured): the
 # acp and fleet plugins landed after that number was written and nobody raised
 # it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
 # until the turn's event channel was released at the end of a turn those three
 # did not fail -- they hung.
-BASELINE_TESTS=2620
+BASELINE_TESTS=2685
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
