@@ -603,6 +603,37 @@ fn cached_usage_chunk(
     }
 }
 
+/// A turn's event channel closes when the turn ends.
+///
+/// The one property every "collect a turn's output" caller depends on, and it
+/// was quietly broken by the plugin host bridge: `bind_host` clones the turn's
+/// `Sender` into a process-wide slot that outlives the turn, so the channel
+/// stayed open until some *other* agent in the process happened to bind and
+/// free it. `plugins::fleet::run_collect_text` drains until `recv` returns
+/// `None`, so a fleet planning turn hung — reliably when it ran alone, not at
+/// all when it ran beside enough other tests. A hang whose presence depends on
+/// the rest of the suite is the worst kind, so it is pinned here rather than
+/// left to the shape of a test run.
+///
+/// The timeout is the assertion. Without it a regression does not fail, it
+/// stops.
+#[tokio::test]
+async fn a_turns_event_channel_closes_when_the_turn_does() {
+    let (mut agent, _provider, _tmp) = test_agent(vec![vec![final_chunk("done")]]);
+    let (tx, mut rx) = mpsc::channel(256);
+    agent.run_turn("say something", tx).await.expect("the turn");
+
+    let drained = tokio::time::timeout(Duration::from_secs(5), async move {
+        while rx.recv().await.is_some() {}
+    })
+    .await;
+    assert!(
+        drained.is_ok(),
+        "the turn's event channel is still open after the turn ended; something \
+         is holding a clone of its sender"
+    );
+}
+
 fn test_agent(responses: Vec<Vec<ChatChunk>>) -> (Agent, Arc<ScriptedProvider>, TempDir) {
     let tmp = TempDir::new();
     let (agent, provider) = test_agent_in(&tmp, responses, Vec::new(), ToolRegistry::new());

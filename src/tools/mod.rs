@@ -20,7 +20,6 @@ pub mod lua;
 pub mod manual;
 pub mod memory;
 pub mod plan;
-pub mod publish;
 pub mod registry;
 pub mod scripted;
 pub mod shell;

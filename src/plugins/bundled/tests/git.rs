@@ -1,4 +1,4 @@
-//! The bundled Lua plugins, exercised as tools.
+//! `git_status` and `git_diff`, ported.
 //!
 //! Most of this file is `src/tools/git.rs`'s test module, moved and pointed at
 //! the Lua implementation. That is the point: the port is only worth anything
@@ -7,48 +7,22 @@
 //! flags, the same "(clean working tree)", the same "No changes.", the same
 //! diff budget — and only the thing under them changed.
 //!
-//! Two shapes of test, because the tool has two halves.
-//!
-//! The behavioural half runs **real git in a temp directory** through the real
-//! [`WizardHost`], so what is being tested is the whole path: the Lua chunk,
-//! the `ctx` table, `wizard.process.exec`, the shell runner, the process, and
-//! the string that comes back. A mock at any layer of that would test the
-//! mock.
-//!
-//! The rendering half cannot be reached that way. A git that exits non-zero
-//! and says nothing, and a git that outlives its budget, are both states this
-//! plugin has to render and neither is a state a test can arrange by running
-//! git. Those go through [`ScriptedHost`], which is a `HostBridge` whose `exec`
-//! answers from a canned [`ExecOutcome`] — the same fixture the Rust tests used
-//! when they built a `CommandResult` by hand and called `git_failure` on it,
-//! one layer further out.
+//! Two shapes of test, because the tool has two halves. The behavioural half
+//! runs real git in a temp directory through the real host; the rendering half
+//! — a git that exits non-zero and says nothing, a git that outlives its
+//! budget — cannot be arranged that way and goes through [`ScriptedHost`].
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::kernel::testing::TempDir;
 use crate::kernel::{ExecOutcome, ExecRequest, HostBridge, Kernel, KernelOptions};
-use crate::tools::{MAX_DIFF_BYTES, ToolAccess, ToolContext, ToolOutput};
+use crate::tools::{MAX_DIFF_BYTES, ToolAccess, ToolContext};
 
-/// A kernel rooted at `root`, with the bundled plugins loaded into it.
-async fn bundled_kernel(root: &Path) -> Kernel {
-    let kernel = super::test_kernel(root);
-    super::load_into(&kernel).await;
-    kernel
-}
-
-/// Call a bundled tool the way the dispatcher would.
-async fn call(kernel: &Kernel, tool: &str, args: Value, cwd: &Path) -> ToolOutput {
-    kernel
-        .tool(tool)
-        .unwrap_or_else(|| panic!("'{tool}' is registered"))
-        .execute(args, &ToolContext::new(cwd))
-        .await
-        .expect("the tool ran")
-}
+use super::{bundled_kernel, call};
 
 /// Run `git <args>` for test setup, isolated from user/system git config.
 fn git(dir: &Path, args: &[&str]) {
@@ -380,7 +354,7 @@ async fn kernel_with(root: &Path, host: Arc<ScriptedHost>) -> Kernel {
         host,
         ..KernelOptions::default()
     });
-    super::load_into(&kernel).await;
+    super::super::load_into(&kernel).await;
     kernel
 }
 

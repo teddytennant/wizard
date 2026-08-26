@@ -1490,16 +1490,20 @@ impl Agent {
         // turn_end hooks: observational, fired however the turn ended.
         self.hooks.turn_end(self.mode, Some(&events)).await;
         self.record_turn_usage();
-        // And the turn's event channel goes with it too. `bind_host` above put
-        // a *clone* of the sender in the process-wide host slot, which is
-        // replaced only by the next bind — so without this the sender outlives
-        // the turn, and anything waiting for the channel to close waits
-        // forever. The fleet's planning turn is exactly that shape
-        // (`run_collect_text` awaits a collector task that ends when the last
-        // sender drops), and it hung after every turn that did not happen to
-        // trigger a rebind. Rebinding without the channel is also what the
-        // slot is documented to mean between turns: `wizard.ui.notify` with no
-        // turn in flight writes to the log.
+        // And the turn's event channel comes back out of the host bridge.
+        //
+        // Not tidiness: [`crate::plugins::host::bind`] stores the binding in a
+        // process-wide slot that outlives the turn, so the `Sender` cloned into
+        // it above is a sender that never drops. Every caller who waits for the
+        // channel to *close* — `fleet::run_collect_text` collects a turn's text
+        // by draining until `recv` returns `None`, and it is not the only shape
+        // like that — then waits forever, unless some other agent in the
+        // process happens to bind afterwards and free it. That is a hang whose
+        // presence depends on what else is running, which is the worst kind.
+        //
+        // Re-binding with no channel restores exactly the state the host had
+        // before the turn: `wizard.ui.notify` goes back to the log, which is
+        // where a notice with no transcript in front of it belongs.
         self.bind_host(None);
         result
     }

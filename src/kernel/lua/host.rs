@@ -286,6 +286,10 @@ fn install_host(lua: &Lua, ctx: &Ctx, caps: &CapabilitySet) -> mlua::Result<()> 
 
     install_output_budget(lua, &wizard)?;
 
+    if caps.contains(Capability::Filesystem) {
+        install_paths(lua, &wizard, ctx)?;
+    }
+
     if caps.contains(Capability::Network) {
         let http = lua.create_table()?;
         for (name, method) in [("get", "GET"), ("post", "POST"), ("put", "PUT")] {
@@ -412,6 +416,51 @@ fn exec_request(spec: &Table) -> mlua::Result<crate::kernel::ExecRequest> {
         cwd: cwd.map(std::path::PathBuf::from),
         timeout: millis.map_or(DEFAULT_EXEC_TIMEOUT, Duration::from_millis),
     })
+}
+
+/// `wizard.paths`: the directories Wizard keeps its own state in, as strings.
+///
+/// Gated on [`Capability::Filesystem`], which is the grant that makes a path
+/// useful. Without it `wizard.fs` is pinned to the project root and `io` is
+/// gone, so the table would be a list of places the plugin cannot go — and a
+/// path is still a fact about the machine, so handing one to a plugin that
+/// declared nothing is a leak with no upside.
+///
+/// It exists because the alternative is worse in a specific way. A ported
+/// subsystem that keeps state under `~/.wizard` — the evolution log, the
+/// source checkout, the skills tree — would otherwise rebuild those paths from
+/// `os.getenv("HOME")`, and that answer is *wrong under `cargo test`*:
+/// [`Config::wizard_dir`] redirects to a temp directory there, deliberately,
+/// so the suite cannot overwrite a developer's real config. A plugin deriving
+/// the path itself would sail past the redirect and write to the real one. So
+/// every entry here is [`Config`]'s own accessor, evaluated once, and the
+/// redirect holds for a plugin exactly as it holds for Rust.
+///
+/// Named entries rather than a `home` a plugin joins onto, for the reason
+/// `docs/plugins.md` gives about `memory`: the moment a plugin writes
+/// `home .. "/src"` there are two definitions of where the checkout is. `home`
+/// is here anyway, because a plugin that needs a path this table does not
+/// carry has to start somewhere and a missing key is a worse failure than a
+/// join somebody can see.
+///
+/// A `Config` accessor that fails (no home directory) leaves its key absent
+/// rather than erroring the whole VM: a plugin that needs it gets a `nil` it
+/// can report on, and one that does not is unaffected.
+fn install_paths(lua: &Lua, wizard: &Table, ctx: &Ctx) -> mlua::Result<()> {
+    use crate::config::Config;
+
+    let paths = lua.create_table()?;
+    paths.set("project", ctx.kernel().project_root().to_string_lossy())?;
+    for (key, path) in [
+        ("home", Config::wizard_dir()),
+        ("source", Config::source_dir()),
+        ("evolution_log", Config::evolution_log_path()),
+    ] {
+        if let Ok(path) = path {
+            paths.set(key, path.to_string_lossy())?;
+        }
+    }
+    wizard.set("paths", paths)
 }
 
 /// `wizard.truncate` and `wizard.limits`: the context-window budgets, and the

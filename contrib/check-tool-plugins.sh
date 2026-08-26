@@ -40,6 +40,13 @@
 #     has been awaited, so the leg proves that leaving it out costs two tool
 #     names and not a compile error in the four places that assert what the
 #     roster holds (`plugins`, `mcp`, `harness`, `tools::registry`).
+#   - `tool-publish` left out. The second Lua plugin, and the first whose
+#     tool a *slash command* invokes as well as the model, so it has two
+#     degrade paths at once: `publish` must be absent from the roster, and
+#     `/publish` and `wizard --publish` must each answer with the sentence
+#     naming the feature rather than doing nothing. Four call sites go through
+#     `plugins::run_tool`, and this is what proves none of them was left
+#     reaching for a deleted `crate::evolve::publish`.
 #   - `acp` left out, which is also the only build that does not link
 #     `agent-client-protocol` at all — the one plugin feature that gates a
 #     dependency, so it is the one where "removable" includes the dependency
@@ -127,7 +134,17 @@ leg() {
     passed=$(grep -oE '[0-9]+ passed' "$log" | grep -oE '^[0-9]+' | awk '{n += $1} END {print n + 0}')
     failed=$(grep -oE '[0-9]+ failed' "$log" | grep -oE '^[0-9]+' | awk '{n += $1} END {print n + 0}')
     if [ "${passed:-0}" -lt 1 ]; then
-        results+=("NO RESULTS    $label")
+        # A leg with no results is either a leg that ran nothing or a leg
+        # whose log went to a full disk, and those want different reactions:
+        # the first is a bug in this repository, the second is a machine that
+        # needs room. Both still fail -- an unproven leg is unproven -- but
+        # reading `NO RESULTS` and going looking for the code cost an hour
+        # once, so the two are named apart.
+        if grep -q 'No space left on device' "$log"; then
+            results+=("DISK FULL     $label (log truncated; free space and re-run)")
+        else
+            results+=("NO RESULTS    $label")
+        fi
         fail=1
     elif [ "${failed:-1}" -ne 0 ]; then
         if [ "$failed" -eq 1 ] \
@@ -146,6 +163,7 @@ leg() {
 # Leave-one-out, against an otherwise-stock feature set.
 leg "without tool-web" --features "$(without tool-web)"
 leg "without tool-git" --features "$(without tool-git)"
+leg "without tool-publish" --features "$(without tool-publish)"
 leg "without graph" --features "$(without graph)"
 leg "without acp" --features "$(without acp)"
 leg "without fleet" --features "$(without fleet)"

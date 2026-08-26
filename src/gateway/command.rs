@@ -392,14 +392,13 @@ impl CommandSurface for GatewaySurface<'_, '_> {
     }
 
     async fn publish(&mut self, branch: Option<String>) {
-        let request = crate::evolve::PublishRequest { branch };
-        let outcome = crate::evolve::publish(self.ctx.config, request, false).await;
-        match outcome {
-            Ok(outcome) => self.say(format!(
-                "publish: forked to {}  (branch: {})\n\nInstall one-liner:\n{}",
-                outcome.fork_url, outcome.branch, outcome.install_one_liner
-            )),
-            Err(err) => self.say(format!("publish failed: {err:#}")),
+        let args = serde_json::json!({ "branch": branch });
+        // Both arms are already worded — the plugin writes its own failures,
+        // and a build without it answers with the sentence naming the feature
+        // — so the gateway says what it is handed either way.
+        match crate::plugins::run_tool("publish", "tool-publish", args).await {
+            Ok(summary) => self.say(summary),
+            Err(message) => self.say(message),
         }
     }
 

@@ -92,6 +92,12 @@ fn bundled() -> Vec<BundledPlugin> {
         manifest: include_str!("lua/git/manifest.toml"),
         script: include_str!("lua/git/plugin.lua"),
     });
+    #[cfg(feature = "tool-publish")]
+    plugins.push(BundledPlugin {
+        origin: "src/plugins/lua/publish/plugin.lua",
+        manifest: include_str!("lua/publish/manifest.toml"),
+        script: include_str!("lua/publish/plugin.lua"),
+    });
     plugins
 }
 
@@ -150,8 +156,8 @@ pub(crate) async fn load_into(kernel: &Kernel) {
 /// [`super::host::WizardHost`] unbound is exactly what a plugin gets in a
 /// process with no agent in front of it, so this is not a stub: `exec` runs
 /// real programs through the real runner, and the only thing it lacks is the
-/// agent-shaped half the git plugin never asks for.
-#[cfg(all(test, feature = "tool-git"))]
+/// agent-shaped half neither bundled plugin asks for.
+#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
 pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     Kernel::new(crate::kernel::KernelOptions {
         project_root: root.to_path_buf(),
@@ -161,8 +167,9 @@ pub(crate) fn test_kernel(root: &std::path::Path) -> Kernel {
     })
 }
 
-// Everything in there is the git plugin's, so it goes with the feature. The
-// day a second plugin is bundled this becomes `#[cfg(test)]` and the git half
-// moves behind its own module.
-#[cfg(all(test, feature = "tool-git"))]
+// Two plugins now, so the split the line above predicted has happened: each
+// plugin's tests are a module behind its own feature. The `any` is what keeps
+// a build with neither from carrying a `mod tests` whose only contents are two
+// unused helpers.
+#[cfg(all(test, any(feature = "tool-git", feature = "tool-publish")))]
 mod tests;

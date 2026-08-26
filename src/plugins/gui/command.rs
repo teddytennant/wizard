@@ -242,7 +242,7 @@ impl CommandSurface for GuiSurface<'_, '_> {
     }
 
     async fn publish(&mut self, branch: Option<String>) {
-        publish(branch, self.ctx.config, self.ctx.shared).await;
+        publish(branch, self.ctx.shared).await;
     }
 
     async fn toggle_fusion(&mut self) {
@@ -640,7 +640,7 @@ async fn evolve(deep: bool, description: String, config: &Config, shared: &TaskS
 }
 
 /// `/publish [branch]`: fork Wizard and hand back a one-line installer.
-async fn publish(branch: Option<String>, config: &Config, shared: &TaskShared) {
+async fn publish(branch: Option<String>, shared: &TaskShared) {
     notice(
         shared,
         format!(
@@ -651,15 +651,11 @@ async fn publish(branch: Option<String>, config: &Config, shared: &TaskShared) {
                 .unwrap_or_default()
         ),
     );
-    let request = crate::evolve::PublishRequest { branch };
-    match crate::evolve::publish(config, request, false).await {
-        Ok(outcome) => notice(
-            shared,
-            format!(
-                "publish: forked to {}  (branch: {})\n\nInstall one-liner:\n{}",
-                outcome.fork_url, outcome.branch, outcome.install_one_liner
-            ),
-        ),
-        Err(err) => error(shared, format!("publish failed: {err:#}")),
+    let args = serde_json::json!({ "branch": branch });
+    match crate::plugins::run_tool("publish", "tool-publish", args).await {
+        Ok(summary) => notice(shared, summary),
+        // Already worded by the plugin, or by the lookup when this build has
+        // no plugin to ask.
+        Err(message) => error(shared, message),
     }
 }

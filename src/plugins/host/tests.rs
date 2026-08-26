@@ -47,6 +47,18 @@ return {
     ctx:tool { name = "p_run", execute = function(args)
       return wizard.process.run(args.command)
     end }
+    ctx:tool { name = "p_exec", execute = function(args)
+      local r = wizard.process.exec {
+        argv = args.argv, timeout_ms = args.timeout_ms,
+      }
+      return string.format(
+        "%s|%s|%s|%s",
+        tostring(r.code), tostring(r.timed_out), r.stdout, r.stderr
+      )
+    end }
+    ctx:tool { name = "p_paths", execute = function()
+      return wizard.json_encode(wizard.paths)
+    end }
     ctx:tool { name = "p_delegate", execute = function(args)
       return wizard.agent.spawn(args.task)
     end }
@@ -55,6 +67,7 @@ return {
         tostring(wizard.http ~= nil), tostring(wizard.model ~= nil),
         tostring(wizard.ui ~= nil), tostring(wizard.agent ~= nil),
         tostring(wizard.process ~= nil), tostring(wizard.fs ~= nil),
+        tostring(wizard.paths ~= nil),
       }, ",")
     end }
   end,
@@ -195,7 +208,7 @@ async fn a_plugin_that_declared_everything_gets_everything() {
     let (kernel, _host) = fixture(&dir).await;
     assert_eq!(
         call(&kernel, "p_tables", json!({})).await.unwrap(),
-        "true,true,true,true,true,true"
+        "true,true,true,true,true,true,true"
     );
 }
 
@@ -213,10 +226,12 @@ async fn a_capability_a_plugin_did_not_declare_is_absent_from_the_wired_host_too
     )
     .await;
     // `fs` is the exception and is meant to be: without `filesystem` it is
-    // confined to the project root, not taken away.
+    // confined to the project root, not taken away. `paths` is not an
+    // exception and follows `filesystem`: the last `false` is a plugin pinned
+    // to the project directory not being handed the path of somebody's home.
     assert_eq!(
         call(&kernel, "p_tables", json!({})).await.unwrap(),
-        "true,false,false,false,false,true"
+        "true,false,false,false,false,true,false"
     );
 }
 
@@ -454,6 +469,104 @@ async fn a_failed_plugin_command_is_an_error_carrying_its_output() {
     .unwrap_err();
     assert!(err.contains("exited 3"), "{err}");
     assert!(err.contains("nope"), "{err}");
+}
+
+/// A program that is not installed comes back as an outcome, not as a broken
+/// tool.
+///
+/// This is what a ported tool needs in order to keep the sentence its Rust
+/// original had. `evolve::publish` decided whether `gh` was there with
+/// `Command::new("gh").arg("--version").status().is_ok()` and answered with
+/// install instructions; the plugin that replaced it branches on an exit code
+/// and cannot branch on anything if the absence of `gh` arrives as `error()`,
+/// because that reaches the model as "the tool broke".
+#[tokio::test]
+#[cfg(unix)]
+async fn a_program_that_is_not_installed_is_an_outcome_and_not_a_broken_tool() {
+    let dir = TempDir::new("host-exec-missing");
+    let (kernel, _host) = fixture(&dir).await;
+
+    let out = call(
+        &kernel,
+        "p_exec",
+        json!({ "argv": ["wizard-no-such-program-anywhere"] }),
+    )
+    .await
+    .expect("a missing program is not a failed call");
+    let (code, rest) = out.split_once('|').expect("code|timed_out|stdout|stderr");
+    // The shell's number for "command not found", because the shell is where
+    // everybody has already learnt it.
+    assert_eq!(code, "127", "{out}");
+    assert!(rest.contains("wizard-no-such-program-anywhere"), "{out}");
+}
+
+/// A plugin's own budget survives `[shell].timeout_secs`.
+///
+/// The clamp used to be the other way round, and that made every ported tool a
+/// thirty-second tool: `[shell].timeout_secs` answers "how long is it worth
+/// blocking a turn for an answer", the shell tool does not kill anything when
+/// it runs out, and using it as a ceiling turned it into a hard kill at a
+/// number set for a different question. A publish pushing a whole history
+/// would have been SIGKILLed mid-transfer and told it had timed out at a
+/// budget it never asked for.
+#[tokio::test]
+#[cfg(unix)]
+async fn an_exec_keeps_its_own_budget_past_the_shell_tools_foreground_one() {
+    let dir = TempDir::new("host-exec-budget");
+    let (kernel, host) = fixture(&dir).await;
+
+    // One second of foreground budget, and a command asking for five to run
+    // for two. Under the old clamp this came back `timed_out = 1`.
+    let mut ctx = ToolContext::new(&dir.path);
+    ctx.shell = Arc::new(crate::config::ShellConfig { timeout_secs: 1 });
+    host.bind(binding(ctx, "").0);
+
+    let out = call(
+        &kernel,
+        "p_exec",
+        json!({ "argv": ["sleep", "2"], "timeout_ms": 5000 }),
+    )
+    .await
+    .expect("the command ran");
+    assert!(out.starts_with("0|nil|"), "{out}");
+}
+
+/// `wizard.paths` is [`Config`]'s answers and not a join onto `$HOME`.
+///
+/// The distinction is invisible in production and load-bearing here:
+/// `Config::wizard_dir` redirects to a temp directory under `cfg(test)`, so a
+/// plugin that rebuilt the path itself would write into the developer's real
+/// `~/.wizard` and this assertion would find the wrong string.
+#[tokio::test]
+async fn wizard_paths_are_the_configs_answers_and_not_a_join_onto_home() {
+    let dir = TempDir::new("host-paths");
+    let (kernel, _host) = fixture(&dir).await;
+
+    let raw = call(&kernel, "p_paths", json!({})).await.expect("paths");
+    let paths: serde_json::Value = serde_json::from_str(&raw).expect("a JSON object");
+
+    let home = crate::config::Config::wizard_dir().expect("a redirected wizard dir");
+    let says = |key: &str| paths[key].as_str().unwrap_or_default().to_string();
+    assert_eq!(says("home"), home.to_string_lossy());
+    assert_eq!(
+        says("source"),
+        crate::config::Config::source_dir()
+            .expect("source")
+            .to_string_lossy()
+    );
+    assert_eq!(
+        says("evolution_log"),
+        crate::config::Config::evolution_log_path()
+            .expect("log")
+            .to_string_lossy()
+    );
+    assert_eq!(says("project"), dir.path.to_string_lossy());
+    // The redirect is the whole point of the table existing.
+    assert_ne!(
+        home,
+        dirs::home_dir().unwrap_or_default().join(".wizard"),
+        "cfg(test) redirects ~/.wizard, and this test is only meaningful there"
+    );
 }
 
 #[tokio::test]

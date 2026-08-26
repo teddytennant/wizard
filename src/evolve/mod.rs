@@ -1,5 +1,14 @@
-//! Tiered self-extension (`/evolve`) and fork-and-distribute (`/publish`).
-//! See `docs/evolve.md` and `docs/market.md`.
+//! Tiered self-extension (`/evolve`).
+//! See `docs/evolve.md`.
+//!
+//! Fork-and-distribute (`/publish`) used to live here as a sibling module and
+//! is now a Lua plugin — `src/plugins/lua/publish/`, behind `--features
+//! tool-publish`. It shared two things with this module and still does: the
+//! source checkout at `~/.wizard/src` that deep evolve builds in, and the
+//! `evolution.jsonl` line format. Both cross the boundary as *data* rather
+//! than as a call, which is what let it go: the plugin asks `wizard.paths` for
+//! the two paths and writes a line marked with the `"event"` key
+//! [`read_events`] already skips.
 //!
 //! Tier 1 (runtime, default): write a skill, MCP server entry, scripted
 //! tool, or subagent under `~/.wizard/` and activate via `/reload`.
@@ -9,9 +18,6 @@
 //! --locked`), and smoke-test. Any rung failing reverts the patch, records the
 //! failing output in `~/.wizard/evolution.jsonl`, and keeps the current
 //! binary. Falls back to Tier 1 when no toolchain/source can be provisioned.
-
-pub mod publish;
-pub use publish::{PublishOutcome, PublishRequest, publish};
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -223,7 +229,7 @@ pub struct EvolutionEvent {
 /// change that actually landed: a rejected patch has no outcome, and inventing
 /// one would make `evolve list`/`evolve undo` offer to undo something that was
 /// never applied. Readers tell the two apart by the `"event"` key, the same
-/// convention `publish` already uses in this file.
+/// convention the publish plugin already uses in this file.
 ///
 /// It carries the failing output on purpose. The next attempt (and the model
 /// that authored the patch) can only avoid repeating a mistake it can read.
@@ -1544,28 +1550,6 @@ impl Evolver {
     }
 }
 
-/// CLI entry point for `wizard --publish`: forks Wizard to the user's GitHub
-/// and prints the fork URL and one-line installer to stdout.
-pub async fn run_publish_cli(config: Config, cli: Cli) -> Result<()> {
-    use publish::PublishRequest;
-
-    let branch = cli.prompt.clone().and_then(|p| {
-        let p = p.trim().to_string();
-        (!p.is_empty()).then_some(p)
-    });
-
-    let req = PublishRequest { branch };
-
-    let outcome = publish::publish(&config, req, true).await?;
-    println!("Fork:    {}", outcome.fork_url);
-    println!("Branch:  {}", outcome.branch);
-    if let Some(sha) = &outcome.commit {
-        println!("Commit:  {sha}");
-    }
-    println!("\nInstall one-liner:\n{}", outcome.install_one_liner);
-    Ok(())
-}
-
 /// CLI entry point for `wizard evolve list|undo`: inspect and roll back the
 /// evolution history in `~/.wizard/evolution.jsonl`. Self-contained — no
 /// config load, no LLM.
@@ -1593,10 +1577,11 @@ fn read_events(path: &Path) -> Result<Vec<EvolutionEvent>> {
         }
         match serde_json::from_str::<EvolutionEvent>(line) {
             Ok(event) => events.push(event),
-            // `publish` and [`DeepFailureEvent`] share this file and mark
-            // themselves with an `"event"` key. They are not evolutions with
-            // an outcome to list or undo, so skip them without the noise a
-            // genuinely corrupt line deserves.
+            // The publish plugin and [`DeepFailureEvent`] share this file
+            // and mark themselves with an `"event"` key. They are not
+            // evolutions with
+            // an outcome to list or undo, so skip them without the noise
+            // a genuinely corrupt line deserves.
             Err(err) => {
                 let foreign = serde_json::from_str::<Value>(line)
                     .map(|value| value.get("event").is_some())
