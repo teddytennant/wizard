@@ -302,13 +302,25 @@ mod tests {
     #[tokio::test]
     async fn a_row_that_says_present_names_a_plugin_the_kernel_loaded() {
         super::super::bundled::ensure().await;
-        let loaded = super::super::kernel().loaded();
+        let kernel = super::super::kernel();
+        let loaded = kernel.loaded();
         for entry in CATALOGUE.iter().filter(|entry| entry.present) {
             let Some(name) = entry.plugin else { continue };
             assert!(
                 loaded.iter().any(|id| id.as_str() == name),
                 "catalogue says '{}' is present but the kernel has no plugin '{name}'",
                 entry.feature
+            );
+            // And the backend column is the kernel's answer, not a second
+            // opinion. Two spellings of one fact is exactly what this file is,
+            // for the rows that are *absent* and have no kernel to ask; the
+            // present rows are where the two can be checked against each other,
+            // so they are.
+            let report = kernel.describe(&name.into()).expect("a loaded plugin");
+            assert_eq!(
+                entry.backend.map(Backend::name),
+                Some(report.language),
+                "the catalogue and the kernel disagree about what '{name}' is written in"
             );
         }
     }

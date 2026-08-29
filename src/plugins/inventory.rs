@@ -200,7 +200,18 @@ fn registers_summary(report: &PluginReport) -> String {
     add(report.providers.len(), "provider", "providers");
     add(report.tools.len(), "tool", "tools");
     add(report.commands.len(), "command", "commands");
-    add(report.services.len(), "entrypoint", "entrypoints");
+    // A service is a CLI surface only if something answers to its name at one
+    // of the entrypoint shapes, and a plugin can register both: the mesh
+    // publishes `wizard peers` and a tee factory, and calling the second one an
+    // entrypoint would tell the reader there is a `wizard mesh-tee`. The two
+    // are counted apart for the same reason `entrypoint::description` exists.
+    let entrypoints = report
+        .services
+        .iter()
+        .filter(|name| crate::entrypoint::description(name).is_some())
+        .count();
+    add(entrypoints, "entrypoint", "entrypoints");
+    add(report.services.len() - entrypoints, "service", "services");
     add(report.handlers, "subscription", "subscriptions");
     if parts.is_empty() {
         "nothing".to_string()
@@ -288,8 +299,9 @@ fn show(name: &str, as_json: bool) -> Result<i32> {
             );
         } else {
             println!("`{name}` is a plugin, but not in this build.\n");
-            println!("  {}", entry.summary);
-            println!("\n{}", how_to_get(entry));
+            println!("{}", wrapped(entry.summary, 2, 78));
+            println!();
+            println!("{}", wrapped(&how_to_get(entry), 2, 78));
         }
         return Ok(1);
     }
@@ -299,6 +311,36 @@ fn show(name: &str, as_json: bool) -> Result<i32> {
          `wizard plugin missing` what it does not."
     );
     Ok(1)
+}
+
+/// Word-wrap `text` to `width` columns, every line indented by `indent`.
+///
+/// Local and eight lines rather than a crate, because the whole requirement is
+/// that a surface's own `about` — `wizard peers` writes a paragraph, because
+/// that paragraph is also the first thing `wizard peers --help` prints — does
+/// not run off the side of a terminal here. Splits on spaces only; a single
+/// word longer than the budget is left long, which is what a URL or a path
+/// should do.
+fn wrapped(text: &str, indent: usize, width: usize) -> String {
+    let pad = " ".repeat(indent);
+    let budget = width.saturating_sub(indent).max(20);
+    let mut lines = vec![String::new()];
+    for word in text.split_whitespace() {
+        let line = lines.last_mut().expect("at least one line");
+        if line.is_empty() {
+            line.push_str(word);
+        } else if line.chars().count() + 1 + word.chars().count() <= budget {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(word.to_string());
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| format!("{pad}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn show_text(report: &PluginReport) {
@@ -313,7 +355,7 @@ fn show_text(report: &PluginReport) {
         report.manifest.description.trim()
     };
     if !description.is_empty() {
-        println!("  {description}");
+        println!("{}", wrapped(description, 2, 78));
     }
     println!();
     println!("  backend  {}", report.language);
@@ -374,7 +416,10 @@ fn show_text(report: &PluginReport) {
         // service that is merely a value another plugin injects. `None` prints
         // the bare name rather than guessing.
         match crate::entrypoint::description(service) {
-            Some(about) => println!("  entrypoint  wizard {service} — {about}"),
+            Some(about) => {
+                println!("  entrypoint  wizard {service}");
+                println!("{}", wrapped(about, 14, 78));
+            }
             None => println!("  service     {service}"),
         }
         any = true;
@@ -416,8 +461,8 @@ fn missing_text() {
     }
     for entry in &missing {
         println!("{}", entry.feature);
-        println!("  {}", entry.summary);
-        println!("  {}", how_to_get(entry));
+        println!("{}", wrapped(entry.summary, 2, 78));
+        println!("{}", wrapped(&how_to_get(entry), 2, 78));
         println!();
     }
     println!("A profile is the shorter way to ask for a set of these: `wizard plugin profiles`.");
@@ -562,6 +607,32 @@ mod tests {
                 report.registration_count()
             );
         }
+    }
+
+    /// Wrapping keeps every line inside the budget, indents all of them, and
+    /// never drops or splits a word.
+    ///
+    /// The input that made this necessary is `wizard peers`' own `about`: it is
+    /// a paragraph, because the same string is the first thing
+    /// `wizard peers --help` prints, and unwrapped it ran a hundred and sixty
+    /// columns off the side of `wizard plugin show mesh`.
+    #[test]
+    fn wrapping_respects_the_budget_and_keeps_every_word() {
+        let text = "Mesh peers: other machines running Wizard, and what this one \
+                    has decided about each of them";
+        let out = wrapped(text, 4, 40);
+        for line in out.lines() {
+            assert!(line.starts_with("    "), "{line:?}");
+            assert!(line.chars().count() <= 40, "{line:?}");
+        }
+        assert_eq!(
+            out.split_whitespace().collect::<Vec<_>>(),
+            text.split_whitespace().collect::<Vec<_>>()
+        );
+        // A word with no break in it is left long rather than cut in half: a
+        // URL or a path that has been hyphenated is worse than one that wraps.
+        let long = "https://example.invalid/a/very/long/path/that/does/not/fit";
+        assert_eq!(wrapped(long, 2, 20), format!("  {long}"));
     }
 
     /// `show` distinguishes a plugin that is absent from a name that never
