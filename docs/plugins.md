@@ -78,7 +78,8 @@ src/kernel/
 
 ### Ctx
 
-Every plugin — Rust or Lua — is handed a `Ctx` and registers against it. The
+Every plugin — Rust, Lua or JavaScript — is handed a `Ctx` and registers
+against it. The
 shape is identical in both languages so a plugin can be ported between them
 without redesigning it.
 

@@ -1,6 +1,7 @@
 //! Tool system: the [`Tool`] trait implemented by native tools
 //! ([`file`], [`shell`]), agent-authored [`scripted`] tools, MCP tools
-//! (`crate::mcp`) and plugin tools (`crate::plugins`, Rust or Lua). All four
+//! (`crate::mcp`) and plugin tools (`crate::plugins`, Rust, Lua or JavaScript).
+//! All four
 //! present a uniform interface through [`registry::ToolRegistry`], so the
 //! model calls them identically.
 
