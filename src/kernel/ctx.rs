@@ -11,27 +11,30 @@
 //!
 //! [`Plugin::apply`](super::Plugin::apply) is handed `&mut Ctx`, matching the
 //! spec, but the methods only need `&self`: the ledger is behind a mutex
-//! because Lua's host functions capture a `Ctx` clone and register from inside
-//! the VM, where there is no `&mut` to be had. One implementation for both
-//! languages is worth an `Arc<Mutex<_>>` that is uncontended in practice — a
-//! plugin registers from one place at a time — and it is what lets the Lua host
-//! be a thin translation layer rather than a parallel implementation of
-//! registration.
+//! because a scripted host's functions capture a `Ctx` clone and register from
+//! inside the VM, where there is no `&mut` to be had. One implementation for
+//! all three languages is worth an `Arc<Mutex<_>>` that is uncontended in
+//! practice — a plugin registers from one place at a time — and it is what lets
+//! each scripted host be a thin translation layer rather than a parallel
+//! implementation of registration.
 //!
 //! # The two places the languages genuinely differ
 //!
 //! Everything else is identical. These two are not, and both are consequences
-//! of what Lua can hold rather than choices:
+//! of what a scripted value can hold rather than choices. They are the same two
+//! in Lua and in JavaScript, which is itself the evidence that the boundary is
+//! drawn in the right place — a second engine found no new one.
 //!
-//! 1. **A native service is invisible to Lua.** `ctx:inject("web")` on a
-//!    service some Rust plugin provided as an `Arc<dyn Trait>` returns `nil`,
-//!    because Lua cannot call it. It is the same `nil` an absent service gives,
-//!    so a Lua plugin's degrade path already covers the case.
-//! 2. **A Lua teardown runs inside its own VM.** `ctx:effect(fn)` from Lua
-//!    cannot become a Rust `FnOnce`, so it is recorded in the VM and run there
-//!    during shutdown, after the registries are already clear. From Rust an
-//!    effect is a closure in the ledger. The observable ordering is the same in
-//!    both: registries first, teardowns last, teardowns in reverse.
+//! 1. **A native service is invisible to a script.** `ctx:inject("web")` on a
+//!    service some Rust plugin provided as an `Arc<dyn Trait>` returns `nil`
+//!    (`undefined` in JavaScript), because a script cannot call it. It is the
+//!    same absent-service answer, so a scripted plugin's degrade path already
+//!    covers the case.
+//! 2. **A script's teardown runs inside its own VM.** `ctx:effect(fn)` cannot
+//!    become a Rust `FnOnce`, so it is recorded in the VM and run there during
+//!    shutdown, after the registries are already clear. From Rust an effect is
+//!    a closure in the ledger. The observable ordering is the same in all
+//!    three: registries first, teardowns last, teardowns in reverse.
 
 use std::any::Any;
 use std::future::Future;

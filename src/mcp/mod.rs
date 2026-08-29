@@ -79,14 +79,16 @@ const STDIO_ENV_DENYLIST: &[&str] = &[
 /// server's tool rather than colliding with it, so the server's tool goes
 /// unreachable with no warning to anyone. A unit test enforces the list.
 ///
-/// The web tools, the two git tools and `publish` are on it unconditionally
-/// although each is a plugin, because this list is about *names*: a name Wizard
-/// itself can register must not be claimable by an MCP server on a build that
-/// happens to have left the plugin out, or the server's `web_fetch` would work
-/// until somebody rebuilt with the feature on and then collide. Holding the
-/// string is what core is allowed to do with a plugin — see the
-/// `ProviderKind::ANTHROPIC` argument in `docs/plugins.md`; what it may not do
-/// is name the type.
+/// The web tools, the two git tools, `publish` and `json_query` are on it
+/// unconditionally although each is a plugin, because this list is about
+/// *names*: a name Wizard itself can register must not be claimable by an MCP
+/// server on a build that happens to have left the plugin out, or the server's
+/// `web_fetch` would work until somebody rebuilt with the feature on and then
+/// collide. Holding the string is what core is allowed to do with a plugin —
+/// see the `ProviderKind::ANTHROPIC` argument in `docs/plugins.md`; what it may
+/// not do is name the type. It is also why the list says nothing about which
+/// *language* a plugin is written in: `git_status` is Lua and `json_query` is
+/// JavaScript and the reservation is identical.
 const RESERVED_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
@@ -111,6 +113,7 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "compact",
     "computer",
     "publish",
+    "json_query",
     "spawn_subagent",
     crate::tools::code::RUN_CODE_TOOL_NAME,
 ];
@@ -1340,6 +1343,9 @@ mod tests {
         }
         if !cfg!(feature = "tool-publish") {
             absent.extend(["publish"]);
+        }
+        if !cfg!(feature = "tool-json") {
+            absent.extend(["json_query"]);
         }
         assert_eq!(
             extra, absent,

@@ -6,9 +6,9 @@ provider transport, the terminal UI, and the kernel that wires plugins together
 
 This is the "everything is a plugin" model, adapted to a compiled language. The
 adaptation matters: a plugin here is **either** an in-tree Rust module compiled
-behind a cargo feature, **or** a LuaJIT script loaded at runtime from
-`~/.wizard/plugins/`. The kernel cannot tell the two apart, and no core module
-names a plugin.
+behind a cargo feature, **or** a script loaded at runtime from
+`~/.wizard/plugins/` — LuaJIT or JavaScript. The kernel cannot tell the three
+apart, and no core module names a plugin.
 
 ## Why not "all of it in Lua"
 
@@ -166,6 +166,28 @@ The VM is long-lived — one per plugin, created at load and dropped at unload �
 which is the change from today's scripted tools, where each call gets a fresh
 throwaway VM and can therefore hold no state.
 
+### JavaScript
+
+The same directory, holding `plugin.js` instead. The file is loaded as an ES
+module and default-exports the same shape:
+
+```js
+export default {
+  name: "todo",
+  apply(ctx) {
+    let store = [];
+    ctx.tool({ name: "todo", description: "...", parameters: {...},
+               execute: (args) => render(store) });
+    ctx.on("session_end", () => { store = []; });
+    ctx.effect(() => { store = null; });
+  },
+};
+```
+
+One QuickJS VM per plugin, on the same terms. TypeScript compiles to this —
+`docs/wizard-plugin.d.ts` declares `ctx` and `wizard`, and no compiler ships in
+the binary. See the last section of this document for both.
+
 ## Manifest and capabilities
 
 ```toml
@@ -260,6 +282,23 @@ Inside is Rust. Elsewhere is where Lua wins, and `publish` shows why the win is
 not about the language -- every step of its Rust was a blocking
 `Command::...output()` inside an `async fn`, and crossing the bridge is what put
 it on the cancellable path.
+
+### Pass three: Lua or JavaScript?
+
+Only once pass two has already answered "a script". The two backends are peers
+with one long-lived VM each, the same `Ctx`, the same capabilities and the same
+bound, so most of the time the answer is "whichever the author writes", and
+that is the honest default. One question separates them:
+
+**What crosses the boundary?** If it is a *document* -- JSON in, JSON out, and
+the shape has to survive -- it is JavaScript, because Lua has one table type
+and cannot tell an empty array from an empty object. `json_query` is that case
+and the section at the end of this document is the long version. If it is a
+command line and an exit code, either will do and Lua is smaller.
+
+Everything else that could look like a tie-breaker is not one. Neither backend
+is meaningfully faster than the other at this scale (see the bench), both are
+sandboxed to the same set of grants, and both can `await`.
 
 ### Two traps
 
@@ -2666,3 +2705,318 @@ is the gateway's.
   command has to keep existing so it can explain itself on a build with no local
   backend — but it means `/server` is still not one of the thirteen earmarked
   commands that has gone through the door. None has.
+
+## As built: JavaScript is the third backend, and QuickJS is why it is small
+
+`src/kernel/js/` is a peer of `src/kernel/lua/`, behind `--features plugin-js`,
+on by default. A plugin is now **either** an in-tree Rust module behind a cargo
+feature, **or** a LuaJIT script, **or** a JavaScript module — and the kernel
+still cannot tell them apart. `src/plugins/js/json/` is the first one, and
+`json_query` is the tool it registers.
+
+The one-paragraph version: `ctx.tool`, `ctx.command`, `ctx.on`, `ctx.emit`,
+`ctx.provide`, `ctx.inject`, `ctx.plugin`, `ctx.effect`, `ctx.config` and
+`ctx.name` mean what they mean from Lua and from Rust; `wizard.*` reaches the
+same `WizardHost`; a capability a plugin did not declare is `undefined` rather
+than present-and-refusing; a runaway plugin stops on its deadline. Nothing in
+that sentence is a new idea. What is new is a second scripting engine, and the
+interesting part is the handful of places the two engines are not the same.
+
+### The engine decision, with the number behind it
+
+QuickJS through `rquickjs`, and the deciding argument is size.
+`--no-default-features` exists because a build that leaves plugins out is
+supposed to be *smaller*, and a JavaScript backend that cost tens of megabytes
+whether or not anybody wrote a plugin in it would make that claim untrue for
+every stock binary. Measured on this box with `cargo build --release`, same
+toolchain, same target directory, otherwise-default features:
+
+| build | `wizard` binary | delta |
+| --- | --- | --- |
+| default minus `plugin-js`, `tool-json` | 23,840,360 bytes | — |
+| default features | 25,380,496 bytes | **+1,540,136 (+1.5 MB, +6.5%)** |
+
+The release profile already sets `strip = true`, so those are stripped
+binaries; `strip -s` on top of them changes nothing, which was checked rather
+than assumed. The 1.5 MB is the whole backend: the QuickJS interpreter,
+`rquickjs`'s bindings, `src/kernel/js/` and the bundled `plugin.js`.
+
+A `deno_core`/V8 embedding is more than an order of magnitude past that —
+tens of megabytes against 1.5 — because what it brings is a JIT, a heap
+snapshot and a garbage collector tuned for a browser tab. Nothing a plugin does here needs any of the three: a plugin decides
+an argv, walks a JSON document, or awaits an HTTP call, and the bench below says
+what that costs.
+
+The other two reasons are not about size and both are load-bearing.
+
+**A subprocess would put the capability model on the wrong side of a process
+boundary.** `node plugin.js` is easier to wire than an embedded VM and gives up
+the whole design: `wizard.fs` confined to the project directory means nothing
+when the plugin is a separate process running with the user's own file
+permissions, and `Capability::Network` means nothing when the plugin can open a
+socket for itself. An in-process VM with no filesystem, no network and no module
+loader is the only shape in which "a capability a plugin did not declare is
+absent" is a statement about what the code *can* do rather than about what it is
+asked to do.
+
+**The lifecycle has to be the one `src/kernel/lua/` already implements.** One VM
+per plugin, created at load and dropped at unload, so `let store = []` in
+`apply` is a real store and `ctx.effect` has something to tear down. QuickJS's
+`AsyncRuntime` is that; a subprocess is a pipe with a restart problem.
+
+`plugin-js` is **on by default** on the strength of that size number.
+`tool-json` depends on it the way `graph` depends on `mesh`, because a
+`plugin.js` compiled into a binary with no engine to load it is not a smaller
+build — it is a plugin that never runs.
+
+### What was blocked in the sandbox, and why
+
+`narrow_stdlib` removes `package` and `require` from every Lua plugin because
+`package.loadlib` maps a `.so` into this process and calls it: native execution
+behind a grant that never mentioned it. The JavaScript equivalents, in the order
+they matter.
+
+**The module loader, which is the real one.** `import` and `import()` are how a
+JavaScript program reaches code outside itself, and QuickJS resolves them
+through a *loader the embedder installs*. `rquickjs` ships two — `loader` for
+filesystem modules and `dyn-load` for native `.so` modules, which is
+`package.loadlib` under another name. Neither cargo feature is enabled and
+nothing calls `set_loader`, so both forms of `import` fail with nothing to
+resolve against. That is a stronger property than blanking a global: there is no
+loader to reach rather than a loader nobody named. Both halves are pinned —
+`a_capability_grant_does_not_smuggle_in_native_code_loading` for the dynamic
+form, and `a_static_import_is_refused_at_load_rather_than_at_first_use` for the
+static one, which has to fail the *load* rather than the first call, or a plugin
+with an unreachable dependency would register its tools and then fail in front
+of the model.
+
+**`Atomics` and `SharedArrayBuffer`.** Removed. `Atomics.wait` is the one
+JavaScript primitive that blocks a thread *without executing bytecode*, and the
+interrupt handler that bounds a plugin only fires from the interpreter loop — so
+a plugin parked there would sit past its deadline with the bound looking on.
+QuickJS happens to refuse to block on the main agent today ("cannot block in
+this thread"), which makes this defence in depth rather than a live hole. It is
+removed anyway: a capability model that depends on one engine's implementation
+detail is not a promise, and neither name is useful to a plugin with no worker
+threads.
+
+**`FinalizationRegistry`.** Removed. It is the only way to get plugin code to
+run when nobody called it — the callback fires at garbage collection, which is
+not inside any call, which is exactly where no deadline is armed. `WeakRef`
+stays; it has no callback and cannot schedule anything.
+
+**`eval` and the `Function` constructor stay**, and that mirrors Lua rather than
+diverging from it. `blank_globals` keeps `load` and `loadstring` and refuses
+only *bytecode* chunks, because compiling text is not an escape: the result runs
+in the same VM, under the same globals, behind the same bound. LuaJIT needed the
+bytecode refusal because it does not verify a binary chunk; QuickJS exposes no
+bytecode reader to JavaScript at all, so the hole is not there to patch.
+
+**One divergence, in the other direction, and it is honest.** Lua's sandboxed
+profile has no `os`, so a plugin that declared nothing cannot read the clock. A
+JavaScript plugin can: `Date` is not removable without breaking the language.
+`performance` is left alone for the same reason — with `Date.now` present,
+removing the other timer would be theatre. So the two backends' zero-capability
+sandboxes are not identical, and the difference is that a JS plugin can tell the
+time.
+
+### The bound is an interrupt handler, and it is stronger than Lua's
+
+This document records three details LuaJIT needed before an async chunk could be
+bounded — `jit.flush()` after `jit.off()`, `set_global_hook` rather than
+`set_hook`, and `install_stop_guard` — each rediscovered the hard way. QuickJS
+needs one call, `AsyncRuntime::set_interrupt_handler`, and gives for free the
+guarantee the stop guard had to be written to provide: the interpreter raises
+the interrupt as an **uncatchable** error, so `try { for(;;){} } catch {}` stops
+on the deadline. `a_bounded_plugin_is_stopped_and_its_vm_survives` drives four
+spins — bare, after an `await`, inside a `try`, and inside a `try`/`finally` —
+and asserts each stops within the budget and leaves the VM usable afterwards.
+
+Two things carry over unchanged and both are the Lua module's. The deadline is
+per *call*, armed on entry and parked when the VM goes idle, because a lifetime
+deadline would kill a plugin loaded at 09:00 thirty seconds later. And the stop
+flag is un-latched once nothing is in flight, or the first plugin to time out
+would be dead for the rest of the session.
+
+**There is no JIT to lose.** In Lua a bound means `jit.off()`, so a bounded
+plugin is interpreted and gives up the compiler — the trade this document
+records as "a bound costs the JIT". QuickJS is an interpreter either way, so a
+bounded JS plugin pays one function call every few thousand bytecodes and
+nothing else. First-party plugins still run unbounded, because the *reason* is
+about who wrote the code rather than about speed, but the bound costs a registry
+plugin much less here than it does there.
+
+### What the bridge costs
+
+`src/plugins/bench.rs` grew a JavaScript row beside the Lua one: three tools
+that do nothing, reached through the same dispatcher, median of 200 calls,
+`--release`.
+
+```
+=== per-call cost, median of 200 (release) ===
+  rust tool, does nothing       39.000ns
+  lua tool, does nothing         1.529us
+  lua bridge overhead            1.490us
+  js tool, does nothing          1.190us
+  js bridge overhead             1.151us
+
+=== startup, median of 20 ===
+  kernel + bundled plugins     922.813us
+```
+
+**The JavaScript bridge is slightly cheaper than the Lua one**, which was not
+the expected answer and is worth stating plainly rather than rounding away:
+1.15us against 1.49us, both against a 39ns Rust no-op. The likely reason is
+that the Lua side pays for `mlua`'s coroutine trampoline on every call — a
+scripted tool body is driven as an async Lua coroutine whether or not it ever
+yields — where a JavaScript body that returns without awaiting is an ordinary
+call and never allocates a promise. It is not an argument for JavaScript: a
+third of a microsecond is noise beside a `fork`, and the difference is smaller
+than the run-to-run spread on a busy machine.
+
+What the number actually settles is the same thing the Lua row settled. At
+~1.2us a plugin call is invisible next to anything a plugin does — a process
+spawn is thousands of times more, an HTTP request a million — and ruinous
+inside a redraw or a per-token loop. So the "Rust or a script" question is
+unchanged by this backend existing, and `docs/plugins.md`'s answer to it stays
+the same: does the work happen inside this code, or somewhere else?
+
+Loading is measured too, and it is the cost the default-on decision spends:
+0.92ms for the kernel plus all three bundled plugins, which is one LuaJIT
+state, one QuickJS runtime and three scripts.
+
+### Four places the two engines genuinely differ
+
+**Callbacks live inside the VM, not beside it.** The Lua backend keeps a
+`HashMap<FnId, mlua::Function>` on the Rust side. `rquickjs::Persistent` holds
+raw pointers into its runtime and is deliberately not `Send`, so the same table
+could not live in a struct held across an `await` on a `tokio::spawn`ed task —
+which is where a plugin's VM lives, in both backends, by design. So an `FnId` is
+an index into a non-enumerable, non-writable array on the plugin's own globals.
+A plugin that reaches in and corrupts it breaks only itself: one VM per plugin,
+nothing else in it.
+
+**A plugin is a module, and that is the TypeScript decision showing up in the
+loader.** `plugin.lua` ends in `return { ... }`. `plugin.js` is evaluated as an
+ES module and must `export default { name, apply }`, because that is what `tsc`
+and `esbuild` emit — a bare trailing object expression is a shape no TypeScript
+toolchain produces. Modules are strict mode by default, which is one fewer
+footgun in a file nobody is going to lint.
+
+**`apply` may be `async`, and the load waits for it.** That is what makes
+`ctx.plugin(child)` usable from a JavaScript parent, and it means a rejection
+during load is a load failure rather than an unhandled rejection nobody sees.
+
+**JSON survives the round trip exactly.** This is the one that decided what the
+first JavaScript plugin should be.
+
+### `json_query`, and why it is JavaScript-shaped
+
+The rule this document settled on is that a scripted plugin may not own session
+state, may not be something core calls synchronously, and may not have its
+testability built on seams a value cannot carry. `json_query` has none of those
+problems — it is a pure function of a document and a query — so the interesting
+question is the narrower one: why JavaScript rather than Lua?
+
+**Because Lua cannot represent JSON and JavaScript is JSON.** Lua has one table
+type, so `[]` and `{}` are the same value and a serializer has to guess. This
+document already records both halves of the damage: `object_schema` in
+`src/kernel/lua/host.rs` exists to repair `properties = {}` serializing as an
+array, and the `publish` section says plainly that "a plugin that genuinely
+needs an empty JSON array somewhere still cannot write one". A tool whose entire
+job is to read a JSON document, select part of it, and hand that part back
+*unchanged* cannot be built on a value model that rewrites `{"tags": []}` into
+`{"tags": {}}` on the way through.
+`a_json_document_survives_the_round_trip_unchanged` is that claim as a test:
+empty objects, empty arrays, `null`s, an empty-string key and non-ASCII text, in
+and back out identical. There is no `object_schema` in `src/kernel/js/` because
+there is nothing to repair.
+
+The second reason is smaller and still real. The path walk in `plugin.js` is
+about forty lines because objects, arrays and `undefined` are three different
+things; the Lua version would need a table-kind heuristic in every branch of it.
+
+**It declares no capabilities at all**, which is the strongest demonstration of
+the model that was available. It reads a file — and `wizard.fs.read` without
+`filesystem` is confined to the project directory, which is exactly the reach a
+tool for `package.json` and lockfiles should have. Declaring `filesystem` to
+cover a case nobody has is how a capability list stops meaning anything.
+
+What it deliberately is not is a second implementation of an existing plugin. A
+third-language `git_status` would prove that three engines can shell out, which
+nobody doubted.
+
+### Writing a plugin in TypeScript
+
+`docs/wizard-plugin.d.ts` declares `ctx`, `wizard`, the spec shapes and the
+event names. Types are erased at build time, so the runtime runs JavaScript and
+there is nothing for it to do with a `.ts` file. **No TypeScript compiler is
+bundled**: the smallest Rust crate that could strip types is several times the
+size of the whole JavaScript engine, which would spend the size argument the
+backend was chosen on. Compile before installing:
+
+```
+esbuild plugin.ts --bundle --format=esm --platform=neutral --outfile=plugin.js
+```
+
+`tsc --module es2022 --target es2022 plugin.ts` works for a single file with no
+imports. `--bundle` matters as soon as there is more than one: there is no
+module loader in the VM, so everything a plugin uses has to end up in
+`plugin.js`.
+
+The plugin Wizard ships is written the third way, and deliberately — plain
+JavaScript with a `/// <reference path=...>` at the top and JSDoc annotations,
+type-checked by `tsc --noEmit --checkJs` and installed with no build step. A
+checked-in `.ts` beside a checked-in generated `.js` is two files that can
+disagree, and `include_str!` can only take one of them.
+
+Both were run rather than assumed. `tsc 5.9.3` with
+`--noEmit --checkJs --strict --target es2022` reports nothing on
+`src/plugins/js/json/plugin.js`, and a `.ts` plugin written against the same
+declarations compiles and loads —
+`a_typescript_compilers_output_shape_loads` is that second half in the suite,
+because what `tsc` emits after `export default` is a `const` binding rather
+than an object literal, and QuickJS resolves those two differently.
+
+Two things the declaration file had to get right, both found by running the
+compiler rather than by reading it. It is a **global** declaration file with no
+top-level `import` or `export`, because adding either would turn it into a
+module and take `ctx` and `wizard` back out of scope for exactly the plugin
+that referenced it. And the plugin type is `WizardPlugin`, not `Plugin`,
+because TypeScript's DOM lib already declares a global `Plugin` — and two
+global interfaces sharing a name are *merged* rather than shadowed, so the
+collision would have produced one silently mixed shape rather than an error.
+
+### Proving it, and what is still open
+
+`contrib/check-tool-plugins.sh` grew two legs. `without tool-json` is the
+backend present with no bundled JavaScript plugin — the case that proves an
+absent JS tool leaves the roster rather than the build. `without plugin-js`
+takes `tool-json` with it (the `graph = ["mesh"]` shape again) and is the leg
+that proves `rquickjs` genuinely leaves the dependency graph and that
+`PluginKind` loses its `Js` variant without a `match` going non-exhaustive.
+
+In-tree, `plugins::a_tool_is_registered_exactly_when_its_plugin_is_compiled_in`
+gained a `json` row beside the Lua and Rust ones, which is the assertion this
+whole section is trying to earn: the table does not care which language a
+plugin is written in.
+
+Still open, specific to this:
+
+- **A `plugin.js` and a `plugin.lua` in one directory** loads the Lua one and
+  warns. Which the author meant is genuinely unknowable and picking silently is
+  worse than saying so, but a manifest key would settle it — at the cost of a
+  second place to say a thing the directory already says.
+- **`ctx.plugin` loads JavaScript children only**, mirroring the Lua rule that a
+  Lua parent loads Lua children. A cross-language child would need a way to say
+  which, and nobody has asked for one.
+- **The capability set is unchanged.** Nothing here needed a new grant, which is
+  the outcome to want: `Capability` is a promise to a user about what a plugin
+  cannot do, and a backend that forced it wider would be a backend that had to
+  be argued about again.
+- **A JS plugin can read the clock with no capability.** See above. It is a real
+  difference between the two sandboxes and there is no fix that leaves the
+  language intact.
+- **No JS plugin is a command or an event handler yet.** `ctx.command` and
+  `ctx.on` are implemented and tested; `json` uses neither, so the shipped
+  surface is one tool.

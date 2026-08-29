@@ -4,33 +4,34 @@
 //! itself, built and proven alone before anything was ported into it.
 //!
 //! It is no longer dormant. [`crate::plugins`] owns the one kernel a running
-//! Wizard has, loads the compiled-in Rust plugins into it and the user's Lua
-//! plugins from `~/.wizard/plugins`, and `crate::run` boots it above the
-//! dispatch chain so every surface gets the same set. Nothing in here reaches
-//! back out: the kernel still has no idea which plugins exist, and that is
-//! what keeps a bug in a plugin from being a bug in a session.
+//! Wizard has, loads the compiled-in Rust plugins into it and the user's
+//! scripted plugins from `~/.wizard/plugins`, and `crate::run` boots it above
+//! the dispatch chain so every surface gets the same set. Nothing in here
+//! reaches back out: the kernel still has no idea which plugins exist, and that
+//! is what keeps a bug in a plugin from being a bug in a session.
 //!
-//! What it is, in one paragraph. A plugin — Rust or Lua, the kernel cannot tell
-//! them apart — is handed a [`Ctx`] and registers against it: tools, slash
-//! commands, providers, event handlers, services. Every one of those
-//! registrations is written into that plugin's ledger, and unloading it drops
-//! all of them in one step ([`lifecycle`]). Handlers subscribe to lifecycle
-//! events through an async bus that lets them observe, rewrite the payload, or
-//! veto, and a handler that errors or panics is logged and skipped ([`bus`]).
-//! Plugins reach each other by name through `provide`/`inject`, where `inject`
-//! returning `None` is the composability rule rather than a failure
-//! ([`services`]). Lua plugins get one long-lived VM each, created at load and
-//! dropped at unload, with the existing `src/tools/lua.rs` sandbox reused
-//! rather than reimplemented ([`lua`]).
+//! What it is, in one paragraph. A plugin — Rust, Lua or JavaScript, and the
+//! kernel cannot tell them apart — is handed a [`Ctx`] and registers against
+//! it: tools, slash commands, providers, event handlers, services. Every one of
+//! those registrations is written into that plugin's ledger, and unloading it
+//! drops all of them in one step ([`lifecycle`]). Handlers subscribe to
+//! lifecycle events through an async bus that lets them observe, rewrite the
+//! payload, or veto, and a handler that errors or panics is logged and skipped
+//! ([`bus`]). Plugins reach each other by name through `provide`/`inject`,
+//! where `inject` returning `None` is the composability rule rather than a
+//! failure ([`services`]). A scripted plugin gets one long-lived VM, created at
+//! load and dropped at unload: LuaJIT through [`lua`], reusing the existing
+//! `src/tools/lua.rs` sandbox rather than reimplementing it, and QuickJS
+//! through [`js`].
 //!
 //! # The three things worth knowing before reading further
 //!
-//! **The `Ctx` shape is identical from Rust and from Lua.** Not similar — the
+//! **The `Ctx` shape is identical in all three languages.** Not similar — the
 //! same ten calls, with the same meanings, so a plugin can be ported between
-//! the two languages without being redesigned. Every divergence is a bug, and
-//! `ctx.rs` carries the list of the two places the languages genuinely cannot
-//! meet (a native service is invisible to Lua; a Lua teardown runs inside its
-//! own VM).
+//! them without being redesigned. Every divergence is a bug, and `ctx.rs`
+//! carries the list of the two places they genuinely cannot meet (a native
+//! service is invisible to a script; a script's teardown runs inside its own
+//! VM).
 //!
 //! **Names are owned.** A tool, command or provider name may be held by exactly
 //! one plugin, and a second plugin claiming it is refused at load rather than
@@ -47,6 +48,8 @@
 
 pub mod bus;
 pub mod ctx;
+#[cfg(feature = "plugin-js")]
+pub mod js;
 pub mod lifecycle;
 pub mod lua;
 pub mod manifest;
@@ -209,6 +212,19 @@ fn unwired(table: &str, what: &str) -> anyhow::Error {
          The plugin kernel is running but no host bridge is attached to it; \
          see docs/plugins.md."
     )
+}
+
+/// What running one plugin VM's teardowns did.
+///
+/// One struct for both scripted backends rather than one per language. An
+/// unload reports the same two facts whichever VM ran the teardowns, and the
+/// alternative — a `LuaShutdown` and a `JsShutdown` with identical fields —
+/// would be two things to keep in step with [`DisposalReport`] and a `match`
+/// in [`Kernel::unload`] that exists only to convert between them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VmShutdown {
+    pub effects: usize,
+    pub failures: Vec<String>,
 }
 
 /// A registration and the plugin that made it.
@@ -559,6 +575,17 @@ impl Kernel {
         lua::load_dir(self, dir, source, None, None).await
     }
 
+    /// Load a JavaScript plugin from a directory holding `manifest.toml` and
+    /// `plugin.js`.
+    ///
+    /// The sibling of [`Kernel::load_lua`], down to the argument list, because
+    /// the two backends are peers: what changes is the file extension and the
+    /// engine behind it, and nothing a plugin can observe through [`Ctx`].
+    #[cfg(feature = "plugin-js")]
+    pub async fn load_js(&self, dir: &Path, source: PluginSource) -> Result<PluginId, KernelError> {
+        js::load_dir(self, dir, source, None, None).await
+    }
+
     pub fn host(&self) -> Arc<dyn HostBridge> {
         Arc::clone(&self.inner.host)
     }
@@ -741,8 +768,8 @@ impl Kernel {
                 ..
             } = orphan;
             let report = lifecycle::dispose(&self.inner.slots, &child_id, ledger, |_| None);
-            if let PluginKind::Lua(vm) = kind {
-                vms.push(vm);
+            if kind.has_vm() {
+                vms.push(kind);
             }
             child_reports.insert(child_id, report);
         }
@@ -750,8 +777,8 @@ impl Kernel {
         let mut report = lifecycle::dispose(&self.inner.slots, id, ledger, |child| {
             child_reports.remove(child)
         });
-        if let PluginKind::Lua(vm) = kind {
-            vms.push(vm);
+        if kind.has_vm() {
+            vms.push(kind);
         }
 
         for vm in vms {

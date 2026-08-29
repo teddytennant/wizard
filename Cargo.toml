@@ -96,6 +96,8 @@ default = [
   "tool-web",
   "tool-git",
   "tool-publish",
+  "plugin-js",
+  "tool-json",
 ]
 
 # `wizard acp`: the Agent Client Protocol server that lets Zed, Neovim and
@@ -243,6 +245,35 @@ tool-git = []
 # then say which feature would bring it back. Nothing else changes: the
 # checkout at `~/.wizard/src` is deep evolve's and is still there.
 tool-publish = []
+
+# The JavaScript/TypeScript plugin backend: `src/kernel/js/`, one embedded
+# QuickJS VM per plugin, a peer of the LuaJIT backend rather than a
+# replacement for it.
+#
+# This is the only plugin feature that is a *language* rather than a
+# subsystem. Leaving it out costs no tool and no command on its own — it costs
+# the ability to load a `plugin.js` at all, from `~/.wizard/plugins` and from
+# `src/plugins/js/`, which is why the bundled JS plugins name it below.
+#
+# ON by default because it is small. QuickJS is one C file and the whole
+# backend adds under a megabyte to a release binary — see `docs/plugins.md`
+# for the measurement — which is a different order of magnitude from the
+# ~40 MB a V8 embedding costs and therefore does not touch the small-binary
+# story `--no-default-features` exists to protect. The `pi` profile can still
+# turn it off.
+plugin-js = ["dep:rquickjs"]
+
+# `json_query`: pull one value out of a JSON document without spending the
+# context window on the rest of it. `src/plugins/js/json/`, and the first
+# plugin written in JavaScript.
+#
+# It depends on `plugin-js` the way `graph` depends on `mesh`: a `plugin.js`
+# with no JS backend to load it is not a smaller build, it is a plugin whose
+# file is compiled into the binary and never runs. Cargo is where that gets
+# written down, and `contrib/check-tool-plugins.sh` has to know it too —
+# dropping `plugin-js` from the default list leaves this to turn it back on,
+# which is what `without_many` there is for.
+tool-json = ["plugin-js"]
 
 # xAI Grok, by API key (`kind = "xai"`) and by account sign-in
 # (`kind = "xaioauth"`). The token store and the sign-in flow stay in core:
@@ -498,6 +529,21 @@ iced_test = { version = "0.14", optional = true }
 # the just-in-time compiler in-process. Vendored so the binary has no system
 # libluajit dependency; `send` so Lua handles can cross await points.
 mlua = { version = "0.12", default-features = false, features = ["luajit", "vendored", "send", "serialize", "async"] }
+
+# Embedded QuickJS for the JavaScript/TypeScript plugin backend, behind
+# `plugin-js`. Optional, so a build without that feature links no JS engine at
+# all — which is what makes the feature removable in the sense
+# `docs/plugins.md` means by the word.
+#
+# The feature list is short on purpose and two absences are the sandbox rather
+# than an oversight. `loader` is QuickJS's module resolver and `dyn-load` is
+# its native-library loader — `package.loadlib` under another name — so
+# neither is enabled and `import` has nothing to resolve against. See
+# `src/kernel/js/host.rs`, which enumerates the rest. `parallel` is what makes
+# an `AsyncRuntime` `Send`, which is what lets a plugin's VM live on a
+# `tokio::spawn`ed task exactly as a Lua plugin's does, and `futures` is what
+# makes a host call awaitable from straight-line JavaScript.
+rquickjs = { version = "0.12", default-features = false, features = ["std", "futures", "parallel", "classes", "properties", "array-buffer", "macro"], optional = true }
 
 # Process-group kill for background tasks (`task_kill`, timeouts)
 [target.'cfg(unix)'.dependencies]

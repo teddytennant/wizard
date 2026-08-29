@@ -912,15 +912,33 @@ pub(crate) fn install_wizard_lib(lua: &Lua, cwd: &Path, stdlib: Stdlib) -> mlua:
 /// out, and an existing path is canonicalized and re-checked so a symlink
 /// planted inside the project cannot point out of it.
 fn resolve_tool_path(cwd: &Path, path: &str, stdlib: Stdlib) -> mlua::Result<PathBuf> {
+    resolve_plugin_path(cwd, path, stdlib)
+        .map_err(|reason| mlua::Error::external(anyhow::anyhow!(reason)))
+}
+
+/// [`resolve_tool_path`] with the refusal as a plain sentence rather than an
+/// `mlua::Error`.
+///
+/// It exists because the JavaScript backend needs the same answer and cannot
+/// use the same error type. What must not happen is a second confinement:
+/// `wizard.fs.read` means the same thing in both languages, and two copies of
+/// this decision is two places for a `..` to stop being caught. So the
+/// decision lives here, once, and each backend wraps the refusal in whatever
+/// its engine calls an error.
+pub(crate) fn resolve_plugin_path(
+    cwd: &Path,
+    path: &str,
+    stdlib: Stdlib,
+) -> Result<PathBuf, String> {
     if stdlib == Stdlib::Full {
         return Ok(resolve_against(cwd, path));
     }
     confine_to(cwd, path).map_err(|reason| {
-        mlua::Error::external(anyhow::anyhow!(
+        format!(
             "sandboxed tool may not touch '{path}': {reason}. \
              Registry tools are confined to the project directory; \
              a tool that needs more has to declare it and be installed with an explicit grant."
-        ))
+        )
     })
 }
 

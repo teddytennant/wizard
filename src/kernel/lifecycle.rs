@@ -264,12 +264,19 @@ impl DisposalReport {
 /// Which world a loaded plugin's code lives in.
 ///
 /// The kernel does not branch on this for anything a plugin can observe — that
-/// is the whole point of the `Ctx` shape being identical in both languages —
-/// but disposal does: dropping a Lua plugin has to stop its VM task, and
-/// dropping a Rust one has to drop an `Arc`.
+/// is the whole point of the `Ctx` shape being identical in all three
+/// languages — but disposal does: dropping a scripted plugin has to stop its
+/// VM task, and dropping a Rust one has to drop an `Arc`.
+///
+/// The JavaScript arm is behind its feature rather than always present with a
+/// value nothing constructs, so a build without `plugin-js` does not carry a
+/// variant that cannot happen. That costs one `#[cfg]` per `match`, which is
+/// two `match`es in the whole tree.
 pub enum PluginKind {
     Rust(Arc<dyn super::Plugin>),
     Lua(super::lua::LuaPlugin),
+    #[cfg(feature = "plugin-js")]
+    Js(super::js::JsPlugin),
 }
 
 impl fmt::Debug for PluginKind {
@@ -277,6 +284,40 @@ impl fmt::Debug for PluginKind {
         match self {
             PluginKind::Rust(_) => f.write_str("Rust"),
             PluginKind::Lua(_) => f.write_str("Lua"),
+            #[cfg(feature = "plugin-js")]
+            PluginKind::Js(_) => f.write_str("Js"),
+        }
+    }
+}
+
+impl PluginKind {
+    /// True when disposal has an async half — a VM task to stop and teardowns
+    /// to run inside it.
+    ///
+    /// A Rust plugin's teardowns are `FnOnce`s the ledger already ran
+    /// synchronously, so it answers `false` and is dropped where it stands
+    /// rather than being carried to the end of [`crate::kernel::Kernel::unload`].
+    pub(crate) fn has_vm(&self) -> bool {
+        match self {
+            PluginKind::Rust(_) => false,
+            PluginKind::Lua(_) => true,
+            #[cfg(feature = "plugin-js")]
+            PluginKind::Js(_) => true,
+        }
+    }
+
+    /// Run this plugin's in-VM teardowns and stop its VM.
+    ///
+    /// One method rather than a `match` at the call site because the caller —
+    /// `unload` — has nothing to say about which language a plugin is written
+    /// in, and every place that learns the answer is a place a third backend
+    /// has to be remembered.
+    pub(crate) async fn shutdown(self) -> super::VmShutdown {
+        match self {
+            PluginKind::Rust(_) => super::VmShutdown::default(),
+            PluginKind::Lua(vm) => vm.shutdown().await,
+            #[cfg(feature = "plugin-js")]
+            PluginKind::Js(vm) => vm.shutdown().await,
         }
     }
 }

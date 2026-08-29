@@ -67,7 +67,7 @@ use crate::tools::lua::{BoundsHandle, StopReason, install_bounds};
 
 use super::lifecycle::PluginId;
 use super::manifest::{PluginManifest, PluginSource};
-use super::{Kernel, KernelError, PluginKind};
+use super::{Kernel, KernelError, PluginKind, VmShutdown};
 
 /// A Lua function the host holds a handle on, by number.
 ///
@@ -112,15 +112,8 @@ enum VmRequest {
         reply: oneshot::Sender<anyhow::Result<Value>>,
     },
     Shutdown {
-        reply: oneshot::Sender<LuaShutdown>,
+        reply: oneshot::Sender<VmShutdown>,
     },
-}
-
-/// What running a plugin's Lua teardowns did.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct LuaShutdown {
-    pub effects: usize,
-    pub failures: Vec<String>,
 }
 
 /// A cheap, clonable way to call into one plugin's VM.
@@ -172,7 +165,7 @@ impl LuaPlugin {
     /// that does not answer within [`SHUTDOWN_GRACE`] is abandoned and
     /// reported, rather than held onto: `Drop` aborts the task either way, so
     /// the worst case is a leaked socket in a plugin that was already wedged.
-    pub async fn shutdown(self) -> LuaShutdown {
+    pub async fn shutdown(self) -> VmShutdown {
         let (reply, answer) = oneshot::channel();
         if self
             .handle
@@ -181,17 +174,17 @@ impl LuaPlugin {
             .await
             .is_err()
         {
-            return LuaShutdown::default();
+            return VmShutdown::default();
         }
         match tokio::time::timeout(SHUTDOWN_GRACE, answer).await {
             Ok(Ok(shutdown)) => shutdown,
-            Ok(Err(_)) => LuaShutdown::default(),
+            Ok(Err(_)) => VmShutdown::default(),
             Err(_) => {
                 tracing::warn!(
                     plugin = %self.handle.plugin,
                     "a Lua plugin did not finish its teardowns in time; abandoning its VM"
                 );
-                LuaShutdown {
+                VmShutdown {
                     effects: 0,
                     failures: vec![format!(
                         "{}: teardowns did not finish within {}s",

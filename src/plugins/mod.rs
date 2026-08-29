@@ -298,6 +298,14 @@ pub async fn boot(project_root: Option<&Path>) {
 /// arrived by being dropped in a directory has not been read by anybody, so it
 /// runs interpreted under the deadline hook. First-party status is a property
 /// of shipping in the binary, and the binary is [`compiled_in`].
+///
+/// **The file name picks the backend.** A directory holding `plugin.lua` is a
+/// Lua plugin and one holding `plugin.js` is a JavaScript plugin, which is the
+/// whole of the dispatch — there is no `language =` key in the manifest, and
+/// there should not be, because it would be a second place to say a thing the
+/// directory already says and a place for the two to disagree. A directory
+/// holding both is loaded as Lua and warned about, since which one the author
+/// meant is genuinely unknowable and silently picking is worse than saying so.
 async fn load_user_plugins(kernel: &Kernel) {
     let root = kernel.plugin_root().to_path_buf();
     let entries = match std::fs::read_dir(&root) {
@@ -314,20 +322,60 @@ async fn load_user_plugins(kernel: &Kernel) {
     let mut dirs: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        // A directory without a `plugin.lua` is not a broken plugin, it is not
-        // a plugin: `~/.wizard/plugins` is a place people leave notes and
+        // A directory with neither script is not a broken plugin, it is not a
+        // plugin: `~/.wizard/plugins` is a place people leave notes and
         // half-finished checkouts, and warning about those trains the warning
         // out of usefulness.
-        .filter(|path| path.join("plugin.lua").is_file())
+        .filter(|path| path.join("plugin.lua").is_file() || path.join("plugin.js").is_file())
         .collect();
     dirs.sort();
 
     for dir in dirs {
-        match kernel.load_lua(&dir, PluginSource::Registry).await {
+        let loaded = if dir.join("plugin.lua").is_file() {
+            if dir.join("plugin.js").is_file() {
+                tracing::warn!(
+                    "plugin at {} has both plugin.lua and plugin.js; loading the Lua one",
+                    dir.display()
+                );
+            }
+            kernel.load_lua(&dir, PluginSource::Registry).await
+        } else {
+            load_user_js(kernel, &dir).await
+        };
+        match loaded {
             Ok(id) => tracing::info!("plugin '{id}' loaded from {}", dir.display()),
             Err(err) => tracing::warn!("plugin at {} did not load: {err:#}", dir.display()),
         }
     }
+}
+
+/// A `plugin.js` on a build that has the JavaScript backend.
+///
+/// The absent half is a named sentence rather than a silent skip, because a
+/// user who installed a JS plugin and got nothing has no way to discover why
+/// — this is the "degrade in presence, never in behaviour" rule applied to a
+/// backend rather than to a plugin.
+#[cfg(feature = "plugin-js")]
+async fn load_user_js(
+    kernel: &Kernel,
+    dir: &Path,
+) -> Result<crate::kernel::PluginId, crate::kernel::KernelError> {
+    kernel.load_js(dir, PluginSource::Registry).await
+}
+
+#[cfg(not(feature = "plugin-js"))]
+async fn load_user_js(
+    _kernel: &Kernel,
+    dir: &Path,
+) -> Result<crate::kernel::PluginId, crate::kernel::KernelError> {
+    Err(crate::kernel::KernelError::Apply {
+        plugin: dir.display().to_string(),
+        source: anyhow::anyhow!(
+            "this build has no JavaScript plugin backend — it was compiled without the \
+             `plugin-js` feature. Rebuild with `cargo build --release --features plugin-js`, \
+             or install a stock release binary, which has it: `plugin-js` is on by default."
+        ),
+    })
 }
 
 /// Copy every plugin-registered tool into `registry`, and say how many went.
@@ -608,9 +656,9 @@ mod tests {
     async fn a_tool_is_registered_exactly_when_its_plugin_is_compiled_in() {
         /// `(cargo feature is on, plugin name, tools it registers)`.
         ///
-        /// `git` and `publish` are Lua and `web` is Rust, and the rows are the
-        /// same rows: the kernel does not distinguish them, which is the claim
-        /// `docs/plugins.md` opens with.
+        /// `web` is Rust, `git` and `publish` are Lua, `json` is JavaScript,
+        /// and the rows are the same rows: the kernel does not distinguish
+        /// them, which is the claim `docs/plugins.md` opens with.
         const EXPECTED: &[(bool, &str, &[&str])] = &[
             (
                 cfg!(feature = "tool-web"),
@@ -623,6 +671,7 @@ mod tests {
                 &["git_status", "git_diff"],
             ),
             (cfg!(feature = "tool-publish"), "publish", &["publish"]),
+            (cfg!(feature = "tool-json"), "json", &["json_query"]),
         ];
 
         // The Lua half does not load with the kernel — see `bundled` — so a

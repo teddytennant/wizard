@@ -17,15 +17,16 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # 2557 once every provider became a plugin, 2575 with the host bridge and the
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
 # with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
-# 2618 with `publish`, and 2620 with the gateway and the llama-server
-# lifecycle. Raise it when a phase adds tests, so the ratchet keeps ratcheting.
+# 2618 with `publish`, 2620 with the gateway and the llama-server lifecycle,
+# and 2685 with the JavaScript backend and its `json_query` plugin. Raise it
+# when a phase adds tests, so the ratchet keeps ratcheting.
 #
 # 2609 was one below what the tree actually had by then (2610, measured): the
 # acp and fleet plugins landed after that number was written and nobody raised
 # it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
 # until the turn's event channel was released at the end of a turn those three
 # did not fail -- they hung.
-BASELINE_TESTS=2620
+BASELINE_TESTS=2685
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -74,6 +75,14 @@ printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TE
 if [ "${passed:-0}" -lt 1 ]; then
     bad "the test run reported no results at all (truncated log? build failure?)"
 fi
+# A third flake was found and *fixed* rather than listed, because it was
+# fixable: `tools::tests::read_file_never_spills` asserted that its own spill
+# directory was empty, and the spill sink is process-wide while `hold_sink`
+# serialises only the tests that install one. So any concurrent test with an
+# oversized tool answer spilled into it, and the failure rate went up with the
+# size of the suite -- it started firing when the JavaScript backend's tests
+# landed and had nothing to do with them. It asserts on the bytes now.
+#
 # There is a second flake and it is worse than the lockfile one, because it
 # manifests as a *hang* rather than a failure:
 # `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` never
