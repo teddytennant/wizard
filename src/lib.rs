@@ -122,6 +122,28 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         return harness::run(cmd.clone()).map(|()| 0);
     }
 
+    // `wizard plugin`: the report on this binary's own plugin set. Self-
+    // contained — no config, no onboarding, no LLM — and dispatched here rather
+    // than further down for a reason specific to it: the whole point of the
+    // surface is that it works on a build where nothing else does. A
+    // `--no-default-features` binary has no provider to load a config against,
+    // so a `wizard plugin list` placed after the config load would fail on the
+    // one build somebody most needs to inspect.
+    //
+    // `plugins::boot` has already run at the top of this function, so the
+    // kernel holds the Rust plugins, the bundled scripted ones and anything in
+    // ~/.wizard/plugins. That is what makes this a report on the *process*
+    // rather than on the feature flags.
+    if let Some(cli::Command::Plugin { cmd }) = &cli.command {
+        let cmd = cmd
+            .clone()
+            // A bare `wizard plugin` is the listing. Every other verb has to be
+            // typed, and the one people will type most is the one they should
+            // not have to.
+            .unwrap_or(cli::PluginCmd::List { json: false });
+        return plugins::inventory::run(cmd).await;
+    }
+
     // `desktop-setup` is system provisioning for the `computer` tool: it
     // installs OS packages and reports permissions, so it wants no config, no
     // onboarding and no LLM.

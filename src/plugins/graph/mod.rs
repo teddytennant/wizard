@@ -90,7 +90,7 @@ impl GraphPlugin {
                 optional_deps: Vec::new(),
                 // Not in `server` or `pi`: both are headless, and the only
                 // consumer is a window.
-                profiles: vec!["full".to_string()],
+                profiles: vec!["default".to_string(), "full".to_string()],
             },
         }
     }

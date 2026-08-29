@@ -75,8 +75,18 @@ pub mod anthropic;
 #[cfg(any(feature = "tool-git", feature = "tool-publish"))]
 mod bench;
 pub mod bundled;
+// Three ungated modules, and none of them is a plugin. `catalogue` is the one
+// table naming every plugin *feature* — including the ones a build left out,
+// which is the half `compiled_in` below cannot describe; `profile` is the named
+// sets over it; `inventory` is `wizard plugin`, which renders both against the
+// running kernel. They live here rather than in core proper so that a plugin
+// added to `compiled_in` and missing from the catalogue is one directory
+// listing apart, and `catalogue`'s tests turn that into a failure.
+pub mod catalogue;
 #[cfg(feature = "fleet")]
 pub mod fleet;
+pub mod inventory;
+pub mod profile;
 // The messaging gateway: the transport, the setup wizard, the service
 // installer, and the two CLI surfaces that reach them. One plugin over one
 // directory, and the first to register two entrypoints.

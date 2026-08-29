@@ -17,4 +17,4 @@ capabilities = ["process"]
 # In every profile, including `minimal` and `pi`. `docs/plugins.md` lists
 # "core plus file, shell, git, todo" as what a CI container needs, and this is
 # the git in that sentence.
-profiles = ["full", "server", "minimal", "pi"]
+profiles = ["minimal", "pi", "server", "default", "full"]

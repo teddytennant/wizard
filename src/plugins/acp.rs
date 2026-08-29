@@ -529,7 +529,11 @@ impl AcpPlugin {
                 // `docs/plugins.md` puts ACP in `server` by name: an editor on
                 // a laptop driving a checkout on a headless box over stdio is
                 // exactly the machine that has no window and wants this.
-                profiles: vec!["full".to_string(), "server".to_string()],
+                profiles: vec![
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }

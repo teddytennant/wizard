@@ -72,10 +72,15 @@ impl MeshPlugin {
                     Capability::Ui,
                 ],
                 optional_deps: Vec::new(),
-                // In `server` as well as `full`: a headless box is exactly the
-                // machine somebody wants to watch from a laptop. Not in `pi`,
-                // which `docs/plugins.md` defines as "no mesh".
-                profiles: vec!["full".to_string(), "server".to_string()],
+                // The one plugin that is in the stock build and in no smaller
+                // profile, and the reason is what it does at rest rather than
+                // what it costs. `server` leaves it out: mDNS multicast and a
+                // listening QUIC socket are not what a box in a datacenter
+                // should be doing because nobody turned them off, and dropping
+                // it also takes `quinn`, `rustls` and `mdns-sd` out of that
+                // build. `pi` and `minimal` have no room for the largest plugin
+                // in the tree. See `src/plugins/profile.rs`.
+                profiles: vec!["default".to_string(), "full".to_string()],
             },
         }
     }

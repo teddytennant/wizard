@@ -104,7 +104,11 @@ impl XaiPlugin {
                 description: "xAI Grok, by API key or account sign-in".to_string(),
                 capabilities: vec![Capability::Network],
                 optional_deps: Vec::new(),
-                profiles: vec!["full".to_string(), "server".to_string()],
+                profiles: vec![
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }

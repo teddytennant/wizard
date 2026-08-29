@@ -18,7 +18,10 @@ description = "Pull one value out of a JSON document without reading the rest of
 # tells nobody.
 capabilities = []
 
-# In every profile, `minimal` and `pi` included. It costs one QuickJS VM and no
-# dependency, and reading a lockfile without spending the context window on it
-# is worth as much on a Raspberry Pi as anywhere.
-profiles = ["full", "server", "minimal", "pi"]
+# Not in `minimal` or `pi`, and not because the tool is unwanted there — reading
+# a lockfile without spending the context window on it is worth as much on a
+# Raspberry Pi as anywhere. It is that this plugin is a `plugin.js`, so it needs
+# the whole QuickJS backend (`tool-json = ["plugin-js"]`), and the two small
+# profiles are exactly the builds that drop a megabyte of engine rather than
+# carry it for one tool. See `src/plugins/profile.rs`.
+profiles = ["server", "default", "full"]

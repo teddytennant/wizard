@@ -197,8 +197,11 @@ version = "1.0.0"
 description = "Fetch and search the web"
 capabilities = ["network"]
 optional_deps = ["credentials"]
-profiles = ["full", "server"]
+profiles = ["server", "default", "full"]
 ```
+
+`profiles` is checked rather than decorative: it has to agree with the table in
+`src/plugins/profile.rs`, smallest profile first. See "Profiles".
 
 Capabilities extend the two that already gate registry tools
 (`crate::registry_client::Capability`):
@@ -314,23 +317,69 @@ failed to start anything, which reads to a user as a broken install.
 
 ## Profiles
 
-A profile is a named plugin set. `install.sh` picks one; `~/.wizard/plugins.toml`
-records it and can be edited afterwards.
+A profile is a named plugin set: an answer to "what kind of machine is this",
+not a checkbox list. `--features` is already the checkbox list, and it is the
+wrong shape for the question somebody has while a `curl | bash` is running —
+nobody knows whether they want `graph` before they have used the explorer.
 
-| Profile | Contents | For |
+`install.sh` picks one with `WIZARD_PROFILE`; `wizard plugin profiles` prints
+them off an installed binary and marks the one it is.
+
+| Profile | Features | For |
 | --- | --- | --- |
-| `full` | every plugin | the default install |
-| `server` | full minus GUI, minus TUI extras, plus gateway and ACP | headless boxes |
-| `minimal` | core plus file, shell, git, todo | CI containers, a second machine |
-| `pi` | minimal plus a local provider, JIT tuned, no mesh, no GUI, no web | Raspberry Pi and other small ARM |
-| `custom` | `WIZARD_PLUGINS="a,b,c"` | anything else |
+| `minimal` | `provider-anthropic`, `provider-openai`, `tool-git` | CI containers, second machines: one API key and git |
+| `pi` | `provider-llamacpp`, `provider-ollama`, `tool-git` | Raspberry Pi, small ARM: a local model, no account |
+| `server` | default minus `graph` and `mesh` | headless boxes: every provider and every remote surface, no P2P |
+| `default` | Cargo's `default` list — seventeen | everyone else, and what every release binary is |
+| `full` | default plus `native` | one binary with the window in it |
 
-Rust plugins map to cargo features, so a profile is also a build: the `pi`
-release asset does not link iced, quinn or the image stack at all. Lua plugins
-are files, so a profile is also a copy — which is why `pi` can be narrowed after
-install without a rebuild.
+`src/plugins/profile.rs` is the table; the same five are restated in
+`install.sh` because that script is piped from a URL and has no checkout to
+read, and a test sources it and diffs the two.
 
-`WIZARD_MINIMAL` keeps working and means `WIZARD_PROFILE=minimal`.
+Every plugin's manifest declares which profiles it is in, and that declaration
+is checked against the table rather than being prose — see
+`profile::tests::every_manifest_declares_the_profiles_this_table_puts_it_in`.
+
+### Four corrections this section needed
+
+It was written before any of it existed and was wrong in four ways once the
+features were real.
+
+**`server` was defined as "full minus GUI, minus TUI extras, plus gateway and
+ACP", which describes the default build.** The GUI has been off by default since
+it landed, and the gateway and ACP have been on. A profile that resolves to the
+stock build is a second name for it. `server` earns its name by dropping the
+*mesh*: mDNS multicast and a listening QUIC socket are not something a box in a
+datacenter should be doing because nobody turned them off, and `mesh` is also
+the one feature whose removal measurably shrinks the binary. It has to drop
+`graph` in the same breath, because `graph = ["mesh"]` turns it back on.
+
+**`minimal` was "core plus file, shell, git, todo", which is a build that cannot
+answer a prompt.** File, shell and todo are core tools and were never plugins,
+so the whole of that line reduces to `tool-git`, and a wizard with no provider
+linked is `--no-default-features` — a floor, not an install. `minimal` is one
+API key and git: `provider-openai` because that one flag also reaches
+OpenRouter, vLLM, LM Studio, DeepSeek and the `compat.rs` presets, and
+`provider-anthropic` because the other half of the world has that key instead.
+
+**`custom` is not a profile.** `--features a,b,c` already is one, and giving it
+a name would only add a spelling. A binary built from a hand-picked list reports
+`custom` in `wizard plugin`, which is a description rather than a thing you can
+ask for.
+
+**`WIZARD_MINIMAL` does not mean `WIZARD_PROFILE=minimal` and must not.** It
+already exists and already means something else: a binary-only install with no
+model runtime, no config and no loadout, which is about what the *installer*
+sets up and says nothing about which plugins the binary has. Redefining it would
+change the behaviour of every provisioning script that sets it. The two are
+independent and `install.sh` documents them apart.
+
+There is also no `~/.wizard/plugins.toml`. The half of a profile that is a cargo
+feature set is fixed at build time and cannot be edited afterwards, and the half
+that is files is `~/.wizard/plugins/`, which is a directory the loader reads —
+so a second file recording what is in it would be a copy that can disagree with
+the thing it describes. `wizard plugin list` reads the loader.
 
 ## The async model, as proven
 
@@ -1248,8 +1297,9 @@ was the only direct caller, and reqwest brings its own copy either way, so what
 is removed there is the edge rather than the crate.
 
 This is the first plugin whose removal measurably shrinks the binary, which is
-the whole argument for the `pi` profile that `docs/plugins.md` has been
-describing since before any of this was built.
+the whole argument for the small profiles, and it is the reason `server` drops
+the mesh rather than something else. The numbers are in "As built: the profiles,
+measured".
 
 ### Proving it
 

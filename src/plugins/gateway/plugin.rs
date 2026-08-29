@@ -89,10 +89,13 @@ impl GatewayPlugin {
                 ],
                 optional_deps: Vec::new(),
                 // `server` above all: a long-lived headless process with no
-                // terminal is the shape of machine this is for, and it is the
-                // profile `docs/plugins.md` defines as "full minus GUI … plus
-                // gateway and ACP".
-                profiles: vec!["full".to_string(), "server".to_string()],
+                // terminal is the shape of machine this is for. Out of `pi` and
+                // `minimal`, where there is nobody to have set a bot up.
+                profiles: vec![
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }
