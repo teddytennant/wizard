@@ -82,6 +82,47 @@ Nothing below is released yet and the plugin API is not stable.
   assembly that OpenRouter, xAI, Cloudflare, llama.cpp and ChatGPT all build on;
   `src/llm/openai.rs` is what is true of `api.openai.com` and nothing else.
 
+### Breaking
+
+A stock build behaves as 2.x did: every plugin is on by default, and
+`cargo install --path .` still produces the same Wizard. What follows is what
+changes anyway, and what changes if you strip a feature.
+
+- **An unknown provider `kind` is no longer a parse error.** It loads, and fails
+  when something tries to use it, naming the kinds this build installed.
+  **What breaks:** a typo in `kind` used to stop Wizard at startup with a
+  deserialization error naming the line. Now the config parses, the session
+  starts, and the complaint arrives at the first request or at `wizard doctor`.
+  The trade is deliberate: a provider that lives in a plugin somebody left out
+  must not make the whole config unparseable. An empty `kind` is still refused
+  at parse.
+- **`wizard --help` lists only the plugin subcommands this build has.** `peers`,
+  `acp` and `fleet` disappear from the table when their feature is off; `gui`
+  stays, because it is off by default and ships as its own release asset, so its
+  row is how people learn it exists. **What breaks:** a script grepping
+  `wizard --help` for a subcommand name gets nothing on a stripped build. The
+  subcommand still parses and still answers with a message naming the feature
+  that would restore it, so `wizard acp` fails the same way it always did.
+- **`wizard --publish` prints the publish tool's summary** instead of its own
+  `Fork:`/`Branch:` block. **What breaks:** anything parsing those two labels out
+  of stdout. There is one summary now rather than five copies that had already
+  drifted apart across the tool, the TUI, the window, the gateway and the CLI.
+- **`publish` is in the base tool set**, so a subagent and a `run_code` program
+  can call it. **What breaks:** nothing today refuses that and `gh` auth still
+  gates the actual push, but it is a real widening of what an agent can reach
+  without being asked.
+- **`/server` is described as "manage a model server running on this machine"**
+  rather than naming llama-server, and the "not applicable" and start-failure
+  wordings are now identical across the TUI, the window and the gateway.
+  **What breaks:** only text somebody was matching on.
+- **Tool order in the roster changed.** Plugin tools install after native,
+  scripted and MCP ones, so `web_fetch` and friends now appear at the end.
+  Stable within a build, so there is no prompt-cache effect, but the order a
+  model sees is not the order it saw in 2.x.
+- **The binary is about 1.5 MB larger** (23.8 MB to 25.4 MB) because the
+  JavaScript backend ships by default. `--no-default-features` and the profiles
+  below are how you get it back.
+
 ### Fixed
 
 - **A web search read an unbounded response.** Three of the five search backends
