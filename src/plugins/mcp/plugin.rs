@@ -80,7 +80,11 @@ impl McpPlugin {
                 // to an editor over stdio is exactly what `mcp-serve` is for,
                 // and a gateway turn reaching a browser-automation server is
                 // what the client is for.
-                profiles: vec!["full".to_string(), "server".to_string()],
+                profiles: vec![
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }
