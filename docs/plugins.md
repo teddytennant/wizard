@@ -20,8 +20,8 @@ current answer, so nobody has to reconstruct it from the history.
 | | |
 | --- | --- |
 | Backends | in-tree Rust behind a cargo feature; LuaJIT; JavaScript (QuickJS) |
-| Cargo features | 18, all on by default except `native` |
-| Rust plugins | 9 providers (7 features), the window, `graph`, `tool-web`, `mesh`, `fleet`, `acp`, `gateway`, and the llama.cpp runtime folded into `provider-llamacpp` |
+| Cargo features | 20, all on by default except `native` |
+| Rust plugins | 9 providers (7 features), the window, `graph`, `tool-web`, `mesh`, `fleet`, `acp`, `gateway`, `mcp`, and the llama.cpp runtime folded into `provider-llamacpp` |
 | Lua plugins | `git` (`git_status`, `git_diff`), `publish` |
 | JavaScript plugins | `json` (`json_query`) |
 | Verified how | `contrib/check-provider-plugins.sh` and `contrib/check-tool-plugins.sh` build **and test** every leave-one-out feature set |
