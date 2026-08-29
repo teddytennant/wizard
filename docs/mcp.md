@@ -11,6 +11,13 @@ in **both directions**.
   client (Claude Code, Cursor, another Wizard) can call them. That is what
   this page covers.
 
+Both halves ship behind one cargo feature, `mcp`, which is on by default and
+in every published binary. A build without it reaches no MCP server (an
+`mcp.toml` with servers in it says so, one with none says nothing) and answers
+`wizard mcp-serve` with the flag that brings it back. `mcp.toml` itself keeps
+parsing either way, so `wizard import-claude` and `/evolve` still write one for
+the next build to use. See [Plugin architecture](plugins.md).
+
 Two client-side details worth knowing before you add a server, because both
 change what a server sees. A spawned stdio child's environment is **cleared**
 and rebuilt from a fixed allowlist — `PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`,
