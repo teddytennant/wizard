@@ -118,6 +118,15 @@ pub const CATALOGUE: &[Entry] = &[
         present: cfg!(feature = "graph"),
     },
     Entry {
+        feature: "mcp",
+        plugin: Some("mcp"),
+        backend: Some(Backend::Rust),
+        summary: "MCP both ways: the client that mounts an external server's tools, and \
+                  `wizard mcp-serve`, which offers this Wizard's own over stdio",
+        default_on: true,
+        present: cfg!(feature = "mcp"),
+    },
+    Entry {
         feature: "mesh",
         plugin: Some("mesh"),
         backend: Some(Backend::Rust),

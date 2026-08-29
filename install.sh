@@ -293,7 +293,7 @@ die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 # Cargo's `default` feature list, alphabetically. Restated rather than read out
 # of Cargo.toml for the reason above: at this point there is no checkout to read
 # it from, and the profile has to be resolved before the clone.
-WIZARD_DEFAULT_FEATURES="acp,fleet,gateway,graph,mesh,plugin-js,provider-anthropic,provider-chatgpt,provider-cloudflare,provider-llamacpp,provider-ollama,provider-openai,provider-xai,tool-git,tool-json,tool-publish,tool-web"
+WIZARD_DEFAULT_FEATURES="acp,fleet,gateway,graph,mcp,mesh,plugin-js,provider-anthropic,provider-chatgpt,provider-cloudflare,provider-llamacpp,provider-ollama,provider-openai,provider-xai,tool-git,tool-json,tool-publish,tool-web"
 
 # The default list with the named features removed, comma-joined.
 #
