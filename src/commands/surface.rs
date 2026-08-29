@@ -10,7 +10,7 @@
 //! one surface and derived from the table on the other. All three were the same
 //! bug, which is that a command lived in two places.
 //!
-//! What a surface cannot do a built-in declares in [`COMMANDS`] as an
+//! What a surface cannot do a built-in declares in [`crate::commands::COMMANDS`] as an
 //! [`Execution::Unavailable`] column, and this module refuses it by name. A
 //! command is never silently missing a match arm, because there is only one
 //! match and the compiler walks every variant through it.
@@ -48,7 +48,7 @@ use crate::tools::tasks::Task;
 
 /// The surfaces a slash command can be typed at.
 ///
-/// A new one adds a variant here and a column to every row of [`COMMANDS`];
+/// A new one adds a variant here and a column to every row of [`crate::commands::COMMANDS`];
 /// the compiler walks it through the whole table rather than letting it
 /// quietly miss half of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

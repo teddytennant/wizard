@@ -60,7 +60,7 @@
 //!
 //! # Cancellation
 //!
-//! Every call that can block observes [`CancelHandle`], because the alternative
+//! Every call that can block observes [`crate::agent::CancelHandle`], because the alternative
 //! is that Ctrl-C returns the prompt while a plugin's fetch, completion or
 //! child process keeps running. The handle comes off the bound
 //! [`ToolContext`], which is the same handle the agent loop and the `execute`

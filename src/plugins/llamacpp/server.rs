@@ -16,7 +16,7 @@
 //! provider" and "the llama.cpp server" would have been a build flag whose
 //! whole content is which half of llama.cpp you get.
 //!
-//! What core kept is [`LocalServer`]: three questions, each answered with a
+//! What core kept is [`crate::server::LocalServer`]: three questions, each answered with a
 //! sentence, so that `/server` on the TUI, in the window and in a chat can
 //! print what this file says without any of them knowing what it is talking to.
 //! The three used to hold that prose themselves, in triplicate.

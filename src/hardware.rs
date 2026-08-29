@@ -432,7 +432,7 @@ pub struct GgufModel {
 
 /// GGUF tiers (largest first), the Q4_K_M counterparts of the Ollama tags in
 /// [`suggest_ollama_model`]. `install.sh` (WIZARD_LOCAL=1) and
-/// [`crate::local_setup`] download these exact files.
+/// [`crate::plugins::llamacpp::setup`] download these exact files.
 pub const GGUF_TIERS: &[GgufModel] = &[
     GgufModel {
         name: "Qwen3.6 35B",

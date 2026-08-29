@@ -2707,11 +2707,14 @@ is the gateway's.
 
 ### Still open, specific to this
 
-- **One surface left.** `mcp serve` is the last one still core, and unlike the
-  five that went through the door it is not behind a feature at all.
-- **`src/hardware.rs` has a stale intra-doc link.** It says
-  `[`crate::local_setup`]`, and there is no such module now. It was left alone
-  on purpose: the file is being ported to Lua in a separate change, and a
+- ~~**One surface left.** `mcp serve` is the last one still core, and unlike the
+  five that went through the door it is not behind a feature at all.~~ Closed:
+  `mcp` is a plugin, and no surface is left in core.
+- ~~**`src/hardware.rs` has a stale intra-doc link.**~~ Fixed: it points at
+  `crate::plugins::llamacpp::setup`. The Lua port it was waiting on was
+  attempted and refused -- see the `hardware` section above -- so there was no
+  later change to fold it into. The original note read: the file is being
+  ported to Lua in a separate change, and a
   one-line doc edit in it is a conflict for no benefit. Nothing enforces
   intra-doc links in the gate, so this costs a `cargo doc` warning and nothing
   else. `src/hardware.rs`'s two `[`crate::server`]` links still resolve, since

@@ -5,7 +5,7 @@
 //! `ctx.emit`, `ctx.provide`, `ctx.inject`, `ctx.plugin`, `ctx.effect`,
 //! `ctx.config`, `ctx.name` mean what they mean from Lua and from Rust, take
 //! the same shapes, and go through the same [`Ctx`]. `wizard.*` reaches the
-//! same [`HostBridge`] — there is one `WizardHost` in the process and both
+//! same [`crate::kernel::HostBridge`] — there is one `WizardHost` in the process and both
 //! backends call it. Nothing here is a second implementation of anything.
 //!
 //! The one spelling difference is punctuation: Lua's `ctx:tool{...}` passes
