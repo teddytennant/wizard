@@ -8,9 +8,9 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 The 3.0 line, in progress: Wizard becomes a plugin host. The agent loop, the
 provider transport, the terminal UI and a new kernel stay in the binary;
-everything else becomes a plugin that registers itself, and a plugin is either
-an in-tree Rust module behind a cargo feature or a LuaJIT script. See
-[plugins.md](docs/plugins.md).
+everything else becomes a plugin that registers itself, and a plugin is an
+in-tree Rust module behind a cargo feature, a LuaJIT script, or a JavaScript
+one. See [plugins.md](docs/plugins.md).
 
 Nothing below is released yet and the plugin API is not stable.
 
@@ -52,6 +52,34 @@ Nothing below is released yet and the plugin API is not stable.
   session the way a subagent's is, and a plugin's prompt cannot drive
   compaction. In-flight fetches, completions and child processes all observe the
   turn's cancel handle.
+- **A JavaScript backend, so a plugin can be written in TypeScript.** QuickJS
+  (`rquickjs`) behind `plugin-js`, a peer of the Lua backend rather than a
+  second plugin contract: the same `Ctx`, the same `WizardHost`, the same
+  capability rules, the same deadline. `docs/wizard-plugin.d.ts` types the API
+  for a TypeScript author, and is checked with `tsc`. Measured, because the
+  answer was not the expected one: a JS call crosses in 1.19us against Lua's
+  1.60us and a Rust no-op's 42ns -- `mlua` drives every scripted body as an
+  async coroutine whether it yields or not, and a JS function that returns
+  without awaiting skips that. Both are noise beside a `fork` and both are wrong
+  inside a redraw, so the rule in [plugins.md](docs/plugins.md) is unchanged.
+  Costs 1.5 MB.
+- **The mesh, the gateway, the fleet, the ACP server and the llama-server
+  lifecycle are plugins.** The mesh was the hardest: 30 core references, of
+  which `src/app/tee.rs` was 685 lines of mesh glue living in core, now a
+  `SessionTee` trait and an injected factory. `wizard peers` keeps its own
+  `clap::Parser` and its own `Trust` enum -- the argument list crosses
+  unparsed, because a second spelling of a trust decision is how a fourth state
+  appears. `server.rs` and `local_setup.rs` folded into `provider-llamacpp`
+  rather than becoming a feature under it: a build that registers
+  `kind = "llamacpp"` and then cannot start one degrades in behaviour instead
+  of presence, which is the one degrade path this architecture does not have.
+- **`git_status`, `git_diff` and `publish` are Lua plugins.** The first Rust
+  code deleted in favour of a script. `publish` came out better rather than
+  smaller: every step of the Rust was a blocking `Command::..output()` inside an
+  `async fn`, with no timeout, no cancel handle and no process group, so a
+  `git push` parked the executor and Ctrl-C did nothing. It also became
+  testable -- `wizard.process.exec` is an interface, so a whole publish now runs
+  in tests with no `gh` on the machine.
 - **`--no-default-features` is meaningful.** It builds, passes its own suite, and
   runs, with the Anthropic provider genuinely absent -- `kind = "anthropic"`
   degrades to a named error rather than a panic. Removing any one plugin has to
@@ -77,6 +105,13 @@ Nothing below is released yet and the plugin API is not stable.
   `Plugin { name, args }` variant backed by a runtime registry. Completion, help,
   dispatch and per-surface gating all read one merged list. A plugin cannot take
   a name a built-in owns.
+- **Onboarding, the provider pickers and `wizard --help` read the registries.**
+  All three were hand-written lists that offered providers and subcommands a
+  stripped build did not have, and then failed when one was chosen. Menu
+  dispatch also moved from index to per-row: the first time such a menu is
+  filtered, dropping row 0 makes row 1 run row 0's arm, which compiles and looks
+  on screen like the wrong provider was clicked. `wizard help <sub>` now prints
+  the plugin's own help rather than core's `[ARGS]...` stub.
 - **The OpenAI wire protocol is separate from the OpenAI provider.**
   `src/llm/wire.rs` holds the request shaping, SSE decoding and tool-call
   assembly that OpenRouter, xAI, Cloudflare, llama.cpp and ChatGPT all build on;
