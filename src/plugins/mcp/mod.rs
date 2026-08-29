@@ -1,17 +1,37 @@
-//! MCP client: connects to external Model Context Protocol servers
-//! (stdio or HTTP transport) declared in `~/.wizard/mcp.toml`, lists their
-//! tools, and exposes each as a [`Tool`] for the unified registry.
+//! The Model Context Protocol, in both directions, behind `--features mcp`.
 //!
-//! This is the supported path for computer use, browser control, database
-//! access, and any capability shipped as an MCP server — no rebuild needed.
+//! **Client** (this file): connects to the external servers declared in
+//! `~/.wizard/mcp.toml` over stdio or streamable HTTP, lists their tools, and
+//! exposes each one as a [`Tool`] for the unified registry. This is the
+//! supported path for computer use, browser control, database access, and any
+//! capability shipped as an MCP server — no rebuild needed.
 //!
-//! The inverse direction — Wizard *as* an MCP server, exposing its own tools
-//! to another client — lives in [`serve`].
+//! **Server** ([`serve`]): `wizard mcp-serve` points the same protocol the
+//! other way, so Claude Code, Cursor or another Wizard can call *Wizard's*
+//! tools.
+//!
+//! # One feature over both halves
+//!
+//! They are opposite ends of one wire and they share its vocabulary:
+//! [`PROTOCOL_VERSION`] is the revision both announce, and [`McpToolInfo`] is
+//! the `tools/list` entry the client parses and the server emits. Splitting
+//! them would leave a second feature whose entire content is a struct and a
+//! string — the objection `docs/plugins.md` already makes to a cargo flag
+//! carrying nothing but one credential variant — or would push both into
+//! core, where a protocol revision this build cannot speak has no business
+//! being. So `mcp` is one feature, and the two surfaces are two
+//! registrations, which is the shape `plugins::gateway` proved.
+//!
+//! # What core kept
+//!
+//! [`crate::mcp`] — the `mcp.toml` format, the [`McpClient`] and
+//! [`McpConnector`] traits, and the [`McpManager`](crate::mcp::McpManager)
+//! four surfaces hold. Nothing in this file is named outside it.
 
+pub mod plugin;
 pub mod serve;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -28,15 +48,24 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use crate::llm::Image;
+use crate::mcp::{McpClient, McpConfig, McpConnector, McpServerConfig, McpTransport};
 use crate::tools::{Tool, ToolContext, ToolError, ToolKind, ToolOutput};
 
-/// MCP protocol revision this client speaks.
-const PROTOCOL_VERSION: &str = "2025-03-26";
+/// MCP protocol revision this plugin speaks, as a client and as a server.
+///
+/// One constant for both halves: a `wizard mcp-serve` that announced a
+/// different revision from the one this binary's client understands would be
+/// two Wizards unable to talk to each other.
+pub(crate) const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// Budget for spawning/dialing a server and completing `initialize`.
-/// Public so `wizard doctor` probes with the same budget as the runtime —
-/// a slow-starting `npx`/`uvx` server must not pass here and fail there.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+///
+/// `wizard doctor` probes at this same budget without knowing the number:
+/// it asks [`Connector::probe`], which applies it, so a slow-starting
+/// `npx`/`uvx` server cannot pass doctor and fail the runtime. Core holding
+/// the constant was the old arrangement and would have meant core holding one
+/// protocol's timing.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Budget for one `tools/list` page.
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Budget for one `tools/call`.
@@ -117,89 +146,6 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "spawn_subagent",
     crate::tools::code::RUN_CODE_TOOL_NAME,
 ];
-
-/// Contents of `~/.wizard/mcp.toml`:
-///
-/// ```toml
-/// [[server]]
-/// name = "computer-use"
-/// transport = "stdio"
-/// command = "uvx"
-/// args = ["mcp-computer-use"]
-///
-/// [[server]]
-/// name = "remote"
-/// transport = "http"
-/// url = "https://mcp.example.com/mcp"
-/// [server.headers]
-/// Authorization = "Bearer literal-token"
-/// X-Api-Key = "env:MY_API_KEY"   # resolved from the environment at connect time
-/// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct McpConfig {
-    #[serde(default, rename = "server")]
-    pub servers: Vec<McpServerConfig>,
-}
-
-impl McpConfig {
-    /// Load from `path`, returning an empty config when the file is missing.
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => toml::from_str(&raw)
-                .with_context(|| format!("invalid MCP config at {}", path.display())),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(err) => {
-                Err(err).with_context(|| format!("failed to read MCP config at {}", path.display()))
-            }
-        }
-    }
-
-    /// Persist to `path` (used by `/evolve` when registering a server).
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        let raw = toml::to_string_pretty(self).context("failed to serialize MCP config")?;
-        std::fs::write(path, raw)
-            .with_context(|| format!("failed to write MCP config to {}", path.display()))
-    }
-}
-
-/// Transport used to reach an MCP server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum McpTransport {
-    /// Spawn `command args...` and speak JSON-RPC over stdin/stdout.
-    Stdio,
-    /// Streamable HTTP endpoint at `url`.
-    Http,
-}
-
-/// One `[[server]]` entry in `mcp.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    /// Unique server name; used to namespace colliding tool names.
-    pub name: String,
-    pub transport: McpTransport,
-    /// Executable to spawn (stdio transport).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Arguments for `command` (stdio transport).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    /// Endpoint URL (http transport).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// Extra environment variables for the spawned process (stdio transport).
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    pub env: std::collections::HashMap<String, String>,
-    /// Extra HTTP headers sent on every request (http transport), e.g.
-    /// `Authorization`. A value of the form `env:VAR` is resolved from the
-    /// environment at connect time so the token never sits in `mcp.toml`.
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    pub headers: std::collections::HashMap<String, String>,
-}
 
 /// A tool as advertised by an MCP server's `tools/list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1082,13 +1028,17 @@ fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-/// Owns all MCP connections for a run. Built at startup and rebuilt on
-/// `/reload`.
-pub struct McpManager {
+/// Every MCP connection this process holds, and the plugin's half of
+/// [`McpClient`].
+///
+/// Core's [`McpManager`](crate::mcp::McpManager) holds one of these as a
+/// `Box<dyn McpClient>`, which is the whole of the seam: a surface keeps the
+/// manager for the life of a session and never learns what is inside it.
+pub struct Connections {
     connections: Vec<Arc<McpConnection>>,
 }
 
-impl McpManager {
+impl Connections {
     /// Connect to every configured server. Servers that fail to connect are
     /// skipped with a warning so one bad server doesn't take down startup.
     ///
@@ -1222,17 +1172,72 @@ impl McpManager {
         }
         Ok(tools)
     }
+}
 
-    /// Drop all connections and reconnect from `config` (for `/reload`).
-    pub async fn reload(&mut self, config: &McpConfig) -> Result<()> {
-        for connection in self.connections.drain(..) {
-            // Tools in the (about-to-be-rebuilt) registry may still hold
-            // Arcs, so tear down through the shared reference; the child is
-            // also `kill_on_drop` as a backstop.
+#[async_trait]
+impl McpClient for Connections {
+    async fn tools(&self) -> Result<Vec<Arc<dyn Tool>>> {
+        Connections::tools(self).await
+    }
+
+    fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+
+    /// Close every connection.
+    ///
+    /// Through the shared reference rather than by consuming `self`, because
+    /// the tools in the registry that is about to be rebuilt still hold
+    /// `Arc`s to these connections. The stdio child is `kill_on_drop` as a
+    /// backstop, but a backstop that fires whenever the last `Arc` happens to
+    /// go is not a shutdown — it is a race with whoever is still holding one.
+    async fn disconnect(&self) {
+        for connection in &self.connections {
             connection.shutdown().await;
         }
-        *self = Self::connect_all(config).await?;
-        Ok(())
+    }
+}
+
+/// The plugin's half of [`McpConnector`]: it makes [`Connections`], and it
+/// answers `wizard doctor` about one server.
+///
+/// A unit struct because there is nothing to configure. Everything a connect
+/// needs comes from the [`McpConfig`] it is handed, which is what makes the
+/// service safe to register in an `apply` that runs synchronously, with no
+/// tokio runtime, from a unit test.
+pub struct Connector;
+
+#[async_trait]
+impl McpConnector for Connector {
+    async fn connect(&self, config: McpConfig) -> Result<Box<dyn McpClient>> {
+        Ok(Box::new(Connections::connect_all(&config).await?))
+    }
+
+    /// One handshake, one `tools/list`, one sentence.
+    ///
+    /// The budget is [`CONNECT_TIMEOUT`], the same one a session connects
+    /// under, which is the reason this is the plugin's method rather than
+    /// doctor connecting for itself: a diagnostic that is more patient than
+    /// the runtime passes servers that will fail every session.
+    async fn probe(&self, server: McpServerConfig) -> Result<String> {
+        let name = server.name.clone();
+        let connection = match timeout(CONNECT_TIMEOUT, McpConnection::connect(server)).await {
+            Ok(result) => result?,
+            Err(_) => bail!("no handshake within {}s", CONNECT_TIMEOUT.as_secs()),
+        };
+        // A server that shook hands and cannot list is still reachable, which
+        // is the fact doctor was asking about, so the tool count degrades
+        // rather than turning the whole check red.
+        let detail = match timeout(CONNECT_TIMEOUT, connection.list_tools()).await {
+            Ok(Ok(tools)) => format!("handshake ok, {} tool(s)", tools.len()),
+            _ => "handshake ok".to_string(),
+        };
+        // Doctor probes and leaves; without this the stdio child outlives the
+        // check that spawned it and `wizard doctor` on a machine with three
+        // servers leaks three processes.
+        connection.shutdown().await;
+        debug!(server = %name, "MCP probe complete");
+        Ok(detail)
     }
 }
 
@@ -1352,102 +1357,6 @@ mod tests {
             "a reserved name that no compiled-in tool claims must be a plugin tool this \
              build left out"
         );
-    }
-
-    #[test]
-    fn config_load_missing_file_is_empty() {
-        let config = McpConfig::load(Path::new("/nonexistent/wizard-mcp.toml"))
-            .expect("missing file should yield default config");
-        assert!(config.servers.is_empty());
-    }
-
-    #[test]
-    fn config_save_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("wizard-mcp-test-{}", std::process::id()));
-        let path = dir.join("mcp.toml");
-        let config = McpConfig {
-            servers: vec![
-                McpServerConfig {
-                    name: "computer-use".into(),
-                    transport: McpTransport::Stdio,
-                    command: Some("uvx".into()),
-                    args: vec!["mcp-computer-use".into()],
-                    url: None,
-                    env: HashMap::from([("FOO".to_string(), "bar".to_string())]),
-                    headers: HashMap::new(),
-                },
-                McpServerConfig {
-                    name: "search".into(),
-                    transport: McpTransport::Http,
-                    command: None,
-                    args: vec![],
-                    url: Some("http://127.0.0.1:8808/mcp".into()),
-                    env: HashMap::new(),
-                    headers: HashMap::from([
-                        ("Authorization".to_string(), "Bearer tok-123".to_string()),
-                        ("X-Api-Key".to_string(), "env:MY_API_KEY".to_string()),
-                    ]),
-                },
-            ],
-        };
-        config.save(&path).expect("save should succeed");
-        let loaded = McpConfig::load(&path).expect("load should succeed");
-        std::fs::remove_dir_all(&dir).ok();
-
-        assert_eq!(loaded.servers.len(), 2);
-        assert_eq!(loaded.servers[0].name, "computer-use");
-        assert_eq!(loaded.servers[0].transport, McpTransport::Stdio);
-        assert_eq!(loaded.servers[0].command.as_deref(), Some("uvx"));
-        assert_eq!(
-            loaded.servers[0].env.get("FOO").map(String::as_str),
-            Some("bar")
-        );
-        assert_eq!(loaded.servers[1].transport, McpTransport::Http);
-        assert_eq!(
-            loaded.servers[1].url.as_deref(),
-            Some("http://127.0.0.1:8808/mcp")
-        );
-        assert_eq!(
-            loaded.servers[1]
-                .headers
-                .get("Authorization")
-                .map(String::as_str),
-            Some("Bearer tok-123")
-        );
-        assert_eq!(
-            loaded.servers[1]
-                .headers
-                .get("X-Api-Key")
-                .map(String::as_str),
-            Some("env:MY_API_KEY")
-        );
-        assert!(loaded.servers[0].headers.is_empty());
-    }
-
-    #[test]
-    fn headers_parse_from_toml_and_default_empty() {
-        let raw = r#"
-[[server]]
-name = "remote"
-transport = "http"
-url = "https://mcp.example.com/mcp"
-
-[server.headers]
-Authorization = "Bearer abc"
-"#;
-        let config: McpConfig = toml::from_str(raw).expect("valid toml");
-        assert_eq!(
-            config.servers[0]
-                .headers
-                .get("Authorization")
-                .map(String::as_str),
-            Some("Bearer abc")
-        );
-
-        // Absent table defaults to empty (older configs keep parsing).
-        let raw = "[[server]]\nname = \"plain\"\ntransport = \"http\"\nurl = \"https://x/mcp\"\n";
-        let config: McpConfig = toml::from_str(raw).expect("valid toml");
-        assert!(config.servers[0].headers.is_empty());
     }
 
     #[test]
@@ -1706,7 +1615,7 @@ done"#
                 fake_server_config("gamma", "read_file"),
             ],
         };
-        let manager = McpManager::connect_all(&config)
+        let manager = Connections::connect_all(&config)
             .await
             .expect("connect_all never hard-fails");
         let tools = manager.tools().await.expect("tools/list should succeed");
@@ -1746,7 +1655,7 @@ done"#
         let config = McpConfig {
             servers: vec![fake_server_returning("browser", "screenshot", &content)],
         };
-        let manager = McpManager::connect_all(&config)
+        let manager = Connections::connect_all(&config)
             .await
             .expect("connect_all never hard-fails");
         let tools = manager.tools().await.expect("tools/list should succeed");
@@ -1787,7 +1696,7 @@ done"#
                 fake_server_config("good", "weather"),
             ],
         };
-        let manager = McpManager::connect_all(&config)
+        let manager = Connections::connect_all(&config)
             .await
             .expect("bad servers are skipped, not fatal");
         let tools = manager.tools().await.expect("tools should list");

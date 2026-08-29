@@ -1,14 +1,15 @@
 //! CLI subcommands whose bodies ship in plugins.
 //!
-//! `wizard gui`, `wizard acp`, `wizard fleet` and the two gateway surfaces are
-//! parsed by core (they are `clap` variants in [`crate::cli`]) and run by
-//! plugins (the iced window behind `--features native`, the ACP server behind
-//! `acp`, the worktree fleet behind `fleet`, the Telegram bot and its service
+//! `wizard gui`, `wizard acp`, `wizard fleet`, `wizard mcp-serve` and the two
+//! gateway surfaces are parsed by core (they are `clap` variants in
+//! [`crate::cli`]) and run by plugins (the iced window behind
+//! `--features native`, the ACP server behind `acp`, the worktree fleet behind
+//! `fleet`, the MCP server behind `mcp`, the Telegram bot and its service
 //! installer behind `gateway`). Something has to join those two halves without
 //! core naming the plugin, and this is it: the plugin `provide`s an
 //! [`Entrypoint`] under a well-known name, and the dispatch chain in
 //! [`crate::run`] `inject`s one instead of calling `native::run` /
-//! `acp::run` / `fleet::run` / `gateway::run`.
+//! `acp::run` / `fleet::run` / `mcp::serve::run` / `gateway::run`.
 //!
 //! # Two shapes, because two subcommands are shaped differently
 //!
@@ -26,13 +27,14 @@
 //! wrong one. A [`PluginCommand`](crate::commands::PluginCommand) is a
 //! `String -> String` body that runs *inside a session*, on a surface that is
 //! already up, and `src/commands/plugin.rs` says why it deliberately cannot
-//! reach further than that. All three surfaces here are the opposite: they run
+//! reach further than that. Every surface here is the opposite: they run
 //! before there is a session (the window builds its own
 //! [`TaskManager`](crate::plugins::gui::tasks::TaskManager) per chat, the ACP
 //! server builds one headless agent per `session/new`, a fleet run builds one
-//! for planning and another for synthesis), and none of them returns until the
-//! surface is finished — a window closing, an editor closing the pipe, every
-//! worker reaped. Registering any of them as a slash command would mean a
+//! for planning and another for synthesis, and `wizard mcp-serve` builds no
+//! agent at all — it composes a tool registry and answers JSON-RPC), and none
+//! of them returns until the surface is finished — a window closing, an editor
+//! closing the pipe, every worker reaped, stdin at EOF. Registering any of them as a slash command would mean a
 //! `/gui` in the TUI palette that opens a second surface out from under the
 //! first, which is not a thing anybody asked for.
 //!
@@ -43,16 +45,17 @@
 //! was exactly that: the dispatch chain naming a plugin's function, gated on
 //! the plugin's own cargo feature. It compiles either way, which is why it
 //! survived a year — but it means core pays one `#[cfg]` per plugin that owns
-//! a surface, and this module now has five names over four plugins. A name in
+//! a surface, and this module now has six names over five plugins. A name in
 //! a registry costs core one lookup, forever; the third registration cost this
 //! file one generic parameter and one constructor rather than a third arm's
-//! worth of `#[cfg]`, and the fifth cost nothing at all, which is the point.
+//! worth of `#[cfg]`, and the fifth and sixth cost nothing at all, which is
+//! the point.
 //!
 //! # What core still holds
 //!
-//! The names (`"gui"`, `"acp"`, `"fleet"`, `"gateway"`, `"gateway-service"`)
-//! and the sentence printed when nothing answers to one. That is the same split [`crate::llm::registry`]
-//! makes for a provider `kind`: core may hold the *string* a user types, and
+//! The names (`"gui"`, `"acp"`, `"fleet"`, `"mcp-serve"`, `"gateway"`,
+//! `"gateway-service"`) and the sentence printed when nothing answers to one.
+//! That is the same split [`crate::llm::registry`] makes for a provider `kind`: core may hold the *string* a user types, and
 //! the prose explaining how to get the thing behind it, as long as it never
 //! names the type or constructs one. Each "not in this build" message in
 //! [`crate::run`] is the [`None`] arm of a lookup rather than a
@@ -103,6 +106,17 @@ pub const FLEET: &str = "fleet";
 /// The name the messaging gateway registers `wizard --gateway` under: the
 /// long-running bot process itself.
 pub const GATEWAY: &str = "gateway";
+
+/// The name the MCP plugin registers `wizard mcp-serve` under: Wizard as a
+/// Model Context Protocol *server*, handing its own tools to another client
+/// over stdio.
+///
+/// The plugin's other registration is not an entrypoint at all — it is the
+/// MCP *client*, a [`McpConnector`](crate::mcp::McpConnector) under
+/// [`crate::mcp::MCP_CONNECTOR`] — so unlike the gateway's pair these two
+/// names live in two modules. That is the honest arrangement: a name belongs
+/// beside the lookup that uses it, and only one of the two is a subcommand.
+pub const MCP_SERVE: &str = "mcp-serve";
 
 /// The name the messaging gateway registers `wizard gateway <verb>` under:
 /// setting a bot up and running it as a background service.
@@ -493,6 +507,9 @@ mod tests {
         if let Some(entry) = installed::<crate::cli::FleetCmd>(FLEET) {
             abouts.push(entry.about());
         }
+        if let Some(entry) = installed::<crate::cli::McpServeCmd>(MCP_SERVE) {
+            abouts.push(entry.about());
+        }
         if let Some(entry) = installed_subcommand(PEERS) {
             abouts.push(entry.about());
         }
@@ -502,6 +519,7 @@ mod tests {
                 cfg!(feature = "native"),
                 cfg!(feature = "acp"),
                 cfg!(feature = "fleet"),
+                cfg!(feature = "mcp"),
                 cfg!(feature = "mesh"),
             ]
             .iter()
@@ -540,6 +558,26 @@ mod tests {
         assert!(installed::<crate::cli::GatewayCmd>(GATEWAY_SERVICE).is_some());
         assert!(installed::<crate::cli::GatewayCmd>(GATEWAY).is_none());
         assert!(installed::<Config>(GATEWAY_SERVICE).is_none());
+    }
+
+    /// `wizard mcp-serve` is present exactly when `mcp` is, and answers at
+    /// exactly one argument type.
+    ///
+    /// Both directions, for the reason the gateway's pair is asserted here
+    /// rather than only in the plugin: a lookup at the wrong type is a `None`
+    /// indistinguishable from an absent plugin, so a build with the feature on
+    /// would tell the user to rebuild with the feature on.
+    #[test]
+    fn the_mcp_servers_surface_is_present_exactly_when_its_feature_is() {
+        let found = installed::<crate::cli::McpServeCmd>(MCP_SERVE);
+        assert_eq!(found.is_some(), cfg!(feature = "mcp"));
+        if let Some(entry) = found {
+            assert_eq!(entry.name(), MCP_SERVE);
+        }
+        // The client half is a different registry key in a different module,
+        // so neither can be reached by asking for the other.
+        assert!(installed::<Config>(MCP_SERVE).is_none());
+        assert!(installed_subcommand(MCP_SERVE).is_none());
     }
 
     /// The two lookups are separate registries' worth of names and do not see
