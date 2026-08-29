@@ -104,7 +104,14 @@ fi
 # that trains people to re-run the gate until it is green.
 counted=$passed
 if [ "${failed:-1}" -ne 0 ]; then
-    # The one known flake, so a busy machine does not read as a regression.
+    # Two known flakes, so a busy machine does not read as a regression.
+    #
+    # The second is `update::tests::install_sh_falls_back_to_github_when_the_mirror_fails`
+    # and the ones beside it: they spawn a real `bash` running `install.sh`
+    # against a stubbed `curl`, and under enough parallel load the subprocess
+    # misses its window. Seen once at load 18 with five build jobs on the box,
+    # passing alone and passing again on a re-run at the same commit. If one of
+    # these fails, re-run it before believing it.
     #
     # Matched against the `failures:` block rather than anywhere in the log,
     # because the loose version matched the line `test platform::lockfile::...
