@@ -18,7 +18,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
 # with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
 # 2618 with `publish`, 2620 with the gateway and the llama-server lifecycle,
-# 2685 with the JavaScript backend and its `json_query` plugin, and 2704 with
+# 2685 with the JavaScript backend and its `json_query` plugin, and 2705 with
 # the install profiles and the `wizard plugin` surface. Raise it when a phase
 # adds tests, so the ratchet keeps ratcheting.
 #
@@ -27,7 +27,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
 # until the turn's event channel was released at the end of a turn those three
 # did not fail -- they hung.
-BASELINE_TESTS=2704
+BASELINE_TESTS=2705
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
