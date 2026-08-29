@@ -1193,6 +1193,61 @@ mod tests {
         assert!(matches!(cli.command, Some(Command::Acp)));
     }
 
+    /// `wizard plugin` with no verb is the listing, and each verb parses.
+    ///
+    /// The bare form is the one people will type, so the `Option` on the
+    /// subcommand is load-bearing rather than permissive: without it clap
+    /// answers `wizard plugin` with a usage error instead of the report, which
+    /// is the whole surface refusing its most obvious invocation.
+    #[test]
+    fn plugin_subcommands_parse_and_the_bare_form_is_allowed() {
+        let cli = parse(&["plugin"]).expect("bare `plugin` parses");
+        assert!(matches!(cli.command, Some(Command::Plugin { cmd: None })));
+
+        let cli = parse(&["plugin", "list"]).expect("`plugin list` parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::List { json: false })
+            })
+        ));
+
+        let cli = parse(&["plugin", "list", "--json"]).expect("`--json` parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::List { json: true })
+            })
+        ));
+
+        let cli = parse(&["plugin", "show", "mesh"]).expect("`plugin show` parses");
+        let Some(Command::Plugin {
+            cmd: Some(PluginCmd::Show { name, json }),
+        }) = cli.command
+        else {
+            panic!("expected `plugin show`");
+        };
+        assert_eq!(name, "mesh");
+        assert!(!json);
+
+        assert!(matches!(
+            parse(&["plugin", "missing"]).expect("parses").command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::Missing { json: false })
+            })
+        ));
+        assert!(matches!(
+            parse(&["plugin", "profiles"]).expect("parses").command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::Profiles { json: false })
+            })
+        ));
+
+        // `show` needs a name. A missing one is a usage error rather than a
+        // report on nothing.
+        assert!(parse(&["plugin", "show"]).is_err());
+    }
+
     #[test]
     fn update_parses_as_a_subcommand() {
         let cli = parse(&["update"]).expect("update parses");

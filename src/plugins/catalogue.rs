@@ -279,10 +279,20 @@ mod tests {
     /// [`super::super::compiled_in`] so it covers the scripted plugins too —
     /// they are a second table and would otherwise need a second test that
     /// somebody would forget in the same way.
+    ///
+    /// Only first-party plugins are checked. A plugin somebody dropped in
+    /// `~/.wizard/plugins` has no cargo feature and must not be in this table,
+    /// and while the test suite never calls [`super::super::boot`] — so none
+    /// should be loaded here — a test that would fail on the contents of a
+    /// developer's home directory is one nobody trusts the second time.
     #[tokio::test]
     async fn every_compiled_in_plugin_has_a_catalogue_row() {
         super::super::bundled::ensure().await;
-        for id in super::super::kernel().loaded() {
+        for report in super::super::kernel().reports() {
+            if report.source != crate::kernel::PluginSource::FirstParty {
+                continue;
+            }
+            let id = &report.id;
             let entry = plugin(id.as_str())
                 .unwrap_or_else(|| panic!("plugin '{id}' is loaded but has no catalogue row"));
             assert!(
