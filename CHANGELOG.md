@@ -6,13 +6,16 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
-The 3.0 line, in progress: Wizard becomes a plugin host. The agent loop, the
+## [3.0.0] - 2026-08-29
+
+Wizard becomes a plugin host. The agent loop, the
 provider transport, the terminal UI and a new kernel stay in the binary;
 everything else becomes a plugin that registers itself, and a plugin is an
 in-tree Rust module behind a cargo feature, a LuaJIT script, or a JavaScript
 one. See [plugins.md](docs/plugins.md).
 
-Nothing below is released yet and the plugin API is not stable.
+The plugin API is not stable yet: a script plugin written against 3.0 may
+need changes in 3.1.
 
 ### Added
 
@@ -429,6 +432,7 @@ An adversarial audit ran against 2.0.0 before release. Its findings, all fixed h
 
   What is *not* affected: `wizard peers` and the mesh itself are unchanged, and the model and layout under the explorer (`src/graph/`) keep building and keep running their tests. The code is wired out, not deleted — `src/native/graph/mod.rs` lists the four seams that put it back, and `the_window_has_no_route_into_the_graph_explorer` fails the build if one of them returns by accident.
 
+[3.0.0]: https://github.com/teddytennant/wizard/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/teddytennant/wizard/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/teddytennant/wizard/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/teddytennant/wizard/compare/v2.0.1...v2.1.0
