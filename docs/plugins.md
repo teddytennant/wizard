@@ -10,6 +10,33 @@ behind a cargo feature, **or** a script loaded at runtime from
 `~/.wizard/plugins/` — LuaJIT or JavaScript. The kernel cannot tell the three
 apart, and no core module names a plugin.
 
+## Where this stands
+
+The sections below marked **As built** are a chronological record: each one
+corrects the ones before it, because the design in the middle of this document
+was written before any of it existed and was wrong in places. This table is the
+current answer, so nobody has to reconstruct it from the history.
+
+| | |
+| --- | --- |
+| Backends | in-tree Rust behind a cargo feature; LuaJIT; JavaScript (QuickJS) |
+| Cargo features | 18, all on by default except `native` |
+| Rust plugins | 9 providers (7 features), the window, `graph`, `tool-web`, `mesh`, `fleet`, `acp`, `gateway`, and the llama.cpp runtime folded into `provider-llamacpp` |
+| Lua plugins | `git` (`git_status`, `git_diff`), `publish` |
+| JavaScript plugins | `json` (`json_query`) |
+| Verified how | `contrib/check-provider-plugins.sh` and `contrib/check-tool-plugins.sh` build **and test** every leave-one-out feature set |
+
+Four subsystems were attempted and stayed core, each for a different reason, and
+each has a section below arguing it: `todo` (its state belongs to a session, and
+a plugin's is process-wide), `hardware` (core asks it synchronously, and its
+tests inject readings into pure functions that a value-only boundary cannot
+reach), `schedule` (three host namespaces whose only consumer would be that one
+plugin), and `evolve` (`wizard.model` cannot express a turn that carries its own
+system prompt and appends a failed reply on retry).
+
+Those four are why this document has a "Choosing" section. They are not
+leftovers.
+
 ## Why not "all of it in Lua"
 
 The obvious reading of "everything is a plugin" is "rewrite everything above the
