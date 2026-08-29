@@ -3071,3 +3071,261 @@ Still open, specific to this:
 - **No JS plugin is a command or an event handler yet.** `ctx.command` and
   `ctx.on` are implemented and tested; `json` uses neither, so the shipped
   surface is one tool.
+
+## As built: profiles are five names and a cargo flag, and `wizard plugin` is how you see any of it
+
+Everything above this line is machinery. Eighteen cargo features, three plugin
+backends, a rule that any one plugin can be deleted, and two scripts that prove
+it by building every leave-one-out set — and until this phase, none of it was
+reachable by a person. There was no way to ask for a plugin set at install time
+and no way to ask a binary what it had. A feature flag whose effect nobody can
+see is indistinguishable from no feature flag.
+
+This is the half a user touches. It is two things: `WIZARD_PROFILE`, which
+picks a feature set at build time, and `wizard plugin`, which reports one at
+run time.
+
+### The profile table is the design sketch, corrected in four places
+
+See "Profiles" above for the table and for what each correction was. The short
+version: `server` as sketched was the default build under another name, and
+earns its name now by dropping the *mesh*; `minimal` as sketched could not
+answer a prompt, and is one API key and git now; `custom` was never a profile,
+because `--features a,b,c` already is one; and `WIZARD_MINIMAL` could not be
+redefined to mean `WIZARD_PROFILE=minimal` because it already means something
+else in `install.sh` and provisioning scripts already set it.
+
+The one addition is `default`. The stock build had no name, so
+`wizard plugin profiles` had nothing to point at when somebody asked which one
+they had — and every release binary is that build.
+
+### A profile is arithmetic on Cargo's `default`, not a copy of it
+
+`server` is "the default list minus `graph` and `mesh`", written that way in
+`src/plugins/profile.rs` rather than spelled out. A spelled-out copy goes stale
+the first time a feature is added to `default`, silently, in the direction that
+matters: the new plugin would be in the stock build and missing from `server`
+with nothing to notice.
+
+The list it does arithmetic on is derived from `catalogue::CATALOGUE`'s
+`default_on` field, and that field is checked against `Cargo.toml` itself at
+test time — the same trick `contrib/check-tool-plugins.sh` already uses in bash.
+So the chain is: Cargo.toml is the truth, the catalogue is checked against it,
+and the profiles are computed from the catalogue.
+
+It also has to drop *both* `graph` and `mesh`, because `graph = ["mesh"]` and
+`--features graph` turns the mesh back on. That is the same shape
+`without_many` exists for in the check scripts, and it is the second time this
+edge has cost somebody a wrong build.
+
+### `default` passes no flags, and that is the whole opt-in promise
+
+`Profile::cargo_flags()` returns an empty vector for `default`, and
+`install.sh` splices an empty variable. A stock `cargo install --path .` and a
+stock `install.sh` run therefore invoke exactly the commands they invoked before
+any of this existed.
+
+The tempting alternative — `--no-default-features --features <every default>` —
+is not the same command. It is one feature resolution away from the stock build,
+and the difference would be invisible until something in the graph enabled a
+feature transitively that `default` was getting for free. An empty string is the
+only spelling of "unchanged" that cannot be subtly wrong.
+
+### The table exists twice, and a test diffs the copies
+
+`src/plugins/profile.rs` and `install.sh`'s `profile_features`. This cannot be
+one place. `install.sh` is fetched with `curl` and piped to `bash` by people who
+have no checkout, so it cannot read a file from the repository; and the Rust
+module cannot be consulted before the binary it is compiled into exists, which
+is the moment the profile has to be resolved.
+
+So `profile::tests::the_installer_agrees_about_every_profile` sources the
+installer with `WIZARD_SELFTEST=1` — the same door `crate::update`'s installer
+tests already go through — calls `profile_features` for each of the five, and
+compares sorted lists. Two copies with a test between them is a maintained
+duplicate; two copies without one is a bug with a delay fuse.
+
+### `PluginManifest::profiles` was decorative, and is now checked
+
+The field predates all of this. It was filled in from the design sketch, nothing
+read it, and by the time the profiles were real it was wrong in five places:
+every provider claimed `server` and none claimed `minimal`, the mesh claimed a
+profile that now drops it, and `json` claimed two that cannot load a `plugin.js`
+at all.
+
+It is not deleted, because the manifest is where somebody reading *one* plugin
+looks. It is checked instead:
+`profile::tests::every_manifest_declares_the_profiles_this_table_puts_it_in`
+walks every loaded plugin and asserts its declaration equals the profiles whose
+feature list contains its feature. Only loaded plugins can be compared — a
+manifest is a value a compiled-in plugin returns — which is why the coverage is
+completed by `contrib/check-tool-plugins.sh`: between its legs and the default
+build, every plugin is loaded in some run of that test.
+
+### `wizard plugin` is a core subcommand, and could not have been a plugin's
+
+Every other subcommand whose body ships in a plugin is owned by *one* plugin,
+which registers an `Entrypoint` under a name core looks up. This one is about
+all of them at once, and about the ones that are absent, so there is no plugin
+that could own it — and the build where it matters most is
+`--no-default-features`, where a plugin-owned `wizard plugin` would itself be
+missing. A surface whose job is to explain an empty build cannot be a member of
+the set it is explaining.
+
+What it does not do is invent a second registry. It reads the one that is
+already there: `Kernel::reports()` for what loaded, and
+`entrypoint::description` for what a registered surface calls itself. Both were
+added rather than assumed, and each is one method.
+
+`Kernel::reports()` is a snapshot per loaded plugin, copied out under one lock:
+id, manifest, source, backend, and the plugin's own **ledger** — the record
+`dispose` undoes. Reading the ledger rather than the four registries separately
+is what makes "what this prints" and "what an unload would remove" the same
+list. It also could not be a borrow: `LoadedPlugin` lives behind the plugin
+map's mutex, and a listing that held that mutex while it rendered would block
+every load and unload in the process for as long as a terminal took to scroll.
+
+### `entrypoint::description`, and the one place the type parameter is paid for
+
+`entrypoint::installed` is a `TypeId` downcast, so a caller has to already know
+which argument shape a surface was registered at. `wizard plugin` is the first
+caller that cannot: it reads a service name off a ledger and has nothing else to
+go on.
+
+So `description(name)` tries all four — `Entrypoint<Config>`,
+`Entrypoint<FleetCmd>`, `Entrypoint<GatewayCmd>`, `Subcommand` — and returns the
+`about` of whichever answers. Those are core's own `clap` types, which core
+already names in `cli.rs` and in its own dispatch chain, so this adds no
+dependency on a plugin. What it adds is *one* place to remember when a fifth
+argument shape lands, instead of a silent `None` at the surface.
+
+`None` is also load-bearing rather than a failure: it is how a service that is
+not a CLI surface at all is told apart from one that is. The mesh registers
+`peers` and `session-tee`, and the llama.cpp plugin registers a server spinner;
+counting those as entrypoints would tell the reader there is a
+`wizard session-tee`. The listing counts them apart for exactly that reason.
+
+### There is no `wizard plugin install`, and that is a decision
+
+Not for lack of a mechanism. `~/.wizard/plugins/<name>/` already loads a
+`plugin.lua` or a `plugin.js` dropped into it, bounded, as
+`PluginSource::Registry`. An `install` verb would be a downloader in front of a
+`cp`, and the three things that would make it worth having are all missing:
+
+- **There is nowhere to install from.** `registry_client` publishes skills and
+  scripted tools, not plugins. A plugin index is a server-side change.
+- **The grant would have nowhere to be recorded.** `decide_trust` persists a yes
+  against an exact author, version, checksum and capability list. An installer
+  that printed a capability list and then wrote the files would be asking a
+  question it does not keep the answer to, so every later load would either
+  re-ask or silently not ask — and "silently not ask" is the failure the whole
+  capability model exists to prevent.
+- **A `cp` needs no verb.** Somebody installs a plugin today by putting a
+  directory in a directory. That is worse than a command, and much better than a
+  command that pretends to have verified something.
+
+What is built instead is the half that makes the other half safe to write:
+`wizard plugin show` prints the capabilities a plugin declared and what each one
+grants, in the same words `registry_client::grant_prompt` uses, read off the
+manifest rather than restated. The sentence an installer would have to put in
+front of a yes/no already exists.
+
+### The profiles, measured
+
+`contrib/bench-plugins.sh size`, on one box, one toolchain, one target
+directory. `[profile.release]` sets `strip = true`, so these are stripped
+binaries.
+
+The four sets that mode used to build were invented in the script and matched
+nothing a user could ask for — one of them was called `no-mesh` and left `graph`
+in, which turns the mesh back on. It now reads the profile table off a binary
+(`wizard plugin profiles --json`), builds each one, and asks the result which
+profile it thinks it is. A name that comes back wrong is reported as a mismatch
+rather than as a number, because without that check every row still prints a
+plausible size.
+
+| Profile | `wizard` binary | vs `default` |
+| --- | --- | --- |
+| `minimal` | 17,517,168 bytes (16.71 MB) | **−31.2%** |
+| `pi` | 17,566,792 bytes (16.75 MB) | **−31.0%** |
+| `server` | 23,272,288 bytes (22.19 MB) | **−8.6%** |
+| `default` | 25,466,624 bytes (24.29 MB) | — |
+| `full` | 34,224,384 bytes (32.64 MB) | **+34.4%** |
+
+Four things in that table are worth saying out loud, because the whole
+feature-flag design is an argument and these are the evidence for it.
+
+**The floor of a *usable* build is 16.7 MB, and the stock build is 24.3 MB.**
+So the entire plugin surface — nine provider kinds, the mesh, the explorer, the
+gateway, ACP, the fleet, three tool plugins and the JavaScript engine — is
+7.6 MB, a third of what ships. That is the number the flags were for. It is
+also the honest ceiling: no feature list gets below `minimal`, because what is
+left is the agent loop, the TUI, the wire protocol, the tool registry and
+reqwest, and none of those is a plugin.
+
+**`server` saves 2.1 MB by dropping two features.** `mesh` and `graph`, which
+take `quinn` and `mdns-sd` with them. That confirms in bytes what "As built: the
+mesh is a plugin" claimed in prose — it is the one plugin whose removal
+measurably shrinks the binary — and it is why `server` drops *that* rather than
+something else. A profile that saved nothing would be a name for a preference.
+
+**`minimal` and `pi` are within 50 KB of each other.** Two API providers cost
+almost exactly what two local ones do, which says the provider plugins are thin:
+the wire machinery they share (`llm::wire`) is core, so what a provider feature
+actually adds is a descriptor, a credentials shape and a request builder. That
+is the right answer — a plugin boundary that had duplicated the transport would
+show up here as several megabytes per provider.
+
+**The window is 8.8 MB, a third of the stock binary again.** `native` is off by
+default and ships as its own release asset, and this is the sentence-free
+version of why: every headless `wizard -p`, every `wizard acp` and every CI
+container would otherwise carry iced, winit, a font stack and a rasterizer.
+
+One bug in this mode, found by running it: the first run printed `--` in the
+delta column for `minimal`, `pi` and `server`, because the profiles are listed
+smallest first, `default` is fourth, and the baseline was being recorded when
+the loop reached it. The three rows the table exists to make a point about were
+the three with no number. It weighs the stock build before the loop now.
+
+### Proving it
+
+Nineteen tests, and the three that are load-bearing are the ones that compare
+two things somebody would otherwise have to keep in step by hand:
+
+- `catalogue::the_catalogue_matches_cargo_tomls_default_list` — the catalogue
+  against `Cargo.toml`.
+- `catalogue::a_row_that_says_present_names_a_plugin_the_kernel_loaded` — the
+  catalogue against the running kernel, backend column included.
+- `profile::the_installer_agrees_about_every_profile` — this tree against
+  `install.sh`.
+
+Plus `catalogue::every_compiled_in_plugin_has_a_catalogue_row`, which is what
+turns "a new plugin should be added to the catalogue too" from a sentence in
+this document into a test failure.
+
+The surface itself is verified on the real binary rather than only in tests:
+`wizard plugin` on a stock build and on a `--no-default-features` one, which are
+the two ends of the range and the second of which is the build the surface
+exists for.
+
+### Still open, specific to this
+
+- **`WIZARD_PROFILE` always builds from source** except for `default`. The
+  release workflow publishes one asset per target and it is the default profile,
+  so a `minimal` or `pi` install compiles. Publishing a `pi` asset for
+  `aarch64` is the obvious next step and it is a release-workflow change, not a
+  client one.
+- **`wizard plugin` cannot unload anything.** `Kernel::unload` exists and is
+  exact; there is no verb in front of it. A `/plugin unload` inside a session
+  is the shape that was sketched, and it is a different surface from this one.
+- **A profile is not recorded anywhere on the installed machine.** It does not
+  need to be — `wizard plugin profiles` recomputes it from the `cfg!` set the
+  binary was built with, which cannot go stale the way a written record can —
+  but it does mean `install.sh` cannot tell you what the binary already sitting
+  in `/usr/local/bin` is. Running it is the answer.
+- **The scripted half of a profile is not implemented and may not need to be.**
+  The sketch had profiles copying Lua plugins into `~/.wizard/plugins`. Every
+  first-party scripted plugin now ships *inside* the binary (`include_str!`, see
+  "As built: the first Lua plugin"), because a file on disk cannot be
+  first-party, so the cargo feature is the whole of the mechanism and there is
+  nothing left to copy.

@@ -71,8 +71,16 @@ for p in json.load(sys.stdin)["profiles"]: print(p["name"]+"\t"+" ".join(p["carg
         say "could not read the profile table out of the binary"
         return 1
     fi
+    # The stock build is the denominator every delta is against, and it is
+    # weighed here rather than when the loop reaches it. The first run of this
+    # printed `--` for `minimal`, `pi` and `server` because the profiles are
+    # listed smallest first and `default` is fourth, so the baseline did not
+    # exist yet for the three rows the whole table is trying to make a point
+    # about.
+    local baseline
+    baseline=$(file_size target/release/wizard)
 
-    local baseline=0 name flags bytes reported delta mb
+    local name flags bytes reported delta mb
     while IFS=$'\t' read -r name flags; do
         [ -n "$name" ] || continue
         # shellcheck disable=SC2086
@@ -87,12 +95,11 @@ for p in json.load(sys.stdin)["profiles"]: print(p["name"]+"\t"+" ".join(p["carg
             say "$(printf '%-9s %12s  built as `%s` -- MISMATCH' "$name" "$bytes" "$reported")"
             continue
         fi
-        [ "$name" = "default" ] && baseline=$bytes
-        if [ "$baseline" -gt 0 ] && [ "$name" != "default" ]; then
+        if [ "$name" = "default" ]; then
+            delta="baseline"
+        else
             delta=$(awk -v b="$bytes" -v d="$baseline" \
                 'BEGIN {printf "%+.1f%%", (b - d) * 100 / d}')
-        else
-            delta="--"
         fi
         mb=$(awk -v b="$bytes" 'BEGIN {printf "%.2f", b / 1048576}')
         say "$(printf '%-9s %12s bytes  %8s MB  %8s' "$name" "$bytes" "$mb" "$delta")"

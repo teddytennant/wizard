@@ -90,7 +90,7 @@ leg() {
         fail=1
     elif [ "${failed:-1}" -ne 0 ]; then
         if [ "$failed" -eq 1 ] \
-           && grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$log"; then
+           && grep -qE '^[[:space:]]+platform::lockfile::tests::a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it$' "$log"; then
             results+=("$(printf '%-5s passed, known lockfile flake  %s' "$passed" "$label")")
         else
             results+=("$(printf '%-5s passed, %s FAILED  %s' "$passed" "$failed" "$label")")
