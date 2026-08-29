@@ -820,6 +820,55 @@ fn the_gateway_admin_surface_reaches_the_plugin_or_says_it_is_absent() {
     );
 }
 
+/// `wizard mcp-serve` speaks the protocol, or says which build it is not in.
+///
+/// The one thing a unit test cannot check about this surface: whether a whole
+/// process, started from the `clap` variant in core and dispatched through a
+/// lookup, actually answers JSON-RPC on its stdout. `serve::handle` is unit
+/// tested against a registry built in-process; only a subprocess proves the
+/// entrypoint in between finds a body and that the body reaches stdin.
+///
+/// `initialize` rather than `tools/list`, because the roster depends on which
+/// tool plugins this leg compiled in and the handshake does not. Stdin is
+/// closed after the one request, which is how the loop is meant to end.
+#[test]
+fn mcp_serve_answers_a_handshake_or_says_it_is_absent() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let home = TempDir::new();
+
+    if !cfg!(feature = "mcp") {
+        let run = run_wizard(&home.0, &["mcp-serve"], &[]);
+        let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+        assert!(!run.status.success(), "{stderr}");
+        assert!(stderr.contains("--features mcp"), "{stderr}");
+        return;
+    }
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wizard"))
+        .arg("mcp-serve")
+        .env("HOME", &home.0)
+        .current_dir(&home.0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp-serve");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+        .expect("write the request");
+    // The loop ends at EOF, so the pipe has to close or `wait_with_output`
+    // waits for a server doing exactly what it was told to do.
+    drop(stdin);
+    let out = child.wait_with_output().expect("mcp-serve exits at EOF");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains(r#""serverInfo""#), "{stdout}");
+    assert!(stdout.contains(r#""name":"wizard""#), "{stdout}");
+}
+
 /// `wizard peers` reaches the mesh plugin, or says which build it is not in.
 ///
 /// The one thing a unit test cannot check about this subcommand: whether the
@@ -942,6 +991,7 @@ fn help_lists_a_plugin_subcommand_exactly_when_this_build_has_it() {
     for (compiled_in, name) in [
         (cfg!(feature = "acp"), "acp"),
         (cfg!(feature = "fleet"), "fleet"),
+        (cfg!(feature = "mcp"), "mcp-serve"),
         (cfg!(feature = "mesh"), "peers"),
     ] {
         assert_eq!(listed(name), compiled_in, "`{name}` in --help:\n{stdout}");

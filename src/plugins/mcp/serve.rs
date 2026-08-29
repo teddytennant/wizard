@@ -3,6 +3,14 @@
 //! can call Wizard's tools. This is the inverse of the client in [`super`],
 //! which consumes *other* servers' tools; here Wizard is the server.
 //!
+//! One plugin, one feature, both directions: this file shares [`super`]'s
+//! [`PROTOCOL_VERSION`] and [`McpToolInfo`] rather than restating them, which
+//! is the argument [`super`]'s own header makes for not splitting `mcp` in
+//! two. Core reaches it through [`crate::entrypoint::MCP_SERVE`]; the `clap`
+//! variant behind that name stays in [`crate::cli`] and keeps parsing on a
+//! build with no plugin, so `wizard mcp-serve` answers with a sentence rather
+//! than an unknown verb.
+//!
 //! One synchronous request loop over newline-delimited JSON-RPC on
 //! stdin/stdout, answering `initialize`, `tools/list`, `tools/call`, and
 //! `ping`. There is no auth, no transport negotiation, and no streaming to

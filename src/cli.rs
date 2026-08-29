@@ -279,14 +279,15 @@ pub enum Command {
         cmd: HarnessCmd,
     },
 
-    /// Serve Wizard's native tools over stdio as an MCP server (JSON-RPC),
-    /// so any MCP client (Claude Code, Cursor, another Wizard) can call them.
-    /// Self-contained: no config, no LLM. Runs until stdin closes.
-    McpServe {
-        /// Also advertise agent-authored scripted tools from ~/.wizard/tools/.
-        #[arg(long)]
-        scripted: bool,
-    },
+    /// Not in this build: `wizard mcp-serve` needs the `mcp` feature, which
+    /// is on by default. Rebuild with `--features mcp`, or install a stock
+    /// release binary.
+    //
+    // The absent text only. See the `Fleet` variant above for why: `command`
+    // below replaces this with `Entrypoint::about` on a build that has the
+    // plugin and hides the row on one that does not, because the present tense
+    // belongs to whoever implements the surface.
+    McpServe(McpServeCmd),
 
     /// Not in this build: `wizard acp` needs the `acp` feature, which is on by
     /// default. Rebuild with `--features acp`, or install a stock release
@@ -628,6 +629,29 @@ pub enum GatewayCmd {
     Service(crate::platform::service::ServiceCmd),
 }
 
+/// `wizard mcp-serve`'s arguments.
+///
+/// A `clap::Args` struct rather than a bare `bool` on the variant, and rather
+/// than the `clap::Subcommand` enum [`FleetCmd`] and [`GatewayCmd`] are,
+/// because `mcp-serve` is one verb with flags and has no tree. What it shares
+/// with those two is why it exists at all: it is the argument type
+/// [`crate::entrypoint::Entrypoint`] is parameterised on, and that lookup is a
+/// `TypeId` downcast. `Entrypoint<bool>` would have worked today and would
+/// have made the second flag a silent breakage — a plugin registering at one
+/// type while core asks at another reads exactly like a plugin that was never
+/// compiled in.
+///
+/// Core parses it whatever this build contains, for the reason core parses
+/// `FleetCmd`: `--help` has to keep listing the flag, and
+/// `wizard --plan mcp-serve` has to keep being rejected for naming `--plan`
+/// beside a subcommand rather than for an unknown verb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::Args)]
+pub struct McpServeCmd {
+    /// Also advertise agent-authored scripted tools from ~/.wizard/tools/.
+    #[arg(long)]
+    pub scripted: bool,
+}
+
 /// `wizard harness` subcommands. Self-contained: no config load,
 /// no onboarding, no LLM.
 #[derive(Debug, Clone, clap::Subcommand)]
@@ -758,15 +782,15 @@ enum WhenAbsent {
 /// to, what the plugin says it is on this build, and what to do when nothing
 /// answers.
 ///
-/// Core enumerating its four plugin-owned subcommands, which it already does
+/// Core enumerating its five plugin-owned subcommands, which it already does
 /// twice — once as `clap` variants above, once as dispatch arms in
 /// [`crate::run`] — and for the same reason: parsing `wizard fleet run -n 3`
 /// is core's job whether or not a fleet is compiled in, so the variants stay,
 /// and something has to join each one to the lookup that finds its body. The
 /// argument type is part of that join ([`crate::entrypoint::installed`] is a
-/// `TypeId` downcast), which is why this is four written-out lookups and not
+/// `TypeId` downcast), which is why this is five written-out lookups and not
 /// a loop over a table of names.
-fn plugin_subcommands() -> [(&'static str, Option<&'static str>, WhenAbsent); 4] {
+fn plugin_subcommands() -> [(&'static str, Option<&'static str>, WhenAbsent); 5] {
     use crate::entrypoint::{self, installed, installed_subcommand};
 
     [
@@ -786,6 +810,11 @@ fn plugin_subcommands() -> [(&'static str, Option<&'static str>, WhenAbsent); 4]
             WhenAbsent::Drop,
         ),
         (
+            entrypoint::MCP_SERVE,
+            installed::<McpServeCmd>(entrypoint::MCP_SERVE).map(|entry| entry.about()),
+            WhenAbsent::Drop,
+        ),
+        (
             entrypoint::PEERS,
             installed_subcommand(entrypoint::PEERS).map(|entry| entry.about()),
             WhenAbsent::Drop,
@@ -797,7 +826,7 @@ fn plugin_subcommands() -> [(&'static str, Option<&'static str>, WhenAbsent); 4]
 /// derive describes.
 ///
 /// The derive cannot know: whether `wizard acp` does anything is a property of
-/// the plugin set, which is a runtime lookup. So the four rows above are
+/// the plugin set, which is a runtime lookup. So the five rows above are
 /// folded in here — the description a registered surface gave itself replaces
 /// core's, and a row with nothing behind it is dropped or kept per its policy.
 ///
@@ -1110,12 +1139,12 @@ mod tests {
         let cli = parse(&["mcp-serve"]).expect("mcp-serve parses");
         assert!(matches!(
             cli.command,
-            Some(Command::McpServe { scripted: false })
+            Some(Command::McpServe(McpServeCmd { scripted: false }))
         ));
         let cli = parse(&["mcp-serve", "--scripted"]).expect("--scripted parses");
         assert!(matches!(
             cli.command,
-            Some(Command::McpServe { scripted: true })
+            Some(Command::McpServe(McpServeCmd { scripted: true }))
         ));
     }
 

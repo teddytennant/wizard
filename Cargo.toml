@@ -92,6 +92,7 @@ default = [
   "provider-openai",
   "provider-xai",
   "graph",
+  "mcp",
   "mesh",
   "tool-web",
   "tool-git",
@@ -168,6 +169,35 @@ provider-ollama = []
 # `kind = "openrouter"`. The wire machinery itself is `llm::wire` and stays in
 # core — five backends build on it, so it is infrastructure, not a plugin.
 provider-openai = []
+
+# The Model Context Protocol, in both directions. `src/plugins/mcp/`.
+#
+# The *client* connects to the servers in `~/.wizard/mcp.toml` over stdio or
+# streamable HTTP and turns each of their tools into one the model can call;
+# the *server* is `wizard mcp-serve`, which points the same protocol the other
+# way so Claude Code, Cursor or another Wizard can call this binary's tools.
+#
+# One feature over both halves because they are two ends of one wire and share
+# its vocabulary: the protocol revision both announce and the `tools/list`
+# entry one parses and the other emits. A second feature whose entire content
+# was a struct and a string is the flag this file already refuses to ship for a
+# credential variant.
+#
+# What stays in core when this is left out is `src/mcp.rs`: the `mcp.toml`
+# format, the two traits and the `McpManager` four surfaces hold. The format
+# because `wizard import-claude` writes one, `/evolve` upserts into one and
+# `wizard doctor` lists one, none of which dials a server — the `[web]` rule
+# applied to a config *file*. The holder because the TUI, the window, the ACP
+# server and the gateway each keep one for the life of a process, and three of
+# those four are plugins: had they held the client's own type, `mcp` would not
+# have been removable without removing them too.
+#
+# Leaving it out costs the tools the servers in `mcp.toml` would have provided
+# — absent from the roster, so the model is not told about them — and
+# `wizard mcp-serve`, which then says which flag brings it back. Configure a
+# server on such a build and the connect says so; configure none and it says
+# nothing, because there is nothing to say.
+mcp = []
 
 # The mesh graph explorer: `MeshGraph` (a `PeerStore` turned into something
 # drawable, with liveness decided once and honestly) and a deterministic force

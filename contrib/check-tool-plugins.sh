@@ -39,7 +39,7 @@
 #     registered by a script that only runs once `plugins::bundled::ensure`
 #     has been awaited, so the leg proves that leaving it out costs two tool
 #     names and not a compile error in the four places that assert what the
-#     roster holds (`plugins`, `mcp`, `harness`, `tools::registry`).
+#     roster holds (`plugins`, `plugins::mcp`, `harness`, `tools::registry`).
 #   - `tool-publish` left out. The second Lua plugin, and the first whose
 #     tool a *slash command* invokes as well as the model, so it has two
 #     degrade paths at once: `publish` must be absent from the roster, and
@@ -70,6 +70,15 @@
 #     JavaScript engine linked and no bundled JavaScript plugin has to leave
 #     `json_query` out of the roster rather than fail to compile, which is the
 #     same claim `without tool-git` makes about the Lua half.
+#   - `mcp` left out with everything else present. It is the only plugin core
+#     reaches through a seam that four *other* plugins also hold across a whole
+#     process — every surface keeps an `McpManager` — so this is the leg that
+#     proves that holder is genuinely core's and not a re-export of the
+#     client's own type. It is also the second plugin with two registrations of
+#     different kinds (a connector and a `wizard mcp-serve` entrypoint), so, as
+#     with the gateway, "absent" has two halves that can disagree: a build
+#     where `mcp-serve` degraded to a sentence while `mcp.toml` still tried to
+#     spawn `uvx` would pass every other leg here.
 #   - `gateway` left out with everything else present. It is the first plugin
 #     that owns *two* entrypoints, so it is the first leg where "absent" has
 #     two halves that can disagree: a build where `wizard --gateway` degraded
@@ -191,6 +200,7 @@ leg "without graph" --features "$(without graph)"
 leg "without acp" --features "$(without acp)"
 leg "without fleet" --features "$(without fleet)"
 leg "without gateway" --features "$(without gateway)"
+leg "without mcp" --features "$(without mcp)"
 leg "without tool-json" --features "$(without tool-json)"
 
 # `tool-json` goes with it: it enables `plugin-js`, so dropping only the

@@ -129,14 +129,29 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         return tools::computer::setup::run().map(|()| 0);
     }
 
-    // MCP server: expose Wizard's native tools over stdio to another MCP
-    // client. Self-contained — no config, no onboarding, no LLM — so it
-    // dispatches before the config load like the other tooling subcommands.
-    if let Some(cli::Command::McpServe { scripted }) = &cli.command {
+    // MCP server: expose Wizard's tools over stdio to another MCP client.
+    // Self-contained — no config, no onboarding, no LLM — so it dispatches
+    // before the config load like the other tooling subcommands.
+    //
+    // A plugin, and looked up the way the window, the ACP server, the fleet
+    // and the gateway are: `plugins::boot` above has already loaded whatever
+    // this build compiled in, and there is no `#[cfg]` in this arm. The `None`
+    // arm is `entrypoint::absent` rather than a longer message, for the reason
+    // `acp`'s is: `mcp` is on by default and in every published binary, so the
+    // only way to be reading it is to have built the tree without the flag.
+    if let Some(cli::Command::McpServe(cmd)) = &cli.command {
         if let Some(dir) = &cli.cwd {
             std::env::set_current_dir(dir)?;
         }
-        return mcp::serve::run(*scripted).await.map(|()| 0);
+        let Some(server) = entrypoint::installed(entrypoint::MCP_SERVE) else {
+            return Err(entrypoint::absent(
+                entrypoint::MCP_SERVE,
+                "mcp",
+                "It serves this Wizard's own tools over stdio to another MCP client — Claude \
+                 Code, Cursor, another Wizard.",
+            ));
+        };
+        return server.run(*cmd).await;
     }
 
     // Usage rollup: reads ~/.wizard/usage.jsonl only.

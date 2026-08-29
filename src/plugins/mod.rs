@@ -90,6 +90,13 @@ pub mod chatgpt;
 pub mod cloudflare;
 #[cfg(feature = "provider-llamacpp")]
 pub mod llamacpp;
+// The Model Context Protocol, in both directions: the client that dials the
+// servers in `mcp.toml` and turns their tools into `Tool`s, and the
+// `wizard mcp-serve` surface that hands this binary's tools to somebody
+// else's client. One plugin over one directory, because the two halves share
+// the protocol's own vocabulary; see `plugins::mcp` for the argument.
+#[cfg(feature = "mcp")]
+pub mod mcp;
 // The mesh: peer identity, the QUIC transport under it, the consent ledger,
 // the `wizard peers` surface and the session tee. One plugin over one
 // directory, and the largest thing that has gone through the door.
@@ -141,8 +148,10 @@ use crate::tools::registry::ToolRegistry;
 /// Seven of them are providers. The rest are not, and each one is a different
 /// shape of seam: `native`, `acp`, `fleet` and `gateway` register CLI
 /// entrypoints (the gateway two of them), `tool-web` three tools, `graph`
-/// nothing at all, and `mesh` both a `wizard peers` subcommand tree and the
-/// factory `App` opens a session's tee from. They are the reason
+/// nothing at all, `mesh` both a `wizard peers` subcommand tree and the
+/// factory `App` opens a session's tee from, and `mcp` one of each — a
+/// `wizard mcp-serve` entrypoint and the connector every surface's
+/// `McpManager` dials through. They are the reason
 /// `docs/plugins.md`'s first rule is a rule rather than an observation —
 /// `src/lib.rs` used to call `native::run`, `acp::run`, `fleet::run`,
 /// `gateway::run` and `mesh::cli::run` by name, and `src/app/` held a
@@ -169,6 +178,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(gateway::plugin::GatewayPlugin::new()));
     #[cfg(feature = "provider-llamacpp")]
     plugins.push(Arc::new(llamacpp::LlamaCppPlugin::new()));
+    #[cfg(feature = "mcp")]
+    plugins.push(Arc::new(mcp::plugin::McpPlugin::new()));
     #[cfg(feature = "native")]
     plugins.push(Arc::new(native::NativePlugin::new()));
     #[cfg(feature = "provider-ollama")]
@@ -753,6 +764,13 @@ mod tests {
             cfg!(feature = "fleet").then_some(entrypoint::FLEET),
             "the fleet's entrypoint"
         );
+        assert_eq!(
+            services
+                .inject_as::<Entrypoint<crate::cli::McpServeCmd>>(entrypoint::MCP_SERVE)
+                .map(|entry| entry.name()),
+            cfg!(feature = "mcp").then_some(entrypoint::MCP_SERVE),
+            "`wizard mcp-serve`"
+        );
         // Two rows for one plugin, which is the gateway's whole novelty: it
         // owns two surfaces, the registry keys on the name alone, and so the
         // two are two names. A build in which only one of these answered would
@@ -876,6 +894,50 @@ mod tests {
         for name in kernel.command_names() {
             assert!(!name.starts_with("mesh"), "{name}");
             assert!(!name.starts_with("peer"), "{name}");
+        }
+    }
+
+    /// The MCP plugin's two registrations are present exactly when its
+    /// feature is, and they are two different kinds of thing.
+    ///
+    /// The failure this catches is the one the gateway's pair catches, with a
+    /// sharper edge: the connector and the `mcp-serve` entrypoint are looked
+    /// up from different modules by different callers, so a build where only
+    /// one of them registered would have `wizard mcp-serve` working while
+    /// every server in `mcp.toml` silently failed to connect, or the reverse.
+    /// Both read to a user like a broken install rather than like a missing
+    /// feature.
+    #[test]
+    fn the_mcps_two_registrations_are_present_exactly_when_its_plugin_is() {
+        let kernel = kernel();
+        let has_mcp = cfg!(feature = "mcp");
+        assert_eq!(
+            kernel.loaded().iter().any(|id| id.as_str() == "mcp"),
+            has_mcp,
+            "the plugin itself"
+        );
+        assert_eq!(
+            crate::mcp::installed().is_some(),
+            has_mcp,
+            "the client `mcp.toml` is dialed through"
+        );
+        assert_eq!(
+            crate::entrypoint::installed::<crate::cli::McpServeCmd>(crate::entrypoint::MCP_SERVE)
+                .is_some(),
+            has_mcp,
+            "`wizard mcp-serve`"
+        );
+
+        // And nothing else. An MCP tool reaches the model through the
+        // manager a surface holds, never through the kernel's tool slot: what
+        // is on the far end of `mcp.toml` is chosen per machine and per
+        // session, so a tool registered at load would be one this process
+        // cannot have checked is still there.
+        for name in kernel.tool_names() {
+            assert!(!name.starts_with("mcp"), "{name}");
+        }
+        for name in kernel.command_names() {
+            assert!(!name.starts_with("mcp"), "{name}");
         }
     }
 
