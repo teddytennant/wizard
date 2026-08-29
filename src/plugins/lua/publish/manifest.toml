@@ -19,4 +19,4 @@ capabilities = ["process", "filesystem"]
 # Not in `minimal` or `pi`. Publishing forks a repository to somebody's GitHub
 # account, and a CI container and a Raspberry Pi are the two places where
 # nobody is there to have meant it — `gh` is authenticated on neither.
-profiles = ["full", "server"]
+profiles = ["server", "default", "full"]

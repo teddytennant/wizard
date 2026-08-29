@@ -291,6 +291,25 @@ impl fmt::Debug for PluginKind {
 }
 
 impl PluginKind {
+    /// Which backend runs this plugin, as one lowercase word.
+    ///
+    /// The kernel does not otherwise care — one `Ctx`, one set of registries,
+    /// and `docs/plugins.md` opens by saying a loaded plugin's language is
+    /// invisible from here. It matters to exactly one reader: the person
+    /// running `wizard plugin`, for whom the difference between `rust` and
+    /// `lua` is the difference between needing a toolchain and needing a text
+    /// editor. So the answer is spelled once, on the variant that knows it,
+    /// rather than by a `match` at the surface that would have to be found
+    /// again the day a fourth backend lands.
+    pub fn language(&self) -> &'static str {
+        match self {
+            PluginKind::Rust(_) => "rust",
+            PluginKind::Lua(_) => "lua",
+            #[cfg(feature = "plugin-js")]
+            PluginKind::Js(_) => "js",
+        }
+    }
+
     /// True when disposal has an async half — a VM task to stop and teardowns
     /// to run inside it.
     ///

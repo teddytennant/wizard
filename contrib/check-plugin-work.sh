@@ -18,15 +18,16 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
 # with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
 # 2618 with `publish`, 2620 with the gateway and the llama-server lifecycle,
-# and 2685 with the JavaScript backend and its `json_query` plugin. Raise it
-# when a phase adds tests, so the ratchet keeps ratcheting.
+# 2685 with the JavaScript backend and its `json_query` plugin, and 2705 with
+# the install profiles and the `wizard plugin` surface. Raise it when a phase
+# adds tests, so the ratchet keeps ratcheting.
 #
 # 2609 was one below what the tree actually had by then (2610, measured): the
 # acp and fleet plugins landed after that number was written and nobody raised
 # it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
 # until the turn's event channel was released at the end of a turn those three
 # did not fail -- they hung.
-BASELINE_TESTS=2685
+BASELINE_TESTS=2705
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -104,7 +105,17 @@ fi
 counted=$passed
 if [ "${failed:-1}" -ne 0 ]; then
     # The one known flake, so a busy machine does not read as a regression.
-    if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$test_log" \
+    #
+    # Matched against the `failures:` block rather than anywhere in the log,
+    # because the loose version matched the line `test platform::lockfile::...
+    # ok` — which is printed on every run where the flake did *not* fire. So a
+    # single failure of any other test was reported as "only the known lockfile
+    # flake failed" and the gate went green. That is how
+    # `update::tests::security_md_describes_install_sh_at_its_real_length`
+    # survived a passing run of this script and was caught two scripts later by
+    # `check-provider-plugins.sh`, which counts differently. A whitelist that
+    # matches everything is worse than no whitelist.
+    if grep -qE '^[[:space:]]+platform::lockfile::tests::a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it$' "$test_log" \
        && [ "$failed" -eq 1 ]; then
         printf 'note: only the known lockfile flake failed; re-run it alone to confirm\n'
         counted=$((passed + failed))
@@ -153,7 +164,7 @@ if [ "${nd_passed:-0}" -lt 1 ]; then
     bad "--no-default-features reported no test results at all (truncated log? build failure?)"
 fi
 if [ "${nd_failed:-1}" -ne 0 ]; then
-    if grep -q 'a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it' "$nd_log" \
+    if grep -qE '^[[:space:]]+platform::lockfile::tests::a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it$' "$nd_log" \
        && [ "$nd_failed" -eq 1 ]; then
         printf 'note: only the known lockfile flake failed\n'
     else

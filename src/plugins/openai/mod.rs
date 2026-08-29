@@ -201,7 +201,12 @@ impl OpenAiPlugin {
                 description: "OpenAI-compatible Chat Completions, and OpenRouter".to_string(),
                 capabilities: vec![Capability::Network],
                 optional_deps: Vec::new(),
-                profiles: vec!["full".to_string(), "server".to_string()],
+                profiles: vec![
+                    "minimal".to_string(),
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }

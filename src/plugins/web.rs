@@ -1676,10 +1676,14 @@ impl WebPlugin {
                 description: "Fetch and search the web".to_string(),
                 capabilities: vec![Capability::Network],
                 optional_deps: Vec::new(),
-                // Not in `pi`: `docs/plugins.md` defines that profile as
-                // "minimal plus a local provider, JIT tuned, no mesh, no GUI,
-                // no web".
-                profiles: vec!["full".to_string(), "server".to_string()],
+                // Not in `pi` or `minimal`. Both are builds for a machine
+                // running one job on one key, and both of these tools reach a
+                // third-party search API that wants a second one.
+                profiles: vec![
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }

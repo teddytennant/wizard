@@ -449,6 +449,27 @@ pub enum Command {
         args: Vec<String>,
     },
 
+    /// Report the plugin set this binary was built with: what is compiled in,
+    /// which backend each plugin runs on, what it registered, what it was
+    /// granted, and what a rebuild would add.
+    ///
+    /// Read-only and self-contained: no config, no LLM, no network. See
+    /// docs/plugins.md.
+    //
+    // A core subcommand rather than a plugin-owned one, and the distinction is
+    // not a technicality. Every other row in this enum whose body ships in a
+    // plugin is owned by *one* plugin, which registers an `Entrypoint` under a
+    // name core looks up. This one is about all of them at once and about the
+    // ones that are absent, so there is no plugin that could own it: on the
+    // build where it matters most — `--no-default-features`, nothing loaded —
+    // a plugin-owned `wizard plugin` would itself be missing. It reads the same
+    // registry the lookups read (`crate::entrypoint::description`) rather than
+    // holding a second one.
+    Plugin {
+        #[command(subcommand)]
+        cmd: Option<PluginCmd>,
+    },
+
     /// Install and enable the OS dependencies the `computer` tool needs for
     /// desktop control ("computer use"), then print what is left to do by
     /// hand.
@@ -459,6 +480,53 @@ pub enum Command {
     /// how to grant them. It touches no config and starts no agent.
     /// See docs/computer-use.md.
     DesktopSetup,
+}
+
+/// `wizard plugin` subcommands.
+///
+/// Four verbs over one question — "what is in this binary" — split by who is
+/// asking. `list` and `show` are for somebody holding a build they did not
+/// make; `missing` and `profiles` are for somebody about to make one.
+///
+/// `--json` is per-verb rather than a top-level flag because clap puts a
+/// top-level flag *before* the subcommand (`wizard plugin --json list`), which
+/// is the wrong way round for something people will type from memory.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum PluginCmd {
+    /// One row per plugin the kernel loaded: backend, source, and what it
+    /// registered. The default when no verb is given.
+    List {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// One plugin in full: version, backend, the capabilities it declared and
+    /// what each one grants, and every tool, command, provider and entrypoint
+    /// it registered. Exits 1 if this build does not have it.
+    Show {
+        /// The plugin's name, as `wizard plugin list` prints it.
+        name: String,
+        /// Emit JSON instead of a report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Plugin features this build does not have, and the flag that brings each
+    /// one back.
+    Missing {
+        /// Emit JSON instead of a listing.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// The named build profiles, what each is for, and which one this binary
+    /// is.
+    Profiles {
+        /// Emit JSON instead of a listing.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `wizard skills` subcommands. Self-contained like `sync`: they read the
@@ -1152,6 +1220,61 @@ mod tests {
     fn acp_parses_as_a_subcommand() {
         let cli = parse(&["acp"]).expect("acp parses");
         assert!(matches!(cli.command, Some(Command::Acp)));
+    }
+
+    /// `wizard plugin` with no verb is the listing, and each verb parses.
+    ///
+    /// The bare form is the one people will type, so the `Option` on the
+    /// subcommand is load-bearing rather than permissive: without it clap
+    /// answers `wizard plugin` with a usage error instead of the report, which
+    /// is the whole surface refusing its most obvious invocation.
+    #[test]
+    fn plugin_subcommands_parse_and_the_bare_form_is_allowed() {
+        let cli = parse(&["plugin"]).expect("bare `plugin` parses");
+        assert!(matches!(cli.command, Some(Command::Plugin { cmd: None })));
+
+        let cli = parse(&["plugin", "list"]).expect("`plugin list` parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::List { json: false })
+            })
+        ));
+
+        let cli = parse(&["plugin", "list", "--json"]).expect("`--json` parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::List { json: true })
+            })
+        ));
+
+        let cli = parse(&["plugin", "show", "mesh"]).expect("`plugin show` parses");
+        let Some(Command::Plugin {
+            cmd: Some(PluginCmd::Show { name, json }),
+        }) = cli.command
+        else {
+            panic!("expected `plugin show`");
+        };
+        assert_eq!(name, "mesh");
+        assert!(!json);
+
+        assert!(matches!(
+            parse(&["plugin", "missing"]).expect("parses").command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::Missing { json: false })
+            })
+        ));
+        assert!(matches!(
+            parse(&["plugin", "profiles"]).expect("parses").command,
+            Some(Command::Plugin {
+                cmd: Some(PluginCmd::Profiles { json: false })
+            })
+        ));
+
+        // `show` needs a name. A missing one is a usage error rather than a
+        // report on nothing.
+        assert!(parse(&["plugin", "show"]).is_err());
     }
 
     #[test]

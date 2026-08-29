@@ -917,7 +917,12 @@ impl OllamaPlugin {
                 description: "Local Ollama, native /api/chat".to_string(),
                 capabilities: vec![Capability::Network],
                 optional_deps: Vec::new(),
-                profiles: vec!["full".to_string(), "server".to_string()],
+                profiles: vec![
+                    "pi".to_string(),
+                    "server".to_string(),
+                    "default".to_string(),
+                    "full".to_string(),
+                ],
             },
         }
     }

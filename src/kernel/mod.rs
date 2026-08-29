@@ -863,6 +863,64 @@ impl Kernel {
             .map(|loaded| Arc::clone(&loaded.manifest))
     }
 
+    /// Everything the kernel knows about one loaded plugin, copied out under a
+    /// single lock.
+    ///
+    /// [`manifest_of`] answered half of this already and every other half was
+    /// reachable only by asking a different registry a different question and
+    /// hoping nothing moved in between. `wizard plugin show` needs all of it at
+    /// once and needs it to be one consistent picture, so this reads the
+    /// `LoadedPlugin` once and hands back an owned snapshot.
+    ///
+    /// A snapshot rather than a borrow because [`LoadedPlugin`] lives behind
+    /// the plugin map's mutex, and handing out a reference into it would mean
+    /// the caller holding that lock for as long as it took to render a table —
+    /// during which nothing else could load, unload, or answer
+    /// [`Kernel::loaded`].
+    ///
+    /// [`manifest_of`]: Kernel::manifest_of
+    pub fn describe(&self, id: &PluginId) -> Option<PluginReport> {
+        let plugins = self
+            .inner
+            .plugins
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let loaded = plugins.get(id)?;
+        Some(PluginReport {
+            id: loaded.id.clone(),
+            manifest: Arc::clone(&loaded.manifest),
+            source: loaded.source,
+            language: loaded.kind.language(),
+            parent: loaded.parent.clone(),
+            tools: loaded.ledger.tools().to_vec(),
+            commands: loaded.ledger.commands().to_vec(),
+            providers: loaded.ledger.providers().to_vec(),
+            services: loaded.ledger.services().to_vec(),
+            handlers: loaded.ledger.handlers().len(),
+            children: loaded
+                .ledger
+                .children()
+                .iter()
+                .map(PluginId::to_string)
+                .collect(),
+        })
+    }
+
+    /// One report per loaded plugin, in load order.
+    ///
+    /// [`Kernel::loaded`] first and [`Kernel::describe`] after, rather than one
+    /// pass holding both locks: `loaded` takes the order lock and then the
+    /// plugin lock, and a method that held the plugin lock across a second
+    /// acquisition of it would deadlock on the first plugin. A plugin unloaded
+    /// between the two calls simply drops out of the vector, which is the
+    /// honest answer for a listing.
+    pub fn reports(&self) -> Vec<PluginReport> {
+        self.loaded()
+            .iter()
+            .filter_map(|id| self.describe(id))
+            .collect()
+    }
+
     /// A plugin-registered tool by name.
     pub fn tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.inner
@@ -978,6 +1036,51 @@ fn sorted_keys<T>(map: &Mutex<HashMap<String, Owned<T>>>) -> Vec<String> {
     let mut names: Vec<String> = map.keys().cloned().collect();
     names.sort();
     names
+}
+
+/// One loaded plugin, as something outside the kernel can read.
+///
+/// Owned rather than borrowed, and flat rather than a `&LoadedPlugin`, for the
+/// reason [`Kernel::describe`] gives: the real value lives behind a mutex, and
+/// a listing that held that mutex while it rendered would block every load and
+/// unload in the process for as long as somebody's terminal took to scroll.
+///
+/// The registration lists are the plugin's own ledger — the record `dispose`
+/// undoes — so what this prints and what an unload would remove cannot drift.
+/// They are the honest answer to "what did this plugin actually do", as opposed
+/// to what its manifest says it intends to do.
+#[derive(Debug, Clone)]
+pub struct PluginReport {
+    pub id: PluginId,
+    pub manifest: Arc<PluginManifest>,
+    pub source: PluginSource,
+    /// `"rust"`, `"lua"` or `"js"`. See [`lifecycle::PluginKind::language`].
+    pub language: &'static str,
+    /// The plugin that loaded this one through `ctx:plugin`, if any.
+    pub parent: Option<PluginId>,
+    pub tools: Vec<String>,
+    pub commands: Vec<String>,
+    pub providers: Vec<String>,
+    /// Service names, which is where a CLI entrypoint shows up: a surface is
+    /// `provide`d under a well-known name, so `wizard gui` is the `"gui"` entry
+    /// here. See [`crate::entrypoint`].
+    pub services: Vec<String>,
+    /// Event subscriptions, as a count. The ids mean nothing outside the bus.
+    pub handlers: usize,
+    /// Plugins this one loaded itself.
+    pub children: Vec<String>,
+}
+
+impl PluginReport {
+    /// Registrations of every kind, which is what a one-line listing counts.
+    pub fn registration_count(&self) -> usize {
+        self.tools.len()
+            + self.commands.len()
+            + self.providers.len()
+            + self.services.len()
+            + self.handlers
+            + self.children.len()
+    }
 }
 
 /// What is still registered. `Residue::default()` is what a kernel looks like

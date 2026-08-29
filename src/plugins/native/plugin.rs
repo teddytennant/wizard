@@ -81,9 +81,12 @@ impl NativePlugin {
                     Capability::Agent,
                 ],
                 optional_deps: Vec::new(),
-                // Not in `server` or `pi`: a headless box and a Raspberry Pi
-                // are the two machines this surface is deliberately absent
-                // from, which is the reason it is off by default.
+                // `full` and nothing else, which is the same statement as
+                // "off by default" said in the other vocabulary: a headless
+                // box, a Raspberry Pi and a CI container are three machines
+                // with no display, and the stock build is the one every one of
+                // them downloads. `full` is the profile for a desktop somebody
+                // builds themselves.
                 profiles: vec!["full".to_string()],
             },
         }

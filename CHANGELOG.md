@@ -84,6 +84,20 @@ Nothing below is released yet and the plugin API is not stable.
   runs, with the Anthropic provider genuinely absent -- `kind = "anthropic"`
   degrades to a named error rather than a panic. Removing any one plugin has to
   leave a tree that still works, and this is the leg that proves it.
+- **`wizard plugin`.** What this binary has, one row per plugin: which backend
+  it runs on (Rust, Lua or JavaScript), whether it ships in the binary or was
+  installed, and what it registered. `wizard plugin show <name>` adds the
+  capabilities it declared and what each one grants; `wizard plugin missing`
+  lists what a rebuild would add and the flag for each; `wizard plugin profiles`
+  names the build profiles and marks the one you have. Read-only, `--json` on
+  every verb, and it reads the running kernel rather than a `#[cfg]` -- so it
+  answers on a `--no-default-features` build too, which is the build it is most
+  for.
+- **Install profiles.** `WIZARD_PROFILE` picks a plugin set when installing from
+  source: `minimal` (one API key and git), `pi` (a local model, no cloud
+  provider, no JS backend), `server` (the stock build without the P2P mesh),
+  `default`, `full` (default plus the window). Opt-in: a stock `install.sh` run
+  and a stock `cargo install --path .` pass no feature flags and are unchanged.
 
 ### Changed
 

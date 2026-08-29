@@ -403,6 +403,35 @@ pub fn installed_subcommand(name: &str) -> Option<Arc<Subcommand>> {
         .inject_as::<Subcommand>(name)
 }
 
+/// What a surface registered under `name` says it is, whichever of the two
+/// shapes and whichever argument type it took.
+///
+/// The one place the type parameter's sharp edge is paid for deliberately
+/// rather than tripped over. [`installed`] is a `TypeId` downcast, so a caller
+/// that does not already know which argument shape a name was registered at
+/// cannot ask — and `wizard plugin` is exactly that caller: it reads a service
+/// name off a plugin's ledger and has nothing else to go on. The three
+/// argument types below are core's own `clap` types, which core already names
+/// in [`crate::cli`] and in its own dispatch chain, so listing them here adds
+/// no dependency on a plugin; what it adds is one place to remember when a
+/// fourth argument shape lands, instead of a silent [`None`] at the surface.
+///
+/// [`None`] for a service that is not a surface at all — the mesh's tee
+/// factory is one — and `wizard plugin` prints the bare name for those, which
+/// is the honest answer rather than a guess.
+pub fn description(name: &str) -> Option<&'static str> {
+    if let Some(entry) = installed::<Config>(name) {
+        return Some(entry.about());
+    }
+    if let Some(entry) = installed::<crate::cli::FleetCmd>(name) {
+        return Some(entry.about());
+    }
+    if let Some(entry) = installed::<crate::cli::GatewayCmd>(name) {
+        return Some(entry.about());
+    }
+    installed_subcommand(name).map(|entry| entry.about())
+}
+
 /// The error a dispatch arm returns when nothing answers to `name`.
 ///
 /// Two of the three arms print exactly this, and they are the two whose
