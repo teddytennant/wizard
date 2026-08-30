@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Fixed
+
+- **Buzz-room skill stays off the terminal prompt.** Skills can set `when_env` so they are omitted unless those variables are set. The Buzz room skill uses it, so a TUI session without `BUZZ_PRIVATE_KEY` / `BUZZ_RELAY_URL` no longer lists room etiquette on every turn.
+
 ## [3.0.0] - 2026-08-29
 
 Wizard becomes a plugin host. The agent loop, the

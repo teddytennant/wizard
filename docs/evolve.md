@@ -17,7 +17,7 @@ Works on every install. `/evolve` writes config/data under `~/.wizard/` and `/re
 
 ### Skills
 
-A Markdown file of guidelines, workflows, or domain knowledge. The system prompt lists its name and description; the body is read from disk when the skill matches (or inlined if the skill sets `always: true`).
+A Markdown file of guidelines, workflows, or domain knowledge. The system prompt lists its name and description; the body is read from disk when the skill matches (or inlined if the skill sets `always: true`). `when_env` hides the skill unless one of the listed environment variables is set.
 
 ```
 > /evolve add a skill for writing conventional commit messages

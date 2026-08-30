@@ -217,7 +217,7 @@ Isolated workers for parallel or decomposed work:
 
 ### Skills (`skills/`)
 
-Markdown files with frontmatter. The system prompt carries each skill's name, description, and path; the body is read from disk when the skill matches. A skill may set `always: true` to inline its body. Loaded at startup and on `/reload`. Bundled skills live under the repo's `skills/`; user skills under `~/.wizard/skills/`.
+Markdown files with frontmatter. The system prompt carries each skill's name, description, and path; the body is read from disk when the skill matches. A skill may set `always: true` to inline its body. `when_env: VAR1, VAR2` omits the skill from the prompt unless at least one named variable is set (so Buzz room is not advertised in a plain terminal). Loaded at startup and on `/reload`. Bundled skills live under the repo's `skills/`; user skills under `~/.wizard/skills/`.
 
 ### Self-extension (`evolve/`)
 

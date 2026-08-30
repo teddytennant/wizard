@@ -6,8 +6,11 @@
 //! body. The model reads the file with `read_file` when the skill matches,
 //! the same split the charter uses with `manual`. A skill may opt back into
 //! a resident body with `always: true` in its frontmatter; that is the
-//! exception, not the default. A long skill (wrangler is ~11 KB) that is
-//! pasted into every session is a tax on every turn that is not using it.
+//! exception, not the default. `when_env` hides a skill from the prompt
+//! unless at least one named environment variable is set and non-empty
+//! (Buzz room stays off the terminal prompt until Buzz is configured).
+//! A long skill (wrangler is ~11 KB) that is pasted into every session is
+//! a tax on every turn that is not using it.
 //!
 //! Two roots are scanned: the bundled `skills/` directory shipped alongside
 //! the binary, and `~/.wizard/skills/` where `/evolve` writes new ones.
@@ -31,6 +34,10 @@ pub struct SkillMeta {
     /// actually needed.
     #[serde(default)]
     pub always: bool,
+    /// If non-empty, the skill is omitted from the prompt unless at least
+    /// one of these environment variables is set to a non-empty value.
+    #[serde(default)]
+    pub when_env: Vec<String>,
 }
 
 /// One loaded skill.
@@ -176,11 +183,25 @@ pub fn load_skills(roots: &[PathBuf]) -> Result<Vec<Skill>> {
     Ok(skills)
 }
 
+/// True when this skill should appear in the system prompt.
+pub fn skill_visible(skill: &Skill) -> bool {
+    if skill.meta.when_env.is_empty() {
+        return true;
+    }
+    skill.meta.when_env.iter().any(|name| {
+        std::env::var(name)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    })
+}
+
 /// Render loaded skills as a system-prompt section: a `## Skills` header
 /// followed by each skill's name, description, and path. The body stays on
-/// disk unless the skill opted in with `always: true`. Returns an empty
-/// string when no skills are loaded.
+/// disk unless the skill opted in with `always: true`. Skills with
+/// `when_env` are omitted unless at least one named variable is set.
+/// Returns an empty string when no skills are loaded (or all are gated).
 pub fn render_for_prompt(skills: &[Skill]) -> String {
+    let skills: Vec<&Skill> = skills.iter().filter(|s| skill_visible(s)).collect();
     if skills.is_empty() {
         return String::new();
     }
@@ -234,7 +255,8 @@ pub(crate) fn split_frontmatter(raw: &str) -> (SkillMeta, String) {
 }
 
 /// Parse the simple `key: value` frontmatter lines we support (`name`,
-/// `description`, `always`). Unknown keys and malformed lines are ignored.
+/// `description`, `always`, `when_env`). Unknown keys and malformed lines
+/// are ignored. `when_env` is a comma-separated list of env var names.
 fn parse_meta(lines: &[&str]) -> SkillMeta {
     let mut meta = SkillMeta::default();
     for line in lines {
@@ -253,6 +275,14 @@ fn parse_meta(lines: &[&str]) -> SkillMeta {
             "name" => meta.name = Some(value.to_string()),
             "description" => meta.description = Some(value.to_string()),
             "always" => meta.always = parse_bool(value),
+            "when_env" => {
+                meta.when_env = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
             _ => {}
         }
     }
@@ -372,6 +402,7 @@ mod tests {
                 name: Some("demo".to_string()),
                 description: Some("A demo skill".to_string()),
                 always: false,
+                when_env: Vec::new(),
             },
             body: "Body text.".to_string(),
         }];
@@ -395,11 +426,51 @@ mod tests {
                 name: Some("demo".to_string()),
                 description: Some("A demo skill".to_string()),
                 always: true,
+                when_env: Vec::new(),
             },
             body: "Body text.".to_string(),
         }];
         let rendered = render_for_prompt(&skills);
         assert!(rendered.contains("Body text.\n"));
         assert!(rendered.contains("File: `demo/SKILL.md`\n"));
+    }
+
+    #[test]
+    fn render_omits_skill_when_env_unset() {
+        let var = format!("WIZARD_SKILL_TEST_{}", uuid::Uuid::new_v4().simple());
+        unsafe { std::env::remove_var(&var) };
+        let skills = vec![Skill {
+            name: "buzz-room".to_string(),
+            path: PathBuf::from("buzz-room/SKILL.md"),
+            meta: SkillMeta {
+                name: Some("buzz-room".to_string()),
+                description: Some("Buzz workspace".to_string()),
+                always: true,
+                when_env: vec![var.clone()],
+            },
+            body: "Prefer buzz messages send.".to_string(),
+        }];
+        assert_eq!(render_for_prompt(&skills), "");
+        unsafe { std::env::set_var(&var, "1") };
+        let rendered = render_for_prompt(&skills);
+        assert!(rendered.contains("### buzz-room\n"));
+        assert!(rendered.contains("Prefer buzz messages send."));
+        unsafe { std::env::remove_var(&var) };
+    }
+
+    #[test]
+    fn parses_when_env_list() {
+        let root = temp_root("whenenv");
+        write_skill(
+            &root,
+            "buzz-room",
+            "---\nname: buzz-room\nwhen_env: BUZZ_PRIVATE_KEY, BUZZ_RELAY_URL\nalways: true\n---\nbody\n",
+        );
+        let skill = parse_skill(&root.join("buzz-room/SKILL.md")).expect("parse");
+        assert_eq!(
+            skill.meta.when_env,
+            vec!["BUZZ_PRIVATE_KEY", "BUZZ_RELAY_URL"]
+        );
+        std::fs::remove_dir_all(root).ok();
     }
 }

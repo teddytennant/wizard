@@ -203,7 +203,8 @@ empty file falls back to that default.
   behavior, parameters, and access class are compiled in.
 - `skills/<name>/SKILL.md` — skills listed in the prompt's skills index
   (name, description, path). The body is read from disk when the skill
-  matches, unless the skill sets `always: true`. Bundle skills shadow
+  matches, unless the skill sets `always: true`. `when_env` hides it from
+  the prompt unless one of the named environment variables is set. Bundle skills shadow
   bundled and user skills by name; new directories add new skills.
 - `subagents/<name>.toml` — spawnable subagent definitions (`name`,
   `description`, `system_prompt`, optional `tool_scope`; optional `max_steps`

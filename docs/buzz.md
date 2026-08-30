@@ -210,9 +210,16 @@ All stdout is JSON. Pipe through `jq` when debugging by hand. Auth is
 Without guidance, Wizard may answer only in the ACP text stream and never call
 `buzz`. Drop a small skill so room etiquette is default when Buzz env is present.
 
-`~/.wizard/skills/buzz-room/SKILL.md` (create the directory first):
+`~/.wizard/skills/buzz-room/SKILL.md` (create the directory first). Use
+`when_env` so a normal terminal session does not see the skill at all:
 
 ```markdown
+---
+name: buzz-room
+description: Buzz workspace etiquette (only when Buzz env is set)
+when_env: BUZZ_PRIVATE_KEY, BUZZ_RELAY_URL
+always: true
+---
 # Buzz room
 
 When `BUZZ_PRIVATE_KEY` or `BUZZ_RELAY_URL` is set, you are a member of a Buzz

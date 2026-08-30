@@ -1,3 +1,9 @@
+---
+name: buzz-room
+description: Buzz workspace etiquette (only when Buzz env is set)
+when_env: BUZZ_PRIVATE_KEY, BUZZ_RELAY_URL
+always: true
+---
 # Buzz room
 
 When `BUZZ_PRIVATE_KEY` or `BUZZ_RELAY_URL` is set, you are a member of a Buzz
