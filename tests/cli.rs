@@ -91,6 +91,7 @@ fn version_prints_name_and_version() {
     assert!(stdout.starts_with("wizard "), "got: {stdout}");
 }
 
+#[cfg(feature = "provider-ollama")]
 #[test]
 fn unreachable_ollama_provider_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -133,6 +134,11 @@ fn unreachable_ollama_provider_fails_with_actionable_error() {
     );
 }
 
+/// The three tests below drive a real binary against a local backend, so
+/// each needs its plugin compiled in: without it the config resolves to a kind
+/// nothing answers to and the error is the registry's, not the transport's.
+/// That degrade is asserted in `plugins::a_kind_is_installed_exactly_when_its_plugin_is_compiled_in`.
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn unreachable_llamacpp_host_fails_with_actionable_error() {
     let home = TempDir::new();
@@ -179,6 +185,7 @@ fn write_config(home: &Path, contents: &str) {
     std::fs::write(dir.join("config.toml"), contents).expect("write config.toml");
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn fresh_config_resolves_to_the_llamacpp_provider() {
     let home = TempDir::new();
@@ -204,6 +211,7 @@ fn fresh_config_resolves_to_the_llamacpp_provider() {
     );
 }
 
+#[cfg(feature = "provider-llamacpp")]
 #[test]
 fn legacy_ollama_config_resolves_to_llamacpp() {
     let home = TempDir::new();
@@ -738,9 +746,16 @@ fn harness_export_writes_a_complete_bundle() {
         .expect("bundle has system_prompt.md");
     assert!(!prompt.trim().is_empty(), "exported prompt is non-empty");
 
-    // One description file per native tool, contents matching the compiled
-    // defaults' non-empty guarantee.
-    for tool in ["read_file", "write_file", "execute", "web_search"] {
+    // One description file per compiled-in tool, contents matching the compiled
+    // defaults' non-empty guarantee. `web_search` is a plugin tool
+    // (`--features tool-web`), so it is only expected when this build has it:
+    // the bundle describes what the binary can do, not what some other build
+    // could.
+    let mut tools = vec!["read_file", "write_file", "execute"];
+    if cfg!(feature = "tool-web") {
+        tools.push("web_search");
+    }
+    for tool in tools {
         let path = bundle.join("tool_descriptions").join(format!("{tool}.md"));
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("bundle has tool_descriptions/{tool}.md"));
@@ -763,4 +778,244 @@ fn harness_export_writes_a_complete_bundle() {
     );
     assert!(bundle.join("HARNESS.md").is_file(), "bundle guide exported");
     assert!(stdout.contains("exported harness bundle"), "{stdout}");
+}
+
+/// `wizard gateway <verb>` reaches the gateway plugin, or says which build it is
+/// not in.
+///
+/// The gateway is the first plugin to own two entrypoints, and they are two
+/// *names* rather than one name at two argument types, because the service
+/// registry keys on the name alone — see `entrypoint::GATEWAY_SERVICE`. A unit
+/// test asserts both registrations and both argument types; only a process can
+/// prove that `crate::run`'s dispatch arm looks one of them up successfully,
+/// since a lookup at the wrong name or the wrong type reads exactly like a
+/// plugin that was never compiled in.
+///
+/// `gateway status` rather than `gateway setup`, which is interactive, and
+/// rather than `--gateway`, which dispatches after config load and then does
+/// not return until Ctrl-C. The present-build assertion is deliberately weak:
+/// whatever a host's service supervisor says — installed, not installed, or "no
+/// systemd here" — it must not be the absent sentence. What is proven is that
+/// the lookup found a body, not what that body thinks of this machine.
+#[test]
+fn the_gateway_admin_surface_reaches_the_plugin_or_says_it_is_absent() {
+    let home = TempDir::new();
+
+    let run = run_wizard(&home.0, &["gateway", "status"], &[]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    if !cfg!(feature = "gateway") {
+        assert!(!run.status.success(), "{said}");
+        assert!(said.contains("--features gateway"), "{said}");
+        return;
+    }
+
+    assert!(
+        !said.contains("not in this build"),
+        "`wizard gateway status` did not reach the plugin: {said}"
+    );
+}
+
+/// `wizard mcp-serve` speaks the protocol, or says which build it is not in.
+///
+/// The one thing a unit test cannot check about this surface: whether a whole
+/// process, started from the `clap` variant in core and dispatched through a
+/// lookup, actually answers JSON-RPC on its stdout. `serve::handle` is unit
+/// tested against a registry built in-process; only a subprocess proves the
+/// entrypoint in between finds a body and that the body reaches stdin.
+///
+/// `initialize` rather than `tools/list`, because the roster depends on which
+/// tool plugins this leg compiled in and the handshake does not. Stdin is
+/// closed after the one request, which is how the loop is meant to end.
+#[test]
+fn mcp_serve_answers_a_handshake_or_says_it_is_absent() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let home = TempDir::new();
+
+    if !cfg!(feature = "mcp") {
+        let run = run_wizard(&home.0, &["mcp-serve"], &[]);
+        let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+        assert!(!run.status.success(), "{stderr}");
+        assert!(stderr.contains("--features mcp"), "{stderr}");
+        return;
+    }
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wizard"))
+        .arg("mcp-serve")
+        .env("HOME", &home.0)
+        .current_dir(&home.0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp-serve");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+        .expect("write the request");
+    // The loop ends at EOF, so the pipe has to close or `wait_with_output`
+    // waits for a server doing exactly what it was told to do.
+    drop(stdin);
+    let out = child.wait_with_output().expect("mcp-serve exits at EOF");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains(r#""serverInfo""#), "{stdout}");
+    assert!(stdout.contains(r#""name":"wizard""#), "{stdout}");
+}
+
+/// `wizard peers` reaches the mesh plugin, or says which build it is not in.
+///
+/// The one thing a unit test cannot check about this subcommand: whether the
+/// two clap parsers — core's, which takes an unparsed vector, and the plugin's,
+/// which takes eight subcommands and a three-state trust enum — actually meet
+/// in a running binary. `src/cli.rs` proves the arguments cross unchanged and
+/// `plugins::mesh::cli` proves what they mean; only a process can prove the
+/// lookup in between finds anything.
+///
+/// Both sides are asserted against the same feature flag, so the leg in
+/// `contrib/check-tool-plugins.sh` that builds without the mesh checks the
+/// degrade path rather than skipping it.
+#[test]
+fn peers_reaches_the_mesh_plugin_or_says_it_is_absent() {
+    let home = TempDir::new();
+
+    let listed = run_wizard(&home.0, &["peers", "list"], &[]);
+    let stdout = String::from_utf8_lossy(&listed.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&listed.stderr).to_string();
+
+    if !cfg!(feature = "mesh") {
+        assert!(!listed.status.success(), "{stdout}{stderr}");
+        assert!(stderr.contains("this build has no mesh"), "{stderr}");
+        return;
+    }
+
+    assert!(listed.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no peers on this machine"), "{stdout}");
+
+    // The plugin's parser, not core's: the usage line and the eight
+    // subcommands are what somebody sees after mistyping one. Core's
+    // passthrough variant would have printed `wizard peers [ARGS]...` and
+    // listed nothing, which is why `disable_help_flag` is on it.
+    let help = run_wizard(&home.0, &["peers", "--help"], &[]);
+    let help_text = String::from_utf8_lossy(&help.stdout).to_string();
+    assert!(help.status.success(), "{help_text}");
+    for subcommand in [
+        "list", "address", "add", "trust", "forget", "ping", "refresh", "watch",
+    ] {
+        assert!(help_text.contains(subcommand), "{subcommand}: {help_text}");
+    }
+
+    // A trust state the store cannot record is refused by the store's own
+    // enum, reached through core's passthrough. This is the assertion the
+    // whole `Subcommand` seam exists for: core cannot name `Trust`, so this
+    // list can only have come from the plugin.
+    let bad = run_wizard(&home.0, &["peers", "trust", "wiz1abc", "allowed"], &[]);
+    let refusal = String::from_utf8_lossy(&bad.stderr).to_string();
+    assert!(!bad.status.success(), "{refusal}");
+    assert!(refusal.contains("blocked, known, trusted"), "{refusal}");
+}
+
+/// `wizard help peers` prints the same document `wizard peers --help` does.
+///
+/// clap's help *subcommand* is not reached by `disable_help_flag`, so it used
+/// to render core's passthrough variant — "Usage: wizard peers [ARGS]..." and
+/// nothing else — while the flag spelling one word away printed the plugin's
+/// eight subcommands. Two spellings of one request; two different answers, one
+/// of them useless.
+///
+/// Asserted as byte equality rather than by looking for the subcommands in
+/// both, because "they both mention `refresh`" is exactly what was true before
+/// and after the wrong one. On a build with no mesh there is nothing to
+/// forward to and clap keeps the request, which is the other half of the
+/// claim.
+#[test]
+fn the_help_subcommand_and_the_help_flag_print_the_same_thing_for_a_plugin_tree() {
+    let home = TempDir::new();
+
+    let via_subcommand = run_wizard(&home.0, &["help", "peers"], &[]);
+    let subcommand_text = String::from_utf8_lossy(&via_subcommand.stdout).to_string();
+    assert!(via_subcommand.status.success(), "{subcommand_text}");
+
+    if !cfg!(feature = "mesh") {
+        // Nothing registered `peers`, so nothing was forwarded and clap
+        // answered from core's own variant. What matters is that it is still
+        // an answer and not a crash.
+        assert!(subcommand_text.contains("Usage:"), "{subcommand_text}");
+        return;
+    }
+
+    let via_flag = run_wizard(&home.0, &["peers", "--help"], &[]);
+    let flag_text = String::from_utf8_lossy(&via_flag.stdout).to_string();
+    assert!(via_flag.status.success(), "{flag_text}");
+    assert_eq!(subcommand_text, flag_text);
+    assert!(
+        subcommand_text.contains("wizard peers <COMMAND>"),
+        "the plugin's usage line, not core's `[ARGS]...`:\n{subcommand_text}"
+    );
+}
+
+/// `--help` lists a plugin-owned subcommand exactly when this build has one,
+/// and describes it in the plugin's words.
+///
+/// The bug: the descriptions were doc comments on core's `clap` variants, so
+/// a `--no-default-features` binary advertised an ACP server and a fleet it
+/// could not start, in the present tense, and there was no build on which that
+/// text was wrong enough to notice.
+///
+/// `gui` is the deliberate exception and is checked in both directions for
+/// that reason: it stays listed with core's own text when absent, because the
+/// window is a `curl` away rather than a rebuild, and switches to the
+/// plugin's when present — where core's sentence would be telling the reader
+/// to go and get something already in front of them.
+#[test]
+fn help_lists_a_plugin_subcommand_exactly_when_this_build_has_it() {
+    let home = TempDir::new();
+    let output = run_wizard(&home.0, &["--help"], &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // One line per subcommand, so the row is "  <name>  <description>" and a
+    // dropped row leaves no line starting with the name.
+    let listed = |name: &str| {
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with(&format!("{name} ")))
+    };
+
+    for (compiled_in, name) in [
+        (cfg!(feature = "acp"), "acp"),
+        (cfg!(feature = "fleet"), "fleet"),
+        (cfg!(feature = "mcp"), "mcp-serve"),
+        (cfg!(feature = "mesh"), "peers"),
+    ] {
+        assert_eq!(listed(name), compiled_in, "`{name}` in --help:\n{stdout}");
+    }
+
+    // Always listed, and the two texts are distinguishable: core's names the
+    // feature flag, the plugin's does not.
+    assert!(listed("gui"), "{stdout}");
+    let gui_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("gui "))
+        .expect("the gui row");
+    assert_eq!(
+        gui_line.contains("Needs a build with `--features native`"),
+        !cfg!(feature = "native"),
+        "{gui_line}"
+    );
+
+    // A subcommand `--help` no longer lists still parses and still explains
+    // itself, which is the whole reason dropping the row is acceptable.
+    if !cfg!(feature = "acp") {
+        let absent = run_wizard(&home.0, &["acp"], &[]);
+        let stderr = String::from_utf8_lossy(&absent.stderr).to_string();
+        assert!(!absent.status.success(), "{stderr}");
+        assert!(stderr.contains("--features acp"), "{stderr}");
+    }
 }

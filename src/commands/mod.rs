@@ -2,7 +2,7 @@
 //! dispatcher every surface runs them through, plus custom commands and
 //! `@file` references.
 //!
-//! [`COMMANDS`] is the single source of truth for what a built-in command is
+//! [`COMMANDS`] is the single source of truth for what a *built-in* command is
 //! called, what it does, and (through [`CommandSpec::tui`] / [`CommandSpec::gui`]
 //! / [`CommandSpec::gateway`]) how each [`Surface`] executes it. The TUI
 //! completes and dispatches from it, the GUI derives `GET /api/commands` from
@@ -10,6 +10,14 @@
 //! `run_command` allowlist ([`agent_commands`]) is filtered out of it. A second
 //! hand-kept list on any surface is how the surfaces drift, so there is only
 //! this one.
+//!
+//! A *plugin* command is the same thing minus the compile step: a
+//! [`PluginCommand`] in the runtime registry ([`plugin`]), carrying its own
+//! description, argument hint, per-surface availability and handler. The two
+//! are merged by [`listing`], which is what every surface completes, helps and
+//! advertises from, and [`SlashCommand::Plugin`] is how one reaches the one
+//! dispatcher. The table stays the source of truth for the built-ins and the
+//! registry is the source of truth for the rest; nothing consults a third list.
 //!
 //! What each command *does* lives in [`surface`], not on the surfaces: one
 //! [`dispatch`](surface::dispatch) owns every match arm and every line of prose,
@@ -37,8 +45,10 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::import_claude::ImportSelection;
 
+pub mod plugin;
 pub mod surface;
 
+pub use plugin::{CommandFuture, CommandHandler, PluginCommand};
 pub use surface::Surface;
 
 /* ---------------------------------------------------------------------- */
@@ -179,6 +189,23 @@ pub enum SlashCommand {
     /// why it carries the [`ImportSelection`].
     ImportClaude(ImportSelection),
     Quit,
+    /// A command a plugin registered at runtime: the name it registered under
+    /// and the rest of the typed line, verbatim.
+    ///
+    /// The one open variant, and the reason the other thirty-odd could stay
+    /// closed. A built-in variant carries *parsed* arguments because the one
+    /// dispatcher owns what they mean; a plugin's arguments mean whatever the
+    /// plugin says, so the raw tail is the only honest thing to carry. The
+    /// [`PluginCommand`] itself is deliberately not in here — it holds an
+    /// `Arc<dyn CommandHandler>`, which is neither `PartialEq` nor `Debug`, and
+    /// `SlashCommand` being both is what a dozen tests are written against. It
+    /// is looked up at dispatch instead, which also means a command whose
+    /// plugin unloaded between the keystroke and the dispatch is refused rather
+    /// than run.
+    Plugin {
+        name: String,
+        args: String,
+    },
 }
 
 /// What a `/fusion` subcommand does.
@@ -237,26 +264,25 @@ fn parse_provider(args: &[&str]) -> Result<SlashCommand, String> {
         },
         Some("add") => {
             if args.len() < 5 {
-                return Err(
-                    "usage: /provider add <name> <llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth|cloudflare> <base_url> <model> [API_KEY_ENV]"
-                        .to_string(),
-                );
+                // The kinds are listed from what is installed, not from a
+                // literal. The literal that used to be here had drifted:
+                // `chatgptoauth` was a valid kind the config file loaded and
+                // this line never mentioned.
+                let kinds = crate::llm::registry::kinds()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("|");
+                return Err(format!(
+                    "usage: /provider add <name> <{kinds}> <base_url> <model> [API_KEY_ENV]"
+                ));
             }
-            let kind = match args[2] {
-                "llamacpp" => ProviderKind::LlamaCpp,
-                "ollama" => ProviderKind::Ollama,
-                "openai" => ProviderKind::Openai,
-                "anthropic" => ProviderKind::Anthropic,
-                "openrouter" => ProviderKind::OpenRouter,
-                "xai" => ProviderKind::Xai,
-                "xaioauth" => ProviderKind::XaiOauth,
-                "cloudflare" => ProviderKind::Cloudflare,
-                other => {
-                    return Err(format!(
-                        "unknown provider kind '{other}' (llamacpp|ollama|openai|anthropic|openrouter|xai|xaioauth|cloudflare)"
-                    ));
-                }
-            };
+            // Validated against what is registered rather than against a
+            // second copy of the same list.
+            let kind = ProviderKind::new(args[2]);
+            if crate::llm::registry::installed(&kind).is_none() {
+                return Err(crate::llm::registry::unknown(&kind).to_string());
+            }
             ProviderAction::Add {
                 name: args[1].to_string(),
                 kind,
@@ -476,7 +502,25 @@ impl SlashCommand {
             // people type the product name, not the key.
             "ui" => Ok(Self::Ui((!args.is_empty()).then(|| args.join(" ")))),
             "quit" | "q" | "exit" => Ok(Self::Quit),
-            other => Err(format!("unknown command '/{other}' — try /help")),
+            // Not a built-in word. Ask the runtime registry before giving up,
+            // so a plugin command is resolved by the same parser every surface
+            // already calls rather than by a second lookup each surface would
+            // have to remember to do. The built-in arms are matched first and
+            // the registry refuses their names ([`plugin::install`]), so this
+            // can never shadow one.
+            other => match plugin::get(other) {
+                Some(_) => Ok(Self::Plugin {
+                    name: other.to_string(),
+                    // The whole rest of the line, spaces and punctuation
+                    // intact: a plugin's argument grammar is its own.
+                    args: rest
+                        .strip_prefix(other)
+                        .unwrap_or_default()
+                        .trim_start()
+                        .to_string(),
+                }),
+                None => Err(format!("unknown command '/{other}' — try /help")),
+            },
         };
         Some(parsed)
     }
@@ -570,6 +614,20 @@ impl SlashCommand {
             ImportClaude(_) => {
                 Err("`/settings` import is driven from a picker; leave it to the user".into())
             }
+
+            // Plugin commands are not on the agent's allowlist, and this is a
+            // deliberate stop rather than an oversight. Every `Ok` above is an
+            // argument about *that command's* semantics — is it read-only, does
+            // it need a human at a picker, does it reach outside the session —
+            // and a plugin cannot make that argument on its own behalf: an
+            // `agent_runnable = true` field would be a plugin grading its own
+            // homework, and the tool that dispatches it would be handing the
+            // model a name whose blast radius nobody assessed. When a plugin
+            // command should be model-callable, the plugin registers a *tool*,
+            // which is the API that already has a capability grant attached.
+            Plugin { name, .. } => Err(format!(
+                "`/{name}` comes from a plugin; ask the plugin's tool instead"
+            )),
         }
     }
 
@@ -577,9 +635,12 @@ impl SlashCommand {
     /// command they are aliases *of* (`/genie` into `/mode`, `/q` into
     /// `/quit`), and the two variants the pickers emit rather than the parser
     /// (`ProviderSetup`, `ImportClaude`) fold into the command that opened the
-    /// picker. So every parsed command has exactly one row, and
-    /// [`dispatch`](surface::dispatch) can ask the table who runs it.
-    pub fn name(&self) -> &'static str {
+    /// picker. So every parsed built-in has exactly one row, and
+    /// [`dispatch`](surface::dispatch) can ask the table who runs it. A
+    /// [`SlashCommand::Plugin`] names itself instead, which is why this returns
+    /// a borrow rather than the `&'static str` it used to: a registered name is
+    /// a `String` with a runtime lifetime.
+    pub fn name(&self) -> &str {
         use SlashCommand::*;
         match self {
             Help => "help",
@@ -617,14 +678,42 @@ impl SlashCommand {
             Vim => "vim",
             Ui(_) => "ui",
             Quit => "quit",
+            Plugin { name, .. } => name,
         }
     }
 
-    /// The [`CommandSpec`] for this command. Total: every variant's
+    /// The [`CommandSpec`] for this command, or `None` for a
+    /// [`SlashCommand::Plugin`] — the one variant with no table row, because
+    /// its row is a [`PluginCommand`] in the runtime registry instead.
+    ///
+    /// Still total over the built-ins: every other variant's
     /// [`name`](Self::name) is a row of [`COMMANDS`], which
-    /// `every_command_has_a_table_row` holds to.
-    pub fn spec(&self) -> &'static CommandSpec {
-        spec(self.name()).expect("every command has a table row")
+    /// `every_command_has_a_table_row` holds to. Prefer
+    /// [`execution`](Self::execution) where the question is "may this surface
+    /// run it", so the answer covers both kinds of command.
+    pub fn spec(&self) -> Option<&'static CommandSpec> {
+        spec(self.name())
+    }
+
+    /// How `surface` runs this command, whoever owns it.
+    ///
+    /// The one gate [`dispatch`](surface::dispatch) and the window's `route`
+    /// ask, so a plugin command's "TUI only" is enforced by the same line of
+    /// code that enforces `/vim`'s. A plugin command whose plugin has unloaded
+    /// resolves to [`Execution::Unavailable`]: there is nothing left to run,
+    /// and refusing by name is what a surface already knows how to say.
+    pub fn execution(&self, surface: Surface) -> Execution {
+        match self {
+            Self::Plugin { name, .. } => plugin::get(name)
+                .map(|command| command.execution(surface))
+                .unwrap_or(Execution::Unavailable),
+            other => other
+                .spec()
+                .map(|spec| spec.execution(surface))
+                // Unreachable while `every_command_has_a_table_row` passes.
+                // Refusing beats panicking on a surface a user is typing at.
+                .unwrap_or(Execution::Unavailable),
+        }
     }
 }
 
@@ -635,10 +724,11 @@ impl SlashCommand {
 /// How one surface runs a built-in command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Execution {
-    /// Applied to the live [`Agent`](crate::agent::Agent). In the window it is
-    /// queued on the chat's worker ([`crate::gui::tasks::TaskManager`]) and
-    /// answers as the same [`AgentEvent`](crate::agent::AgentEvent)s a turn
-    /// carries — a notice, a context reading, an error.
+    /// Applied to the live [`Agent`](crate::agent::Agent). In the window it
+    /// is queued on the chat's worker
+    /// ([`crate::plugins::gui::tasks::TaskManager`]) and answers as the same
+    /// [`AgentEvent`](crate::agent::AgentEvent)s a turn carries — a notice, a
+    /// context reading, an error.
     Agent,
     /// The surface's own: a picker, a panel, an overlay, a list. There is
     /// nothing to ask the agent for, and asking would only be a round trip to
@@ -910,11 +1000,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "server",
         args: "[status|start|stop]",
-        description: "manage the local llama-server",
+        // Names no backend, because this row exists on builds that have
+        // none: the body is a plugin's (see `crate::server`) and a build
+        // without one answers with a sentence rather than dropping the row.
+        description: "manage a model server running on this machine",
         takes_args: false,
         tui: Execution::Agent,
         gui: Execution::Agent,
-        // The llama-server runs on the operator's machine, which is where the
+        // The model server runs on the operator's machine, which is where the
         // gateway runs too; status/start/stop all report back as text.
         gateway: Execution::Agent,
         agent_arg: "",
@@ -1134,6 +1227,77 @@ pub fn commands_for(
     COMMANDS
         .iter()
         .filter(move |spec| spec.execution(surface) == execution)
+}
+
+/// One row of the palette on one surface, whoever owns it.
+///
+/// The merged view of [`COMMANDS`] and the [`plugin`] registry, and the only
+/// thing a surface should build its completion, its help or its advertised menu
+/// out of. Owned `String`s rather than borrows because half the rows come from
+/// behind an `RwLock` and the other half are `&'static` — a type that could
+/// express both would be a lifetime puzzle for no gain, and this is built once
+/// per keystroke at most.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub name: String,
+    /// Argument hint shown after the name.
+    pub args: String,
+    pub description: String,
+    /// Completion appends a trailing space and waits for arguments.
+    pub takes_args: bool,
+    /// How this surface runs it — [`Execution::Unavailable`] included, because
+    /// the window lists those dimmed rather than hiding them.
+    pub execution: Execution,
+    /// A plugin registered it rather than [`COMMANDS`]. Nothing branches on
+    /// this today — the whole point is that a surface does not have to — but it
+    /// is what a `/help` that ever groups by origin would read, and it is what
+    /// the tests assert a plugin row actually is.
+    pub from_plugin: bool,
+}
+
+/// Every command `surface` knows about: the built-ins in table order, then the
+/// plugin-registered ones in name order.
+///
+/// Built-ins first and plugins after, rather than interleaved alphabetically,
+/// because the table's order is a designed order (`/model`, `/mode`, `/effort`
+/// … then the rare ones) and dropping a plugin's `/deploy` into the middle of it
+/// would scramble a list people navigate by position.
+pub fn listing(surface: Surface) -> Vec<Listing> {
+    let builtin = COMMANDS.iter().map(|spec| Listing {
+        name: spec.name.to_string(),
+        args: spec.args.to_string(),
+        description: spec.description.to_string(),
+        takes_args: spec.takes_args,
+        execution: spec.execution(surface),
+        from_plugin: false,
+    });
+    let registered = plugin::all().into_iter().map(move |command| Listing {
+        execution: command.execution(surface),
+        name: command.name,
+        args: command.args,
+        description: command.description,
+        takes_args: command.takes_args,
+        from_plugin: true,
+    });
+    builtin.chain(registered).collect()
+}
+
+/// [`listing`] minus what `surface` cannot run. What completion offers and what
+/// `/help` lists.
+pub fn available(surface: Surface) -> Vec<Listing> {
+    listing(surface)
+        .into_iter()
+        .filter(|row| row.execution != Execution::Unavailable)
+        .collect()
+}
+
+/// Whether `name` is a command word this build knows — a built-in, one of the
+/// parser's aliases, or a plugin registration.
+///
+/// The question the TUI asks to decide whether `/word` with bad arguments earns
+/// a usage notice or falls through to the model as an ordinary prompt.
+pub fn is_known(name: &str) -> bool {
+    plugin::is_builtin(name) || plugin::get(name).is_some()
 }
 
 /// The commands the agent may queue through `run_command` on a surface that
@@ -1587,7 +1751,7 @@ mod tests {
             SlashCommand::Provider(ProviderAction::Menu),
             SlashCommand::ProviderSetup {
                 name: "x".into(),
-                kind: ProviderKind::Ollama,
+                kind: ProviderKind::OLLAMA,
                 base_url: "u".into(),
                 model: "m".into(),
                 api_key: None,
@@ -1699,6 +1863,11 @@ mod tests {
     }
 
     #[test]
+    /// The two kinds it names are plugins, so the parse it exercises only
+    /// exists on a build that has them. The arity and unknown-kind halves
+    /// below hold either way and are covered by
+    /// `an_unregistered_kind_parses_and_fails_later`.
+    #[cfg(all(feature = "provider-ollama", feature = "provider-openai"))]
     fn provider_add_parses_kind_and_arity() {
         let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
         assert_eq!(
@@ -1709,7 +1878,7 @@ mod tests {
             parse("/provider add local ollama http://localhost:11434 qwen3:8b"),
             Ok(SlashCommand::Provider(ProviderAction::Add {
                 name: "local".to_string(),
-                kind: ProviderKind::Ollama,
+                kind: ProviderKind::OLLAMA,
                 base_url: "http://localhost:11434".to_string(),
                 model: "qwen3:8b".to_string(),
                 api_key_env: None,
@@ -1719,7 +1888,7 @@ mod tests {
             parse("/provider add or openrouter https://openrouter.ai/api/v1 auto OPENROUTER_KEY"),
             Ok(SlashCommand::Provider(ProviderAction::Add {
                 name: "or".to_string(),
-                kind: ProviderKind::OpenRouter,
+                kind: ProviderKind::OPENROUTER,
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 model: "auto".to_string(),
                 api_key_env: Some("OPENROUTER_KEY".to_string()),

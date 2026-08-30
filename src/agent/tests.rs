@@ -603,6 +603,37 @@ fn cached_usage_chunk(
     }
 }
 
+/// A turn's event channel closes when the turn ends.
+///
+/// The one property every "collect a turn's output" caller depends on, and it
+/// was quietly broken by the plugin host bridge: `bind_host` clones the turn's
+/// `Sender` into a process-wide slot that outlives the turn, so the channel
+/// stayed open until some *other* agent in the process happened to bind and
+/// free it. `plugins::fleet::run_collect_text` drains until `recv` returns
+/// `None`, so a fleet planning turn hung — reliably when it ran alone, not at
+/// all when it ran beside enough other tests. A hang whose presence depends on
+/// the rest of the suite is the worst kind, so it is pinned here rather than
+/// left to the shape of a test run.
+///
+/// The timeout is the assertion. Without it a regression does not fail, it
+/// stops.
+#[tokio::test]
+async fn a_turns_event_channel_closes_when_the_turn_does() {
+    let (mut agent, _provider, _tmp) = test_agent(vec![vec![final_chunk("done")]]);
+    let (tx, mut rx) = mpsc::channel(256);
+    agent.run_turn("say something", tx).await.expect("the turn");
+
+    let drained = tokio::time::timeout(Duration::from_secs(5), async move {
+        while rx.recv().await.is_some() {}
+    })
+    .await;
+    assert!(
+        drained.is_ok(),
+        "the turn's event channel is still open after the turn ended; something \
+         is holding a clone of its sender"
+    );
+}
+
 fn test_agent(responses: Vec<Vec<ChatChunk>>) -> (Agent, Arc<ScriptedProvider>, TempDir) {
     let tmp = TempDir::new();
     let (agent, provider) = test_agent_in(&tmp, responses, Vec::new(), ToolRegistry::new());
@@ -1656,9 +1687,18 @@ async fn usage_counts_accumulate_emit_events_and_land_in_the_jsonl_log() {
     // the unknown-model fallback. That pins both halves of the wiring: drop
     // `cost_usd` and the first assertion fires, stop passing the provider's
     // kind through and the source becomes `Fallback` with a non-zero cost.
-    assert_eq!(records[0].cost_usd, Some(0.0));
-    assert_eq!(records[0].price_source, crate::usage::PriceSource::Local);
-    assert_eq!(records[1].price_source, crate::usage::PriceSource::Local);
+    //
+    // "Self-hosted" is read off the llama.cpp descriptor, so this half only
+    // holds on a build that has the plugin; without it the synthesized entry
+    // names a kind nothing answers to and the fallback price is the honest
+    // answer. The counting and provenance-plumbing assertions above are what
+    // this test is for and they hold either way.
+    #[cfg(feature = "provider-llamacpp")]
+    {
+        assert_eq!(records[0].cost_usd, Some(0.0));
+        assert_eq!(records[0].price_source, crate::usage::PriceSource::Local);
+        assert_eq!(records[1].price_source, crate::usage::PriceSource::Local);
+    }
     // These chunks carry `CacheTokens::NONE`, which is what a backend with no
     // prompt cache reports, so the subset counts are zero rather than absent.
     // The turn that *does* report a split is
@@ -1690,7 +1730,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
     let mut config = Config::default();
     config.providers = vec![crate::config::ProviderConfig {
         name: "anthropic".to_string(),
-        kind: crate::config::ProviderKind::Anthropic,
+        kind: crate::config::ProviderKind::ANTHROPIC,
         base_url: "https://api.anthropic.com".to_string(),
         model: "claude-opus-5".to_string(),
         api_key_env: None,
@@ -3939,4 +3979,36 @@ fn switching_to_a_fallback_model_removes_run_code_and_switching_back_restores_it
         agent.dispatcher.registry().get(name).is_some(),
         "and switching back restores it, from the stash rather than a rebuild"
     );
+}
+
+/// A finished turn's event channel closes.
+///
+/// `run_turn` publishes the turn's sender to the process-wide plugin host
+/// slot so a plugin's `wizard.ui.notify` lands in *this* turn's transcript.
+/// That slot is replaced only by the next bind, so without an explicit
+/// release at turn end the clone outlived the turn and the channel never
+/// closed. Every caller that collects a turn by draining until the channel
+/// ends then hung — which is what the fleet's planning turn does, and it hung
+/// rather than failing, which is the worst shape a bug can take in a suite.
+///
+/// Asserted with a timeout for exactly that reason: a regression here must
+/// fail in two seconds, not run until somebody kills the runner.
+#[tokio::test]
+async fn a_finished_turns_event_channel_closes() {
+    let (mut agent, _provider, tmp) = test_agent(vec![vec![final_chunk("done")]]);
+    let _ = &tmp;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
+    let collector = tokio::spawn(async move {
+        let mut count = 0usize;
+        while rx.recv().await.is_some() {
+            count += 1;
+        }
+        count
+    });
+    agent.run_turn("hello", tx).await.expect("turn runs");
+    let events = tokio::time::timeout(std::time::Duration::from_secs(2), collector)
+        .await
+        .expect("the turn's channel must close when the turn ends")
+        .expect("collector did not panic");
+    assert!(events > 0, "the turn should have emitted something");
 }

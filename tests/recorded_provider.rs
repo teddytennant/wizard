@@ -1,6 +1,6 @@
 //! Fixture-driven tests for the streaming provider adapters.
 //!
-//! Every SSE test inside `src/llm/anthropic.rs` and `src/llm/openai.rs` builds
+//! Every SSE test inside `src/plugins/anthropic.rs` and `src/plugins/openai/` builds
 //! its input as an inline Rust string literal and feeds it straight to
 //! `decode_sse`. That asserts what the author believed the wire format was, and
 //! it keeps asserting it forever: when a provider renames a field, adds a
@@ -26,7 +26,7 @@
 //!
 //! One fixture has crossed back the other way, which is the direction worth
 //! copying: `openai/parallel_tool_calls.sse` is `include_str!`d by
-//! `openai::testing::PARALLEL_TOOL_BATCH_SSE`, so the adapter's own in-process
+//! `llm::test_support::PARALLEL_TOOL_BATCH_SSE`, so the adapters' own in-process
 //! decoder tests and the over-a-socket ones here read the same bytes and
 //! cannot drift.
 //!
@@ -46,11 +46,19 @@ use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use wizard::llm::anthropic::AnthropicProvider;
-use wizard::llm::chatgpt::ChatgptProvider;
-use wizard::llm::openai::OpenAiProvider;
+// Every backend is a plugin now, so a build compiled without one of these
+// features has no transport to replay its recordings into. Everything in this
+// file that names a provider type is gated; the fixture guards at the bottom
+// are not, because they only read bytes off disk and a build that dropped a
+// plugin must not drop its recordings.
+#[cfg(feature = "provider-chatgpt")]
+use wizard::plugins::chatgpt::ChatgptProvider;
+
 use wizard::llm::provider::LlmProvider;
+use wizard::llm::wire::OpenAiProvider;
 use wizard::llm::{CacheTokens, ChatChunk, ChatMessage, ChatRequest, ToolCall};
+#[cfg(feature = "provider-anthropic")]
+use wizard::plugins::anthropic::AnthropicProvider;
 
 /// How many bytes of the fixture go into each HTTP chunked frame.
 ///
@@ -140,6 +148,7 @@ impl RecordedProvider {
     }
 
     /// The Anthropic client, pointed here. It appends `/v1/messages` itself.
+    #[cfg(feature = "provider-anthropic")]
     fn anthropic(&self, model: &str) -> AnthropicProvider {
         AnthropicProvider::new(&self.root, model, "test-key")
     }
@@ -155,6 +164,7 @@ impl RecordedProvider {
     /// Unlike the other two this one authorizes from a token file rather than
     /// from a constructor argument, so [`stub_chatgpt_tokens`] has to have put
     /// one where it will look.
+    #[cfg(feature = "provider-chatgpt")]
     fn responses(&self, model: &str) -> ChatgptProvider {
         stub_chatgpt_tokens();
         ChatgptProvider::new(&self.root, model).expect("build the Responses client")
@@ -213,6 +223,7 @@ async fn read_request_body(socket: &mut TcpStream) -> String {
 /// expiry out of it and answers `false`, which is what keeps this off the
 /// network. A JWT-shaped one near expiry would send the client to
 /// `auth.openai.com` for a refresh in the middle of a unit test.
+#[cfg(feature = "provider-chatgpt")]
 fn stub_chatgpt_tokens() {
     static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
@@ -357,6 +368,7 @@ fn streamed_text(chunks: &[ChatChunk]) -> Vec<(bool, String)> {
         .collect()
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_text_then_tool_use_replays_from_the_recorded_stream() {
     let recorded = RecordedProvider::replay("anthropic/text_then_tool_use.sse").await;
@@ -394,6 +406,7 @@ async fn anthropic_text_then_tool_use_replays_from_the_recorded_stream() {
     assert!(sent.contains("\"max_tokens\""), "{sent}");
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_thinking_deltas_stay_flagged_through_the_transport() {
     let recorded = RecordedProvider::replay("anthropic/thinking_then_text.sse").await;
@@ -410,6 +423,7 @@ async fn anthropic_thinking_deltas_stay_flagged_through_the_transport() {
     assert!(chunks.last().expect("a final chunk").done);
 }
 
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_degenerate_tool_input_survives_the_recorded_stream() {
     let recorded = RecordedProvider::replay("anthropic/tool_input_not_json.sse").await;
@@ -526,6 +540,7 @@ async fn openai_generated_image_streams_live_from_the_recorded_stream() {
 /// that are not bound to their calls by id. All three were true of the
 /// pre-content-block adapter, which pushed each result as its own `user`
 /// message and matched them by tool name plus FIFO.
+#[cfg(feature = "provider-anthropic")]
 #[tokio::test]
 async fn anthropic_answers_a_recorded_parallel_batch_in_one_message() {
     let recorded = RecordedProvider::replay("anthropic/parallel_tool_calls.sse").await;
@@ -699,6 +714,7 @@ async fn openai_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
 /// it produced, because this client sends `store: false` and the endpoint
 /// remembers nothing. And the request goes out with OAuth credentials read
 /// from disk, so this is also the only test that drives that path.
+#[cfg(feature = "provider-chatgpt")]
 #[tokio::test]
 async fn responses_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
     let recorded = RecordedProvider::replay("responses/parallel_tool_calls.sse").await;
@@ -777,6 +793,7 @@ async fn responses_answers_a_recorded_parallel_batch_in_one_contiguous_run() {
 /// Reasoning summary deltas and answer text arrive on different event names
 /// and mean different things: a decoder that folds one into the other puts the
 /// model's private deliberation into the transcript as its answer.
+#[cfg(feature = "provider-chatgpt")]
 #[tokio::test]
 async fn responses_reasoning_stays_flagged_through_the_transport() {
     let recorded = RecordedProvider::replay("responses/reasoning_then_text.sse").await;

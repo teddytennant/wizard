@@ -1,0 +1,27 @@
+name = "json"
+version = "1.0.0"
+description = "Pull one value out of a JSON document without reading the rest of it"
+
+# Nothing. Not a shorthand — it is the whole point of shipping this one first.
+#
+# `json_query` reads a file and answers a question about it, which sounds like
+# `filesystem` and is not. Without that capability `wizard.fs.read` still
+# exists and is *confined to the project directory*, which is exactly the
+# reach this tool should have: the JSON documents a session cares about are
+# `package.json`, a lockfile, an API response somebody saved, a fixture. A tool
+# that could also read `~/.aws/credentials` because it might one day want to
+# would be asking for a grant to cover a case nobody has.
+#
+# Not `process` either: there is no program to run. Not `network`: the document
+# is already on disk, and a plugin that fetched one would be `web_fetch` with a
+# parser bolted on. Not `model`, not `ui`, not `agent`: it decides nothing and
+# tells nobody.
+capabilities = []
+
+# Not in `minimal` or `pi`, and not because the tool is unwanted there — reading
+# a lockfile without spending the context window on it is worth as much on a
+# Raspberry Pi as anywhere. It is that this plugin is a `plugin.js`, so it needs
+# the whole QuickJS backend (`tool-json = ["plugin-js"]`), and the two small
+# profiles are exactly the builds that drop a megabyte of engine rather than
+# carry it for one tool. See `src/plugins/profile.rs`.
+profiles = ["server", "default", "full"]

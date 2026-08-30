@@ -213,8 +213,8 @@ jobs:
           # carries no dynamic loader dependency (runs on NixOS/Alpine/old glibc).
           RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
           # Each musl runner is native (x86_64 runner / arm runner), so musl-tools'
-          # `musl-gcc` targets the runner's own arch. Point cc-rs (ring's and
-          # LuaJIT's C builds) at it; without this they look for a
+          # `musl-gcc` targets the runner's own arch. Point cc-rs (ring's, LuaJIT's
+          # and, since 3.0, QuickJS's C builds) at it; without this they look for a
           # triple-prefixed `<arch>-linux-musl-gcc` that musl-tools does not
           # install, and the build stops at "failed to find tool". These vars
           # are target-scoped, so they're inert on the glibc/darwin jobs.

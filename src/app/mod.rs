@@ -9,7 +9,7 @@ mod prompts;
 mod recover;
 mod runtime;
 mod session;
-mod tee;
+pub mod tee;
 mod term;
 #[cfg(test)]
 mod tests;
@@ -18,10 +18,10 @@ mod transcript;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
 pub use runtime::run_tui;
-pub use tee::MeshTee;
+pub use tee::{SessionTee, TeeFactory};
 pub use term::restore_terminal_best_effort;
 pub use transcript::{
-    LOCAL_MARKER, PaneStatus, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
+    LOCAL_MARKER, PaneStatus, PeerAddress, PeerOrigin, PeerStream, SubagentPane, TranscriptOrigin,
     TranscriptView,
 };
 
@@ -39,7 +39,7 @@ use serde_json::Value;
 use crate::agent::{Agent, AgentEvent, DoneReason, PlanVerdict, ultra};
 // The built-in command table and its parser live in [`crate::commands`].
 use crate::commands::CustomCommand;
-use crate::commands::{COMMANDS, ProviderAction, SlashCommand, UltraAction};
+use crate::commands::{ProviderAction, SlashCommand, Surface, UltraAction};
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::event::Event;
 use crate::image_view::ImageCache;
@@ -56,8 +56,8 @@ use paste::{
 };
 use picker::is_builtin_command;
 use prompts::{
-    PROVIDER_ADD_ROW, PROVIDER_TYPES, PromptField, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
-    web_backend_label, web_backend_needs_key, xai_oauth_session_present,
+    PROVIDER_ADD_ROW, PromptField, ProviderSetup, ULTRA_JUDGE_ROW, WEB_BACKENDS, prompt_question,
+    provider_types, web_backend_label, web_backend_needs_key, xai_oauth_session_present,
 };
 use transcript::PANE_LINGER;
 
@@ -223,8 +223,10 @@ pub struct App {
     pub should_quit: bool,
     /// Tick counter driving the busy spinner.
     pub tick: u64,
-    /// Matching commands (builtin [`COMMANDS`] plus custom commands) for the
-    /// current `/input`, shown as the suggestion popup.
+    /// Matching commands for the current `/input`, shown as the suggestion
+    /// popup: everything [`crate::commands::available`] offers this surface —
+    /// the built-in table and whatever plugins registered — plus the
+    /// workspace's own custom commands.
     pub suggestions: Vec<Suggestion>,
     /// Highlighted row in `suggestions`.
     pub suggestion_index: usize,
@@ -373,14 +375,16 @@ pub struct App {
     /// only on the first message. Cleared once a turn completes successfully —
     /// the provider has proven itself, so a transient blip self-heals.
     pub provider_health_error: Option<String>,
-    /// This session's tee onto the mesh, when this node is listening.
+    /// This session's events on their way off this machine, when some plugin
+    /// has somewhere to send them.
     ///
-    /// `None` for a default install, and `None` is the shipped default: a peer
-    /// watches this node by dialling it, so with `[mesh] listen` off nobody can
-    /// subscribe and a tee would be a socket bound for a stream nobody can
-    /// open. See [`MeshTee`], which is also where the one call to
-    /// [`crate::mesh::Mesh::publish_turn`] lives.
-    pub mesh: Option<MeshTee>,
+    /// `None` for a default install, and `None` is the shipped default twice
+    /// over: a build without the mesh has nothing registered to open one, and
+    /// a build with it still answers `None` unless `[mesh] listen` is on,
+    /// because a peer watches this node by dialling it and a tee for a stream
+    /// nobody can open is a socket bound for nothing. A `dyn` rather than the
+    /// plugin's type — see [`tee`] for why core does not name it.
+    pub mesh: Option<Box<dyn SessionTee>>,
 }
 
 impl App {
@@ -985,24 +989,36 @@ impl App {
         });
     }
 
-    /// Open the provider-type picker (level 2): the menu of provider kinds to
-    /// add. Rows are dispatched by index against the fixed order in
-    /// [`PROVIDER_TYPES`], followed by the OpenAI-compatible presets from
-    /// [`crate::llm::compat::PRESETS`], so the labels stay human-readable.
+    /// Open the provider-type picker (level 2): the backends this build can
+    /// actually add.
+    ///
+    /// The rows come from [`provider_types`], which drops any whose `kind` no
+    /// plugin registered. Nothing is offered that would collect a key and
+    /// then fail on the first turn, and the Enter handler dispatches on the
+    /// row's own [`ProviderSetup`] rather than on its position, so a dropped
+    /// row cannot shift what the rows below it do.
     pub fn open_provider_type_picker(&mut self) {
-        let items: Vec<PickerItem> = PROVIDER_TYPES
-            .iter()
-            .map(|(label, detail)| PickerItem {
-                value: (*label).to_string(),
-                detail: (*detail).to_string(),
+        let items: Vec<PickerItem> = provider_types()
+            .into_iter()
+            .map(|row| PickerItem {
+                value: row.label,
+                detail: row.detail,
                 current: false,
             })
-            .chain(crate::llm::compat::PRESETS.iter().map(|preset| PickerItem {
-                value: format!("{} — API key", preset.label),
-                detail: preset.detail.to_string(),
-                current: false,
-            }))
             .collect();
+        // Every backend is a plugin, so a build can have none of them. The
+        // level-1 picker's "＋ Add provider…" row is still the honest thing
+        // to show there — it is how a user gets to a config file at all — but
+        // the menu behind it has nothing in it, and an empty picker looks
+        // like a hung key rather than an answer.
+        if items.is_empty() {
+            self.notice(
+                "this build has no provider backends compiled in — every one of them is a \
+                 plugin behind a cargo feature, and all are on by default. Install a stock \
+                 release binary, or rebuild with the ones you want.",
+            );
+            return;
+        }
         self.picker = Some(Picker {
             kind: PickerKind::ProviderType,
             title: " add provider · ↑/↓ move · enter select · esc close ".to_string(),
@@ -1171,9 +1187,10 @@ impl App {
                 }
                 // Substitute the account id into the base-URL template
                 // (e.g. `.../accounts/{account_id}/ai/v1`).
-                prompt.base_url = prompt
-                    .base_url
-                    .replace(crate::llm::cloudflare::ACCOUNT_ID_PLACEHOLDER, &value);
+                prompt.base_url = prompt.base_url.replace(
+                    crate::llm::registry::defaults::CLOUDFLARE_ACCOUNT_ID_PLACEHOLDER,
+                    &value,
+                );
             }
             PromptField::BaseUrl => prompt.base_url = value,
             PromptField::Model => prompt.model = value,
@@ -1714,8 +1731,11 @@ impl App {
             self.suggestion_index = 0;
             return;
         }
-        // Builtins in display order, then custom commands (already sorted).
-        let candidates: Vec<Suggestion> = COMMANDS
+        // Builtins in display order, then plugin commands by name, then custom
+        // commands (already sorted). Anything this surface cannot run is left
+        // out rather than offered and then refused — the window dims those
+        // instead, because it has the room to.
+        let candidates: Vec<Suggestion> = crate::commands::available(Surface::Tui)
             .iter()
             .map(Suggestion::from)
             .chain(self.custom_commands.iter().map(Suggestion::from))
@@ -3109,21 +3129,33 @@ impl App {
                             )))
                         }
                         PickerKind::ProviderType => {
-                            use crate::llm::{cloudflare, openrouter, xai_oauth};
+                            use crate::llm::registry::defaults;
+                            use crate::llm::xai_oauth;
                             use std::collections::VecDeque;
-                            match picker.selected {
+                            // Rebuilt rather than remembered from the open:
+                            // the menu is a pure function of the plugin set,
+                            // which cannot change inside one process, so the
+                            // second call sees the same rows the first one
+                            // drew. Dispatch is on the row's `setup`, not on
+                            // its position — a filtered menu has no fixed
+                            // positions.
+                            let Some(row) = provider_types().into_iter().nth(picker.selected)
+                            else {
+                                return Ok(None);
+                            };
+                            match row.setup {
                                 // xAI sign-in: run the OAuth flow; login()
                                 // auto-adds the provider on success.
-                                0 => {
+                                ProviderSetup::XaiSignIn => {
                                     return Ok(Some(AppAction::Command(SlashCommand::Login {
                                         provider: "xai".to_string(),
                                         force: false,
                                     })));
                                 }
                                 // xAI API key.
-                                1 => {
+                                ProviderSetup::XaiKey => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Xai,
+                                        kind: ProviderKind::XAI,
                                         name: "xai".to_string(),
                                         base_url: xai_oauth::DEFAULT_BASE_URL.to_string(),
                                         model: xai_oauth::DEFAULT_MODEL.to_string(),
@@ -3133,11 +3165,11 @@ impl App {
                                 }
                                 // OpenRouter — model is unknown, so prompt for
                                 // it alongside the key.
-                                2 => {
+                                ProviderSetup::OpenRouter => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::OpenRouter,
+                                        kind: ProviderKind::OPENROUTER,
                                         name: "openrouter".to_string(),
-                                        base_url: openrouter::DEFAULT_BASE_URL.to_string(),
+                                        base_url: defaults::OPENROUTER_BASE_URL.to_string(),
                                         model: String::new(),
                                         api_key: None,
                                         queue: VecDeque::from([
@@ -3149,12 +3181,13 @@ impl App {
                                 // Cloudflare Workers AI — account id (folded
                                 // into the base URL) + token; model defaults to
                                 // GLM 5.2 and can be changed later via /model.
-                                3 => {
+                                ProviderSetup::Cloudflare => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Cloudflare,
+                                        kind: ProviderKind::CLOUDFLARE,
                                         name: "cloudflare".to_string(),
-                                        base_url: cloudflare::BASE_URL_TEMPLATE.to_string(),
-                                        model: cloudflare::DEFAULT_MODEL.to_string(),
+                                        base_url: defaults::CLOUDFLARE_BASE_URL_TEMPLATE
+                                            .to_string(),
+                                        model: defaults::CLOUDFLARE_MODEL.to_string(),
                                         api_key: None,
                                         queue: VecDeque::from([
                                             PromptField::AccountId,
@@ -3163,9 +3196,9 @@ impl App {
                                     });
                                 }
                                 // OpenAI — model + key.
-                                4 => {
+                                ProviderSetup::OpenAi => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: "openai".to_string(),
                                         base_url: "https://api.openai.com/v1".to_string(),
                                         model: String::new(),
@@ -3177,9 +3210,9 @@ impl App {
                                     });
                                 }
                                 // Anthropic — model + key.
-                                5 => {
+                                ProviderSetup::Anthropic => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Anthropic,
+                                        kind: ProviderKind::ANTHROPIC,
                                         name: "claude".to_string(),
                                         base_url: "https://api.anthropic.com".to_string(),
                                         model: String::new(),
@@ -3192,9 +3225,9 @@ impl App {
                                 }
                                 // OpenAI-compatible custom — everything is
                                 // prompted, starting with the name.
-                                6 => {
+                                ProviderSetup::Custom => {
                                     self.begin_provider_prompt(ProviderPrompt {
-                                        kind: ProviderKind::Openai,
+                                        kind: ProviderKind::OPENAI,
                                         name: String::new(),
                                         base_url: String::new(),
                                         model: String::new(),
@@ -3211,12 +3244,10 @@ impl App {
                                 // Groq, …) appended after the fixed rows — the
                                 // default model is preset, so only the key is
                                 // asked for.
-                                index => {
-                                    if let Some(preset) = crate::llm::compat::PRESETS
-                                        .get(index - PROVIDER_TYPES.len())
-                                    {
+                                ProviderSetup::Compat(index) => {
+                                    if let Some(preset) = crate::llm::compat::PRESETS.get(index) {
                                         self.begin_provider_prompt(ProviderPrompt {
-                                            kind: ProviderKind::Openai,
+                                            kind: ProviderKind::OPENAI,
                                             name: preset.name.to_string(),
                                             base_url: preset.base_url.to_string(),
                                             model: preset.default_model().to_string(),
@@ -3467,7 +3498,7 @@ impl App {
                 self.suggestions[self.suggestion_index.min(self.suggestions.len() - 1)].clone();
             // An exactly-typed command always runs as typed; otherwise Enter
             // completes the highlighted suggestion first.
-            let exact = COMMANDS.iter().any(|command| command.name == typed)
+            let exact = crate::commands::is_known(&typed)
                 || self.custom_commands.iter().any(|c| c.name == typed);
             if !exact && typed != spec.name {
                 let takes_args = spec.takes_args;
@@ -3990,7 +4021,7 @@ impl App {
         // session-start hook, a background task reporting in, a subagent run —
         // and a tee hung off the turn alone would show a watcher a session that
         // went silent between turns. What crosses is not decided here: see
-        // [`MeshTee::publish`].
+        // [`SessionTee::publish`] and whatever implements it.
         if let Some(mesh) = &self.mesh {
             mesh.publish(&event);
         }

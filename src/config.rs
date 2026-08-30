@@ -11,14 +11,11 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
-use crate::llm::anthropic::AnthropicProvider;
-use crate::llm::cloudflare::{self, CloudflareProvider};
-use crate::llm::llamacpp::LlamaCppProvider;
-use crate::llm::ollama::OllamaClient;
-use crate::llm::openai::{OpenAiProvider, StaticToken};
-use crate::llm::openrouter;
 use crate::llm::provider::LlmProvider;
-use crate::llm::xai_oauth;
+// `ProviderKind` is re-exported from here (see below) because twenty-three
+// modules import it as `crate::config::ProviderKind` and it is, on disk, a
+// config field. The type itself lives with the registry that resolves it.
+use crate::llm::registry;
 // Every directory under `~/.wizard` is private state: session JSONLs carry
 // full tool output, `logs/` carries traces, `credentials.toml` carries API
 // keys. The mode used to be set only as a side effect of `crate::credentials`
@@ -169,56 +166,7 @@ impl fmt::Display for ReasoningEffort {
     }
 }
 
-/// Which backend a [`ProviderConfig`] talks to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "lowercase")]
-#[clap(rename_all = "lowercase")]
-pub enum ProviderKind {
-    /// Local llama.cpp `llama-server` (OpenAI-compatible `/v1` API plus the
-    /// native `/health` probe). The default local backend.
-    LlamaCpp,
-    /// Local Ollama server (native `/api/chat`).
-    Ollama,
-    /// OpenAI-compatible Chat Completions endpoint (OpenAI, OpenRouter, Groq,
-    /// together.ai, vLLM, LM Studio, ...).
-    Openai,
-    /// Anthropic Messages API.
-    Anthropic,
-    /// OpenRouter's OpenAI-compatible API at `https://openrouter.ai/api/v1`
-    /// with a plain API key (default env var `OPENROUTER_API_KEY`).
-    OpenRouter,
-    /// xAI (Grok) Chat Completions at `https://api.x.ai/v1` with a plain API
-    /// key (default env var `XAI_API_KEY`).
-    Xai,
-    /// xAI via account sign-in: OAuth tokens from `wizard --login xai`
-    /// (stored in `~/.wizard/xai_oauth.json`), no API key needed.
-    XaiOauth,
-    /// ChatGPT subscription via account sign-in: OAuth tokens from
-    /// `wizard --login chatgpt` (stored in `~/.wizard/chatgpt_oauth.json`),
-    /// calling the Responses API at `chatgpt.com/backend-api/codex`.
-    ChatgptOauth,
-    /// Cloudflare Workers AI: serverless open models (GLM, Llama, Qwen, ...)
-    /// behind an account-scoped OpenAI-compatible endpoint
-    /// (`https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`) with a
-    /// Cloudflare API token (default env var `CLOUDFLARE_API_TOKEN`).
-    Cloudflare,
-}
-
-impl fmt::Display for ProviderKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProviderKind::LlamaCpp => write!(f, "llamacpp"),
-            ProviderKind::Ollama => write!(f, "ollama"),
-            ProviderKind::Openai => write!(f, "openai"),
-            ProviderKind::Anthropic => write!(f, "anthropic"),
-            ProviderKind::OpenRouter => write!(f, "openrouter"),
-            ProviderKind::Xai => write!(f, "xai"),
-            ProviderKind::XaiOauth => write!(f, "xaioauth"),
-            ProviderKind::ChatgptOauth => write!(f, "chatgptoauth"),
-            ProviderKind::Cloudflare => write!(f, "cloudflare"),
-        }
-    }
-}
+pub use crate::llm::registry::{Credentials, ProviderDescriptor, ProviderKind};
 
 /// Which messaging gateway, if any, Wizard exposes (`wizard --gateway`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
@@ -260,7 +208,8 @@ pub struct GatewayConfig {
     /// Chat IDs allowed to drive the agent. The list is a closed allow-list:
     /// empty means *nobody* is allowed, so an unconfigured gateway refuses
     /// every message instead of handing a stranger an autonomous agent with
-    /// the unrestricted tool set. See [`crate::gateway::is_authorized`].
+    /// the unrestricted tool set. The gateway plugin's `is_authorized` is what
+    /// enforces it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_chat_ids: Vec<i64>,
 }
@@ -274,6 +223,40 @@ impl GatewayConfig {
     pub fn token_env(&self) -> &str {
         self.token_env.as_deref().unwrap_or(Self::DEFAULT_TOKEN_ENV)
     }
+}
+
+/// The warning a gateway allow-list earns when it names a group chat, or
+/// [`None`] when every id in it is a one-to-one chat.
+///
+/// A negative id is a group on every platform wired up so far, and the
+/// allow-list authorises a *chat* rather than a person, so a group in it hands
+/// full tool access to everyone in that group — including whoever joins it
+/// later.
+///
+/// It lives in core rather than in the gateway plugin for the same reason
+/// [`GatewayConfig`] itself does: it is a fact about a value core parses and
+/// keeps parsing on a build with no gateway in it, and its callers sit on both
+/// sides of the plugin boundary — `wizard doctor` is core, `wizard gateway
+/// setup` is the plugin. They have to say the same sentence, or an operator
+/// hears the warning once and is reassured by its absence the second time.
+/// Same move [`crate::text::is_invisible`] made when its callers ended up on
+/// both sides of the mesh.
+///
+/// It takes a slice rather than a [`GatewayConfig`] because one of those
+/// callers is asking about an id that is not in the config yet: `gateway
+/// setup` has just discovered a chat id and is about to offer to write it, and
+/// the moment to say "that is a group" is before it lands in the file rather
+/// than the next time doctor runs.
+pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
+    let groups: Vec<i64> = allowed.iter().copied().filter(|id| *id < 0).collect();
+    (!groups.is_empty()).then(|| {
+        format!(
+            "{groups:?} look like group chats. The allow-list authorises a chat, not a \
+             person, so every member of those groups — including anyone added later — can \
+             run agent turns on this machine with full tool access. Prefer a one-to-one \
+             chat id."
+        )
+    })
 }
 
 /// Cosmetic TUI settings (`[ui]` in `config.toml`).
@@ -589,7 +572,7 @@ pub struct MeshConfig {
     /// (default [`DEFAULT_MESH_LISTEN_ADDR`]). Ignored otherwise.
     pub listen_addr: String,
     /// Announce this node on the local network, and look for peers there
-    /// (default **false**). See [`crate::mesh::discovery`] for what mDNS does
+    /// (default **false**). See `crate::plugins::mesh::discovery` for what mDNS does
     /// and, more importantly, what it does not.
     pub mdns: bool,
     /// Where to find peers, as `mesh address -> host:port`.
@@ -793,106 +776,92 @@ impl ProviderConfig {
             .unwrap_or_default()
     }
 
-    /// Construct the concrete client for this provider. For cloud kinds a
-    /// missing key is a soft warning (the client is still built so `health()`
-    /// can report the real error).
+    /// The registered descriptor for this provider's kind.
+    ///
+    /// `None` when nothing has registered that kind: a typo in `config.toml`,
+    /// or — once providers are plugins — a provider left out of this profile.
+    /// Callers that only need one field off it (a display name, whether a key
+    /// is needed) treat the absence as "unknown backend" and carry on; only
+    /// [`build`](Self::build) turns it into an error, because that is the one
+    /// call that cannot degrade.
+    pub fn descriptor(&self) -> Option<ProviderDescriptor> {
+        registry::installed(&self.kind)
+    }
+
+    /// How this provider proves who is asking, per its descriptor.
+    ///
+    /// An unregistered kind is reported as a keyed cloud backend with no
+    /// default variable, which is the safe reading: it keeps a `/settings`
+    /// sheet showing "key missing" rather than claiming a backend nothing can
+    /// build is free and local.
+    pub fn credentials(&self) -> Credentials {
+        self.descriptor()
+            .map(|descriptor| descriptor.credentials().clone())
+            .unwrap_or(Credentials::ApiKey { default_env: None })
+    }
+
+    /// The API key this provider would use right now: its configured env var,
+    /// then its kind's default env var, then `credentials.toml`.
+    ///
+    /// The per-kind default used to be a literal in each arm of `build`'s
+    /// match — `Some(openrouter::DEFAULT_KEY_ENV)` and friends — sitting
+    /// alongside a second, separately maintained copy of the same table in
+    /// `gui::settings::default_key_env`. Both now read the one descriptor, so
+    /// the settings sheet cannot disagree with the resolver about where a key
+    /// comes from, which it previously could and had to be kept from.
+    pub fn api_key(&self) -> String {
+        self.resolved_key(self.credentials().default_env())
+    }
+
+    /// Warn that this provider has no credential, in the one wording every
+    /// backend that warns has always used.
+    ///
+    /// `label` is what the backend calls the secret ("API key", "API token")
+    /// and `fallback` names the variable to export when the config names
+    /// none. Only the backends that warned before call this: OpenRouter and
+    /// xAI deliberately do not, and preserving that asymmetry exactly is
+    /// worth more here than tidying it, because tidying it is a separate
+    /// change with its own argument.
+    pub fn warn_missing_key(&self, label: &str, fallback: &str) {
+        tracing::warn!(
+            "provider '{}' has no {label} (store one via /provider or set {}); requests will likely 401",
+            self.name,
+            self.api_key_env.as_deref().unwrap_or(fallback)
+        );
+    }
+
+    /// Construct the client for this provider.
+    ///
+    /// Was a nine-arm `match self.kind` that imported nine concrete provider
+    /// types. It is now one lookup, and the nine constructors live in the
+    /// modules that own them — which is the whole point of the change: a
+    /// tenth provider is a `register` call from anywhere, not an edit here.
+    ///
+    /// A missing key stays a soft warning inside the backend's own
+    /// constructor rather than an error, so `health()` can report the real
+    /// failure against the real endpoint.
     pub fn build(&self) -> Result<Arc<dyn LlmProvider>> {
-        match self.kind {
-            ProviderKind::LlamaCpp => Ok(Arc::new(LlamaCppProvider::new(
-                self.base_url.clone(),
-                self.model.clone(),
-            ))),
-            ProviderKind::Ollama => Ok(Arc::new(OllamaClient::new(self.base_url.clone()))),
-            ProviderKind::Openai => {
-                let key = self.resolved_key(None);
-                if key.is_empty() {
-                    tracing::warn!(
-                        "provider '{}' has no API key (store one via /provider or set {}); requests will likely 401",
-                        self.name,
-                        self.api_key_env.as_deref().unwrap_or("an env var")
-                    );
-                }
-                Ok(Arc::new(OpenAiProvider::new(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    key,
-                )))
-            }
-            ProviderKind::Anthropic => {
-                let key = self.resolved_key(None);
-                if key.is_empty() {
-                    tracing::warn!(
-                        "provider '{}' has no API key (store one via /provider or set {}); requests will likely 401",
-                        self.name,
-                        self.api_key_env.as_deref().unwrap_or("an env var")
-                    );
-                }
-                Ok(Arc::new(AnthropicProvider::new(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    key,
-                )))
-            }
-            // OpenRouter speaks the OpenAI-compatible Chat Completions API;
-            // the helper adds the attribution headers.
-            ProviderKind::OpenRouter => {
-                let key = self.resolved_key(Some(openrouter::DEFAULT_KEY_ENV));
-                Ok(Arc::new(openrouter::provider(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    key,
-                )))
-            }
-            // xAI speaks the OpenAI-compatible Chat Completions API; only the
-            // credentials differ between the two kinds.
-            ProviderKind::Xai => {
-                let key = self.resolved_key(Some(xai_oauth::DEFAULT_KEY_ENV));
-                Ok(Arc::new(OpenAiProvider::with_token_source(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    Arc::new(StaticToken::new(key)),
-                    "xai",
-                )))
-            }
-            ProviderKind::XaiOauth => {
-                let source = xai_oauth::XaiTokenSource::new()
-                    .context("setting up xAI OAuth token storage")?;
-                Ok(Arc::new(OpenAiProvider::with_token_source(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    Arc::new(source),
-                    "xai",
-                )))
-            }
-            // A ChatGPT subscription is not the Chat Completions API — it is the
-            // Responses API behind account tokens, so it has its own client.
-            ProviderKind::ChatgptOauth => Ok(Arc::new(
-                crate::llm::chatgpt::ChatgptProvider::new(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                )
-                .context("setting up ChatGPT OAuth token storage")?,
-            )),
-            // Cloudflare Workers AI speaks the OpenAI-compatible Chat
-            // Completions API, but has no `/v1/models`, so it needs its own
-            // client for health/model-listing (see `CloudflareProvider`).
-            ProviderKind::Cloudflare => {
-                let key = self.resolved_key(Some(cloudflare::DEFAULT_KEY_ENV));
-                if key.is_empty() {
-                    tracing::warn!(
-                        "provider '{}' has no API token (store one via /provider or set {}); requests will likely 401",
-                        self.name,
-                        self.api_key_env
-                            .as_deref()
-                            .unwrap_or(cloudflare::DEFAULT_KEY_ENV)
-                    );
-                }
-                Ok(Arc::new(CloudflareProvider::new(
-                    self.base_url.clone(),
-                    self.model.clone(),
-                    key,
-                )))
-            }
+        let descriptor = self
+            .descriptor()
+            .ok_or_else(|| registry::unknown(&self.kind))?;
+        descriptor.build(self)
+    }
+
+    /// Get the backend ready to answer: spawn `llama-server`, pull an Ollama
+    /// tag, or — for every hosted backend — nothing at all.
+    ///
+    /// `model` is the tag the caller will actually ask for, which is not
+    /// always [`Self::model`]: an agent built with a `/model` override has to
+    /// pull the model it is about to use, not the one in the file.
+    ///
+    /// An unregistered kind is *not* an error here. Preparation is best
+    /// effort by construction — every cloud backend has none — and the
+    /// caller's next step is `build`, which is where an unknown kind is
+    /// supposed to be reported.
+    pub async fn prepare(&self, model: &str) -> Result<()> {
+        match self.descriptor() {
+            Some(descriptor) => descriptor.prepare(self, model).await,
+            None => Ok(()),
         }
     }
 }
@@ -1324,7 +1293,7 @@ impl Config {
         }
         ProviderConfig {
             name: "local".to_string(),
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: self.llamacpp_host.clone(),
             model: self.model.clone(),
             api_key_env: None,
@@ -1517,7 +1486,7 @@ impl Config {
             if !path.is_empty() {
                 self.gguf_path = Some(path.to_string());
                 if let Some(index) = self.active_index()
-                    && self.providers[index].kind == ProviderKind::LlamaCpp
+                    && self.providers[index].kind == ProviderKind::LLAMACPP
                 {
                     self.providers[index].gguf_path = Some(path.to_string());
                 }
@@ -1574,1173 +1543,5 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
-    use clap::Parser;
-
-    use super::*;
-
-    fn cli(args: &[&str]) -> Cli {
-        Cli::try_parse_from(std::iter::once("wizard").chain(args.iter().copied()))
-            .expect("valid args")
-    }
-
-    #[test]
-    fn tests_never_write_to_the_real_wizard_dir() {
-        // Regression guard, and not a hypothetical one: the suite exercises
-        // code that persists config (the TUI's `/vim` toggle, `/mode`,
-        // provider setup, onboarding). When this pointed at $HOME, running
-        // `cargo test` silently overwrote the developer's own config.toml —
-        // providers and all. It did, once.
-        let dir = Config::wizard_dir().expect("a wizard dir");
-        let home = dirs::home_dir().expect("a home dir");
-        assert_ne!(dir, home.join(".wizard"));
-        assert!(
-            dir.starts_with(std::env::temp_dir()),
-            "tests must use a temp wizard dir, got {}",
-            dir.display()
-        );
-    }
-
-    #[test]
-    fn defaults_match_docs() {
-        let config = Config::default();
-        assert_eq!(config.model, "qwen3.6:27b");
-        assert_eq!(config.ollama_host, "http://127.0.0.1:11434");
-        assert_eq!(config.llamacpp_host, DEFAULT_LLAMACPP_HOST);
-        assert!(config.gguf_path.is_none());
-        assert_eq!(config.mode, Mode::Genie);
-        assert_eq!(config.max_steps, StepBudget::UNLIMITED);
-        assert!(!config.continuous);
-        assert!(!config.plan_first);
-        assert!(!config.plan_each_cycle);
-        assert_eq!(config.retry_base_secs, 5);
-        assert_eq!(config.retry_max_secs, 300);
-        assert_eq!(config.cycle_pause_secs, 0);
-        // No gate unless one is asked for: a gate runs commands unattended.
-        assert!(config.gates.is_empty());
-        assert_eq!(config.gate_max_attempts, 3);
-        assert_eq!(config.gate_timeout_secs, 1_800);
-        assert_eq!(config.compact_threshold_bytes, 48_000);
-        assert!(!config.rollback_failed_cycles);
-        assert_eq!(config.max_consecutive_failures, 5);
-        assert_eq!(config.checkpoints.keep_turns, 50);
-        assert_eq!(config.fleet.max_minutes, 30);
-        assert!(config.fleet.synthesize);
-    }
-
-    #[test]
-    fn checkpoints_section_parses() {
-        let config: Config = toml::from_str("[checkpoints]\nkeep_turns = 7").expect("valid toml");
-        assert_eq!(config.checkpoints.keep_turns, 7);
-        let config: Config = toml::from_str("rollback_failed_cycles = true").expect("valid toml");
-        assert!(config.rollback_failed_cycles);
-    }
-
-    /// A config written before the knob existed must keep the documented
-    /// default rather than deserializing to `0`, which the loop reads as "no
-    /// bound at all" — the exact opposite of the safe reading.
-    #[test]
-    fn max_consecutive_failures_defaults_when_absent_and_zero_is_explicit() {
-        let config: Config = toml::from_str("continuous = true").expect("valid toml");
-        assert_eq!(config.max_consecutive_failures, 5);
-        let config: Config = toml::from_str("max_consecutive_failures = 0").expect("valid toml");
-        assert_eq!(config.max_consecutive_failures, 0);
-    }
-
-    #[test]
-    fn fleet_section_parses_with_partial_keys() {
-        let config: Config =
-            toml::from_str("[fleet]\nmax_minutes = 10\nsynthesize = false").expect("valid toml");
-        assert_eq!(config.fleet.max_minutes, 10);
-        assert!(!config.fleet.synthesize);
-
-        let config: Config = toml::from_str("[fleet]\nmax_minutes = 90").expect("valid toml");
-        assert_eq!(config.fleet.max_minutes, 90);
-        assert!(config.fleet.synthesize, "missing key takes the default");
-    }
-
-    #[test]
-    fn update_config_defaults() {
-        let update = UpdateConfig::default();
-        assert!(update.notify);
-        assert!(!update.auto);
-        assert_eq!(update.repo, "teddytennant/wizard");
-        assert_eq!(update.interval_hours, 24);
-    }
-
-    #[test]
-    fn config_without_update_table_deserializes_to_defaults() {
-        // Configs written before `[update]` existed must still parse.
-        let config: Config = toml::from_str("model = \"qwen3.6:27b\"").expect("valid toml");
-        assert_eq!(config.update, UpdateConfig::default());
-    }
-
-    #[test]
-    fn update_section_parses_with_partial_keys() {
-        let config: Config =
-            toml::from_str("[update]\nauto = true\ninterval_hours = 6").expect("valid toml");
-        assert!(config.update.auto);
-        assert_eq!(config.update.interval_hours, 6);
-        // Unspecified keys take their defaults.
-        assert!(config.update.notify);
-        assert_eq!(config.update.repo, "teddytennant/wizard");
-
-        let config: Config =
-            toml::from_str("[update]\nrepo = \"acme/wizard\"\nnotify = false").expect("valid toml");
-        assert_eq!(config.update.repo, "acme/wizard");
-        assert!(!config.update.notify);
-        assert!(!config.update.auto, "missing key takes the default");
-    }
-
-    #[test]
-    fn mode_parameters() {
-        assert_eq!(Mode::Genie.temperature(), 0.8);
-        assert_eq!(Mode::Sovereign.temperature(), 0.6);
-        assert_eq!(Mode::Genie.to_string(), "genie");
-        assert_eq!(Mode::Sovereign.to_string(), "sovereign");
-    }
-
-    #[test]
-    fn missing_keys_take_defaults() {
-        let config: Config = toml::from_str("model = \"qwen3.5:9b\"").expect("valid toml");
-        assert_eq!(config.model, "qwen3.5:9b");
-        assert_eq!(config.ollama_host, "http://127.0.0.1:11434");
-        assert_eq!(config.mode, Mode::Genie);
-        assert_eq!(config.max_steps, StepBudget::UNLIMITED);
-    }
-
-    #[test]
-    fn the_mesh_listener_and_mdns_are_both_off_by_default() {
-        // The one thing about `[mesh]` that must not drift. A mesh that opened
-        // a socket on install would be a security surface nobody asked for,
-        // and an mDNS advertisement broadcasts this machine's public key to
-        // every device on the network. Both are opt-in, and this is the test
-        // that says so.
-        let mesh = MeshConfig::default();
-        assert!(!mesh.listen, "the mesh listener is off until somebody asks");
-        assert!(!mesh.mdns, "and so is announcing this machine on the LAN");
-        assert!(mesh.routes.is_empty());
-        assert_eq!(mesh.listen_addr, DEFAULT_MESH_LISTEN_ADDR);
-        assert_eq!(Config::default().mesh, mesh);
-
-        // A config file that says nothing about the mesh reads back as off,
-        // rather than as whatever a missing field happens to deserialize to.
-        let quiet: Config = toml::from_str("model = \"qwen3.6:27b\"").expect("parse");
-        assert!(!quiet.mesh.listen);
-        assert!(!quiet.mesh.mdns);
-        // And a `[mesh]` section that sets something *else* still leaves the
-        // listener off: this is the fail-open shape the module keeps warning
-        // about, where a field added later defaults to the permissive side.
-        let partial: Config = toml::from_str("[mesh]\nmdns = true\n").expect("parse");
-        assert!(partial.mesh.mdns);
-        assert!(!partial.mesh.listen);
-    }
-
-    #[test]
-    fn a_malformed_listen_address_is_an_error_rather_than_a_silent_fallback() {
-        // Binding the default when somebody typed an address they meant is how
-        // a node ends up listening somewhere its operator did not intend.
-        let mesh = MeshConfig::default();
-        assert_eq!(
-            mesh.listen_socket().expect("the default parses").port(),
-            DEFAULT_MESH_PORT
-        );
-        let broken = MeshConfig {
-            listen_addr: "0.0.0.0".to_string(),
-            ..MeshConfig::default()
-        };
-        let err = broken.listen_socket().expect_err("no port");
-        assert!(format!("{err:#}").contains("host:port"), "{err:#}");
-    }
-
-    /// `WIZARD_CODE_MODE` moves in both directions, and an unrecognised value
-    /// moves nothing.
-    ///
-    /// Both halves matter: an exported `WIZARD_CODE_MODE=maybe` must not
-    /// silently arm a model-authored interpreter, and must not silently disarm
-    /// one the user turned on in `config.toml` either.
-    #[test]
-    fn the_code_mode_env_override_moves_in_both_directions() {
-        let mut config = Config::default();
-        assert!(!config.code_mode, "off by default");
-
-        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "1".to_string()));
-        assert!(config.code_mode);
-        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| " no ".to_string()));
-        assert!(!config.code_mode);
-        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "true".to_string()));
-        assert!(config.code_mode);
-        config.apply_env_from(|name| (name == "WIZARD_CODE_MODE").then(|| "maybe".to_string()));
-        assert!(config.code_mode, "an unrecognised value changes nothing");
-        config.apply_env_from(|_| None);
-        assert!(config.code_mode, "and an unset variable changes nothing");
-    }
-
-    #[test]
-    fn full_file_round_trips() {
-        let original = Config {
-            model: "llama3.3:70b".to_string(),
-            ollama_host: "http://10.0.0.5:11434".to_string(),
-            llamacpp_host: "http://10.0.0.5:8080".to_string(),
-            gguf_path: Some("/models/qwen3-8b-q4_k_m.gguf".to_string()),
-            mode: Mode::Sovereign,
-            reasoning_effort: Some(ReasoningEffort::High),
-            max_steps: StepBudget::new(200),
-            continuous: true,
-            plan_first: true,
-            omakase: true,
-            plan_each_cycle: true,
-            rollback_failed_cycles: true,
-            max_consecutive_failures: 9,
-            retry_base_secs: 10,
-            retry_max_secs: 600,
-            cycle_pause_secs: 30,
-            gates: vec!["cargo fmt --check".to_string(), "cargo test".to_string()],
-            gate_max_attempts: 4,
-            gate_timeout_secs: 600,
-            compact_threshold_bytes: 96_000,
-            providers: vec![ProviderConfig {
-                name: "openai".to_string(),
-                kind: ProviderKind::Openai,
-                base_url: "https://api.openai.com/v1".to_string(),
-                model: "gpt-4o".to_string(),
-                api_key_env: Some("OPENAI_API_KEY".to_string()),
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("openai".to_string()),
-            gateway: GatewayConfig {
-                kind: GatewayKind::Telegram,
-                token_env: Some("MY_BOT_TOKEN".to_string()),
-                allowed_chat_ids: vec![42, -100123],
-            },
-            ui: UiConfig {
-                spinner_verbs: vec!["Pondering".to_string(), "Musing".to_string()],
-                vim: true,
-                skin: Some("codex".to_string()),
-            },
-            web: WebConfig {
-                fetch_max_bytes: 250_000,
-                allow_local: true,
-                search_backend: "brave".to_string(),
-                search_api_key_env: Some("BRAVE_API_KEY".to_string()),
-                search_model: Some("grok-4.6".to_string()),
-            },
-            shell: ShellConfig { timeout_secs: 45 },
-            checkpoints: CheckpointConfig { keep_turns: 12 },
-            fleet: FleetConfig {
-                max_minutes: 45,
-                synthesize: false,
-            },
-            update: UpdateConfig {
-                notify: false,
-                auto: true,
-                repo: "acme/wizard".to_string(),
-                interval_hours: 6,
-            },
-            sync: SyncConfig {
-                source: Some("https://example.com/wizard-sync.tar.gz".to_string()),
-            },
-            mesh: MeshConfig {
-                listen: true,
-                listen_addr: "127.0.0.1:4300".to_string(),
-                mdns: true,
-                routes: BTreeMap::from([(
-                    "wiz1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
-                    "10.0.0.9:4242".to_string(),
-                )]),
-            },
-            fusion: Some(FusionConfig {
-                panel: vec!["openai".to_string()],
-                synthesizer: "openai".to_string(),
-                rounds: 2,
-            }),
-            ultra: Some(UltraConfig {
-                lenses: vec!["skeptic".to_string(), "minimalist".to_string()],
-                judges: 2,
-                candidate_max_steps: 8,
-                judge_max_steps: 4,
-                timeout_secs: 120,
-                max_draft_chars: 4_000,
-            }),
-            code_mode: true,
-        };
-        let raw = toml::to_string_pretty(&original).expect("serialize");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.model, original.model);
-        assert_eq!(parsed.ollama_host, original.ollama_host);
-        assert_eq!(parsed.llamacpp_host, original.llamacpp_host);
-        assert_eq!(parsed.gguf_path, original.gguf_path);
-        assert_eq!(parsed.mode, original.mode);
-        assert_eq!(parsed.reasoning_effort, original.reasoning_effort);
-        assert_eq!(parsed.max_steps, original.max_steps);
-        assert_eq!(parsed.continuous, original.continuous);
-        assert_eq!(parsed.plan_first, original.plan_first);
-        assert_eq!(parsed.plan_each_cycle, original.plan_each_cycle);
-        assert_eq!(parsed.retry_base_secs, original.retry_base_secs);
-        assert_eq!(parsed.retry_max_secs, original.retry_max_secs);
-        assert_eq!(parsed.cycle_pause_secs, original.cycle_pause_secs);
-        assert_eq!(parsed.gates, original.gates);
-        assert_eq!(parsed.gate_max_attempts, original.gate_max_attempts);
-        assert_eq!(parsed.gate_timeout_secs, original.gate_timeout_secs);
-        assert_eq!(
-            parsed.compact_threshold_bytes,
-            original.compact_threshold_bytes
-        );
-        assert_eq!(parsed.code_mode, original.code_mode);
-        assert_eq!(parsed.providers.len(), 1);
-        assert_eq!(parsed.providers[0].name, "openai");
-        assert_eq!(parsed.providers[0].kind, ProviderKind::Openai);
-        assert_eq!(
-            parsed.providers[0].api_key_env.as_deref(),
-            Some("OPENAI_API_KEY")
-        );
-        assert_eq!(parsed.active_provider.as_deref(), Some("openai"));
-        assert_eq!(parsed.gateway.kind, GatewayKind::Telegram);
-        assert_eq!(parsed.gateway.token_env.as_deref(), Some("MY_BOT_TOKEN"));
-        assert_eq!(parsed.gateway.allowed_chat_ids, vec![42, -100123]);
-        assert_eq!(parsed.ui, original.ui);
-        assert_eq!(parsed.web, original.web);
-        assert_eq!(
-            parsed.rollback_failed_cycles,
-            original.rollback_failed_cycles
-        );
-        assert_eq!(
-            parsed.max_consecutive_failures,
-            original.max_consecutive_failures
-        );
-        assert_eq!(parsed.checkpoints, original.checkpoints);
-        assert_eq!(parsed.fleet, original.fleet);
-        assert_eq!(parsed.update, original.update);
-        assert_eq!(parsed.sync, original.sync);
-        assert_eq!(parsed.fusion, original.fusion);
-        assert_eq!(parsed.ultra, original.ultra);
-    }
-
-    #[test]
-    fn ultra_defaults_when_section_missing() {
-        let config: Config = toml::from_str("model = \"m\"").expect("valid toml");
-        assert!(config.ultra.is_none());
-        assert_eq!(config.effective_ultra(), UltraConfig::default());
-
-        // A partial block fills the rest from the defaults, so adding a knob to
-        // `[ultra]` never invalidates a config that predates it.
-        let config: Config = toml::from_str("[ultra]\njudges = 0").expect("valid toml");
-        let ultra = config.effective_ultra();
-        assert_eq!(ultra.judges, 0);
-        assert_eq!(ultra.lenses, UltraConfig::default().lenses);
-        assert_eq!(
-            ultra.candidate_max_steps,
-            UltraConfig::default().candidate_max_steps
-        );
-        assert_eq!(ultra.timeout_secs, UltraConfig::default().timeout_secs);
-    }
-
-    #[test]
-    fn sync_defaults_when_section_missing() {
-        let config: Config = toml::from_str("model = \"m\"").expect("valid toml");
-        assert_eq!(config.sync, SyncConfig::default());
-        assert!(config.sync.source.is_none());
-
-        let config: Config =
-            toml::from_str("[sync]\nsource = \"~/bundles/w.tar.gz\"").expect("valid toml");
-        assert_eq!(config.sync.source.as_deref(), Some("~/bundles/w.tar.gz"));
-    }
-
-    #[test]
-    fn web_defaults_when_section_missing() {
-        let config: Config = toml::from_str("model = \"m\"").expect("valid toml");
-        assert_eq!(config.web, WebConfig::default());
-        assert_eq!(config.web.fetch_max_bytes, 100_000);
-        assert!(!config.web.allow_local);
-        assert_eq!(config.web.search_backend, "duckduckgo");
-        assert!(config.web.search_api_key_env.is_none());
-    }
-
-    #[test]
-    fn web_section_parses_partial_keys() {
-        let config: Config = toml::from_str(
-            "[web]\nsearch_backend = \"tavily\"\nsearch_api_key_env = \"TAVILY_API_KEY\"",
-        )
-        .expect("valid toml");
-        assert_eq!(config.web.search_backend, "tavily");
-        assert_eq!(
-            config.web.search_api_key_env.as_deref(),
-            Some("TAVILY_API_KEY")
-        );
-        assert_eq!(config.web.fetch_max_bytes, 100_000, "missing keys default");
-    }
-
-    #[test]
-    fn spinner_verbs_default_when_section_missing() {
-        let config: Config = toml::from_str("model = \"qwen3.5:9b\"").expect("valid toml");
-        assert!(config.ui.spinner_verbs.is_empty());
-        for seed in 0..64 {
-            let verb = config.ui.spinner_verb(seed);
-            assert!(UiConfig::DEFAULT_SPINNER_VERBS.contains(&verb));
-        }
-    }
-
-    #[test]
-    fn spinner_verbs_default_when_list_empty() {
-        let config: Config = toml::from_str("[ui]\nspinner_verbs = []").expect("valid toml");
-        assert!(config.ui.spinner_verbs.is_empty());
-        assert!(UiConfig::DEFAULT_SPINNER_VERBS.contains(&config.ui.spinner_verb(7)));
-    }
-
-    #[test]
-    fn spinner_verbs_custom_list_replaces_defaults() {
-        let config: Config = toml::from_str("[ui]\nspinner_verbs = [\"Pondering\", \"Musing\"]")
-            .expect("valid toml");
-        assert_eq!(config.ui.spinner_verbs, vec!["Pondering", "Musing"]);
-        for seed in 0..64 {
-            let verb = config.ui.spinner_verb(seed);
-            assert!(verb == "Pondering" || verb == "Musing");
-        }
-    }
-
-    #[test]
-    fn spinner_verb_is_deterministic_per_seed_and_varies_across_seeds() {
-        let ui = UiConfig::default();
-        assert_eq!(ui.spinner_verb(42), ui.spinner_verb(42));
-        // The hash must not collapse every seed onto one verb.
-        let first = ui.spinner_verb(0);
-        assert!((1..64).any(|seed| ui.spinner_verb(seed) != first));
-    }
-
-    #[test]
-    fn gateway_defaults_to_none_and_round_trips() {
-        // A config without a [gateway] table defaults to None / terminal only.
-        let config: Config = toml::from_str("model = \"m\"").expect("valid toml");
-        assert_eq!(config.gateway.kind, GatewayKind::None);
-        assert!(config.gateway.token_env.is_none());
-        assert!(config.gateway.allowed_chat_ids.is_empty());
-        assert_eq!(config.gateway.token_env(), GatewayConfig::DEFAULT_TOKEN_ENV);
-
-        // A Telegram gateway round-trips through TOML.
-        let raw = toml::to_string_pretty(&Config {
-            gateway: GatewayConfig {
-                kind: GatewayKind::Telegram,
-                token_env: None,
-                allowed_chat_ids: vec![7],
-            },
-            ..Config::default()
-        })
-        .expect("serialize");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.gateway.kind, GatewayKind::Telegram);
-        assert_eq!(parsed.gateway.allowed_chat_ids, vec![7]);
-    }
-
-    /// Adversarial: onboarding now pastes the key instead of naming an env
-    /// var, so the stored key must be what the provider actually reads back,
-    /// and must still lose to an exported variable (the documented override).
-    ///
-    /// Both sources are injected rather than real. Under `cfg(test)`,
-    /// [`Config::wizard_dir`] is one directory for the whole process, so
-    /// `credentials.toml` is a single file that several other tests in this
-    /// binary (`gui::settings`, `app`) write concurrently
-    /// through `credentials::store`, which is a read-modify-write. A test that
-    /// stored a key there and read it back could lose its entry to an
-    /// interleaved writer and fail for reasons that have nothing to do with
-    /// precedence. The on-disk half of the contract is covered where it
-    /// belongs and without sharing: the `store_get_remove_round_trip` and
-    /// `stored_file_is_0600` tests in `crate::credentials` both run against a
-    /// tempdir of their own.
-    #[test]
-    fn the_env_var_wins_over_a_stored_provider_key() {
-        let provider = ProviderConfig {
-            name: "test-key-precedence".to_string(),
-            kind: ProviderKind::Openai,
-            base_url: "https://example.invalid/v1".to_string(),
-            model: "m".to_string(),
-            api_key_env: Some("WIZARD_TEST_KEY_PRECEDENCE".to_string()),
-            gguf_path: None,
-            usd_per_mtok_in: None,
-            usd_per_mtok_out: None,
-        };
-        // Stand-ins for the process environment and for credentials.toml:
-        // this test neither depends on nor disturbs either.
-        fn env_is(value: &'static str) -> impl Fn(&str) -> Option<String> {
-            move |name: &str| (name == "WIZARD_TEST_KEY_PRECEDENCE").then(|| value.to_string())
-        }
-        fn stored_is(value: &'static str) -> impl Fn(&str) -> Option<String> {
-            move |name: &str| (name == "test-key-precedence").then(|| value.to_string())
-        }
-        let nothing = |_: &str| None;
-
-        // Neither stored nor exported: no key at all. This is the state
-        // onboarding used to leave behind, and it 401s on the first turn.
-        assert_eq!(provider.resolved_key_from(None, nothing, nothing), "");
-
-        // Paste-and-store, exactly as onboarding does: with no variable
-        // exported, the stored key is what goes out.
-        assert_eq!(
-            provider.resolved_key_from(None, nothing, stored_is("sk-pasted\n")),
-            "sk-pasted",
-            "a key pasted with a trailing newline still works"
-        );
-
-        // The env var overrides the stored key, trailing newline and all
-        // (`export KEY=$(cat file)`).
-        assert_eq!(
-            provider.resolved_key_from(None, env_is("sk-exported\n"), stored_is("sk-pasted")),
-            "sk-exported"
-        );
-        // …but an empty or blank export is not an override.
-        assert_eq!(
-            provider.resolved_key_from(None, env_is("   "), stored_is("sk-pasted")),
-            "sk-pasted",
-            "a blank env var must not blank out the stored key"
-        );
-        // A different provider's stored key is not this provider's key.
-        assert_eq!(
-            provider.resolved_key_from(None, nothing, |name: &str| (name == "someone-else")
-                .then(|| "sk-theirs".to_string())),
-            ""
-        );
-        // A provider with no `api_key_env` still honors the backend default.
-        let defaulted = ProviderConfig {
-            api_key_env: None,
-            ..provider.clone()
-        };
-        assert_eq!(
-            defaulted.resolved_key_from(
-                Some("WIZARD_TEST_KEY_PRECEDENCE"),
-                env_is("sk-default"),
-                nothing
-            ),
-            "sk-default"
-        );
-    }
-
-    /// `~/.wizard` holds session JSONLs (full tool output), logs and
-    /// credentials. Every directory `ensure_dirs` creates must be private the
-    /// moment it exists, not only once some credential writer happens to
-    /// tighten it.
-    ///
-    /// The mode itself, and the fact that a pre-existing loose directory is
-    /// tightened rather than left alone, belong to
-    /// [`crate::platform::secrets`] and are asserted there (exactly 0700, plus
-    /// the exFAT/CIFS case where the chmod cannot work at all). What config
-    /// owns, and what this covers, is the *set* of directories: a new one
-    /// added to `ensure_dirs` and not created privately is the regression.
-    #[test]
-    fn state_dirs_are_created_private() {
-        Config::ensure_dirs().expect("ensure_dirs");
-        for dir in [
-            Config::wizard_dir().expect("wizard dir"),
-            Config::sessions_dir().expect("sessions dir"),
-            Config::logs_dir().expect("logs dir"),
-            Config::wizard_dir().expect("wizard dir").join("running"),
-        ] {
-            assert!(
-                crate::platform::secrets::is_protected(&dir).expect("stat"),
-                "{} must not be readable by other users",
-                dir.display()
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_ollama_config_synthesizes_llamacpp() {
-        // A file with only model/ollama_host (no providers table) still
-        // parses, but the synthesized local provider is llama.cpp — Ollama
-        // is opt-in via an explicit [[providers]] entry.
-        let config =
-            Config::from_toml("model = \"qwen3.5:9b\"\nollama_host = \"http://10.0.0.5:11434\"")
-                .expect("valid toml");
-        assert!(config.providers.is_empty());
-        let active = config.active();
-        assert_eq!(active.name, "local");
-        assert_eq!(active.kind, ProviderKind::LlamaCpp);
-        assert_eq!(active.base_url, DEFAULT_LLAMACPP_HOST);
-        assert_eq!(active.model, "qwen3.5:9b");
-        assert!(active.api_key_env.is_none());
-        assert_eq!(config.ollama_host, "http://10.0.0.5:11434");
-    }
-
-    #[test]
-    fn fresh_default_synthesizes_llamacpp() {
-        // No config file at all: the synthesized provider is llama.cpp.
-        let config = Config::default();
-        let active = config.active();
-        assert_eq!(active.name, "local");
-        assert_eq!(active.kind, ProviderKind::LlamaCpp);
-        assert_eq!(active.base_url, DEFAULT_LLAMACPP_HOST);
-        assert_eq!(active.model, "qwen3.6:27b");
-        assert!(active.api_key_env.is_none());
-        assert!(active.gguf_path.is_none());
-
-        // An empty file is equivalent to no file.
-        let config = Config::from_toml("").expect("valid toml");
-        assert_eq!(config.active().kind, ProviderKind::LlamaCpp);
-    }
-
-    #[test]
-    fn saved_default_config_stays_llamacpp_on_reload() {
-        // save() writes every field, including ollama_host — its presence
-        // must not change the synthesized llama.cpp default.
-        let raw = toml::to_string_pretty(&Config::default()).expect("serialize");
-        assert!(raw.contains("ollama_host"), "save writes legacy fields");
-        let config = Config::from_toml(&raw).expect("parse back");
-        assert_eq!(config.active().kind, ProviderKind::LlamaCpp);
-    }
-
-    #[test]
-    fn llamacpp_provider_round_trips_through_toml() {
-        let original = Config {
-            providers: vec![ProviderConfig {
-                name: "local".to_string(),
-                kind: ProviderKind::LlamaCpp,
-                base_url: "http://127.0.0.1:8080".to_string(),
-                model: "qwen3-8b".to_string(),
-                api_key_env: None,
-                gguf_path: Some("/home/u/.wizard/models/qwen3-8b-q4_k_m.gguf".to_string()),
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("local".to_string()),
-            ..Config::default()
-        };
-        let raw = toml::to_string_pretty(&original).expect("serialize");
-        assert!(raw.contains("kind = \"llamacpp\""), "raw: {raw}");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.providers.len(), 1);
-        assert_eq!(parsed.providers[0].kind, ProviderKind::LlamaCpp);
-        assert_eq!(
-            parsed.providers[0].gguf_path.as_deref(),
-            Some("/home/u/.wizard/models/qwen3-8b-q4_k_m.gguf")
-        );
-        assert!(parsed.providers[0].api_key_env.is_none());
-        assert_eq!(parsed.active().kind, ProviderKind::LlamaCpp);
-    }
-
-    #[test]
-    fn xai_kinds_round_trip_through_toml() {
-        let original = Config {
-            providers: vec![
-                ProviderConfig {
-                    name: "xai".to_string(),
-                    kind: ProviderKind::Xai,
-                    base_url: "https://api.x.ai/v1".to_string(),
-                    model: "grok-4.3".to_string(),
-                    api_key_env: Some("XAI_API_KEY".to_string()),
-                    gguf_path: None,
-                    usd_per_mtok_in: None,
-                    usd_per_mtok_out: None,
-                },
-                ProviderConfig {
-                    name: "xai-account".to_string(),
-                    kind: ProviderKind::XaiOauth,
-                    base_url: "https://api.x.ai/v1".to_string(),
-                    model: "grok-4.3".to_string(),
-                    api_key_env: None,
-                    gguf_path: None,
-                    usd_per_mtok_in: None,
-                    usd_per_mtok_out: None,
-                },
-            ],
-            active_provider: Some("xai-account".to_string()),
-            ..Config::default()
-        };
-        let raw = toml::to_string_pretty(&original).expect("serialize");
-        // The serde names are what the /provider parser and Display use.
-        assert!(raw.contains("kind = \"xai\""), "raw: {raw}");
-        assert!(raw.contains("kind = \"xaioauth\""), "raw: {raw}");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.providers[0].kind, ProviderKind::Xai);
-        assert_eq!(
-            parsed.providers[0].api_key_env.as_deref(),
-            Some("XAI_API_KEY")
-        );
-        assert_eq!(parsed.providers[1].kind, ProviderKind::XaiOauth);
-        assert!(parsed.providers[1].api_key_env.is_none());
-        assert_eq!(parsed.active().kind, ProviderKind::XaiOauth);
-    }
-
-    #[test]
-    fn openrouter_kind_round_trips_through_toml() {
-        let original = Config {
-            providers: vec![ProviderConfig {
-                name: "openrouter".to_string(),
-                kind: ProviderKind::OpenRouter,
-                base_url: "https://openrouter.ai/api/v1".to_string(),
-                model: "openrouter/auto".to_string(),
-                api_key_env: Some("OPENROUTER_API_KEY".to_string()),
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("openrouter".to_string()),
-            ..Config::default()
-        };
-        let raw = toml::to_string_pretty(&original).expect("serialize");
-        // The serde name is what the /provider parser and Display use.
-        assert!(raw.contains("kind = \"openrouter\""), "raw: {raw}");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.providers[0].kind, ProviderKind::OpenRouter);
-        assert_eq!(
-            parsed.providers[0].api_key_env.as_deref(),
-            Some("OPENROUTER_API_KEY")
-        );
-        assert_eq!(parsed.active().kind, ProviderKind::OpenRouter);
-    }
-
-    #[test]
-    fn cloudflare_kind_round_trips_through_toml() {
-        let original = Config {
-            providers: vec![ProviderConfig {
-                name: "cloudflare".to_string(),
-                kind: ProviderKind::Cloudflare,
-                base_url: "https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1".to_string(),
-                model: "@cf/zai-org/glm-5.2".to_string(),
-                api_key_env: Some("CLOUDFLARE_API_TOKEN".to_string()),
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("cloudflare".to_string()),
-            ..Config::default()
-        };
-        let raw = toml::to_string_pretty(&original).expect("serialize");
-        // The serde name is what the /provider parser and Display use.
-        assert!(raw.contains("kind = \"cloudflare\""), "raw: {raw}");
-        let parsed: Config = toml::from_str(&raw).expect("parse back");
-        assert_eq!(parsed.providers[0].kind, ProviderKind::Cloudflare);
-        assert_eq!(parsed.providers[0].model, "@cf/zai-org/glm-5.2");
-        assert_eq!(
-            parsed.providers[0].api_key_env.as_deref(),
-            Some("CLOUDFLARE_API_TOKEN")
-        );
-        assert_eq!(parsed.active().kind, ProviderKind::Cloudflare);
-
-        // build() dispatches to the Cloudflare client (labeled by vendor+model),
-        // proving the wiring from config to provider.
-        let client = parsed.active().build().expect("builds a cloudflare client");
-        assert_eq!(client.label(), "cloudflare:@cf/zai-org/glm-5.2");
-    }
-
-    #[test]
-    fn provider_cost_rates_parse_and_round_trip() {
-        let raw = "\
-[[providers]]
-name = \"claude\"
-kind = \"anthropic\"
-base_url = \"https://api.anthropic.com\"
-model = \"claude-fable-5\"
-api_key_env = \"ANTHROPIC_API_KEY\"
-usd_per_mtok_in = 3.0
-usd_per_mtok_out = 15.0
-";
-        let config: Config = toml::from_str(raw).expect("valid toml");
-        let provider = &config.providers[0];
-        assert_eq!(provider.usd_per_mtok_in, Some(3.0));
-        assert_eq!(provider.usd_per_mtok_out, Some(15.0));
-
-        let serialized = toml::to_string_pretty(&config).expect("serialize");
-        let parsed: Config = toml::from_str(&serialized).expect("parse back");
-        assert_eq!(parsed.providers[0].usd_per_mtok_in, Some(3.0));
-        assert_eq!(parsed.providers[0].usd_per_mtok_out, Some(15.0));
-
-        // Unset rates stay absent on the wire.
-        let bare: Config = toml::from_str("model = \"m\"").expect("valid toml");
-        assert_eq!(bare.active().usd_per_mtok_in, None);
-        let serialized = toml::to_string_pretty(&bare).expect("serialize");
-        assert!(!serialized.contains("usd_per_mtok"), "{serialized}");
-    }
-
-    #[test]
-    fn provider_kind_display_matches_serde_names() {
-        for (kind, name) in [
-            (ProviderKind::LlamaCpp, "llamacpp"),
-            (ProviderKind::Ollama, "ollama"),
-            (ProviderKind::Openai, "openai"),
-            (ProviderKind::Anthropic, "anthropic"),
-            (ProviderKind::OpenRouter, "openrouter"),
-            (ProviderKind::Xai, "xai"),
-            (ProviderKind::XaiOauth, "xaioauth"),
-            (ProviderKind::Cloudflare, "cloudflare"),
-        ] {
-            assert_eq!(kind.to_string(), name);
-            let json = serde_json::to_value(kind).expect("serialize kind");
-            assert_eq!(
-                json,
-                serde_json::json!(name),
-                "Display and serde must agree"
-            );
-        }
-    }
-
-    #[test]
-    fn active_selects_by_name_and_falls_back_to_first() {
-        let providers = vec![
-            ProviderConfig {
-                name: "local".to_string(),
-                kind: ProviderKind::Ollama,
-                base_url: "http://127.0.0.1:11434".to_string(),
-                model: "qwen3.6:27b".to_string(),
-                api_key_env: None,
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            },
-            ProviderConfig {
-                name: "claude".to_string(),
-                kind: ProviderKind::Anthropic,
-                base_url: "https://api.anthropic.com".to_string(),
-                model: "claude-fable-5".to_string(),
-                api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            },
-        ];
-
-        // Explicit selection by name.
-        let config = Config {
-            providers: providers.clone(),
-            active_provider: Some("claude".to_string()),
-            ..Config::default()
-        };
-        assert_eq!(config.active().name, "claude");
-        assert_eq!(config.active().kind, ProviderKind::Anthropic);
-
-        // Unset active_provider falls back to the first.
-        let config = Config {
-            providers: providers.clone(),
-            active_provider: None,
-            ..Config::default()
-        };
-        assert_eq!(config.active().name, "local");
-
-        // Unknown active_provider also falls back to the first.
-        let config = Config {
-            providers,
-            active_provider: Some("missing".to_string()),
-            ..Config::default()
-        };
-        assert_eq!(config.active().name, "local");
-    }
-
-    #[test]
-    fn active_provider_mismatch_flags_unknown_names_only() {
-        let provider = ProviderConfig {
-            name: "local".to_string(),
-            kind: ProviderKind::LlamaCpp,
-            base_url: DEFAULT_LLAMACPP_HOST.to_string(),
-            model: "qwen3.6:27b".to_string(),
-            api_key_env: None,
-            gguf_path: None,
-            usd_per_mtok_in: None,
-            usd_per_mtok_out: None,
-        };
-
-        // Resolving name / unset name: no mismatch.
-        let config = Config {
-            providers: vec![provider.clone()],
-            active_provider: Some("local".to_string()),
-            ..Config::default()
-        };
-        assert_eq!(config.active_provider_mismatch(), None);
-        let config = Config {
-            providers: vec![provider.clone()],
-            active_provider: None,
-            ..Config::default()
-        };
-        assert_eq!(config.active_provider_mismatch(), None);
-
-        // Unknown name (typo / removed provider): flagged.
-        let config = Config {
-            providers: vec![provider],
-            active_provider: Some("claud".to_string()),
-            ..Config::default()
-        };
-        assert_eq!(config.active_provider_mismatch().as_deref(), Some("claud"));
-
-        // A named provider with no providers configured is also a mismatch —
-        // the synthesized local default runs instead.
-        let config = Config {
-            active_provider: Some("ghost".to_string()),
-            ..Config::default()
-        };
-        assert_eq!(config.active_provider_mismatch().as_deref(), Some("ghost"));
-    }
-
-    #[test]
-    fn env_model_overrides_active_provider_when_configured() {
-        let mut config = Config {
-            providers: vec![ProviderConfig {
-                name: "openai".to_string(),
-                kind: ProviderKind::Openai,
-                base_url: "https://api.openai.com/v1".to_string(),
-                model: "gpt-4o".to_string(),
-                api_key_env: Some("OPENAI_API_KEY".to_string()),
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("openai".to_string()),
-            ..Config::default()
-        };
-        config.apply_env_from(|name| match name {
-            "WIZARD_MODEL" => Some("gpt-4o-mini".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.active().model, "gpt-4o-mini");
-        assert_eq!(config.model, "gpt-4o-mini", "legacy field also updated");
-    }
-
-    #[test]
-    fn unknown_keys_are_ignored() {
-        let config: Config =
-            toml::from_str("model = \"m\"\nfuture_option = true").expect("valid toml");
-        assert_eq!(config.model, "m");
-    }
-
-    #[test]
-    fn env_overrides_model_and_host() {
-        let mut config = Config::default();
-        config.apply_env_from(|name| match name {
-            "WIZARD_MODEL" => Some("  llama3.3:70b  ".to_string()),
-            "WIZARD_OLLAMA_HOST" => Some("http://10.0.0.5:11434///".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.model, "llama3.3:70b", "model is trimmed");
-        assert_eq!(
-            config.ollama_host, "http://10.0.0.5:11434",
-            "host trailing slashes are trimmed"
-        );
-    }
-
-    #[test]
-    fn env_ollama_host_does_not_change_synthesized_kind() {
-        // The env var updates the field (for explicitly configured Ollama
-        // providers) but the synthesized local provider stays llama.cpp.
-        let mut config = Config::default();
-        config.apply_env_from(|name| match name {
-            "WIZARD_OLLAMA_HOST" => Some("http://10.0.0.5:11434".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.ollama_host, "http://10.0.0.5:11434");
-        assert_eq!(config.active().kind, ProviderKind::LlamaCpp);
-    }
-
-    #[test]
-    fn env_llamacpp_host_overrides_synthesized_base_url() {
-        let mut config = Config::from_toml("model = \"qwen3.5:9b\"").expect("valid toml");
-        config.apply_env_from(|name| match name {
-            "WIZARD_OLLAMA_HOST" => Some("http://10.0.0.5:11434".to_string()),
-            "WIZARD_LLAMACPP_HOST" => Some("http://10.0.0.5:8080///".to_string()),
-            _ => None,
-        });
-        let active = config.active();
-        assert_eq!(active.kind, ProviderKind::LlamaCpp);
-        assert_eq!(
-            active.base_url, "http://10.0.0.5:8080",
-            "host trailing slashes are trimmed"
-        );
-        assert_eq!(config.ollama_host, "http://10.0.0.5:11434");
-    }
-
-    #[test]
-    fn env_gguf_path_feeds_synthesized_and_active_llamacpp_provider() {
-        // Synthesized provider picks up the path.
-        let mut config = Config::default();
-        config.apply_env_from(|name| match name {
-            "WIZARD_GGUF_PATH" => Some("  /models/a.gguf  ".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.gguf_path.as_deref(), Some("/models/a.gguf"));
-        assert_eq!(config.active().gguf_path.as_deref(), Some("/models/a.gguf"));
-
-        // An explicitly configured active llamacpp provider is updated too;
-        // other kinds are left alone.
-        let mut config = Config {
-            providers: vec![ProviderConfig {
-                name: "local".to_string(),
-                kind: ProviderKind::LlamaCpp,
-                base_url: "http://127.0.0.1:8080".to_string(),
-                model: "qwen3-8b".to_string(),
-                api_key_env: None,
-                gguf_path: None,
-                usd_per_mtok_in: None,
-                usd_per_mtok_out: None,
-            }],
-            active_provider: Some("local".to_string()),
-            ..Config::default()
-        };
-        config.apply_env_from(|name| match name {
-            "WIZARD_GGUF_PATH" => Some("/models/b.gguf".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.active().gguf_path.as_deref(), Some("/models/b.gguf"));
-    }
-
-    #[test]
-    fn env_unset_keeps_existing_values() {
-        let mut config = Config::default();
-        config.apply_env_from(|_| None);
-        assert_eq!(config.model, "qwen3.6:27b");
-        assert_eq!(config.ollama_host, "http://127.0.0.1:11434");
-        assert_eq!(config.llamacpp_host, DEFAULT_LLAMACPP_HOST);
-        assert!(config.gguf_path.is_none());
-    }
-
-    #[test]
-    fn env_empty_values_are_ignored() {
-        let mut config = Config::default();
-        config.apply_env_from(|name| match name {
-            "WIZARD_MODEL" => Some("   ".to_string()),
-            "WIZARD_OLLAMA_HOST" => Some("".to_string()),
-            "WIZARD_LLAMACPP_HOST" => Some("  ".to_string()),
-            "WIZARD_GGUF_PATH" => Some("".to_string()),
-            _ => None,
-        });
-        assert_eq!(config.model, "qwen3.6:27b");
-        assert_eq!(config.ollama_host, "http://127.0.0.1:11434");
-        assert_eq!(config.llamacpp_host, DEFAULT_LLAMACPP_HOST);
-        assert!(config.gguf_path.is_none());
-        assert_eq!(
-            config.active().kind,
-            ProviderKind::LlamaCpp,
-            "empty env values do not opt into Ollama"
-        );
-    }
-
-    #[test]
-    fn cli_mode_overrides_config() {
-        let mut config = Config::default();
-        config.apply_cli(&cli(&["--mode", "sovereign"]));
-        assert_eq!(config.mode, Mode::Sovereign);
-        assert_eq!(
-            config.max_steps,
-            StepBudget::UNLIMITED,
-            "sovereign does not cap an unlimited budget"
-        );
-    }
-
-    #[test]
-    fn plan_flag_sets_plan_first() {
-        let mut config = Config::default();
-        assert!(!config.plan_first);
-        assert!(!config.plan_each_cycle);
-        config.apply_cli(&cli(&["--plan"]));
-        assert!(config.plan_first);
-        assert!(!config.plan_each_cycle, "--plan never affects cycles");
-
-        // The flag only sets, never clears, the config value.
-        let mut config = Config {
-            plan_first: true,
-            ..Config::default()
-        };
-        config.apply_cli(&cli(&[]));
-        assert!(config.plan_first);
-    }
-
-    #[test]
-    fn continuous_flag_forces_sovereign() {
-        let mut config = Config::default();
-        config.apply_cli(&cli(&["--continuous"]));
-        assert_eq!(config.mode, Mode::Sovereign);
-        assert!(config.continuous);
-        assert_eq!(config.max_steps, StepBudget::UNLIMITED);
-    }
-
-    #[test]
-    fn sovereign_keeps_explicitly_higher_max_steps() {
-        let mut config = Config {
-            max_steps: StepBudget::new(250),
-            ..Config::default()
-        };
-        config.apply_cli(&cli(&["--mode", "sovereign"]));
-        assert_eq!(config.max_steps, StepBudget::new(250));
-    }
-
-    #[test]
-    fn sovereign_raises_a_capped_budget_to_its_floor() {
-        let mut config = Config {
-            max_steps: StepBudget::new(25),
-            ..Config::default()
-        };
-        config.apply_cli(&cli(&["--mode", "sovereign"]));
-        assert_eq!(config.max_steps, StepBudget::new(100));
-    }
-
-    #[test]
-    fn step_budget_zero_is_unlimited() {
-        let unlimited = StepBudget::new(0);
-        assert_eq!(unlimited, StepBudget::UNLIMITED);
-        assert_eq!(unlimited, StepBudget::default());
-        assert_eq!(unlimited.cap(), None);
-        assert_eq!(unlimited.last_step(), u32::MAX);
-        assert_eq!(unlimited.to_string(), "no step limit");
-        // Unattended posture never shrinks an unlimited budget.
-        assert_eq!(unlimited.for_mode(Mode::Sovereign), StepBudget::UNLIMITED);
-
-        let capped = StepBudget::new(25);
-        assert_eq!(capped.cap(), Some(25));
-        assert_eq!(capped.last_step(), 25);
-        assert_eq!(capped.to_string(), "25 steps");
-        assert_eq!(capped.for_mode(Mode::Genie), capped);
-    }
-
-    #[test]
-    fn step_budget_is_a_bare_integer_in_toml() {
-        let config: Config = toml::from_str("max_steps = 7").expect("valid toml");
-        assert_eq!(config.max_steps, StepBudget::new(7));
-        let raw = toml::to_string_pretty(&config).expect("serialize");
-        assert!(raw.contains("max_steps = 7"), "{raw}");
-
-        let config: Config = toml::from_str("max_steps = 0").expect("valid toml");
-        assert!(config.max_steps.cap().is_none(), "0 opts out of the limit");
-    }
-
-    #[test]
-    fn unknown_keys_are_ignored_and_not_written_back() {
-        // Old configs carried an `auto_approve` key for the since-removed
-        // approval gate. Unknown keys must still load (no `deny_unknown_fields`)
-        // and never reappear on re-serialization.
-        let config: Config = toml::from_str("auto_approve = false").expect("old key parses");
-        let raw = toml::to_string_pretty(&config).expect("serialize");
-        assert!(
-            !raw.contains("auto_approve"),
-            "deprecated key is not written back: {raw}"
-        );
-    }
-
-    #[test]
-    fn a_legacy_gui_step_budget_still_loads() {
-        // The GUI used to keep a budget of its own (`[gui] max_steps`). It now
-        // runs on the shared one like every other surface, and a config still
-        // carrying the old section must load — not fail — and not gain it back.
-        let config: Config =
-            toml::from_str("max_steps = 12\n[gui]\nmax_steps = 250\n").expect("old section parses");
-        assert_eq!(config.max_steps, StepBudget::new(12));
-        let raw = toml::to_string_pretty(&config).expect("serialize");
-        assert!(
-            !raw.contains("[gui]"),
-            "the section is not written back: {raw}"
-        );
-    }
-
-    #[test]
-    fn no_flags_leaves_config_untouched() {
-        let mut config = Config::default();
-        config.apply_cli(&cli(&[]));
-        assert_eq!(config.mode, Mode::Genie);
-        assert_eq!(config.max_steps, StepBudget::UNLIMITED);
-    }
-
-    #[test]
-    fn config_sovereign_mode_raises_a_capped_budget_without_flags() {
-        let mut config = Config {
-            mode: Mode::Sovereign,
-            max_steps: StepBudget::new(10),
-            ..Config::default()
-        };
-        config.apply_cli(&cli(&[]));
-        assert_eq!(config.max_steps, StepBudget::new(100));
-    }
-}
+#[path = "config/tests.rs"]
+mod tests;

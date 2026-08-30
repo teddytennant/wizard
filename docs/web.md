@@ -1,6 +1,17 @@
 # Web tools
 
-Three native tools give the agent network research access: `web_fetch` (read a page), `web_search` (query a search engine), and `x_search` (search X / Twitter via xAI). All are read-only, so they stay available in plan mode. Settings for fetch and web search live in the `[web]` section of `~/.wizard/config.toml`; `x_search` always uses xAI credentials and does not use `search_backend`.
+Three tools give the agent network research access: `web_fetch` (read a page), `web_search` (query a search engine), and `x_search` (search X / Twitter via xAI). All are read-only, so they stay available in plan mode. Settings for fetch and web search live in the `[web]` section of `~/.wizard/config.toml`; `x_search` always uses xAI credentials and does not use `search_backend`.
+
+They are a plugin (`--features tool-web`, on by default). A build without it
+has no `web_fetch`, no `web_search` and no `x_search`, and the model is not
+told about them — an absent tool is absent from the roster rather than
+advertised and broken. What stays in every build is the plumbing underneath:
+the HTTP client, the SSRF guard below, the hand-walked redirect chain and the
+body cap are `src/tools/http.rs`, because a Lua plugin's `wizard.http` and
+`generate_image`'s downloader use them too. `[web]` in `config.toml` stays as
+well, for the same reason: `allow_local` and `fetch_max_bytes` are promises
+about what the process does on the network, not settings for one tool. See
+[plugins.md](plugins.md).
 
 ## web_fetch
 
@@ -10,7 +21,7 @@ Fetch a URL over HTTP(S) and return its content.
 - HTML pages are converted to markdown; other text content types (plain text, JSON, XML, ...) are returned as-is; binary content is summarized, not dumped
 - Conversion keeps the readable content: the `<main>`/`<article>` region when the page marks one, with script/style/nav/footer chrome and image syntax stripped
 - A JavaScript bot-challenge interstitial returns a one-line error instead of challenge markup. It is detected by marker (`_cf_chl_opt`, `cf-browser-verification`, Cloudflare's "Attention Required!", "Checking if the site connection is secure", or "Just a moment" *together with* "enable JavaScript and cookies") and only when the converted page is under 2 000 bytes, so a real article that happens to quote one of those strings is not thrown away
-- Sends a desktop browser user agent, follows redirects (max 10), 10-second connect timeout and a 30-second overall timeout
+- Sends a desktop browser user agent, follows redirects (max 10), 10-second connect timeout and a 30-second overall timeout. The 30 seconds is the budget for the *whole* redirect chain, not per hop: a reqwest timeout is per request, so ten hops used to be able to run for five minutes under a nominal thirty seconds, which a hostile server controls both halves of
 - The response body is read up to `fetch_max_bytes` (default 100 000) and marked when capped
 
 ### SSRF guard
@@ -43,7 +54,7 @@ The default backend is `duckduckgo`, which needs no key, so `web_search` works o
 
 A key pasted via `/settings`/onboarding is stored under the backend name in `~/.wizard/credentials.toml` and read at call time. As a fallback (e.g. CI), `search_api_key_env` may name an environment variable holding the key instead; a stored key takes precedence.
 
-Search endpoints get their redirects walked by hand too, since these clients follow nothing on their own. A redirect that stays on the configured host (and does not downgrade `https` to `http`) is followed with the request replayed as-is; one that leaves the host is an error, so an API key in a header or a request body is never handed to a host you did not configure. Either way a `3xx` cannot be mistaken for a page with no results in it.
+Search endpoints get their redirects walked by hand too, since these clients follow nothing on their own. A redirect that stays on the configured host (and does not downgrade `https` to `http`) is followed with the request replayed as-is; one that leaves the host is an error, so an API key in a header or a request body is never handed to a host you did not configure. Either way a `3xx` cannot be mistaken for a page with no results in it. The whole chain shares one 30-second budget, and the reply is read up to 2 MB and *refused* past that rather than truncated — a truncated search page parses to fewer results, or none, and would otherwise report success.
 
 ### xAI Grok web search
 

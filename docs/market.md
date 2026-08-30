@@ -28,6 +28,8 @@ gh auth login
 
 Wizard checks `gh auth status` before doing anything and tells you what to fix if authentication is missing. It never invents or stores credentials.
 
+Publish is a plugin (`--features tool-publish`, on by default and in every published binary). A build compiled without it has no `publish` tool, and `/publish` and `wizard --publish` say which flag brings it back rather than doing nothing. See [docs/plugins.md](plugins.md).
+
 ---
 
 ## The install one-liner

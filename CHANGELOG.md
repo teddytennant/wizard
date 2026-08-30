@@ -6,6 +6,202 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-29
+
+Wizard becomes a plugin host. The agent loop, the
+provider transport, the terminal UI and a new kernel stay in the binary;
+everything else becomes a plugin that registers itself, and a plugin is an
+in-tree Rust module behind a cargo feature, a LuaJIT script, or a JavaScript
+one. See [plugins.md](docs/plugins.md).
+
+The plugin API is not stable yet: a script plugin written against 3.0 may
+need changes in 3.1.
+
+### Added
+
+- **A plugin kernel** (`src/kernel/`). One `Ctx` that tools, commands,
+  providers, event handlers and services all register through, an async event
+  bus whose handlers can observe, rewrite or veto, and exact disposal: unloading
+  a plugin drops every registration it made, in one step. A teardown that panics
+  does not stop the unload.
+- **LuaJIT plugins with long-lived VMs.** A plugin's VM is created at load and
+  dropped at unload, so a Lua plugin can hold state between calls -- which the
+  existing scripted tools, each getting a fresh throwaway VM, cannot. Host calls
+  are async, so a plugin awaits a fetch or a model call as straight-line code.
+  The sandbox is the one `src/tools/lua.rs` already had: a runaway plugin is
+  stopped on its deadline whether it spins bare, spins after an await, or spins
+  inside a `pcall`.
+- **Every LLM provider is a plugin.** All nine shipped kinds now live in
+  `src/plugins/` behind seven cargo features, one per *backend* rather than per
+  kind: `xai`/`xaioauth` are one endpoint differing only in where the bearer
+  token comes from, and `openrouter` is the `openai` kind with a fixed base URL.
+  `src/llm/builtin.rs` is gone and the registry starts empty. Each feature is
+  independently removable, checked by `contrib/check-provider-plugins.sh`, which
+  builds and tests every leave-one-out set rather than trusting that it compiles.
+- **The window, the graph explorer and the web tools are plugins.**
+  `src/native/` and `src/gui/` moved under `src/plugins/` behind the existing
+  `native` feature, and `wizard gui` is no longer a call to `native::run` from
+  the dispatch chain: the window provides an entrypoint service and core injects
+  one, so core holds the name `gui` and the sentence printed when nothing
+  answers to it, and never the type. `graph` and `tool-web` are their own
+  features. Each is independently removable, checked by
+  `contrib/check-tool-plugins.sh`.
+- **A Lua plugin can do real work.** `wizard.http`, `wizard.process`,
+  `wizard.model`, `wizard.ui`, `wizard.agent` and `wizard.fs` are wired to the
+  implementations Wizard already had -- the same HTTP client and SSRF guard as
+  `web_fetch`, the same process-group kill as `execute`, the same subagent tool
+  the model calls -- rather than second copies. A capability a plugin did not
+  declare is absent, not present-and-refusing. Model spend is billed to the
+  session the way a subagent's is, and a plugin's prompt cannot drive
+  compaction. In-flight fetches, completions and child processes all observe the
+  turn's cancel handle.
+- **A JavaScript backend, so a plugin can be written in TypeScript.** QuickJS
+  (`rquickjs`) behind `plugin-js`, a peer of the Lua backend rather than a
+  second plugin contract: the same `Ctx`, the same `WizardHost`, the same
+  capability rules, the same deadline. `docs/wizard-plugin.d.ts` types the API
+  for a TypeScript author, and is checked with `tsc`. Measured, because the
+  answer was not the expected one: a JS call crosses in 1.19us against Lua's
+  1.60us and a Rust no-op's 42ns -- `mlua` drives every scripted body as an
+  async coroutine whether it yields or not, and a JS function that returns
+  without awaiting skips that. Both are noise beside a `fork` and both are wrong
+  inside a redraw, so the rule in [plugins.md](docs/plugins.md) is unchanged.
+  Costs 1.5 MB.
+- **The mesh, the gateway, the fleet, the ACP server and the llama-server
+  lifecycle are plugins.** The mesh was the hardest: 30 core references, of
+  which `src/app/tee.rs` was 685 lines of mesh glue living in core, now a
+  `SessionTee` trait and an injected factory. `wizard peers` keeps its own
+  `clap::Parser` and its own `Trust` enum -- the argument list crosses
+  unparsed, because a second spelling of a trust decision is how a fourth state
+  appears. `server.rs` and `local_setup.rs` folded into `provider-llamacpp`
+  rather than becoming a feature under it: a build that registers
+  `kind = "llamacpp"` and then cannot start one degrades in behaviour instead
+  of presence, which is the one degrade path this architecture does not have.
+- **`git_status`, `git_diff` and `publish` are Lua plugins.** The first Rust
+  code deleted in favour of a script. `publish` came out better rather than
+  smaller: every step of the Rust was a blocking `Command::..output()` inside an
+  `async fn`, with no timeout, no cancel handle and no process group, so a
+  `git push` parked the executor and Ctrl-C did nothing. It also became
+  testable -- `wizard.process.exec` is an interface, so a whole publish now runs
+  in tests with no `gh` on the machine.
+- **`--no-default-features` is meaningful.** It builds, passes its own suite, and
+  runs, with the Anthropic provider genuinely absent -- `kind = "anthropic"`
+  degrades to a named error rather than a panic. Removing any one plugin has to
+  leave a tree that still works, and this is the leg that proves it.
+- **`wizard plugin`.** What this binary has, one row per plugin: which backend
+  it runs on (Rust, Lua or JavaScript), whether it ships in the binary or was
+  installed, and what it registered. `wizard plugin show <name>` adds the
+  capabilities it declared and what each one grants; `wizard plugin missing`
+  lists what a rebuild would add and the flag for each; `wizard plugin profiles`
+  names the build profiles and marks the one you have. Read-only, `--json` on
+  every verb, and it reads the running kernel rather than a `#[cfg]` -- so it
+  answers on a `--no-default-features` build too, which is the build it is most
+  for.
+- **Install profiles.** `WIZARD_PROFILE` picks a plugin set when installing from
+  source: `minimal` (one API key and git), `pi` (a local model, no cloud
+  provider, no JS backend), `server` (the stock build without the P2P mesh),
+  `default`, `full` (default plus the window). Opt-in: a stock `install.sh` run
+  and a stock `cargo install --path .` pass no feature flags and are unchanged.
+
+### Changed
+
+- **Providers are a registry, not an enum.** `ProviderKind` is now the string
+  that was already on disk plus a descriptor lookup, so a provider can be
+  registered by a plugin instead of named in core. `config.rs` imports no
+  concrete provider and lost the nine-arm match that built them. Four separately
+  drifting tables that were all asking "does this backend need a key, an account,
+  or nothing?" collapsed into one field; the `default_env` half of that had been
+  duplicated between `config.rs` and `gui/settings.rs` with nothing checking that
+  the two agreed.
+- **An unknown provider `kind` now loads and fails at use.** The enum refused it
+  at deserialization. A provider that lives in a plugin left out of a profile
+  must not make the whole config unparseable, so the error moved to the point of
+  use and names the kinds that are installed. An empty `kind` is still refused at
+  parse.
+- **Slash commands are extensible.** `SlashCommand` keeps its variants -- they
+  carry parsed arguments the one dispatcher matches exhaustively -- and gains a
+  `Plugin { name, args }` variant backed by a runtime registry. Completion, help,
+  dispatch and per-surface gating all read one merged list. A plugin cannot take
+  a name a built-in owns.
+- **Onboarding, the provider pickers and `wizard --help` read the registries.**
+  All three were hand-written lists that offered providers and subcommands a
+  stripped build did not have, and then failed when one was chosen. Menu
+  dispatch also moved from index to per-row: the first time such a menu is
+  filtered, dropping row 0 makes row 1 run row 0's arm, which compiles and looks
+  on screen like the wrong provider was clicked. `wizard help <sub>` now prints
+  the plugin's own help rather than core's `[ARGS]...` stub.
+- **The OpenAI wire protocol is separate from the OpenAI provider.**
+  `src/llm/wire.rs` holds the request shaping, SSE decoding and tool-call
+  assembly that OpenRouter, xAI, Cloudflare, llama.cpp and ChatGPT all build on;
+  `src/llm/openai.rs` is what is true of `api.openai.com` and nothing else.
+
+### Breaking
+
+A stock build behaves as 2.x did: every plugin is on by default, and
+`cargo install --path .` still produces the same Wizard. What follows is what
+changes anyway, and what changes if you strip a feature.
+
+- **An unknown provider `kind` is no longer a parse error.** It loads, and fails
+  when something tries to use it, naming the kinds this build installed.
+  **What breaks:** a typo in `kind` used to stop Wizard at startup with a
+  deserialization error naming the line. Now the config parses, the session
+  starts, and the complaint arrives at the first request or at `wizard doctor`.
+  The trade is deliberate: a provider that lives in a plugin somebody left out
+  must not make the whole config unparseable. An empty `kind` is still refused
+  at parse.
+- **`wizard --help` lists only the plugin subcommands this build has.** `peers`,
+  `acp` and `fleet` disappear from the table when their feature is off; `gui`
+  stays, because it is off by default and ships as its own release asset, so its
+  row is how people learn it exists. **What breaks:** a script grepping
+  `wizard --help` for a subcommand name gets nothing on a stripped build. The
+  subcommand still parses and still answers with a message naming the feature
+  that would restore it, so `wizard acp` fails the same way it always did.
+- **`wizard --publish` prints the publish tool's summary** instead of its own
+  `Fork:`/`Branch:` block. **What breaks:** anything parsing those two labels out
+  of stdout. There is one summary now rather than five copies that had already
+  drifted apart across the tool, the TUI, the window, the gateway and the CLI.
+- **`publish` is in the base tool set**, so a subagent and a `run_code` program
+  can call it. **What breaks:** nothing today refuses that and `gh` auth still
+  gates the actual push, but it is a real widening of what an agent can reach
+  without being asked.
+- **`/server` is described as "manage a model server running on this machine"**
+  rather than naming llama-server, and the "not applicable" and start-failure
+  wordings are now identical across the TUI, the window and the gateway.
+  **What breaks:** only text somebody was matching on.
+- **Tool order in the roster changed.** Plugin tools install after native,
+  scripted and MCP ones, so `web_fetch` and friends now appear at the end.
+  Stable within a build, so there is no prompt-cache effect, but the order a
+  model sees is not the order it saw in 2.x.
+- **The binary is about 1.5 MB larger** (23.8 MB to 25.4 MB) because the
+  JavaScript backend ships by default. `--no-default-features` and the profiles
+  below are how you get it back.
+
+### Fixed
+
+- **A web search read an unbounded response.** Three of the five search backends
+  point at an operator-supplied `base_url`, and the search path handed its
+  response straight to `.text()`/`.json()`, which read to EOF -- while the fetch
+  path next to it had always capped. Search responses are now capped at 2 MB and
+  *refused* past it rather than truncated, because a truncated result page parses
+  to no results and reports success.
+- **A redirect chain could outrun its timeout by ten times.** `FETCH_TIMEOUT`
+  was applied per `send()`, so ten hops under a nominal 30-second budget could
+  run for five minutes. Both redirect walkers now take a wall-clock budget for
+  the whole chain.
+- **A plugin capability did not mean what it said.** `filesystem` and `process`
+  each opened the full Lua standard library, and the narrowing that takes the
+  other one's names back left `package` in place. So a plugin that declared
+  `filesystem` -- the mildest thing a text-munging plugin asks for -- could call
+  `package.loadlib`, map a native library into the process and run it, which is
+  every capability at once and is not any of the six. `require` reached the same
+  loader through `package.cpath`. Both are now removed from every plugin
+  whatever it declared, because no grant in the table means "load and execute
+  arbitrary native code". Locally authored scripted tools are unaffected: they
+  do not run through the plugin host, and their author is the user.
+- **`/provider add` accepted fewer kinds than the config file did.** Its
+  hand-written list of eight omitted `chatgptoauth`, so it rejected a spelling
+  Wizard itself would load. The list and its usage string are generated from the
+  registry now, so the two cannot drift again.
+
 ## [2.1.2] - 2026-08-23
 
 ### Fixed
@@ -236,6 +432,7 @@ An adversarial audit ran against 2.0.0 before release. Its findings, all fixed h
 
   What is *not* affected: `wizard peers` and the mesh itself are unchanged, and the model and layout under the explorer (`src/graph/`) keep building and keep running their tests. The code is wired out, not deleted — `src/native/graph/mod.rs` lists the four seams that put it back, and `the_window_has_no_route_into_the_graph_explorer` fails the build if one of them returns by accident.
 
+[3.0.0]: https://github.com/teddytennant/wizard/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/teddytennant/wizard/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/teddytennant/wizard/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/teddytennant/wizard/compare/v2.0.1...v2.1.0

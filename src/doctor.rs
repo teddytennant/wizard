@@ -4,7 +4,7 @@
 //! servers handshake, tools registered, hooks parse, state directories
 //! writable, checkpoint index sane — and prints one `✓` / `✗` / `–` line
 //! per check. Provider probes are capped at [`PROBE_TIMEOUT`] and MCP
-//! handshakes at the runtime's own [`crate::mcp::CONNECT_TIMEOUT`], so
+//! handshakes at the runtime's own connect budget, so
 //! doctor can never hang. The CLI exits 0 when nothing failed, 1 otherwise;
 //! skipped (`–`) checks are not failures.
 //!
@@ -22,7 +22,7 @@ use crate::config::{Config, ProviderConfig};
 use crate::tools::registry::ToolRegistry;
 
 /// Cap on every provider health probe. MCP handshakes use
-/// [`crate::mcp::CONNECT_TIMEOUT`] instead — the same budget the runtime
+/// the MCP client's own connect budget instead — the same budget the runtime
 /// allows, so a slow-starting `npx`/`uvx` server that works in the app does
 /// not fail doctor.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -636,12 +636,12 @@ pub fn check_gateway_allow_list(config: &Config) -> Check {
              your chat id and add it under [gateway] in ~/.wizard/config.toml",
         );
     }
-    // The group-chat note, in the words `crate::gateway::group_chat_warning`
+    // The group-chat note, in the words `crate::config::group_chat_warning`
     // gives every surface that has to say it. `pass`, not a failure: allow-
     // listing a group is a legitimate thing to configure deliberately and
     // doctor must not refuse a working setup. But it is the check most worth
     // surfacing here, because after setup nothing else ever tells the operator.
-    if let Some(warning) = crate::gateway::group_chat_warning(ids) {
+    if let Some(warning) = crate::config::group_chat_warning(ids) {
         return Check::pass(
             label,
             format!("{} chat id(s) allowed — note: {warning}", ids.len()),
@@ -767,11 +767,18 @@ async fn check_provider(provider: &ProviderConfig) -> Check {
     }
 }
 
-/// Every `[[server]]` in `mcp.toml` spawns and completes the MCP handshake
-/// within the runtime's [`crate::mcp::CONNECT_TIMEOUT`], so a server that
-/// works in the app never fails doctor on startup time alone.
+/// Every `[[server]]` in `mcp.toml` completes the MCP handshake, at the same
+/// budget a session connects under — so a server that works in the app never
+/// fails doctor on startup time alone.
+///
+/// The connect is [`crate::mcp::probe`]'s and so is every word of the detail:
+/// the protocol, the timeout and what is worth saying about a server that
+/// answered all belong to whatever implements the client. What doctor keeps is
+/// the row, the label, and the decision that a failed handshake is a failed
+/// *check* — which is the [`crate::server`] split one diagnostic further
+/// along. On a build with no MCP client the failure names the feature, because
+/// somebody who wrote a `[[server]]` entry meant it.
 async fn check_mcp_servers(path: &Path) -> Vec<Check> {
-    let connect_timeout = crate::mcp::CONNECT_TIMEOUT;
     let config = match crate::mcp::McpConfig::load(path) {
         Ok(config) => config,
         Err(err) => return vec![Check::fail("mcp", format!("{err:#}"))],
@@ -782,29 +789,10 @@ async fn check_mcp_servers(path: &Path) -> Vec<Check> {
     let mut checks = Vec::new();
     for server in config.servers {
         let label = format!("mcp {}", server.name);
-        let check =
-            match tokio::time::timeout(connect_timeout, crate::mcp::McpConnection::connect(server))
-                .await
-            {
-                Ok(Ok(connection)) => {
-                    let detail = match tokio::time::timeout(
-                        connect_timeout,
-                        connection.list_tools(),
-                    )
-                    .await
-                    {
-                        Ok(Ok(tools)) => format!("handshake ok, {} tool(s)", tools.len()),
-                        _ => "handshake ok".to_string(),
-                    };
-                    Check::pass(label, detail)
-                }
-                Ok(Err(err)) => Check::fail(label, format!("{err:#}")),
-                Err(_) => Check::fail(
-                    label,
-                    format!("no handshake within {}s", connect_timeout.as_secs()),
-                ),
-            };
-        checks.push(check);
+        checks.push(match crate::mcp::probe(&server).await {
+            Ok(detail) => Check::pass(label, detail),
+            Err(err) => Check::fail(label, format!("{err:#}")),
+        });
     }
     checks
 }
@@ -2435,7 +2423,7 @@ mod tests {
         // the probe to be skipped; a nonsense name guarantees that.
         let provider = ProviderConfig {
             name: "wizard-doctor-test-provider-never-stored".to_string(),
-            kind: crate::config::ProviderKind::Openai,
+            kind: crate::config::ProviderKind::OPENAI,
             base_url: "https://example.invalid/v1".to_string(),
             model: "gpt-test".to_string(),
             api_key_env: Some("WIZARD_DOCTOR_TEST_KEY_THAT_IS_NEVER_SET".to_string()),
@@ -2453,7 +2441,7 @@ mod tests {
     fn active_provider_check_flags_unknown_selection() {
         let provider = ProviderConfig {
             name: "local".to_string(),
-            kind: crate::config::ProviderKind::LlamaCpp,
+            kind: crate::config::ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:11435".to_string(),
             model: "qwen3.6:27b".to_string(),
             api_key_env: None,
@@ -3121,8 +3109,8 @@ mod tests {
             "TAVILY_API_KEY",
             crate::config::GatewayConfig::DEFAULT_TOKEN_ENV,
             crate::llm::xai_oauth::DEFAULT_KEY_ENV,
-            crate::llm::openrouter::DEFAULT_KEY_ENV,
-            crate::llm::cloudflare::DEFAULT_KEY_ENV,
+            crate::llm::registry::defaults::OPENROUTER_KEY_ENV,
+            crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV,
         ] {
             // Wizard's own defaults are in the list on purpose: a default
             // renamed to something this gate cannot confirm would be withheld

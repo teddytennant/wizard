@@ -66,6 +66,25 @@
 #   WIZARD_USE_OLLAMA            1 = local flavor on Ollama instead of llama.cpp
 #                                    (implies WIZARD_LOCAL)    (default 0)
 #   WIZARD_SKIP_OLLAMA_INSTALL   1 = Ollama managed elsewhere (default 0)
+#   WIZARD_PROFILE               which plugins to build in: minimal, pi, server,
+#                                default or full. Unset (the default) installs
+#                                the published binary, which is the `default`
+#                                profile. Anything else is a different cargo
+#                                feature set, so it is built from source here.
+#                                  minimal  one API key and git — CI containers,
+#                                           second machines
+#                                  pi       a local model, no cloud provider,
+#                                           no JS backend — Raspberry Pi, small ARM
+#                                  server   the stock build without the P2P mesh
+#                                           — headless boxes
+#                                  default  every backend and every tool, no
+#                                           window (what a release binary is)
+#                                  full     default plus the GUI, in one binary
+#                                `wizard plugin profiles` prints this list off
+#                                an installed binary. See docs/plugins.md.
+#                                NOTE: unrelated to WIZARD_MINIMAL, which is
+#                                about what the installer sets up, not about
+#                                which plugins the binary has.
 #   WIZARD_WITH_TOOLCHAIN        1 = eagerly install a Rust toolchain for deep evolve (default 0)
 #   WIZARD_NATIVE                1 = also install the native GUI: a second binary,
 #                                    `wizard-native` (built --features native),
@@ -253,6 +272,103 @@ trap cleanup EXIT
 say()  { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# --- build profiles (WIZARD_PROFILE) ------------------------------------
+#
+# A profile is a named plugin set: five answers to "what kind of machine is
+# this", each one a cargo feature list. Wizard ships eighteen plugin features
+# and every one of them can be left out; asking somebody to decide eighteen
+# times while a curl pipe is running is how a feature list stays decorative.
+#
+# The same table is in src/plugins/profile.rs, which is where the rationale for
+# each name lives. It has to be in two places: this script is fetched and piped
+# to bash by people who have no checkout, so it cannot read a file from the
+# repository, and that module cannot be consulted before the binary it is
+# compiled into exists. The Rust test `the_installer_agrees_about_every_profile`
+# sources this script and diffs the answers, so the two copies cannot drift
+# without a red test.
+#
+# Nothing below runs unless WIZARD_PROFILE is set. A stock install is untouched.
+
+# Cargo's `default` feature list, alphabetically. Restated rather than read out
+# of Cargo.toml for the reason above: at this point there is no checkout to read
+# it from, and the profile has to be resolved before the clone.
+WIZARD_DEFAULT_FEATURES="acp,fleet,gateway,graph,mcp,mesh,plugin-js,provider-anthropic,provider-chatgpt,provider-cloudflare,provider-llamacpp,provider-ollama,provider-openai,provider-xai,tool-git,tool-json,tool-publish,tool-web"
+
+# The default list with the named features removed, comma-joined.
+#
+# A filter over the whole list rather than a substring delete, because a feature
+# that another kept feature enables is not removed by dropping it from the list:
+# `graph = ["mesh"]`, so `server` has to drop both or cargo turns the mesh back
+# on. Written with `if` rather than `[ ... ] && x=1` because callers run under
+# `set -e`, where a test that is simply false is a failed command.
+profile_default_minus() {
+    local out="" f d skip
+    for f in $(printf '%s' "$WIZARD_DEFAULT_FEATURES" | tr ',' ' '); do
+        skip=0
+        for d in "$@"; do
+            if [ "$f" = "$d" ]; then skip=1; fi
+        done
+        if [ "$skip" = "0" ]; then
+            if [ -z "$out" ]; then out="$f"; else out="${out},${f}"; fi
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# The features one profile resolves to, comma-joined. Non-zero for a name that
+# is not a profile, which is how the caller tells a typo from a valid set.
+profile_features() {
+    case "${1:-}" in
+        minimal) printf 'provider-anthropic,provider-openai,tool-git' ;;
+        pi)      printf 'provider-llamacpp,provider-ollama,tool-git' ;;
+        server)  profile_default_minus graph mesh ;;
+        default) printf '%s' "$WIZARD_DEFAULT_FEATURES" ;;
+        full)    printf '%s,native' "$WIZARD_DEFAULT_FEATURES" ;;
+        *)       return 1 ;;
+    esac
+}
+
+# The cargo flags that build one profile.
+#
+# `default` prints nothing, and the emptiness is the whole opt-in promise: a
+# stock run has to invoke exactly the command it invoked before profiles
+# existed, which it does by being handed no flags rather than by being handed
+# the default list spelled out. `--no-default-features --features <every
+# default>` is one feature resolution away from the stock build and the
+# difference would be invisible until it bit.
+profile_cargo_flags() {
+    case "${1:-}" in
+        default) printf '' ;;
+        full)    printf -- '--features native' ;;
+        minimal|pi|server)
+            printf -- '--no-default-features --features %s' "$(profile_features "$1")" ;;
+        *) return 1 ;;
+    esac
+}
+
+WIZARD_PROFILE="${WIZARD_PROFILE:-}"
+# Spliced into `cargo build --release` unquoted, so an empty value adds no
+# argument at all. Set only by the block below.
+CARGO_FEATURE_FLAGS=""
+if [ -n "$WIZARD_PROFILE" ]; then
+    profile_features "$WIZARD_PROFILE" >/dev/null 2>&1 \
+        || die "WIZARD_PROFILE='${WIZARD_PROFILE}' is not a profile — pick one of: minimal, pi, server, default, full (see docs/plugins.md)"
+    CARGO_FEATURE_FLAGS="$(profile_cargo_flags "$WIZARD_PROFILE")"
+    # A profile is a *build*, and the published release assets are all the
+    # default one, so anything else has to be compiled here. `default` is the
+    # exception and stays on the download path, which is what makes
+    # WIZARD_PROFILE=default a no-op rather than a slow no-op.
+    if [ "$WIZARD_PROFILE" != "default" ]; then
+        WIZARD_BUILD_FROM_SOURCE=1
+    fi
+    # Not a conflict, but it is almost always a mistake: `full` puts the window
+    # inside the one `wizard` binary, and WIZARD_NATIVE installs a second binary
+    # called `wizard-native` that also has it. Doing both compiles iced twice.
+    if [ "$WIZARD_PROFILE" = "full" ] && [ "$WIZARD_NATIVE" = "1" ]; then
+        warn "WIZARD_PROFILE=full already builds the window into 'wizard'; WIZARD_NATIVE=1 will build it a second time as 'wizard-native'"
+    fi
+fi
 
 # --- input validation ---------------------------------------------------
 
@@ -1826,9 +1942,14 @@ build_from_source() {
     ensure_c_linker \
         || die "a C linker (cc) is required to build from source and none could be installed — install your distro's compiler package (build-essential on Debian/Ubuntu, gcc on Fedora, base-devel on Arch, build-base on Alpine) and re-run"
     ensure_rust_toolchain
-    say "Running cargo build --release (this may take several minutes) ..."
-    ( cd "$src_dir" && cargo build --release ) \
-        || die "cargo build --release failed — see output above for details"
+    # Unquoted on purpose: empty means no argument, which is the stock build.
+    # See the WIZARD_PROFILE block near the top for why that has to be the
+    # literal command and not the default feature list spelled out.
+    # shellcheck disable=SC2086
+    say "Running cargo build --release ${CARGO_FEATURE_FLAGS} (this may take several minutes) ..."
+    # shellcheck disable=SC2086
+    ( cd "$src_dir" && cargo build --release $CARGO_FEATURE_FLAGS ) \
+        || die "cargo build --release ${CARGO_FEATURE_FLAGS} failed — see output above for details"
     local bin="${src_dir}/target/release/wizard"
     [ -f "$bin" ] \
         || die "build succeeded but target/release/wizard not found in ${src_dir}"

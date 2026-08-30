@@ -18,7 +18,6 @@ use super::command::RunCommandTool;
 use super::compact::CompactTool;
 use super::computer::ComputerTool;
 use super::file::{EditFileTool, ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool};
-use super::git::{GitDiffTool, GitStatusTool};
 use super::image::GenerateImageTool;
 use super::manual::ManualTool;
 use super::memory::MemoryTool;
@@ -26,7 +25,6 @@ use super::shell::ExecuteTool;
 use super::subagent_tasks::{SubagentKillTool, SubagentStatusTool};
 use super::tasks::{TaskKillTool, TaskOutputTool};
 use super::todo::TodoTool;
-use super::web::{WebFetchTool, WebSearchTool, XSearchTool};
 
 /// Registry of every callable tool, keyed by advertised name.
 /// Registration order is preserved for stable spec ordering in prompts.
@@ -61,10 +59,19 @@ impl ToolRegistry {
 
     /// Registry pre-populated with all native tools
     /// (`read_file`, `write_file`, `edit_file`, `list_files`,
-    /// `search_files`, `execute`, `git_status`, `git_diff`, `memory`,
-    /// `todo`, `manual`, `web_fetch`, `web_search`, `x_search`, `generate_image`,
+    /// `search_files`, `execute`, `memory`,
+    /// `todo`, `manual`, `generate_image`,
     /// `task_output`, `task_kill`, `subagent_status`, `subagent_kill`,
     /// `run_command`, `compact`, `computer`).
+    ///
+    /// **Native is not the whole tool set.** `web_fetch`, `web_search` and
+    /// `x_search` are `src/plugins/web.rs`; `git_status` and `git_diff` are
+    /// `src/plugins/lua/git/` and `publish` is `src/plugins/lua/publish/`,
+    /// both in Lua. All six arrive through
+    /// [`crate::plugins::install_tools_into`], which
+    /// [`crate::agent::build_tool_registry`] and `mcp serve` both call. A
+    /// caller that wants the set the model actually sees wants one of those
+    /// two, not this.
     pub fn with_native_tools() -> Self {
         let mut registry = Self::new();
         registry.register(Arc::new(ReadFileTool));
@@ -73,17 +80,12 @@ impl ToolRegistry {
         registry.register(Arc::new(ListFilesTool));
         registry.register(Arc::new(SearchFilesTool));
         registry.register(Arc::new(ExecuteTool));
-        registry.register(Arc::new(GitStatusTool));
-        registry.register(Arc::new(GitDiffTool));
         registry.register(Arc::new(MemoryTool));
         registry.register(Arc::new(TodoTool));
         // The on-demand half of the system prompt (see `crate::tools::manual`).
         // The always-on prompt tells the model to call this by name, so it is
         // native and unconditional: every surface composes that prompt.
         registry.register(Arc::new(ManualTool));
-        registry.register(Arc::new(WebFetchTool));
-        registry.register(Arc::new(WebSearchTool));
-        registry.register(Arc::new(XSearchTool));
         registry.register(Arc::new(GenerateImageTool));
         registry.register(Arc::new(TaskOutputTool));
         registry.register(Arc::new(TaskKillTool));
@@ -401,14 +403,9 @@ mod tests {
                 "list_files",
                 "search_files",
                 "execute",
-                "git_status",
-                "git_diff",
                 "memory",
                 "todo",
                 "manual",
-                "web_fetch",
-                "web_search",
-                "x_search",
                 "generate_image",
                 "task_output",
                 "task_kill",
@@ -419,7 +416,7 @@ mod tests {
                 "computer",
             ]
         );
-        assert_eq!(registry.len(), 22);
+        assert_eq!(registry.len(), 17);
         assert!(!registry.is_empty());
 
         for spec in registry.specs() {
@@ -438,15 +435,9 @@ mod tests {
             "read_file",
             "list_files",
             "search_files",
-            "git_status",
-            "git_diff",
             // `todo` mutates only agent-local state, so it stays usable in
             // plan mode.
             "todo",
-            // The web tools only observe the outside world.
-            "web_fetch",
-            "web_search",
-            "x_search",
             // `task_output` only reads buffered task state.
             "task_output",
             // `subagent_status` only reads registry state.
@@ -609,7 +600,7 @@ mod tests {
             registry.apply_description_overrides(&tmp.0.join("absent")),
             0
         );
-        assert_eq!(registry.len(), 22);
+        assert_eq!(registry.len(), 17);
     }
 
     /// A scripted tool cannot take a built-in's name.

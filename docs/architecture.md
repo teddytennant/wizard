@@ -45,26 +45,25 @@ wizard/
 │   ├── config.rs            # ~/.wizard/config.toml
 │   ├── app/ / ui/ / event.rs / vim.rs
 │   ├── agent/               # tool-calling loop, prompts, subagents, mission, ultra
-│   ├── server.rs            # llama-server lifecycle
-│   ├── llm/                 # LlmProvider + per-vendor clients (incl. fusion, oauth)
+│   ├── llm/                 # LlmProvider, the shared OpenAI-protocol wire, the registry
 │   ├── mcp/                 # MCP client and mcp-serve server
-│   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs)
+│   ├── tools/               # native tools + registry + scripted + code mode (lua.rs, code.rs), http.rs
+│   ├── kernel/              # the plugin host: Ctx, event bus, services, Lua VMs
+│   ├── plugins/             # every compiled-in plugin, one per cargo feature (see plugins.md)
+│   │                        #   catalogue.rs / profile.rs / inventory.rs: the feature table,
+│   │                        #   the named build profiles, and `wizard plugin`
 │   ├── evolve/              # tiered self-extension + publish
-│   ├── gui/                 # the window's agent half: tasks, config store, git, OAuth (`native`)
-│   ├── gateway/             # messaging bot (Telegram)
-│   ├── fleet/               # parallel worktree workers
-│   ├── mesh/                # peer discovery, QUIC transport, `wizard peers`
-│   ├── graph/               # mesh graph model for the explorer
 │   ├── commands/            # slash-command registry, shared by every surface
-│   ├── platform/            # OS seams: paths, service units, secrets, locks
+│   ├── entrypoint.rs        # the lookup a CLI subcommand whose body ships in a plugin goes through
+│   ├── server.rs            # the seam `/server` goes through; the lifecycle is in plugins/llamacpp/
+│   ├── progress.rs          # the Progress/ByteProgress shape + the plain-terminal spinners
+│   ├── platform/            # OS seams: paths, service units, secrets, locks, host probes
 │   ├── schedule.rs          # cron-scheduled headless runs
 │   ├── git_util.rs          # shared async git / worktree helpers
 │   ├── hooks/               # pre/post tool hooks
 │   ├── trust.rs             # per-project trust gate for project-shipped hooks
 │   ├── logging.rs           # JSONL session log under ~/.wizard/logs (never stdio)
 │   ├── doctor.rs            # environment checks + redacted bug-report bundles
-│   ├── acp.rs               # Agent Client Protocol surface
-│   ├── native/              # wizard gui (iced window, `native` feature)
 │   ├── sync.rs              # signed config bundles
 │   ├── memory.rs / checkpoint.rs / usage.rs / update.rs / …
 │   └── skills/              # bundled skill loader
@@ -125,17 +124,20 @@ At TUI startup, a missing or unstartable local backend is not fatal. Wizard fall
 
 All providers implement the `LlmProvider` trait (health, model listing, streaming chat, optional context-window probe). Clients include:
 
-- `llamacpp.rs`: default local path; OpenAI-compatible `/v1` plus native `/health` and `/props`
-- `openai.rs`: generic OpenAI-compatible endpoints
-- `anthropic.rs`, `ollama.rs`, `openrouter.rs`, `xai` (via openai + oauth), `cloudflare.rs`
+- `wire.rs`: the OpenAI Chat Completions wire protocol — the request shape, SSE decoding, the token seam and the model-family field rules. Not a provider of its own; six adapters build on it
+- `llamacpp.rs`: default local path; `wire`'s `/v1` client plus native `/health` and `/props`
+- `openai.rs`: OpenAI's own endpoint. Thin, because the protocol lives in `wire.rs`; what is left is the `prompt_cache_key` no other endpoint implements
+- `anthropic.rs`, `ollama.rs`, `openrouter.rs`, `xai` (via wire + oauth), `cloudflare.rs`
 - `chatgpt.rs` / `chatgpt_oauth.rs`: ChatGPT subscription via Codex backend
 - `fusion.rs`: multi-provider debate panel as one `LlmProvider`
 
 Streaming tokens, native tool calls, and a prompt-based JSON fallback when the model lacks native tools all live behind the same trait.
 
-### llama-server lifecycle (`server.rs`)
+### llama-server lifecycle (`plugins/llamacpp/server.rs`)
 
 When the active provider is llama.cpp and nothing answers at its `base_url`, Wizard starts `llama-server` itself (TUI/headless/gateway startup and after `/provider use` switches to llamacpp). Requirements: the URL points at this machine, `llama-server` is on `PATH`, and the provider's `gguf_path` exists. The child is detached in its own process group, logs to `~/.wizard/llama-server.log`, and records its PID in `~/.wizard/llama-server.pid`. Readiness is polled at `GET /health` for up to 60 s. `/server status|start|stop` manages it from the TUI; `stop` verifies the recorded PID is still a `llama-server` before signalling.
+
+All of that ships with the `provider-llamacpp` plugin, because all of it is llama.cpp's. What core keeps is `src/server.rs`: a three-method `LocalServer` trait and the lookup that finds whatever registered one, so `/server` works on the TUI, in the window and in a chat without any of them naming a backend. A build without the plugin answers `/server` with a sentence. See `docs/plugins.md`.
 
 ### Agent loop (`agent/turn.rs`)
 
@@ -199,7 +201,7 @@ Wizard is both an MCP client and an MCP server:
 - **Client:** servers in `~/.wizard/mcp.toml` (stdio or HTTP). On startup and `/reload`, tools are listed and merged into the registry. This is the path for browser control, databases, search, and similar. (Computer use is not one of them: `computer` is a native tool.)
 - **Server:** `wizard mcp-serve` exposes the native tool set over stdio. See [mcp.md](mcp.md).
 
-### Mesh (`mesh/`, `graph/`)
+### Mesh (`mesh/`, `plugins/graph/`)
 
 Peer-to-peer visibility between your own machines: discovery, a QUIC transport with per-peer trust, and `wizard peers` to list, trust, and watch them. It is an **observation** layer — a peer's turn arrives as an event you can watch. (The graph explorer that draws it is deferred and unreachable in 2.0; see [graph-explorer.md](graph-explorer.md).) It does not distribute work: there is no task frame on the wire and nothing in a shipping path hands a peer a job. See [mesh.md](mesh.md). Nothing accepts a connection until `[mesh] listen` is configured.
 
@@ -238,7 +240,7 @@ Evolution events go to `~/.wizard/evolution.jsonl`. `/publish` pushes `~/.wizard
 
 - **TUI** (`app/`, `ui/`, `event.rs`): chat, tool cards, git sidebar, subagent rail, status bar, slash commands
 - **Headless** (`agent` + `output.rs`): text / JSON / stream-json ([headless.md](headless.md))
-- **Window** (`src/native/` drawing, `src/gui/` holding the agent; both `--features native`): the same agent core in-process, in an iced window — no HTTP, no webview, no port ([native-gui.md](native-gui.md)). There is no browser GUI: the loopback HTTP server and JavaScript page that used to be the second surface are deleted. A headless box is reached by running the TUI over SSH, by `wizard -p`, by `wizard acp`, or through the gateway
+- **Window** (`src/plugins/native/` drawing, `src/plugins/gui/` holding the agent; both `--features native`): the same agent core in-process, in an iced window — no HTTP, no webview, no port ([native-gui.md](native-gui.md)). There is no browser GUI: the loopback HTTP server and JavaScript page that used to be the second surface are deleted. A headless box is reached by running the TUI over SSH, by `wizard -p`, by `wizard acp`, or through the gateway
 - **ACP** (`acp.rs`): editor embedding ([acp.md](acp.md)); also the surface Buzz and other ACP harnesses drive ([buzz.md](buzz.md))
 - **Gateway** (`gateway/`): Telegram bot turns ([gateway.md](gateway.md))
 - **Fleet / schedule / sync / doctor / update**: see the matching docs pages

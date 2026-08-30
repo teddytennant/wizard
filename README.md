@@ -83,6 +83,7 @@ Everything is indexed in **[docs/README.md](docs/README.md)**, grouped by what y
 - [Mesh](docs/mesh.md): `wizard peers`, trust states, and what does and does not ship
 - [Sync](docs/sync.md): `wizard sync` moves config, skills, and custom tooling between machines as a signed bundle
 - [Fork and distribute](docs/market.md): publish your evolved Wizard, and the skills and tools registry (`wizard skills`)
+- [Plugins](docs/plugins.md): `wizard plugin` shows what your binary has and what it does not; `WIZARD_PROFILE` picks a plugin set at install time
 - [Architecture](docs/architecture.md): how it's built
 - [Security](SECURITY.md): threat model
 - [WIZARD.md](WIZARD.md): the agent's bundled behavioral charter, inherited and editable by every fork

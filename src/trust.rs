@@ -1663,9 +1663,10 @@ mod tests {
             // deliberate answer — and answers `Console::Unavailable` when
             // either stream is not a terminal, so a piped or supervised
             // invocation refuses instead of hanging or reading a stray byte as
-            // consent. Note this is `gateway/setup.rs` and *not* `gateway/mod.rs`:
-            // the running gateway must stay structurally unable to prompt.
-            Path::new("gateway/setup.rs"),
+            // consent. Note this is the gateway's `setup.rs` and *not* its
+            // `mod.rs`: the running gateway must stay structurally unable to
+            // prompt.
+            Path::new("plugins/gateway/setup.rs"),
         ];
         // Plus the files that may merely *name* the capability: this module
         // defines it, and `hooks` documents where the answer comes from.
@@ -1694,8 +1695,8 @@ mod tests {
             wired,
             vec![
                 "app/runtime.rs".to_string(),
-                "gateway/setup.rs".to_string(),
                 "headless.rs".to_string(),
+                "plugins/gateway/setup.rs".to_string(),
                 "registry_client.rs".to_string(),
             ],
             "every console-owning call site is still wired up; without the first \

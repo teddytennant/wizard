@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# The gate every plugin-migration change has to clear before it is merged.
+#
+# One script rather than a list in a prompt, because "make sure it works" is
+# otherwise re-interpreted by every agent that reads it, and the interesting
+# failures here are the ones nobody thought to check: a dependency orphaned by
+# code that moved to Lua, a file that grew past the ratchet while being split,
+# a test that passes alone and fails in the suite.
+#
+# Exits non-zero on the first failure, loudly. Run from anywhere in the repo.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# The baseline this migration must not regress. Captured with
+# `cargo test --no-fail-fast`: 2422 on `main` @ 1ffd988, 2536 after the kernel,
+# 2557 once every provider became a plugin, 2575 with the host bridge and the
+# sandbox fix, 2577 with the window, 2584 with the graph and web tools, 2590
+# with the mesh, 2609 once `git_status`/`git_diff` became the first Lua plugin,
+# 2618 with `publish`, 2620 with the gateway and the llama-server lifecycle,
+# 2685 with the JavaScript backend and its `json_query` plugin, and 2705 with
+# the install profiles and the `wizard plugin` surface. Raise it when a phase
+# adds tests, so the ratchet keeps ratcheting.
+#
+# 2609 was one below what the tree actually had by then (2610, measured): the
+# acp and fleet plugins landed after that number was written and nobody raised
+# it. Measuring it took skipping `plugins::fleet::tests::decompose*`, because
+# until the turn's event channel was released at the end of a turn those three
+# did not fail -- they hung.
+BASELINE_TESTS=2705
+
+fail=0
+step() { printf '\n=== %s ===\n' "$1"; }
+bad()  { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
+
+step "format"
+cargo fmt --check || bad "cargo fmt --check"
+
+step "file-size ratchet"
+contrib/check-file-size.sh || bad "a file exceeds the 5500-line ratchet"
+
+step "clippy (warnings are errors)"
+cargo clippy --all-targets --locked -- -D warnings || bad "clippy"
+
+step "unused dependencies"
+# Moving Rust code into Lua plugins orphans crates. cargo machete is the only
+# check that notices, and a stale dep is a real cost: it still compiles, still
+# ships, and still shows up in `cargo deny`.
+if command -v cargo-machete >/dev/null 2>&1; then
+    cargo machete || bad "cargo machete found unused dependencies"
+elif command -v nix >/dev/null 2>&1; then
+    # Not installed on the NixOS box this migration runs on, and skipping it is
+    # not harmless here: the whole point of moving Rust into Lua plugins is that
+    # crates stop being used, and this is the only check that notices.
+    nix run nixpkgs#cargo-machete -- --help >/dev/null 2>&1 \
+        && { nix run nixpkgs#cargo-machete || bad "cargo machete found unused dependencies"; } \
+        || printf 'skipped: could not obtain cargo-machete\n'
+else
+    bad "cargo-machete unavailable and no nix to fetch it; unused deps would go unnoticed"
+fi
+
+step "tests"
+# --no-fail-fast so one failing target does not hide the rest, which is what
+# `cargo test` did on the baseline run and cost a full second pass.
+test_log=$(mktemp)
+cargo test --no-fail-fast 2>&1 | tee "$test_log" | grep -E '^test result' || true
+# awk rather than bc: bc is not installed on every box this runs on, and a
+# missing summing tool that silently reports 0 would turn a regression into a
+# pass.
+passed=$(grep -oE '[0-9]+ passed' "$test_log" | grep -oE '^[0-9]+' \
+         | awk '{n += $1} END {print n + 0}')
+failed=$(grep -oE '[0-9]+ failed' "$test_log" | grep -oE '^[0-9]+' \
+         | awk '{n += $1} END {print n + 0}')
+printf '\npassed=%s failed=%s (baseline %s)\n' "$passed" "$failed" "$BASELINE_TESTS"
+
+if [ "${passed:-0}" -lt 1 ]; then
+    bad "the test run reported no results at all (truncated log? build failure?)"
+fi
+# A third flake was found and *fixed* rather than listed, because it was
+# fixable: `tools::tests::read_file_never_spills` asserted that its own spill
+# directory was empty, and the spill sink is process-wide while `hold_sink`
+# serialises only the tests that install one. So any concurrent test with an
+# oversized tool answer spilled into it, and the failure rate went up with the
+# size of the suite -- it started firing when the JavaScript backend's tests
+# landed and had nothing to do with them. It asserts on the bytes now.
+#
+# There is a second flake and it is worse than the lockfile one, because it
+# manifests as a *hang* rather than a failure:
+# `plugins::fleet::tests::decompose_retries_once_on_unparsable_reply` never
+# returns when it is run on its own (`cargo test --lib -- --exact <that>` sits
+# there past any timeout you give it), and passes when the whole suite runs.
+# Reproduced on `f252267`, before the gateway and llama-server splits, so it is
+# not one of theirs. It matters here because the leave-one-out scripts run
+# filtered subsets: a leg whose filter happens to select that test without
+# selecting whatever unblocks it will hang forever rather than fail, and a
+# hanging gate reads as a busy machine. If a leg stops producing output, check
+# for a `wizard-*` test binary at ~0% CPU with a thread named `plugins::fleet:`
+# before suspecting the code under test.
+#
+# The ratchet counts tests that *exist*, not tests that passed on this run.
+# A flaked test is one the suite still has, so counting only `passed` made a
+# flaked run fail twice: once as the flake, and again as a phantom regression
+# one test below the baseline. That second failure is a lie, and it is the kind
+# that trains people to re-run the gate until it is green.
+counted=$passed
+if [ "${failed:-1}" -ne 0 ]; then
+    # Two known flakes, so a busy machine does not read as a regression.
+    #
+    # The second is `update::tests::install_sh_falls_back_to_github_when_the_mirror_fails`
+    # and the ones beside it: they spawn a real `bash` running `install.sh`
+    # against a stubbed `curl`, and under enough parallel load the subprocess
+    # misses its window. Seen once at load 18 with five build jobs on the box,
+    # passing alone and passing again on a re-run at the same commit. If one of
+    # these fails, re-run it before believing it.
+    #
+    # Matched against the `failures:` block rather than anywhere in the log,
+    # because the loose version matched the line `test platform::lockfile::...
+    # ok` — which is printed on every run where the flake did *not* fire. So a
+    # single failure of any other test was reported as "only the known lockfile
+    # flake failed" and the gate went green. That is how
+    # `update::tests::security_md_describes_install_sh_at_its_real_length`
+    # survived a passing run of this script and was caught two scripts later by
+    # `check-provider-plugins.sh`, which counts differently. A whitelist that
+    # matches everything is worse than no whitelist.
+    if grep -qE '^[[:space:]]+platform::lockfile::tests::a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it$' "$test_log" \
+       && [ "$failed" -eq 1 ]; then
+        printf 'note: only the known lockfile flake failed; re-run it alone to confirm\n'
+        counted=$((passed + failed))
+    else
+        bad "$failed test(s) failed"
+    fi
+fi
+if [ "${counted:-0}" -lt "$BASELINE_TESTS" ]; then
+    bad "test count went backwards: $counted < $BASELINE_TESTS (did tests get deleted rather than moved?)"
+fi
+rm -f "$test_log"
+
+# The "delete any one plugin" rule from docs/plugins.md, as something that can
+# fail. A plugin whose removal breaks the build is not a plugin, and the only
+# way to know is to remove it: `--no-default-features` drops every one of them,
+# and the tree still has to compile, still has to pass, `kind = "anthropic"`
+# still has to degrade to a named error rather than a panic, and `web_fetch`
+# still has to be absent from the roster the model is told about rather than
+# advertised-and-broken. `src/plugins/mod.rs` carries the assertions for the
+# second and third halves.
+#
+# This leg is the floor and the default build is the ceiling; the case in
+# between — one plugin missing, the rest present — is what
+# `contrib/check-provider-plugins.sh` and `contrib/check-tool-plugins.sh`
+# cover, because a module that reached into one plugin compiles fine both with
+# everything on and with everything off.
+#
+# Cheap enough to run every time (one extra feature-set build) and worth it:
+# this is the leg that catches a core module reaching into a plugin, which is
+# the failure the whole architecture exists to prevent and which the
+# default-features build cannot see.
+step "no-default-features (a build with every optional plugin deleted)"
+cargo build --no-default-features --locked || bad "cargo build --no-default-features"
+nd_log=$(mktemp)
+cargo test --no-default-features --locked --no-fail-fast 2>&1 | tee "$nd_log" \
+    | grep -E '^test result' || true
+nd_failed=$(grep -oE '[0-9]+ failed' "$nd_log" | grep -oE '^[0-9]+' \
+            | awk '{n += $1} END {print n + 0}')
+nd_passed=$(grep -oE '[0-9]+ passed' "$nd_log" | grep -oE '^[0-9]+' \
+            | awk '{n += $1} END {print n + 0}')
+printf '\nno-default-features: passed=%s failed=%s\n' "$nd_passed" "$nd_failed"
+# A run that reported nothing is not a pass. This leg once printed
+# `passed=0 failed=0` and scored green because the disk filled and the log it
+# parses was truncated to nothing -- the exact shape of a gate that lies.
+if [ "${nd_passed:-0}" -lt 1 ]; then
+    bad "--no-default-features reported no test results at all (truncated log? build failure?)"
+fi
+if [ "${nd_failed:-1}" -ne 0 ]; then
+    if grep -qE '^[[:space:]]+platform::lockfile::tests::a_second_holder_waits_and_gets_the_lock_once_the_first_drops_it$' "$nd_log" \
+       && [ "$nd_failed" -eq 1 ]; then
+        printf 'note: only the known lockfile flake failed\n'
+    else
+        bad "$nd_failed test(s) failed with --no-default-features"
+    fi
+fi
+rm -f "$nd_log"
+
+step "result"
+if [ "$fail" -ne 0 ]; then
+    printf 'GATE FAILED\n' >&2
+    exit 1
+fi
+printf 'GATE PASSED\n'

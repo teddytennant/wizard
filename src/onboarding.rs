@@ -25,7 +25,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::config::{Config, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind};
+use crate::config::{
+    Config, Credentials, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind,
+};
 use crate::hardware::{self, GgufModel};
 use crate::import_claude::{self, ImportSelection};
 use crate::skin::Skin;
@@ -87,7 +89,7 @@ pub struct Answers {
     pub gateway_token_env: Option<String>,
     /// Allowed inbound chat IDs (Telegram only). The list is closed: an empty
     /// list allows **nobody**, which is the shipped default (see
-    /// [`crate::gateway::is_authorized`]). Leaving this empty ships a gateway
+    /// the gateway's `is_authorized`). Leaving this empty ships a gateway
     /// that refuses every message, not one that answers everyone.
     pub gateway_allowed_chat_ids: Vec<i64>,
     /// Personality mode.
@@ -123,7 +125,7 @@ impl Answers {
 
         let provider = ProviderConfig {
             name: self.provider_name.clone(),
-            kind: self.kind,
+            kind: self.kind.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             api_key_env: self.api_key_env.clone(),
@@ -134,7 +136,7 @@ impl Answers {
 
         // Mirror an Ollama choice into the legacy fields so config files remain
         // readable by code paths that predate the providers table.
-        if self.kind == ProviderKind::Ollama {
+        if self.kind == ProviderKind::OLLAMA {
             config.model = self.model.clone();
             config.ollama_host = self.base_url.clone();
         }
@@ -142,7 +144,7 @@ impl Answers {
         // Mirror a llama.cpp choice into the top-level fields so the same
         // local provider is synthesized if the providers table ever empties
         // (e.g. `/provider remove`).
-        if self.kind == ProviderKind::LlamaCpp {
+        if self.kind == ProviderKind::LLAMACPP {
             config.llamacpp_host = self.base_url.clone();
             config.gguf_path = self.gguf_path.clone();
         }
@@ -173,7 +175,7 @@ impl Answers {
 /// `provider_name`, which is what [`crate::config::ProviderConfig`] resolves
 /// against; the web-search key under the backend name the `web_search` tool
 /// resolves at call time; the bot token under
-/// [`crate::gateway::telegram::TOKEN_CREDENTIAL`], which is what the gateway
+/// [`crate::credentials::GATEWAY_TOKEN`], which is what the gateway
 /// reads. A typo in any of those stores the secret where nothing looks for it
 /// and leaves a setup that looks finished and 401s on the first turn, which is
 /// exactly the failure asking for the key was meant to remove. Injecting the
@@ -203,7 +205,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
         &format!("{} API key", answers.web_search_backend),
     );
     persist(
-        crate::gateway::telegram::TOKEN_CREDENTIAL,
+        crate::credentials::GATEWAY_TOKEN,
         answers.gateway_bot_token.as_deref(),
         "Telegram bot token",
     );
@@ -211,7 +213,7 @@ fn store_pasted_secrets(answers: &Answers, mut store: impl FnMut(&str, &str) -> 
 
 /// Parse a comma-separated list of numeric chat IDs. Whitespace and empty
 /// entries are ignored; an empty input yields an empty list, which the gateway
-/// reads as "allow nobody" (see [`crate::gateway::is_authorized`]) and warns
+/// reads as "allow nobody" (see the gateway plugin's `is_authorized`) and warns
 /// about in the summary. A non-numeric entry is an error naming the offending
 /// token.
 pub fn parse_chat_ids(input: &str) -> Result<Vec<i64>, String> {
@@ -271,7 +273,7 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 /// Default base URL for the xAI API.
 const XAI_BASE_URL: &str = crate::llm::xai_oauth::DEFAULT_BASE_URL;
 /// Default base URL for the OpenRouter API.
-const OPENROUTER_BASE_URL: &str = crate::llm::openrouter::DEFAULT_BASE_URL;
+const OPENROUTER_BASE_URL: &str = crate::llm::registry::defaults::OPENROUTER_BASE_URL;
 /// Default env var name for the OpenAI key.
 const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
 /// Default env var name for the Anthropic key.
@@ -279,13 +281,13 @@ const ANTHROPIC_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// Default env var name for the xAI key.
 const XAI_KEY_ENV: &str = crate::llm::xai_oauth::DEFAULT_KEY_ENV;
 /// Default env var name for the OpenRouter key.
-const OPENROUTER_KEY_ENV: &str = crate::llm::openrouter::DEFAULT_KEY_ENV;
+const OPENROUTER_KEY_ENV: &str = crate::llm::registry::defaults::OPENROUTER_KEY_ENV;
 /// Default OpenRouter model (the Auto Router).
-const OPENROUTER_MODEL: &str = crate::llm::openrouter::DEFAULT_MODEL;
+const OPENROUTER_MODEL: &str = crate::llm::registry::defaults::OPENROUTER_MODEL;
 /// Default env var name for the Cloudflare API token.
-const CLOUDFLARE_KEY_ENV: &str = crate::llm::cloudflare::DEFAULT_KEY_ENV;
+const CLOUDFLARE_KEY_ENV: &str = crate::llm::registry::defaults::CLOUDFLARE_KEY_ENV;
 /// Default Cloudflare Workers AI model (GLM 5.2).
-const CLOUDFLARE_MODEL: &str = crate::llm::cloudflare::DEFAULT_MODEL;
+const CLOUDFLARE_MODEL: &str = crate::llm::registry::defaults::CLOUDFLARE_MODEL;
 
 // ---------------------------------------------------------------------------
 // TUI entry point
@@ -368,48 +370,144 @@ fn run_blocking() -> Result<Option<Config>> {
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// One row of the provider menu.
+///
+/// The row exists in the source; whether it is *offered* is a question for
+/// [`crate::llm::registry`]. That split is the whole of what this type is for:
+/// every backend is a plugin behind a cargo feature now, so a menu written out
+/// as eleven literals offered whatever it was written with, and a build
+/// without `provider-anthropic` still had a row that produced a config failing
+/// at `build()` — an entry that should never have been on the screen.
+struct ProviderChoice {
+    label: &'static str,
+    detail: &'static str,
+    /// The kinds this row can produce. Offered when *any* of them is
+    /// registered, because "Local" resolves to llama.cpp or to Ollama
+    /// depending on what is already on the machine and either one alone is
+    /// enough to make the row work.
+    kinds: Vec<ProviderKind>,
+    /// The questions this row asks next. A function pointer rather than an
+    /// index into a `match`, so a row that is filtered out cannot shift the
+    /// meaning of the ones after it — which is what an index-dispatched menu
+    /// does the first time it is filtered.
+    collect: fn(&mut Tui) -> Result<Option<ProviderAnswers>>,
+}
+
+/// The provider menu, in display order, before `installed` narrows it.
+///
+/// The order is the order: xAI first, then the one-click local pick, then the
+/// keyed clouds, then the bring-your-own rows. Filtering preserves it.
+///
+/// What is derived here is *availability*, and only that. The labels and the
+/// details beside them stay written out, because a descriptor answers "what is
+/// this backend called" and this menu answers "which of these should a person
+/// pick, and why" — "one pick, model sized to this machine" is a claim about
+/// what the *next three steps* will do, and no backend knows that about
+/// itself. `docs/plugins.md` already permits core to hold the text a user
+/// would otherwise type; this is the same boundary one step further out.
+fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
+    let all = vec![
+        ProviderChoice {
+            label: "xAI account sign-in",
+            detail: "grok-4.6 via OAuth, no API key",
+            kinds: vec![ProviderKind::XAI_OAUTH],
+            collect: collect_xai_oauth,
+        },
+        ProviderChoice {
+            label: "xAI (Grok), API key",
+            detail: "grok-4.6 via XAI_API_KEY",
+            kinds: vec![ProviderKind::XAI],
+            collect: collect_xai,
+        },
+        ProviderChoice {
+            label: "Local",
+            detail: "one pick — llama.cpp & Ollama set up for you, model sized to this \
+                     machine; private, no API key",
+            kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
+            collect: collect_local_auto,
+        },
+        ProviderChoice {
+            label: "OpenRouter",
+            detail: "hundreds of models via OPENROUTER_API_KEY",
+            kinds: vec![ProviderKind::OPENROUTER],
+            collect: collect_openrouter,
+        },
+        ProviderChoice {
+            label: "Cloudflare Workers AI",
+            detail: "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)",
+            kinds: vec![ProviderKind::CLOUDFLARE],
+            collect: collect_cloudflare,
+        },
+        ProviderChoice {
+            label: "OpenAI / OpenAI-compatible",
+            detail: "gpt-5.6 family and friends",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_openai,
+        },
+        ProviderChoice {
+            label: "Anthropic (Claude)",
+            detail: "claude-fable-5",
+            kinds: vec![ProviderKind::ANTHROPIC],
+            collect: collect_anthropic,
+        },
+        // Gemini, DeepSeek, Groq and the rest are `compat.rs` presets, which
+        // are `kind = "openai"` with a base URL: they need the OpenAI plugin
+        // and nothing else.
+        ProviderChoice {
+            label: "More cloud providers",
+            detail: "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_compat_menu,
+        },
+        ProviderChoice {
+            label: "Custom OpenAI-compatible endpoint",
+            detail: "any base URL",
+            kinds: vec![ProviderKind::OPENAI],
+            collect: collect_custom,
+        },
+        ProviderChoice {
+            label: "BYOM — llama.cpp",
+            detail: "bring your own model: any GGUF, your server URL",
+            kinds: vec![ProviderKind::LLAMACPP],
+            collect: collect_llamacpp,
+        },
+        ProviderChoice {
+            label: "BYOM — Ollama",
+            detail: "bring your own model: any Ollama tag, pulled on first run",
+            kinds: vec![ProviderKind::OLLAMA],
+            collect: collect_ollama,
+        },
+    ];
+    all.into_iter()
+        .filter(|choice| choice.kinds.iter().any(|kind| installed.contains(kind)))
+        .collect()
+}
+
 /// Drive the sequence of steps. Returns `Ok(None)` as soon as any step is
 /// cancelled.
 fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
-    // Step 1 — provider, xAI first. "Local" is one pick: no further model
-    // questions — Wizard self-configures llama.cpp (or an Ollama install that
-    // already has a model) and downloads a hardware-sized GGUF on first run.
-    // The BYOM local flavors sit alongside the cloud providers for people who
-    // want to bring their own model and pick the pieces themselves.
-    let provider_options = [
-        Opt::new("xAI account sign-in", "grok-4.6 via OAuth, no API key"),
-        Opt::new("xAI (Grok), API key", "grok-4.6 via XAI_API_KEY"),
-        Opt::new(
-            "Local",
-            "one pick — llama.cpp & Ollama set up for you, model sized to this machine; \
-             private, no API key",
-        ),
-        Opt::new("OpenRouter", "hundreds of models via OPENROUTER_API_KEY"),
-        Opt::new(
-            "Cloudflare Workers AI",
-            "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)",
-        ),
-        Opt::new("OpenAI / OpenAI-compatible", "gpt-5.6 family and friends"),
-        Opt::new("Anthropic (Claude)", "claude-fable-5"),
-        Opt::new(
-            "More cloud providers",
-            "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …",
-        ),
-        Opt::new("Custom OpenAI-compatible endpoint", "any base URL"),
-        Opt::new(
-            "BYOM — llama.cpp",
-            "bring your own model: any GGUF, your server URL",
-        ),
-        Opt::new(
-            "BYOM — Ollama",
-            "bring your own model: any Ollama tag, pulled on first run",
-        ),
-    ];
+    // Step 1 — provider, xAI first, and only the ones this build can reach.
+    let choices = provider_choices(&crate::llm::registry::kinds());
+    if choices.is_empty() {
+        anyhow::bail!(
+            "this build has no provider backends compiled in, so there is nothing to \
+             onboard to.\n\
+             \n\
+             Every backend is a plugin behind a cargo feature (`provider-xai`, \
+             `provider-openai`, `provider-llamacpp`, …) and all of them are on by \
+             default. Rebuild with the ones you want, or install a stock release \
+             binary, which has all of them. See docs/plugins.md."
+        );
+    }
+    let options: Vec<Opt> = choices
+        .iter()
+        .map(|choice| Opt::new(choice.label, choice.detail))
+        .collect();
     let provider = match select(
         terminal,
         "Provider",
         "Where should Wizard send its requests?",
-        &provider_options,
+        &options,
         0,
     )? {
         Some(index) => index,
@@ -418,51 +516,9 @@ fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
 
     // Step 2 — model (+ key env / base url, depending on provider). The
     // one-click local pick asks nothing further.
-    let collected = match provider {
-        0 => match collect_xai_oauth(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        1 => match collect_xai(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        2 => match collect_local_auto(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        3 => match collect_openrouter(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        4 => match collect_cloudflare(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        5 => match collect_openai(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        6 => match collect_anthropic(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        7 => match collect_compat_menu(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        8 => match collect_custom(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        9 => match collect_llamacpp(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
-        _ => match collect_ollama(terminal)? {
-            Some(c) => c,
-            None => return Ok(None),
-        },
+    let collected = match (choices[provider].collect)(terminal)? {
+        Some(collected) => collected,
+        None => return Ok(None),
     };
 
     // Step 3 — messaging gateway.
@@ -901,40 +957,66 @@ pub enum LocalPlan {
 ///    (the hardware-suggested tag when pulled, else the first listed).
 /// 3. Otherwise llama.cpp with the suggested tier: Wizard downloads the GGUF
 ///    and installs llama-server itself on first run.
+///
+/// Each step is skipped when this build has no plugin for the backend it
+/// would pick. Both are on by default, so a stock build takes every step and
+/// `installed` changes nothing — but a `--features provider-ollama` build has
+/// no llama.cpp to fall back to, and steps 1 and 3 would otherwise hand back
+/// a config that fails at `build()`. That is the same entry-that-was-never-
+/// offered this menu was rewritten to stop producing, one level down: the
+/// "Local" row is offered when *either* backend is present, so the row's own
+/// resolution has to respect which one that was.
+///
+/// [`None`] when neither is installed. Unreachable from the menu, which does
+/// not offer the row at all in that case, and returned rather than asserted
+/// because a caller that is wrong about the plugin set should get an answer
+/// it can report instead of a panic.
 pub fn plan_local_auto(
+    installed: &[ProviderKind],
     existing: &[PathBuf],
     models_dir: &Path,
     ollama_models: &[String],
     suggested: &GgufModel,
     suggested_tag: &str,
-) -> LocalPlan {
-    if !existing.is_empty() {
+) -> Option<LocalPlan> {
+    let llamacpp = installed.contains(&ProviderKind::LLAMACPP);
+    let ollama = installed.contains(&ProviderKind::OLLAMA);
+
+    if llamacpp && !existing.is_empty() {
         let chosen = existing
             .iter()
             .find(|path| path.file_name().is_some_and(|name| name == suggested.file))
             .unwrap_or(&existing[0]);
-        return LocalPlan::LlamaCpp {
+        return Some(LocalPlan::LlamaCpp {
             gguf_path: chosen.display().to_string(),
-        };
+        });
     }
-    if !ollama_models.is_empty() {
+    if ollama && !ollama_models.is_empty() {
         let model = ollama_models
             .iter()
             .find(|model| model.as_str() == suggested_tag)
             .unwrap_or(&ollama_models[0]);
-        return LocalPlan::Ollama {
+        return Some(LocalPlan::Ollama {
             model: model.clone(),
-        };
+        });
     }
-    LocalPlan::LlamaCpp {
-        gguf_path: models_dir.join(suggested.file).display().to_string(),
+    if llamacpp {
+        return Some(LocalPlan::LlamaCpp {
+            gguf_path: models_dir.join(suggested.file).display().to_string(),
+        });
     }
+    // Ollama is installed but has nothing pulled: fall through to it anyway
+    // with the hardware-suggested tag, which `collect_ollama` would have
+    // offered and which is pulled on first run.
+    ollama.then(|| LocalPlan::Ollama {
+        model: suggested_tag.to_string(),
+    })
 }
 
 /// Model tags an installed Ollama already has pulled (empty when Ollama is
 /// absent, its server is down, or the listing fails).
 fn installed_ollama_models() -> Vec<String> {
-    if !crate::server::on_path("ollama") {
+    if !crate::platform::host::on_path("ollama") {
         return Vec::new();
     }
     let Ok(output) = std::process::Command::new("ollama").arg("list").output() else {
@@ -972,16 +1054,19 @@ fn collect_local_auto(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     }
     let dir = models_dir();
     let existing = existing_ggufs(&dir);
-    let answers = match plan_local_auto(
+    let plan = plan_local_auto(
+        &crate::llm::registry::kinds(),
         &existing,
         &dir,
         &installed_ollama_models(),
         suggested,
         &suggested_tag,
-    ) {
+    )
+    .context("the one-click local pick needs `provider-llamacpp` or `provider-ollama`")?;
+    let answers = match plan {
         LocalPlan::LlamaCpp { gguf_path } => ProviderAnswers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: LLAMACPP_BASE_URL.to_string(),
             model: gguf_model_tag(&gguf_path),
             api_key_env: None,
@@ -990,7 +1075,7 @@ fn collect_local_auto(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         },
         LocalPlan::Ollama { model } => ProviderAnswers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::Ollama,
+            kind: ProviderKind::OLLAMA,
             base_url: OLLAMA_BASE_URL.to_string(),
             model,
             api_key_env: None,
@@ -1088,7 +1173,7 @@ fn collect_llamacpp(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
 
     Ok(Some(ProviderAnswers {
         provider_name: "local".to_string(),
-        kind: ProviderKind::LlamaCpp,
+        kind: ProviderKind::LLAMACPP,
         base_url,
         model: gguf_model_tag(&gguf_path),
         api_key_env: None,
@@ -1134,7 +1219,7 @@ fn collect_ollama(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "local".to_string(),
-        kind: ProviderKind::Ollama,
+        kind: ProviderKind::OLLAMA,
         base_url: OLLAMA_BASE_URL.to_string(),
         model,
         api_key_env: None,
@@ -1174,7 +1259,7 @@ fn collect_openai(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "openai".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url: OPENAI_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1214,7 +1299,7 @@ fn collect_anthropic(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "claude".to_string(),
-        kind: ProviderKind::Anthropic,
+        kind: ProviderKind::ANTHROPIC,
         base_url: ANTHROPIC_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1244,7 +1329,7 @@ fn collect_openrouter(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "openrouter".to_string(),
-        kind: ProviderKind::OpenRouter,
+        kind: ProviderKind::OPENROUTER,
         base_url: OPENROUTER_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1291,8 +1376,8 @@ fn collect_cloudflare(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
         };
     Ok(Some(ProviderAnswers {
         provider_name: "cloudflare".to_string(),
-        kind: ProviderKind::Cloudflare,
-        base_url: crate::llm::cloudflare::base_url(&account_id),
+        kind: ProviderKind::CLOUDFLARE,
+        base_url: crate::llm::registry::defaults::cloudflare_base_url(&account_id),
         model,
         api_key_env: Some(api_key_env),
         api_key,
@@ -1325,7 +1410,7 @@ fn collect_xai(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "xai".to_string(),
-        kind: ProviderKind::Xai,
+        kind: ProviderKind::XAI,
         base_url: XAI_BASE_URL.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1360,7 +1445,7 @@ fn collect_xai_oauth(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "xai".to_string(),
-        kind: ProviderKind::XaiOauth,
+        kind: ProviderKind::XAI_OAUTH,
         base_url: XAI_BASE_URL.to_string(),
         model,
         api_key_env: None,
@@ -1425,7 +1510,7 @@ fn collect_compat(
         };
     Ok(Some(ProviderAnswers {
         provider_name: preset.name.to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url: preset.base_url.to_string(),
         model,
         api_key_env: Some(api_key_env),
@@ -1462,7 +1547,7 @@ fn collect_custom(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     };
     Ok(Some(ProviderAnswers {
         provider_name: "custom".to_string(),
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::OPENAI,
         base_url,
         model,
         api_key_env,
@@ -1532,8 +1617,17 @@ fn print_summary(config: &Config) {
     println!();
     println!("Next steps:");
 
-    match provider.kind {
-        ProviderKind::LlamaCpp => match provider.gguf_path.as_deref() {
+    // The two backends with something on this machine to say a word about are
+    // still named here, because the advice is about *their* artifacts — a GGUF
+    // file, an `ollama pull` — and there is nothing on a descriptor that would
+    // let a stranger's local backend produce it. Everything past them is
+    // generated from the descriptor, so a new cloud provider gets the right
+    // closing line without touching this function.
+    let manages_server = provider
+        .descriptor()
+        .is_some_and(|descriptor| descriptor.manages_local_server());
+    if manages_server {
+        match provider.gguf_path.as_deref() {
             Some(path) if Path::new(path).exists() => {
                 println!("  • llama-server starts automatically (model: {path})");
             }
@@ -1557,46 +1651,54 @@ fn print_summary(config: &Config) {
                     crate::config::DEFAULT_LLAMACPP_PORT
                 );
             }
-        },
-        ProviderKind::Ollama => {
-            if crate::llm::ollama::model_installed(&provider.model, &installed_ollama_models()) {
-                println!("  • model already pulled: {}", provider.model);
-            } else {
-                println!(
-                    "  • first run pulls the model for you (model: {})",
-                    provider.model
-                );
+        }
+    } else if cfg!(feature = "provider-ollama") && provider.kind == ProviderKind::OLLAMA {
+        // Gated because the tag comparison is the plugin's: `ollama list`
+        // prints `llama3:latest` where a config says `llama3`, and one
+        // canonicalizer for that is better than a second copy here. Without
+        // the plugin there is no `kind = "ollama"` to advise about anyway, and
+        // the generic credential advice below is the honest fallback.
+        #[cfg(feature = "provider-ollama")]
+        if crate::plugins::ollama::model_installed(&provider.model, &installed_ollama_models()) {
+            println!("  • model already pulled: {}", provider.model);
+        } else {
+            println!(
+                "  • first run pulls the model for you (model: {})",
+                provider.model
+            );
+        }
+    } else {
+        match provider.credentials() {
+            Credentials::ApiKey { .. } => {
+                // Report the actual state rather than a generic instruction: a
+                // summary that says "Wizard is configured" over a setup with no
+                // key anywhere is how the first turn came to 401 in silence.
+                let stored = crate::credentials::get(&provider.name)
+                    .is_some_and(|key| !key.trim().is_empty());
+                let env = provider.api_key_env.as_deref();
+                let exported = env.is_some_and(|name| {
+                    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+                });
+                for line in api_key_summary(stored, env, exported) {
+                    println!("{line}");
+                }
             }
-        }
-        ProviderKind::Openai
-        | ProviderKind::Anthropic
-        | ProviderKind::OpenRouter
-        | ProviderKind::Xai
-        | ProviderKind::Cloudflare => {
-            // Report the actual state rather than a generic instruction: a
-            // summary that says "Wizard is configured" over a setup with no
-            // key anywhere is how the first turn came to 401 in silence.
-            let stored =
-                crate::credentials::get(&provider.name).is_some_and(|key| !key.trim().is_empty());
-            let env = provider.api_key_env.as_deref();
-            let exported = env.is_some_and(|name| {
-                std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
-            });
-            for line in api_key_summary(stored, env, exported) {
-                println!("{line}");
+            Credentials::Account { login } => {
+                let display = provider
+                    .descriptor()
+                    .map(|descriptor| descriptor.display_name().to_string())
+                    .unwrap_or_else(|| provider.kind.to_string());
+                println!("  • sign in to {display}:  wizard --login {login}");
             }
-        }
-        ProviderKind::XaiOauth => {
-            println!("  • sign in to xAI:  wizard --login xai");
-        }
-        ProviderKind::ChatgptOauth => {
-            println!("  • sign in to ChatGPT:  wizard --login chatgpt");
+            // A local backend Wizard neither starts nor stocks has nothing to
+            // set up, so the summary above is already the whole answer.
+            Credentials::Local => {}
         }
     }
 
     if config.gateway.kind == GatewayKind::Telegram {
         let env = config.gateway.token_env();
-        let token_stored = crate::credentials::get(crate::gateway::telegram::TOKEN_CREDENTIAL)
+        let token_stored = crate::credentials::get(crate::credentials::GATEWAY_TOKEN)
             .is_some_and(|t| !t.trim().is_empty());
         if token_stored {
             println!("  • Telegram bot token: stored in ~/.wizard/credentials.toml");
@@ -2016,7 +2118,7 @@ mod tests {
     fn base_answers() -> Answers {
         Answers {
             provider_name: "local".to_string(),
-            kind: ProviderKind::Ollama,
+            kind: ProviderKind::OLLAMA,
             base_url: OLLAMA_BASE_URL.to_string(),
             model: "qwen3.6:27b".to_string(),
             api_key_env: None,
@@ -2044,7 +2146,7 @@ mod tests {
         let config = answers.into_config();
         assert_eq!(config.providers.len(), 1);
         assert_eq!(config.active_provider.as_deref(), Some("local"));
-        assert_eq!(config.active().kind, ProviderKind::Ollama);
+        assert_eq!(config.active().kind, ProviderKind::OLLAMA);
         assert_eq!(config.active().model, "qwen3.5:9b");
         // Legacy fields mirror the Ollama choice for back-compat.
         assert_eq!(config.model, "qwen3.5:9b");
@@ -2091,7 +2193,7 @@ mod tests {
     #[test]
     fn llamacpp_answers_carry_gguf_and_skip_legacy_ollama_fields() {
         let answers = Answers {
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:9090".to_string(),
             model: "Qwen3.6-27B-Q4_K_M".to_string(),
             gguf_path: Some("/home/u/.wizard/models/Qwen3.6-27B-Q4_K_M.gguf".to_string()),
@@ -2099,7 +2201,7 @@ mod tests {
         };
         let defaults = Config::default();
         let config = answers.into_config();
-        assert_eq!(config.active().kind, ProviderKind::LlamaCpp);
+        assert_eq!(config.active().kind, ProviderKind::LLAMACPP);
         assert_eq!(config.active().model, "Qwen3.6-27B-Q4_K_M");
         assert_eq!(
             config.active().gguf_path.as_deref(),
@@ -2144,7 +2246,7 @@ mod tests {
     fn cloud_answers_do_not_touch_legacy_ollama_fields() {
         let answers = Answers {
             provider_name: "claude".to_string(),
-            kind: ProviderKind::Anthropic,
+            kind: ProviderKind::ANTHROPIC,
             base_url: ANTHROPIC_BASE_URL.to_string(),
             model: "claude-fable-5".to_string(),
             api_key_env: Some(ANTHROPIC_KEY_ENV.to_string()),
@@ -2154,7 +2256,7 @@ mod tests {
         let defaults = Config::default();
         let config = answers.into_config();
         assert_eq!(config.active().name, "claude");
-        assert_eq!(config.active().kind, ProviderKind::Anthropic);
+        assert_eq!(config.active().kind, ProviderKind::ANTHROPIC);
         assert_eq!(
             config.active().api_key_env.as_deref(),
             Some(ANTHROPIC_KEY_ENV)
@@ -2170,7 +2272,7 @@ mod tests {
         // API-key flavor.
         let answers = Answers {
             provider_name: "xai".to_string(),
-            kind: ProviderKind::Xai,
+            kind: ProviderKind::XAI,
             base_url: XAI_BASE_URL.to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: Some(XAI_KEY_ENV.to_string()),
@@ -2178,21 +2280,21 @@ mod tests {
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "xai");
-        assert_eq!(config.active().kind, ProviderKind::Xai);
+        assert_eq!(config.active().kind, ProviderKind::XAI);
         assert_eq!(config.active().base_url, "https://api.x.ai/v1");
         assert_eq!(config.active().api_key_env.as_deref(), Some("XAI_API_KEY"));
 
         // OAuth flavor: no API key env; credentials come from the token file.
         let answers = Answers {
             provider_name: "xai".to_string(),
-            kind: ProviderKind::XaiOauth,
+            kind: ProviderKind::XAI_OAUTH,
             base_url: XAI_BASE_URL.to_string(),
             model: "grok-4.3".to_string(),
             api_key_env: None,
             ..base_answers()
         };
         let config = answers.into_config();
-        assert_eq!(config.active().kind, ProviderKind::XaiOauth);
+        assert_eq!(config.active().kind, ProviderKind::XAI_OAUTH);
         assert!(config.active().api_key_env.is_none());
         // Legacy Ollama fields stay untouched for cloud choices.
         let defaults = Config::default();
@@ -2204,7 +2306,7 @@ mod tests {
     fn openrouter_answers_build_the_expected_provider() {
         let answers = Answers {
             provider_name: "openrouter".to_string(),
-            kind: ProviderKind::OpenRouter,
+            kind: ProviderKind::OPENROUTER,
             base_url: OPENROUTER_BASE_URL.to_string(),
             model: OPENROUTER_MODEL.to_string(),
             api_key_env: Some(OPENROUTER_KEY_ENV.to_string()),
@@ -2212,7 +2314,7 @@ mod tests {
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "openrouter");
-        assert_eq!(config.active().kind, ProviderKind::OpenRouter);
+        assert_eq!(config.active().kind, ProviderKind::OPENROUTER);
         assert_eq!(config.active().base_url, "https://openrouter.ai/api/v1");
         assert_eq!(config.active().model, "openrouter/auto");
         assert_eq!(
@@ -2229,15 +2331,15 @@ mod tests {
     fn cloudflare_answers_build_the_expected_provider() {
         let answers = Answers {
             provider_name: "cloudflare".to_string(),
-            kind: ProviderKind::Cloudflare,
-            base_url: crate::llm::cloudflare::base_url("acc123"),
+            kind: ProviderKind::CLOUDFLARE,
+            base_url: crate::llm::registry::defaults::cloudflare_base_url("acc123"),
             model: CLOUDFLARE_MODEL.to_string(),
             api_key_env: Some(CLOUDFLARE_KEY_ENV.to_string()),
             ..base_answers()
         };
         let config = answers.into_config();
         assert_eq!(config.active().name, "cloudflare");
-        assert_eq!(config.active().kind, ProviderKind::Cloudflare);
+        assert_eq!(config.active().kind, ProviderKind::CLOUDFLARE);
         assert_eq!(
             config.active().base_url,
             "https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1"
@@ -2300,7 +2402,7 @@ mod tests {
     fn pasted_provider_key_never_reaches_config() {
         let answers = Answers {
             provider_name: "openai".to_string(),
-            kind: ProviderKind::Openai,
+            kind: ProviderKind::OPENAI,
             base_url: OPENAI_BASE_URL.to_string(),
             model: OPENAI_MODELS[0].to_string(),
             api_key_env: Some(OPENAI_KEY_ENV.to_string()),
@@ -2357,7 +2459,7 @@ mod tests {
                 ("openai".to_string(), "sk-provider".to_string()),
                 ("brave".to_string(), "brv-secret-key".to_string()),
                 (
-                    crate::gateway::telegram::TOKEN_CREDENTIAL.to_string(),
+                    crate::credentials::GATEWAY_TOKEN.to_string(),
                     "123456:ABC-test-token".to_string()
                 ),
             ]
@@ -2502,7 +2604,7 @@ mod tests {
     #[test]
     fn onboarding_config_survives_a_toml_round_trip() {
         let answers = Answers {
-            kind: ProviderKind::LlamaCpp,
+            kind: ProviderKind::LLAMACPP,
             base_url: "http://127.0.0.1:8080".to_string(),
             model: "Qwen3.6-27B-Q4_K_M".to_string(),
             gguf_path: Some("/m/Qwen3.6-27B-Q4_K_M.gguf".to_string()),
@@ -2517,7 +2619,7 @@ mod tests {
         let raw = toml::to_string_pretty(&answers.into_config()).expect("serialize");
         let reloaded: Config = toml::from_str(&raw).expect("parse");
         assert_eq!(reloaded.active().name, "local");
-        assert_eq!(reloaded.active().kind, ProviderKind::LlamaCpp);
+        assert_eq!(reloaded.active().kind, ProviderKind::LLAMACPP);
         assert_eq!(reloaded.active().model, "Qwen3.6-27B-Q4_K_M");
         assert_eq!(
             reloaded.active().gguf_path.as_deref(),
@@ -2584,12 +2686,19 @@ mod tests {
         }
     }
 
+    /// Both local backends compiled in, which is what a stock build has and
+    /// what every plan test below except the last three assumes.
+    fn both_local() -> Vec<ProviderKind> {
+        vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA]
+    }
+
     #[test]
     fn local_plan_prefers_a_downloaded_gguf() {
         let dir = Path::new("/m");
         let existing = vec![PathBuf::from("/m/a.gguf"), PathBuf::from("/m/big.gguf")];
         // The suggested tier is on disk: it wins over the first-by-name file.
         let plan = plan_local_auto(
+            &both_local(),
             &existing,
             dir,
             &["qwen3.5:9b".to_string()],
@@ -2598,13 +2707,14 @@ mod tests {
         );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/big.gguf".to_string()
-            }
+            })
         );
         // Suggested tier not on disk: first existing GGUF wins, still no
         // download and still ahead of any Ollama install.
         let plan = plan_local_auto(
+            &both_local(),
             &existing,
             dir,
             &["qwen3.5:9b".to_string()],
@@ -2613,9 +2723,9 @@ mod tests {
         );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/a.gguf".to_string()
-            }
+            })
         );
     }
 
@@ -2624,31 +2734,228 @@ mod tests {
         let dir = Path::new("/m");
         let pulled = vec!["llama3:8b".to_string(), "qwen3.5:9b".to_string()];
         // The hardware-suggested tag is pulled: use it.
-        let plan = plan_local_auto(&[], dir, &pulled, &tier("x.gguf"), "qwen3.5:9b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            dir,
+            &pulled,
+            &tier("x.gguf"),
+            "qwen3.5:9b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::Ollama {
+            Some(LocalPlan::Ollama {
                 model: "qwen3.5:9b".to_string()
-            }
+            })
         );
         // Suggested tag not pulled: first listed model.
-        let plan = plan_local_auto(&[], dir, &pulled, &tier("x.gguf"), "qwen3.6:27b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            dir,
+            &pulled,
+            &tier("x.gguf"),
+            "qwen3.6:27b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::Ollama {
+            Some(LocalPlan::Ollama {
                 model: "llama3:8b".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn local_plan_falls_back_to_a_fresh_llamacpp_download() {
-        let plan = plan_local_auto(&[], Path::new("/m"), &[], &tier("big.gguf"), "qwen3.5:9b");
+        let plan = plan_local_auto(
+            &both_local(),
+            &[],
+            Path::new("/m"),
+            &[],
+            &tier("big.gguf"),
+            "qwen3.5:9b",
+        );
         assert_eq!(
             plan,
-            LocalPlan::LlamaCpp {
+            Some(LocalPlan::LlamaCpp {
                 gguf_path: "/m/big.gguf".to_string()
-            }
+            })
+        );
+    }
+
+    /// The one-click local pick never resolves to a backend this build left
+    /// out, whatever is lying around on the machine.
+    ///
+    /// Both directions, because both are wrong in the same way and only one
+    /// of them is obvious: a GGUF already downloaded is the *strongest*
+    /// signal in the whole function, and it still must not produce
+    /// `kind = "llamacpp"` on a build that cannot serve one. The row is
+    /// offered because Ollama is present, so what it resolves to has to be
+    /// Ollama.
+    #[test]
+    fn the_one_click_local_pick_skips_a_backend_this_build_lacks() {
+        let dir = Path::new("/m");
+        let gguf = vec![PathBuf::from("/m/a.gguf")];
+        let pulled = vec!["llama3:8b".to_string()];
+
+        let ollama_only = vec![ProviderKind::OLLAMA];
+        assert_eq!(
+            plan_local_auto(
+                &ollama_only,
+                &gguf,
+                dir,
+                &pulled,
+                &tier("x.gguf"),
+                "qwen3.5:9b"
+            ),
+            Some(LocalPlan::Ollama {
+                model: "llama3:8b".to_string()
+            }),
+            "a downloaded GGUF must not win on a build with no llama.cpp"
+        );
+        // Nothing pulled either: still Ollama, with the tag `collect_ollama`
+        // would have offered, because there is no other backend to fall to.
+        assert_eq!(
+            plan_local_auto(&ollama_only, &[], dir, &[], &tier("x.gguf"), "qwen3.5:9b"),
+            Some(LocalPlan::Ollama {
+                model: "qwen3.5:9b".to_string()
+            })
+        );
+
+        let llamacpp_only = vec![ProviderKind::LLAMACPP];
+        assert_eq!(
+            plan_local_auto(
+                &llamacpp_only,
+                &[],
+                dir,
+                &pulled,
+                &tier("big.gguf"),
+                "llama3:8b"
+            ),
+            Some(LocalPlan::LlamaCpp {
+                gguf_path: "/m/big.gguf".to_string()
+            }),
+            "a pulled Ollama model must not win on a build with no Ollama"
+        );
+
+        assert_eq!(
+            plan_local_auto(&[], &gguf, dir, &pulled, &tier("x.gguf"), "llama3:8b"),
+            None,
+            "neither backend compiled in leaves nothing to plan"
+        );
+    }
+
+    /// The menu offers a row exactly when this build can carry it out.
+    ///
+    /// This is the bug the table replaced a literal array to fix: a stripped
+    /// build used to print "Anthropic (Claude)" and then fail at `build()`
+    /// when it was picked. Asserted over feature sets rather than over the
+    /// live registry, so the claim holds on every leg of
+    /// `contrib/check-provider-plugins.sh` and not only on the one that is
+    /// running.
+    #[test]
+    fn the_provider_menu_offers_only_what_this_build_installed() {
+        // Nothing installed: nothing to offer, and onboarding says so rather
+        // than drawing an empty picker.
+        assert!(provider_choices(&[]).is_empty());
+
+        // One backend: its rows and no others. Anthropic is the narrowest —
+        // one kind, one row — so it is the sharpest version of the claim.
+        let anthropic = provider_choices(&[ProviderKind::ANTHROPIC]);
+        assert_eq!(anthropic.len(), 1);
+        assert_eq!(anthropic[0].label, "Anthropic (Claude)");
+
+        // The OpenAI kind carries three rows, because the compat presets and
+        // the custom-endpoint row are both `kind = "openai"`.
+        let openai: Vec<&str> = provider_choices(&[ProviderKind::OPENAI])
+            .iter()
+            .map(|choice| choice.label)
+            .collect();
+        assert_eq!(
+            openai,
+            [
+                "OpenAI / OpenAI-compatible",
+                "More cloud providers",
+                "Custom OpenAI-compatible endpoint",
+            ]
+        );
+
+        // "Local" needs either local backend, not both.
+        for kind in [ProviderKind::LLAMACPP, ProviderKind::OLLAMA] {
+            assert!(
+                provider_choices(std::slice::from_ref(&kind))
+                    .iter()
+                    .any(|choice| choice.label == "Local"),
+                "the one-click local row should survive on {kind} alone"
+            );
+        }
+
+        // Filtering preserves the display order, which is the property an
+        // index-dispatched menu had for free and a filtered one has to keep.
+        let full = provider_choices(&crate::llm::registry::kinds());
+        let labels: Vec<&str> = full.iter().map(|choice| choice.label).collect();
+        let mut sorted = labels.clone();
+        sorted.sort_by_key(|label| {
+            provider_choices(&all_shipped_kinds())
+                .iter()
+                .position(|choice| choice.label == *label)
+                .expect("every offered row is a row")
+        });
+        assert_eq!(labels, sorted);
+    }
+
+    /// Every kind a stock build ships, whether or not this one does. Used to
+    /// pin the menu's display order independently of the feature set the test
+    /// happens to be running under.
+    fn all_shipped_kinds() -> Vec<ProviderKind> {
+        vec![
+            ProviderKind::ANTHROPIC,
+            ProviderKind::CHATGPT_OAUTH,
+            ProviderKind::CLOUDFLARE,
+            ProviderKind::LLAMACPP,
+            ProviderKind::OLLAMA,
+            ProviderKind::OPENAI,
+            ProviderKind::OPENROUTER,
+            ProviderKind::XAI,
+            ProviderKind::XAI_OAUTH,
+        ]
+    }
+
+    /// A stock build's menu is the one it has always been: eleven rows, in
+    /// the order they were written, xAI first.
+    ///
+    /// The point of the change was to stop offering what a build lacks, not
+    /// to redesign the menu, and this is the half of that claim a filtered
+    /// list could quietly break.
+    #[test]
+    #[cfg(all(
+        feature = "provider-anthropic",
+        feature = "provider-cloudflare",
+        feature = "provider-llamacpp",
+        feature = "provider-ollama",
+        feature = "provider-openai",
+        feature = "provider-xai",
+    ))]
+    fn a_stock_build_offers_the_menu_it_always_did() {
+        let labels: Vec<&str> = provider_choices(&crate::llm::registry::kinds())
+            .iter()
+            .map(|choice| choice.label)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "xAI account sign-in",
+                "xAI (Grok), API key",
+                "Local",
+                "OpenRouter",
+                "Cloudflare Workers AI",
+                "OpenAI / OpenAI-compatible",
+                "Anthropic (Claude)",
+                "More cloud providers",
+                "Custom OpenAI-compatible endpoint",
+                "BYOM — llama.cpp",
+                "BYOM — Ollama",
+            ]
         );
     }
 

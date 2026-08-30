@@ -89,7 +89,7 @@ pub enum Stdlib {
 ///
 /// The cost is real and is the accepted trade: a registry tool cannot read a
 /// file outside the project, cannot shell out, and cannot even ask the clock.
-fn sandboxed_libs() -> StdLib {
+pub(crate) fn sandboxed_libs() -> StdLib {
     StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::BIT | StdLib::JIT
 }
 
@@ -808,7 +808,7 @@ pub(crate) fn install_print_into(lua: &Lua, stdout: &Arc<Mutex<String>>) -> mlua
 
 /// Blank every [`BLANKED_GLOBALS`] name. Setting an already-absent global to
 /// `nil` is a no-op, so this is safe to run over any library set.
-fn blank_globals(lua: &Lua) -> mlua::Result<()> {
+pub(crate) fn blank_globals(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
     for name in BLANKED_GLOBALS {
         globals.set(name, LuaValue::Nil)?;
@@ -912,15 +912,33 @@ pub(crate) fn install_wizard_lib(lua: &Lua, cwd: &Path, stdlib: Stdlib) -> mlua:
 /// out, and an existing path is canonicalized and re-checked so a symlink
 /// planted inside the project cannot point out of it.
 fn resolve_tool_path(cwd: &Path, path: &str, stdlib: Stdlib) -> mlua::Result<PathBuf> {
+    resolve_plugin_path(cwd, path, stdlib)
+        .map_err(|reason| mlua::Error::external(anyhow::anyhow!(reason)))
+}
+
+/// [`resolve_tool_path`] with the refusal as a plain sentence rather than an
+/// `mlua::Error`.
+///
+/// It exists because the JavaScript backend needs the same answer and cannot
+/// use the same error type. What must not happen is a second confinement:
+/// `wizard.fs.read` means the same thing in both languages, and two copies of
+/// this decision is two places for a `..` to stop being caught. So the
+/// decision lives here, once, and each backend wraps the refusal in whatever
+/// its engine calls an error.
+pub(crate) fn resolve_plugin_path(
+    cwd: &Path,
+    path: &str,
+    stdlib: Stdlib,
+) -> Result<PathBuf, String> {
     if stdlib == Stdlib::Full {
         return Ok(resolve_against(cwd, path));
     }
     confine_to(cwd, path).map_err(|reason| {
-        mlua::Error::external(anyhow::anyhow!(
+        format!(
             "sandboxed tool may not touch '{path}': {reason}. \
              Registry tools are confined to the project directory; \
              a tool that needs more has to declare it and be installed with an explicit grant."
-        ))
+        )
     })
 }
 

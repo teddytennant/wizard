@@ -1,6 +1,7 @@
 //! Tool system: the [`Tool`] trait implemented by native tools
-//! ([`file`], [`shell`], [`git`]), agent-authored [`scripted`] tools, and
-//! MCP tools (`crate::mcp`). All three present a uniform interface through
+//! ([`file`], [`shell`]), agent-authored [`scripted`] tools, MCP tools
+//! (`crate::mcp`) and plugin tools (`crate::plugins`, Rust, Lua or
+//! JavaScript). All four present a uniform interface through
 //! [`registry::ToolRegistry`], so the model calls them identically.
 
 pub mod code;
@@ -9,14 +10,16 @@ pub mod compact;
 pub mod computer;
 pub mod evolve;
 pub mod file;
-pub mod git;
+/// The client, the SSRF guard, the redirect walk and the body cap. Core, and
+/// shared by the web plugin, the image downloader and a Lua plugin's
+/// `wizard.http`; see the module doc for where that line is drawn.
+pub mod http;
 pub mod image;
 pub mod interview;
 pub mod lua;
 pub mod manual;
 pub mod memory;
 pub mod plan;
-pub mod publish;
 pub mod registry;
 pub mod scripted;
 pub mod shell;
@@ -24,7 +27,6 @@ pub mod spill;
 pub mod subagent_tasks;
 pub mod tasks;
 pub mod todo;
-pub mod web;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -378,7 +380,7 @@ pub enum ToolError {
 /// below take less.
 pub(crate) const MAX_OUTPUT_BYTES: usize = 30_000;
 
-/// Cap for `git_diff`.
+/// Cap for the `git` plugin's `git_diff`.
 ///
 /// A diff is the one summary output that is still worth several thousand
 /// tokens, because the model is usually about to act on every hunk in it. 16
@@ -395,7 +397,7 @@ pub(crate) const MAX_DIFF_BYTES: usize = 16_000;
 /// subsequent step.
 pub(crate) const MAX_SEARCH_BYTES: usize = 12_000;
 
-/// Cap for listings: `list_files`, `git_status`.
+/// Cap for listings: `list_files`, and the `git` plugin's `git_status`.
 ///
 /// Paths, one per line. 8 KB holds several hundred of them, comfortably more
 /// than the entry caps these tools already apply, and a working tree with more
@@ -652,15 +654,37 @@ mod tests {
     use super::spill::{SpillSink, hold_sink};
     use super::*;
 
-    /// The one file in a sink directory, and a failure naming what was there
-    /// instead. Every spilling test writes exactly one.
-    fn only_spill_file(dir: &Path) -> PathBuf {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-            .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
-            .map(|entry| entry.expect("a dir entry").path())
-            .collect();
-        assert_eq!(entries.len(), 1, "expected one spill file: {entries:?}");
-        entries.pop().expect("the one entry")
+    /// The spill file a result *names*, taken out of the notice rather than by
+    /// listing the directory.
+    ///
+    /// Listing was the obvious way and it is wrong here. `hold_sink` serialises
+    /// the tests that install a sink, but eleven other files call
+    /// [`truncate_output`] in tests without taking that lock, and a spill from
+    /// any of them lands in whichever sink is installed at that moment -- this
+    /// test's directory. So "exactly one file is in the directory" is an
+    /// assertion about what else the suite happens to be running, which passed
+    /// alone and failed in the full run.
+    ///
+    /// Reading the path back out of the notice is also the stronger check: the
+    /// contract is that the model is told where its bytes went, and a
+    /// directory listing would still pass if the notice named the wrong file.
+    fn named_spill_file(out: &str, dir: &Path) -> PathBuf {
+        let (_, rest) = out
+            .split_once("full result is at ")
+            .unwrap_or_else(|| panic!("no spill notice in: {out:.400}"));
+        // Split on the notice's own next sentence, not on '.': a temp dir is
+        // routinely `/tmp/.tmpXXXX/...`, and the first dot is inside the path.
+        let (path, _) = rest
+            .split_once(". Use read_file")
+            .unwrap_or_else(|| panic!("notice does not end its path: {rest:.200}"));
+        let path = PathBuf::from(path);
+        assert!(
+            path.starts_with(dir),
+            "named a file outside the sink: {} not under {}",
+            path.display(),
+            dir.display()
+        );
+        path
     }
 
     /// One cap for every tool meant one result could inject 30 KB — about
@@ -762,11 +786,7 @@ mod tests {
             out.contains("full result is at "),
             "points somewhere: {out:.400}"
         );
-        let spilled = only_spill_file(&dir);
-        assert!(
-            out.contains(&spilled.display().to_string()),
-            "names the file it wrote"
-        );
+        let spilled = named_spill_file(&out, &dir);
         assert_eq!(
             std::fs::read_to_string(&spilled).expect("read the spill file"),
             text,
@@ -903,9 +923,24 @@ mod tests {
             !out.content.contains("full result is at"),
             "no spill pointer in a read result"
         );
+        // And nothing of *this* call's was written to the sink.
+        //
+        // The claim is about these bytes rather than about the directory being
+        // untouched, and that is not fussiness. [`hold_sink`] serialises sink
+        // *installers*; the sink itself is process-wide, so any other test
+        // running concurrently that produces an oversized tool answer spills
+        // into whichever sink is installed — this one. Asserting the directory
+        // is empty made this test fail on what some unrelated test did, at a
+        // rate that depended on how many tests the suite happened to have.
+        let spilled: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .collect();
         assert!(
-            !dir.exists() || std::fs::read_dir(&dir).map(|e| e.count()).unwrap_or(0) == 0,
-            "and nothing written to the sink"
+            !spilled.iter().any(|body| body.contains("line of text")),
+            "read_file's own output must never reach a spill file"
         );
     }
 }
