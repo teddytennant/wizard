@@ -1861,10 +1861,22 @@ mod tests {
 
         let started = Instant::now();
         let result =
-            run_with_budget(&tool, &ctx, "print('before')\nos.execute('sleep 30')", 1).await;
+            run_with_budget(&tool, &ctx, "print('before')\nos.execute('sleep 10')", 1).await;
         let elapsed = started.elapsed();
+        // The two numbers are a pair and only mean something together. The
+        // sleep is what the turn must NOT wait for and the bound is what it
+        // must beat, so the gap between them is the whole assertion: the
+        // backstop fires one grace period after a 1s budget, around 3s, and
+        // anything that waited for the program instead lands at 10.
+        //
+        // It was `sleep 30` against a 15s bound, which cost the suite 30
+        // seconds of doing nothing — the thread is left to finish in its own
+        // time by design (see above), so the test outlives the program no
+        // matter how fast the turn returns. Shortening the sleep alone would
+        // have quietly gutted this: at `sleep 10` a 15s bound passes whether
+        // the backstop fired or not.
         assert!(
-            elapsed < Duration::from_secs(15),
+            elapsed < Duration::from_secs(6),
             "the turn waited on a chunk nothing can interrupt: {elapsed:?}"
         );
         assert!(
@@ -1894,11 +1906,15 @@ mod tests {
             cancel.cancel();
         });
         let started = Instant::now();
-        let result = run_with_budget(&tool, &ctx, "os.execute('sleep 30')", 120).await;
+        let result = run_with_budget(&tool, &ctx, "os.execute('sleep 10')", 120).await;
         let _ = raiser.await;
 
+        // Paired the same way as the test above, and for the same reason: the
+        // cancel is raised at 150ms but cannot be delivered through the hook,
+        // so this is the backstop's grace period again, and 6 sits between
+        // that and the sleep.
         assert!(
-            started.elapsed() < Duration::from_secs(15),
+            started.elapsed() < Duration::from_secs(6),
             "cancellation did not reach it: {:?}",
             started.elapsed()
         );

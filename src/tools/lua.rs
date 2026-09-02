@@ -1475,13 +1475,30 @@ return "reachable:[" .. table.concat(reachable, ",") .. "]"
         );
 
         // Runaway allocation becomes a Lua error the tool reports.
+        //
+        // READ THE BUDGET BEFORE TRUSTING THE NAME. Today this case is carried
+        // entirely by the TIME bound, not the memory one, and the `||` below is
+        // what hides it. `install_hook` reads `lua.used_memory()`, mlua cannot
+        // install its allocator under `luajit` (the feature this crate builds
+        // with), and the comment there says a 0 reading is skipped rather than
+        // tripped — so the memory branch cannot fire at all and this script
+        // runs until the clock stops it.
+        //
+        // Measured, not guessed: raising this budget to 60s made the test take
+        // 61s. A working 64 MB cap would end it in under a second, since the
+        // script allocates 1 MB an iteration.
+        //
+        // 3 seconds rather than 20 because those 17 extra seconds bought
+        // nothing but a slower suite. Whoever makes the memory bound real
+        // should tighten the assertion to `contains("memory")` at the same
+        // time; until then a wider budget only makes the gap cost more.
         let err = run_scripted_with(
             "greedy",
             "local t = {}\nwhile true do t[#t + 1] = string.rep('x', 1000000) end",
             &tmp.0.join("greedy.lua"),
             &json!({}),
             &tmp.0,
-            Duration::from_secs(20),
+            Duration::from_secs(3),
             Stdlib::Sandboxed,
         )
         .expect_err("unbounded allocation must not reach the host allocator");
