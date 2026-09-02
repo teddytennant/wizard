@@ -29,8 +29,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
-    name: Rust checks
+  # The Linux legs. These four were one job called `rust` until they were
+  # split, and the split is the only reason this file is worth reading twice:
+  # the work did not get cheaper, it stopped being in a line. The old job ran
+  # clippy, the suite, a release build, then clippy and the suite again under
+  # `--features native`, one after another, for 763 seconds of wall clock on a
+  # green run while every other job in this file had been finished for ten
+  # minutes. Nothing in that sequence needed the step before it.
+  #
+  # Public repository, so standard runners are not metered and four in
+  # parallel cost exactly what one cost. What they do cost is four checkouts,
+  # four toolchain installs and four cache restores, about 30 seconds each,
+  # which is why this is four jobs and not nine: past a point the setup is the
+  # job.
+  #
+  # The required check named "Rust checks" is now the `rust` gate at the
+  # bottom. Read the note there before renaming anything here.
+  rust-lint:
+    name: Rust lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -41,17 +57,22 @@ jobs:
       - name: File-size ratchet
         run: contrib/check-file-size.sh
 
-      # Two properties of this file that no run of it can report on, because
-      # both failure modes look green: a required check that stops being
-      # reported (every pull request then sits forever at "Expected - Waiting
-      # for status to be reported", with no failing job to point at), and a
+      # Four properties of this file that no run of it can report on, because
+      # every one of the failure modes looks green: a required check that stops
+      # being reported (every pull request then sits forever at "Expected -
+      # Waiting for status to be reported", with no failing job to point at), a
       # compile step that stops being able to fail (a broken build reports
-      # success). The second is not hypothetical: the macOS leg shipped with
+      # success), a gate that stops gating one of the legs it fronts for, and a
+      # macOS suite that quietly stops existing.
+      #
+      # The second is not hypothetical: the macOS leg shipped with
       # `continue-on-error` on both of its `cargo check` steps and reported
       # green with no blocking compile left, which is why it is asserted here
-      # now rather than left to whoever reads the diff.
+      # now rather than left to whoever reads the diff. The third and fourth
+      # arrived with the job split, which took one job that could only be
+      # wholly red or wholly green and turned it into five that can disagree.
       #
-      # Deliberately narrow. It checks those two invariants and holds no opinion
+      # Deliberately narrow. It checks those invariants and holds no opinion
       # about anything else in the file, so ordinary edits (a new job, a renamed
       # step, a matrix entry) do not have to come here first.
       #
@@ -123,6 +144,44 @@ jobs:
                           f"suite step {step.get('name')!r} is a compile and must be able to fail the job"
                       )
 
+          # 3. The `rust` gate holds the required name on behalf of four jobs it
+          # does not run, which is two new ways to be green and mean nothing. A
+          # new `rust-*` leg that nobody adds to `needs` gates nothing and its
+          # red blocks no pull request. A gate without `if: always()` is SKIPPED
+          # when a leg fails, and a skipped required check is not a failing one:
+          # the pull request waits forever with nothing red to click, the same
+          # dead end a rename produces.
+          gate = jobs.get("rust")
+          if gate is None:
+              problems.append("there is no `rust` gate job left to report 'Rust checks'")
+          else:
+              legs = {name for name in jobs if name.startswith("rust-")}
+              for name in sorted(legs - set(gate.get("needs") or [])):
+                  problems.append(
+                      f"job {name!r} is not in the `rust` gate's needs, so its failure would not block"
+                  )
+              if str(gate.get("if", "")).strip() != "always()":
+                  problems.append(
+                      "the `rust` gate needs `if: always()`, or a failed leg skips it "
+                      "and the required check is never reported"
+                  )
+
+          # 4. The macOS suite moved out of `suite` so the compile gate stops
+          # waiting on it. Nothing notices if it then disappears: `suite` stays
+          # green, the required check stays green, and Darwin stops being tested.
+          def is_macos(job):
+              if str(job.get("runs-on", "")).startswith("macos"):
+                  return True
+              include = (job.get("strategy") or {}).get("matrix", {}).get("include") or []
+              return any(str(entry.get("runner", "")).startswith("macos") for entry in include)
+
+          if not any(
+              str(step.get("run", "")).startswith("cargo test")
+              for job in jobs.values() if is_macos(job)
+              for step in job["steps"]
+          ):
+              problems.append("no job runs `cargo test` on macOS any more")
+
           for problem in problems:
               print(f"::error::{problem}")
           sys.exit(1 if problems else 0)
@@ -136,15 +195,27 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      # `save-if` on this and every other build job the split touched: only
+      # pushes to main write a cache, pull requests read one. One job became
+      # six across two platforms and two feature sets, and six per-branch
+      # copies of the same 729 dependencies is how a repository spends its
+      # 10 GB cache budget on evictions that cost every job a cold build. It
+      # also drops the ~25s save from the end of every pull-request job, which
+      # is most of what the split's extra setup costs.
+      #
+      # `coverage` still saves unconditionally. It is an instrumented build
+      # nothing else can reuse, and it was never on the critical path.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Prebuilt binary, no cargo-install-from-source in CI.
       - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
         with:
           tool: cargo-machete
 
-      # Steps ordered cheapest-first so failures surface fast:
-      # machete -> fmt -> clippy -> test -> release build.
+      # Cheapest-first within the job, so a formatting slip does not wait on
+      # clippy: machete -> fmt -> clippy -> clippy --features native.
       # --locked makes Cargo.lock drift a hard failure instead of a
       # silent re-resolve.
       - name: Unused dependencies
@@ -156,14 +227,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Test
-        run: cargo test --locked
-
-      - name: Build (release)
-        run: cargo build --release --locked
-
       # The native GUI (`wizard gui`) is off by default, so nothing
-      # above compiles a line of it — and it is now a *published release asset*
+      # above compiles a line of it — and it is a *published release asset*
       # (`wizard-native-*`, the `native` job in release.yml), so letting it rot
       # unnoticed would mean shipping four binaries no gate ever looked at.
       #
@@ -171,20 +236,143 @@ jobs:
       # from the webview shell this replaced: `--features native` adds real
       # logic (the widget trees, the selection layer, the console gate) with
       # real tests behind `#[cfg(feature = "native")]`, and a `cargo check`
-      # compiles none of them. It needs no system packages — winit reaches X11
-      # and Wayland through `dlopen`, and `tiny-skia` means no wgpu — so there
-      # is nothing to `apt-get` first.
-      #
+      # compiles none of them. The suite half is `rust-test-native` below. It
+      # needs no system packages — winit reaches X11 and Wayland through
+      # `dlopen`, and `tiny-skia` means no wgpu — so there is nothing to
+      # `apt-get` first.
+      - name: Clippy (--features native)
+        run: cargo clippy --all-targets --locked --features native -- -D warnings
+
+  rust-test:
+    name: Rust suite
+    runs-on: ubuntu-latest
+    env:
+      # Roughly 80 of this job's 130 seconds was compiling, and full debuginfo
+      # is a large share of that and of the cache it writes. `line-tables-only`
+      # keeps file and line in a panic backtrace, which is the only thing CI
+      # ever reads out of it; a `debug = 0` build reports naked addresses on
+      # the one run where somebody needs the trace.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test
+        run: cargo test --locked
+
+  # Split from `rust-test` rather than run after it, because the two do not
+  # share a build: `--features native` pulls in iced, winit, cosmic-text and
+  # tiny-skia, so the second run recompiles most of the graph either way. Two
+  # jobs pay one extra setup and save 130 seconds.
+  rust-test-native:
+    name: Rust suite (--features native)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       # No compositor here, and there never will be one: everything in
       # `src/plugins/native/tests.rs` drives `iced_test`'s headless `Simulator` or a
       # software-rasterized frame in memory. See "Testing, and what a headless
       # machine cannot prove" in docs/native-gui.md for what that leaves
       # unproven.
-      - name: Clippy (--features native)
-        run: cargo clippy --all-targets --locked --features native -- -D warnings
-
       - name: Test (--features native)
         run: cargo test --locked --features native
+
+  rust-release:
+    name: Rust release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # This step asks one question: does the tree compile with
+      # `debug_assertions` off and optimisations on. It was answering it with a
+      # full ship build — `[profile.release]` in Cargo.toml is `lto = true`,
+      # `codegen-units = 1` — and paying 334 seconds, 44% of the old job, to
+      # link 729 crates as a single unit that nothing here then runs. rust-cache
+      # drops the workspace crate's own artifacts by design, so that link was
+      # paid in full on every run, cache hit or not.
+      #
+      # Overridden by environment rather than by editing the profile: the
+      # profile is what ships, and release.yml builds ten assets from it
+      # unchanged. What is given up is the small class of break that only fat
+      # LTO finds, mostly duplicate symbols at link time, and release.yml still
+      # finds those before a tag publishes anything.
+      - name: Build (release)
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: cargo build --release --locked
+
+  # The name in branch protection, and nothing else. Four jobs became four
+  # check runs, and the repository's required-status-check rule matches one
+  # name, "Rust checks", which no longer belongs to a job that does anything.
+  # Rather than edit branch protection to list four names — a settings change
+  # in another system, invisible from this file, and one that has to be redone
+  # every time a leg is added — the name stays here on a job whose entire
+  # purpose is to be red when any leg is red.
+  #
+  # Renaming still means editing branch protection. That has not changed, and
+  # the `Workflow invariants` step above will fail before a rename can merge.
+  rust:
+    name: Rust checks
+    needs: [rust-lint, rust-test, rust-test-native, rust-release]
+    # Without this a failed leg SKIPS the gate, and GitHub does not treat a
+    # skipped required check as a failing one: the pull request sits at
+    # "Expected - Waiting for status to be reported" with a green tick on
+    # everything it can see. Asserted in `Workflow invariants` above.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # `cancelled` and `skipped` are failures here too. A leg that never ran
+      # proved nothing, and this job exists to say so.
+      - name: Gate
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RESULTS"])
+          failed = {name: leg["result"] for name, leg in results.items() if leg["result"] != "success"}
+          for name, result in sorted(failed.items()):
+              print(f"::error::{name} was {result}")
+          print(f"{len(results) - len(failed)}/{len(results)} legs green")
+          sys.exit(1 if failed else 0)
+          PY
 
   # The second platform, running the same suite the Linux job above runs.
   # macOS used to be a `cargo check` canary, which meant every Darwin-specific
@@ -239,21 +427,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `experimental` marks the SUITE as unproven. It does not reach the
-          # compile: the two `cargo check` steps below block whatever it says.
-          #
-          # Non-blocking as of 2026-08-01, and only until it is observed green.
-          # This leg ran `cargo check` until today, so the suite has never once
-          # been executed on Darwin: "the tests pass on macOS" is a hope, not a
-          # measurement. Making a never-executed leg blocking is how a repo
-          # goes red on a commit that changed nothing, and this check run's
-          # name is in branch protection, so that red would be unmergeable
-          # rather than merely loud.
-          #
-          # FLIP `experimental` TO false ONCE `cargo test` HAS BEEN SEEN GREEN
-          # on main. The `Report unproven-leg outcome` step below prints which
-          # way each run went, into the run summary, so nobody has to go
-          # looking.
+          # No `experimental` here any more. It marked the SUITE as unproven
+          # and never reached the compile, so when the suite moved to
+          # `suite-test` below the key stayed behind meaning nothing: a flag
+          # you can flip with no effect is worse than no flag. The live one is
+          # in that job's matrix, and the note above it says what promoting it
+          # now costs.
           #
           # `macos-15`, not `macos-14`, since 2026-08-08. macos-14 is deprecated
           # on both architectures (actions/runner-images#13518): brownouts that
@@ -269,7 +448,6 @@ jobs:
           # the gate that decides whether a tag publishes.
           - runner: macos-15
             check-name: macOS check
-            experimental: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -281,6 +459,8 @@ jobs:
           toolchain: stable
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Blocking, and the whole reason this job can still go red on a code
       # defect. It is the gate this leg carried before it grew a suite, kept
@@ -298,31 +478,62 @@ jobs:
       - name: Check (--features native)
         run: cargo check --all-targets --locked --features native
 
-      # The unproven half, and the only step here that may fail without
-      # failing the job.
-      #
-      # `continue-on-error` sits on the step, not on the job, and that is not a
-      # stylistic choice. Job-level `continue-on-error` is documented as
-      # keeping the *workflow run* from failing; it does not promise anything
-      # about this job's own check run, and that check run is "macOS check",
-      # the name branch protection matches on. A red required check blocks
-      # every pull request just as thoroughly as a renamed one does. Failing
-      # the step and passing the job is the one shape that is unambiguously
-      # non-blocking, and the summary step below is what stops it from being
-      # invisible.
+  # The unproven half, moved out of `suite` so the compile gate stops waiting
+  # on it. It was the last two thirds of that job: 105 seconds of `cargo check`
+  # followed by 237 seconds of `cargo test`, in a line, on the slowest runner
+  # in this file. Now "macOS check" reports as soon as the compiles are done,
+  # which is what a required check named after a compile should have been doing
+  # all along.
+  #
+  # `continue-on-error` stays on the step rather than moving to the job, and
+  # that is not a stylistic choice. Job-level `continue-on-error` is documented
+  # as keeping the *workflow run* from failing; it does not promise anything
+  # about this job's own check run. Failing the step and passing the job is the
+  # one shape that is unambiguously non-blocking, and the summary step below is
+  # what stops it from being invisible.
+  #
+  # PROMOTING THIS TO BLOCKING IS NOW TWO EDITS, NOT ONE. Set `experimental:
+  # false` on the macos-15 leg in `suite` above, and add "macOS suite" to the
+  # repository's required status checks. Before the split, the suite rode on
+  # "macOS check" and the second edit did not exist. `Workflow invariants` in
+  # `rust-lint` asserts that this job still runs `cargo test` on macOS, so it
+  # cannot vanish quietly, but no guard in this file can see branch protection.
+  suite-test:
+    name: macOS suite
+    # No `needs: [suite]`. Gating this on the compile job would put the 237
+    # seconds back behind the 105 and undo the split; both legs compile the
+    # same tree, and on a public repository the second macOS runner is free.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            experimental: true
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Test
         id: test
         continue-on-error: ${{ matrix.experimental }}
+        env:
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
         run: cargo test --locked
 
       # The half that keeps an unproven leg from being a hole: whichever way it
       # went is in the run summary along with the exact edit that promotes it
       # to blocking. Without this, "flip it once it is green" is a thing nobody
       # ever does, because nobody opens a green job to read its log.
-      #
-      # A failed compile never reaches here (the steps above block, so the job
-      # has already stopped), which is the intended reading: this step reports
-      # on the suite and on nothing else.
       - name: Report unproven-leg outcome
         if: matrix.experimental
         env:
@@ -331,12 +542,13 @@ jobs:
           set -eu
           echo "### macOS suite (non-blocking)" >>"$GITHUB_STEP_SUMMARY"
           if [ "$TEST_OUTCOME" = success ]; then
-            echo "::notice::macOS suite green. Set experimental: false on the macos-15 leg in .github/workflows/ci.yml to make it blocking."
-            echo "Green. Set \`experimental: false\` on the macos-15 leg in .github/workflows/ci.yml to make this blocking." >>"$GITHUB_STEP_SUMMARY"
+            echo "::notice::macOS suite green. Set experimental: false on the macos-15 leg in .github/workflows/ci.yml AND add 'macOS suite' to the required status checks to make it blocking."
+            echo "Green. Set \`experimental: false\` on the macos-15 leg in .github/workflows/ci.yml and add \`macOS suite\` to the required status checks to make this blocking." >>"$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::macOS suite failed (cargo test: ${TEST_OUTCOME}). This leg is non-blocking, so it did not fail the run. The compile steps in the same job are blocking."
+            echo "::warning::macOS suite failed (cargo test: ${TEST_OUTCOME}). This leg is non-blocking, so it did not fail the run. The compile steps in the macOS check job are blocking."
             echo "FAILED, and did not fail the run (cargo test: ${TEST_OUTCOME})." >>"$GITHUB_STEP_SUMMARY"
           fi
+
 
   # contrib/check-coverage.sh's own regression test, and the reason "it cannot
   # fail" is not a fair description of the script: a fixture summary below the
