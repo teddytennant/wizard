@@ -526,9 +526,17 @@ impl TranscriptView {
 /// Whether a row starts folded.
 ///
 /// A call still running is always open — its card is where you watch it work.
-/// Once it answers, a failure folds (the ✗ carries the signal without dumping
-/// the payload; Ctrl-T or a click opens it) and so does anything long enough
-/// to bury the reply underneath it.
+/// Once it answers, the transcript keeps the *result* and folds the *payload*:
+/// a one-line answer (`Edited src/parser.rs: replaced 1 occurrence`, `failed to
+/// read /etc/nope: No such file`) is the report itself and stays on screen,
+/// and anything longer is the file, the listing or the build log the model
+/// asked for, which folds to a count the card carries. Ctrl-T or a click opens
+/// it.
+///
+/// This used to keep anything up to six lines open, which meant a `cat` of a
+/// short file, a `ls`, and a three-line test summary all landed in the
+/// conversation between the question and the answer to it. The reply is what
+/// the screen is for.
 ///
 /// One rule, applied to a live row and a replayed one alike. The TUI used to
 /// have two: replay folded *every* answered call whatever its size, so a
@@ -538,7 +546,7 @@ impl TranscriptView {
 fn folds_by_default(item: &TranscriptItem) -> bool {
     match item {
         TranscriptItem::Tool(tool) => match &tool.output {
-            Some(output) => output.is_error || collapse_long(&output.content),
+            Some(output) => output.content.lines().count() > 1,
             None => false,
         },
         _ => false,
@@ -847,13 +855,6 @@ fn tool_args(args: &serde_json::Value) -> String {
         return rendered;
     }
     rendered.chars().take(119).chain(['…']).collect()
-}
-
-/// Whether a finished tool's output is long enough to start collapsed: more
-/// than six source lines, or a payload that would wrap well past that (one
-/// giant minified line counts as 1 by `lines()` but fills the screen anyway).
-pub(super) fn collapse_long(content: &str) -> bool {
-    content.lines().count() > 6 || content.chars().count() > 600
 }
 
 /// One step of the shared stick-to-bottom scroll rule. Positive `delta` moves

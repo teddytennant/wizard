@@ -5,7 +5,7 @@ use crate::commands::{FusionAction, ServerAction};
 use crate::images::ImageRef;
 
 use super::command::{git_diff_text, is_wizard_state_path};
-use super::transcript::{collapse_long, scroll_step};
+use super::transcript::scroll_step;
 use crate::transcript::TranscriptItem;
 
 /// Replay `messages` into `app` the way `/resume` does — through session
@@ -1238,7 +1238,7 @@ fn the_tuis_live_turn_and_its_replay_agree() {
     ));
     // Answered out of call order, which is the case only the id gets right.
     let mut results = ChatMessage::tool_result("toolu_b", "read_file", "body b");
-    results.push_tool_result("toolu_a", "read_file", "body a");
+    results.push_tool_result("toolu_a", "read_file", "body a\nand a second line");
     results.push_tool_result("toolu_c", "render", "Error: the canvas is empty");
 
     let mut replayed = app();
@@ -1269,7 +1269,7 @@ fn the_tuis_live_turn_and_its_replay_agree() {
         (
             "read_file",
             serde_json::json!({"path": "a.rs"}),
-            crate::tools::ToolOutput::ok("body a"),
+            crate::tools::ToolOutput::ok("body a\nand a second line"),
         ),
         (
             "read_file",
@@ -1334,8 +1334,8 @@ fn the_tuis_live_turn_and_its_replay_agree() {
         "the failed call is in there"
     );
     // And the fold flags agree too, which is the half of the screen the model
-    // does not carry: the failed `render` card is shut on both paths, the
-    // short reads are open on both.
+    // does not carry: the two-line read is shut on both paths, the one-line
+    // ones are open on both.
     let folds = |app: &App| -> Vec<bool> {
         (0..app.transcript.len())
             .map(|index| app.transcript.folded(index))
@@ -1714,7 +1714,7 @@ fn background_task_events_drive_the_live_status_bar_counter() {
 }
 
 #[test]
-fn failed_tool_cards_start_collapsed() {
+fn multi_line_tool_output_starts_collapsed() {
     let mut app = app();
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "web_fetch".to_string(),
@@ -1730,24 +1730,40 @@ fn failed_tool_cards_start_collapsed() {
             Some(TranscriptItem::Tool(tool))
                 if tool.output.as_ref().expect("answered").is_error
         ) && app.transcript.folded(app.transcript.len() - 1),
-        "errors show only the ✗ card line until expanded via Ctrl-T"
+        "a page of HTML behind an error shows as the ✗ card line until Ctrl-T"
     );
 
-    // Short successful outputs still arrive expanded.
+    // A one-line result is the report itself, whether it worked or not.
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "read_file".to_string(),
         args: serde_json::json!({"path": "a.txt"}),
     });
     app.handle_agent_event(AgentEvent::ToolFinished {
         name: "read_file".to_string(),
-        output: crate::tools::ToolOutput::ok("one line"),
+        output: crate::tools::ToolOutput::error("failed to read a.txt: No such file"),
     });
-    assert!(matches!(
-        app.transcript.last(),
-        Some(TranscriptItem::Tool(tool))
-            if !tool.output.as_ref().expect("answered").is_error
-    ));
     assert!(!app.transcript.folded(app.transcript.len() - 1));
+
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({"path": "a.txt"}),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "edit_file".to_string(),
+        output: crate::tools::ToolOutput::ok("Edited a.txt: replaced 1 occurrence (line 3)"),
+    });
+    assert!(!app.transcript.folded(app.transcript.len() - 1));
+
+    // Three lines of a file are already the payload, not the answer.
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "read_file".to_string(),
+        args: serde_json::json!({"path": "b.txt"}),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "read_file".to_string(),
+        output: crate::tools::ToolOutput::ok("one\ntwo\nthree"),
+    });
+    assert!(app.transcript.folded(app.transcript.len() - 1));
 }
 
 #[test]
@@ -1773,17 +1789,6 @@ fn stream_retry_discards_the_partial_streamed_text() {
     // The retry streams the full answer; only that lands.
     app.handle_agent_event(AgentEvent::TextDelta("the full answer".to_string()));
     assert_eq!(app.transcript.streaming().1, "the full answer");
-}
-
-#[test]
-fn long_outputs_start_collapsed_by_lines_or_length() {
-    assert!(!collapse_long("short output"));
-    assert!(!collapse_long(&"line\n".repeat(6)));
-    assert!(collapse_long(&"line\n".repeat(7)), "more than six lines");
-    assert!(
-        collapse_long(&"x".repeat(601)),
-        "a giant single line wraps to fill the screen just the same"
-    );
 }
 
 fn click(app: &mut App, column: u16, row: u16) {
@@ -3616,7 +3621,13 @@ fn themed_fixture() -> App {
     for (name, output) in [
         ("probe", None),
         ("inspect", Some(crate::tools::ToolOutput::ok("output line"))),
-        ("explode", Some(crate::tools::ToolOutput::error("it broke"))),
+        (
+            "explode",
+            // Two lines, so the card folds and the fixture covers a shut one.
+            Some(crate::tools::ToolOutput::error(
+                "it broke\nstack: one frame",
+            )),
+        ),
     ] {
         app.handle_agent_event(AgentEvent::ToolStarted {
             name: name.to_string(),
