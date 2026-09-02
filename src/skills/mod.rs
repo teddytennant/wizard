@@ -188,11 +188,11 @@ pub fn skill_visible(skill: &Skill) -> bool {
     if skill.meta.when_env.is_empty() {
         return true;
     }
-    skill.meta.when_env.iter().any(|name| {
-        std::env::var(name)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-    })
+    skill
+        .meta
+        .when_env
+        .iter()
+        .any(|name| std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false))
 }
 
 /// Render loaded skills as a system-prompt section: a `## Skills` header
