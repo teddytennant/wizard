@@ -407,9 +407,15 @@ pub fn install_hook(lua: &Lua, _proof: &JitOff, bounds: &BoundsHandle) -> mlua::
                 stop.store(StopReason::Time.as_u8(), Ordering::SeqCst);
                 return Err(mlua::Error::runtime("exceeded its time budget"));
             }
-            // `used_memory` is 0 when mlua could not install its allocator,
-            // which reads as "no reading available" rather than "nothing
-            // allocated": the bound is skipped instead of tripping at once.
+            // mlua cannot install its accounting allocator under `luajit`, so
+            // `used_memory` falls through to LuaJIT's own `LUA_GCCOUNT` and
+            // returns a real figure rather than the 0 an older note here
+            // warned about. Verified by reading both and comparing: identical,
+            // to the byte, on every call.
+            //
+            // What it counts is the collector's heap, so anything held on the
+            // Rust side is invisible to this bound by construction. See the
+            // note on the output buffer below for the other half of that.
             let used = lua.used_memory();
             if used > memory_limit {
                 stop.store(StopReason::Memory.as_u8(), Ordering::SeqCst);
@@ -1475,9 +1481,31 @@ return "reachable:[" .. table.concat(reachable, ",") .. "]"
         );
 
         // Runaway allocation becomes a Lua error the tool reports.
+        //
+        // `tostring(#t)` is load-bearing. This was `string.rep('x', 1000000)`,
+        // which builds the SAME one-megabyte string on every iteration, and Lua
+        // interns strings: all of them were one object, the table grew by a
+        // pointer per entry, and the whole loop peaked at 2.3 MB against a
+        // 64 MB bound. It never came close, so the `||` in the old assertion
+        // was carrying the case on the time budget and the memory bound went
+        // unexercised. Vary the string and the loop allocates for real.
+        //
+        // Measured while getting this wrong: the hook's reading sat at 47701
+        // bytes, unchanged across 30953 of 31721 calls, which is the spin loop
+        // above rather than anything to do with allocation. The bound itself
+        // was always fine.
+        //
+        // The budget is 20s and the case takes about 6: it is a ceiling for the
+        // memory bound to trip under, not a duration. Do not tune it down to
+        // what a green run happens to take, because then a regression in the
+        // bound shows up as a timeout that this assertion no longer accepts,
+        // which reads as a broken test rather than a broken sandbox. Do not
+        // raise the megabytes either, since a big enough `string.rep` parks the
+        // VM in one C call for longer than the outer wall clock and the run
+        // dies with "timed out after 20s" before the hook gets to look.
         let err = run_scripted_with(
             "greedy",
-            "local t = {}\nwhile true do t[#t + 1] = string.rep('x', 1000000) end",
+            "local t = {}\nwhile true do t[#t + 1] = string.rep(tostring(#t), 1000000) end",
             &tmp.0.join("greedy.lua"),
             &json!({}),
             &tmp.0,
@@ -1486,8 +1514,11 @@ return "reachable:[" .. table.concat(reachable, ",") .. "]"
         )
         .expect_err("unbounded allocation must not reach the host allocator");
         let text = error_text(&err);
+        // Memory, specifically. A time refusal here means the allocation stopped
+        // being the thing that ends this script, which is the failure the old
+        // `|| contains("time budget")` hid for as long as it was written.
         assert!(
-            text.contains("memory") || text.contains("time budget"),
+            text.contains("memory"),
             "expected a memory refusal, got: {text}"
         );
 

@@ -24,8 +24,6 @@
 //! either left out this file compiles to nothing rather than to a broken
 //! reference.
 
-#![cfg(all(feature = "native", feature = "graph"))]
-
 use std::sync::Arc;
 use std::time::Duration;
 
