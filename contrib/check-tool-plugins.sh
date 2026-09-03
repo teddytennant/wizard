@@ -217,9 +217,11 @@ leg "without mesh" --features "$(without_many mesh graph)"
 
 # The GUI is where `graph` is actually consumed, so both sides of it need a
 # build with the window linked. `--build-only` is not enough here: the
-# `graph_explorer` integration test is `#![cfg(all(native, graph))]` and has to
+# `graph_explorer` integration test is gated on `all(native, graph)` and has to
 # be seen compiling *and* passing in the first of these and compiling to
-# nothing in the second.
+# nothing in the second. The gate is the `#[cfg]` on its `mod` line in
+# tests/integration/main.rs; it was a `#![cfg(...)]` inside the file itself
+# until the five integration targets became one.
 leg "the window, with the explorer" --features "$(all),native"
 leg "the window, with graph deleted" --features "$(without graph),native"
 

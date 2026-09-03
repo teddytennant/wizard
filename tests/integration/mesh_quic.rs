@@ -45,7 +45,6 @@
 //! cannot compile without it, so the file compiles to nothing on a build
 //! without the feature — the same shape `tests/graph_explorer.rs` has for
 //! `graph` and `native`.
-#![cfg(feature = "mesh")]
 
 use std::io::BufRead;
 use std::net::SocketAddr;
@@ -705,6 +704,24 @@ async fn a_peers_name_and_text_cannot_repaint_this_machines_terminal() {
 // Two processes
 // ---------------------------------------------------------------------------
 
+/// What `--exact` has to be given to reach [`child_node_entry_point`].
+///
+/// Derived rather than written down. This file used to be its own test binary,
+/// where the entry point was reachable as a bare `child_node_entry_point`; it
+/// is a module now, so libtest calls it `mesh_quic::child_node_entry_point`,
+/// and the hardcoded name silently matched no test at all. The child then ran
+/// nothing, printed nothing, and the parent failed on a missing socket address
+/// rather than on anything to do with the mesh.
+///
+/// `module_path!()` is `<crate>::mesh_quic` and libtest drops that crate root,
+/// so the first segment comes off. Moving this file again costs nothing.
+fn child_entry_point_name() -> String {
+    match module_path!().split_once("::") {
+        Some((_crate_root, module)) => format!("{module}::child_node_entry_point"),
+        None => "child_node_entry_point".to_string(),
+    }
+}
+
 /// The environment variable that turns this test binary into a mesh node.
 ///
 /// Set to `<seed byte>,<the parent's mesh address>` by the parent. Its presence
@@ -736,7 +753,7 @@ async fn a_node_in_another_process_streams_its_turn_across_a_socket() {
     let mut spawned = std::process::Command::new(exe)
         .args([
             "--exact",
-            "child_node_entry_point",
+            &child_entry_point_name(),
             "--nocapture",
             "--ignored",
         ])

@@ -26,7 +26,6 @@
 //! exits, so every assertion below would be about the wrong program. That
 //! degrade has its own assertion in
 //! `plugins::an_entrypoint_is_registered_exactly_when_its_plugin_is_compiled_in`.
-#![cfg(all(feature = "provider-ollama", feature = "acp"))]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
