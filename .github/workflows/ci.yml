@@ -175,6 +175,10 @@ jobs:
               include = (job.get("strategy") or {}).get("matrix", {}).get("include") or []
               return any(str(entry.get("runner", "")).startswith("macos") for entry in include)
 
+          #
+          # This proves the job EXISTS, not that it ran: `suite-test` skips
+          # itself on pull requests, so the run you are reading this on very
+          # likely did not execute it. Main did.
           if not any(
               str(step.get("run", "")).startswith("cargo test")
               for job in jobs.values() if is_macos(job)
@@ -500,9 +504,26 @@ jobs:
   # cannot vanish quietly, but no guard in this file can see branch protection.
   suite-test:
     name: macOS suite
-    # No `needs: [suite]`. Gating this on the compile job would put the 237
-    # seconds back behind the 105 and undo the split; both legs compile the
-    # same tree, and on a public repository the second macOS runner is free.
+    # Pushes to main, not pull requests. Measured at 365s against a 129s
+    # `macOS check`, which made it the slowest thing in this file by a wide
+    # margin and the only one whose result blocks nothing: on a pull request it
+    # was setting the wall clock long after the verdict anybody waits on had
+    # landed. On main it still runs on every commit, which is where a Darwin
+    # regression has to be caught before a tag.
+    #
+    # What this gives up, plainly: a Darwin-only test failure now merges green
+    # and surfaces on the next push to main rather than on the pull request
+    # that caused it. The compile half of that risk is untouched — `macOS
+    # check` above is blocking and still runs on every pull request. This is
+    # the suite only.
+    #
+    # Flipping it back is deleting the `if`, and promoting the suite to
+    # blocking REQUIRES that: a required check that does not run on pull
+    # requests leaves every one of them waiting on a status that never reports.
+    if: github.event_name != 'pull_request'
+    # No `needs: [suite]`. Gating this on the compile job would put its minutes
+    # back behind the compile's and undo the split; both legs compile the same
+    # tree, and on a public repository the second macOS runner is free.
     strategy:
       fail-fast: false
       matrix:
