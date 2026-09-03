@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-09-03
+
 ### Fixed
 
 - **Buzz-room skill stays off the terminal prompt.** Skills can set `when_env` so they are omitted unless those variables are set. The Buzz room skill uses it, so a TUI session without `BUZZ_PRIVATE_KEY` / `BUZZ_RELAY_URL` no longer lists room etiquette on every turn.
@@ -436,6 +438,7 @@ An adversarial audit ran against 2.0.0 before release. Its findings, all fixed h
 
   What is *not* affected: `wizard peers` and the mesh itself are unchanged, and the model and layout under the explorer (`src/graph/`) keep building and keep running their tests. The code is wired out, not deleted — `src/native/graph/mod.rs` lists the four seams that put it back, and `the_window_has_no_route_into_the_graph_explorer` fails the build if one of them returns by accident.
 
+[3.0.1]: https://github.com/teddytennant/wizard/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/teddytennant/wizard/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/teddytennant/wizard/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/teddytennant/wizard/compare/v2.1.0...v2.1.1
