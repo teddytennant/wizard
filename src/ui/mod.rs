@@ -725,10 +725,6 @@ pub(super) fn items_text(
     let mut prev_tool = false;
     let mut prev_notice = false;
     let mut first = true;
-    // The row Ctrl-T toggles, so its card can say so.
-    let newest_tool = view
-        .iter()
-        .rposition(|item| matches!(item, TranscriptItem::Tool(_)));
 
     for (index, item) in view.iter().enumerate() {
         // A turn boundary has no row of its own: the TUI shows a continuous
@@ -789,13 +785,7 @@ pub(super) fn items_text(
             TranscriptItem::Thinking(message) => wrap_lines(thinking_text(message), content_width),
             TranscriptItem::Tool(tool) => {
                 running = tool.output.is_none();
-                tool_card_lines(
-                    tool,
-                    view.folded(index),
-                    newest_tool == Some(index),
-                    tick,
-                    content_width,
-                )
+                tool_card_lines(tool, view.folded(index), tick, content_width)
             }
             // Images are the one entry that is not decorated: its rows are
             // reserved for pixels painted straight into the cells afterwards,
@@ -900,15 +890,7 @@ fn tool_label(name: &str, args: &serde_json::Value, grammar: ToolLabel) -> (Stri
     let summary = if args.is_null() {
         String::new()
     } else {
-        // `pattern` before `path`: a search has both, and the pattern is what
-        // was asked for — the path is only where.
-        match args
-            .get("command")
-            .or_else(|| args.get("pattern"))
-            .or_else(|| args.get("query"))
-            .or_else(|| args.get("url"))
-            .or_else(|| args.get("path"))
-        {
+        match args.get("command").or_else(|| args.get("path")) {
             Some(serde_json::Value::String(subject)) => subject.clone(),
             _ => serde_json::to_string(args).unwrap_or_default(),
         }
@@ -926,23 +908,18 @@ fn label_for(base: &str, grammar: ToolLabel) -> String {
 
 /// Render one tool invocation as a compact single-line card: status glyph,
 /// tool name in accent, truncated args in dim. Output expands below only
-/// when relevant (one-line results, a command still running, or Ctrl-T).
+/// when relevant (short successful outputs, or Ctrl-T).
 ///
 /// `running` is the call not having landed yet, which is *not* the same as
 /// `output` being `None`: a foreground command streams its output into the card
 /// while it runs (see [`crate::transcript::ToolItem::progress`]), so a card can
 /// have a body and still be waiting.
-///
-/// `newest` is this being the last tool row in the transcript, which is the one
-/// Ctrl-T toggles — so it is the only card the key hint can honestly appear on.
-///
 /// Returns the card's *content* rows, already wrapped to `width` — the block's
 /// own decoration (accent column, pads, slab) goes on afterwards, in
 /// [`crate::skin::layout::decorate`].
 fn tool_card_lines(
     tool: &ToolItem,
     collapsed: bool,
-    newest: bool,
     tick: u64,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -983,15 +960,9 @@ fn tool_card_lines(
             dim(),
         ));
     }
-    if collapsed && let Some(text) = output {
-        let mut digest = result_digest(name, text, is_error);
-        // Only on the newest card: Ctrl-T toggles that one, and a hint on
-        // every folded row would be a column of the same eight characters
-        // down a transcript where seven of them do nothing.
-        if newest {
-            digest.push_str("  ctrl+t");
-        }
-        card.push(Span::styled(format!("  {digest}"), dim().italic()));
+    let hidden = output.map(|text| text.lines().count()).unwrap_or(0);
+    if collapsed && hidden > 0 {
+        card.push(Span::styled(format!("  +{hidden} lines"), dim().italic()));
     }
     // The header is one row by construction: it is a summary, and a summary
     // that wraps onto a second line has stopped being one.
@@ -1044,75 +1015,6 @@ fn tool_card_lines(
         ));
     }
     lines
-}
-
-/// What a folded card says its call produced, in the tool's own unit.
-///
-/// A count rather than a preview: the card is one row, and half a line of a
-/// build log is not a summary of it. The unit is what makes the count worth
-/// reading — `12 entries` and `12 matches in 3 files` say something `12 lines`
-/// does not.
-///
-/// A failure says why instead. That is the one case where the count is beside
-/// the point, and it is also the case where the reason is a single line
-/// somewhere in the output rather than the whole of it.
-fn result_digest(name: &str, text: &str, is_error: bool) -> String {
-    let rows = text.lines().filter(|line| !line.trim().is_empty()).count();
-    if is_error {
-        return format!("{}  ({rows} lines)", truncate_width(failure_line(text), 56));
-    }
-    match name {
-        "search_files" => match_summary(text),
-        "list_files" => format!("{rows} {}", if rows == 1 { "entry" } else { "entries" }),
-        _ => format!("{rows} lines"),
-    }
-}
-
-/// The one line of a failed call's output that says what went wrong: the first
-/// real line of it.
-///
-/// `stderr:` is skipped because it is a divider
-/// [`render_command_result`](crate::tools::shell::render_command_result) writes
-/// between two streams, not something a program said. When skipping it leaves
-/// nothing — a command that printed no diagnostics at all — what remains is the
-/// verdict that function appends (`exit code: 101`), which is then the whole of
-/// what is known.
-///
-/// The ✗ has already said it failed, so the count beside this is what the line
-/// spends its width on: `error[E0308]: mismatched types` over `exit code: 101`.
-fn failure_line(text: &str) -> &str {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && *line != "stderr:")
-        .unwrap_or_default()
-}
-
-/// `3 matches in 2 files` and its neighbours, read back off `search_files`
-/// output — which is `path:line:text` rows, so the counts are in the text
-/// rather than beside it.
-///
-/// Shared with the Grok skin, whose header has carried this since it was
-/// ported (`P/src/scrollback/blocks/tool/search.rs:177-213`); it wraps the
-/// result in parentheses, the house card does not.
-pub(super) fn match_summary(output: &str) -> String {
-    let rows: Vec<&str> = output
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if rows.is_empty() {
-        return "no matches".to_string();
-    }
-    let mut files: Vec<&str> = rows
-        .iter()
-        .filter_map(|line| line.split_once(':').map(|(path, _)| path))
-        .collect();
-    files.sort_unstable();
-    files.dedup();
-    match (rows.len(), files.len()) {
-        (1, _) => "1 match".to_string(),
-        (n, 0 | 1) => format!("{n} matches"),
-        (n, m) => format!("{n} matches in {m} files"),
-    }
 }
 
 /// Wrap every line to `width`, keeping them in order. The rows that come out
@@ -4821,87 +4723,6 @@ mod tests {
         assert_eq!(wrap_rows(&cs("ab\ncd"), 10), vec![(0, 2), (3, 5)]);
         assert_eq!(wrap_rows(&cs("ab\n"), 10), vec![(0, 2), (3, 3)]);
         assert_eq!(wrap_rows(&cs("a\n\nb"), 10), vec![(0, 1), (2, 2), (3, 4)]);
-    }
-
-    /// A folded card is one row, and the row has to say what is behind it.
-    /// `+3 lines` was true of every call ever made; the unit is what makes it
-    /// worth reading.
-    #[test]
-    fn a_folded_card_says_what_the_call_produced() {
-        let card = |name: &str, args: serde_json::Value, output: crate::tools::ToolOutput| {
-            let mut tool = ToolItem {
-                name: name.to_string(),
-                args,
-                call_id: String::new(),
-                output: None,
-                progress: String::new(),
-            };
-            tool.output = Some(crate::transcript::ToolItemOutput {
-                is_error: output.is_error,
-                content: output.content,
-            });
-            flat(&tool_card_lines(&tool, true, false, 0, 200)[0])
-        };
-
-        assert_eq!(
-            card(
-                "read_file",
-                serde_json::json!({"path": "src/parser.rs"}),
-                crate::tools::ToolOutput::ok("one\ntwo\nthree"),
-            ),
-            "✓ read_file  src/parser.rs  3 lines"
-        );
-        assert_eq!(
-            card(
-                "list_files",
-                serde_json::json!({"path": "src"}),
-                crate::tools::ToolOutput::ok("a.rs\nb.rs"),
-            ),
-            "✓ list_files  src  2 entries"
-        );
-        // The pattern, not the directory it was run in: a search has both
-        // arguments and only one of them is the question.
-        assert_eq!(
-            card(
-                "search_files",
-                serde_json::json!({"pattern": "todo", "path": "src"}),
-                crate::tools::ToolOutput::ok("src/a.rs:1:todo\nsrc/a.rs:9:todo\nsrc/b.rs:2:todo"),
-            ),
-            "✓ search_files  todo  3 matches in 2 files"
-        );
-        // A failure spends the row on the reason rather than on the count, and
-        // `stderr:` is a divider `render_command_result` wrote, not a line the
-        // command printed.
-        assert_eq!(
-            card(
-                "execute",
-                serde_json::json!({"command": "cargo build"}),
-                crate::tools::ToolOutput::error(
-                    "stderr:\nerror[E0308]: mismatched types\n  --> src/parser.rs:3\nexit code: 101",
-                ),
-            ),
-            "✗ execute  cargo build  error[E0308]: mismatched types  (4 lines)"
-        );
-    }
-
-    /// The key that opens a card is named on the card it opens — the last
-    /// one — and nowhere else, because that is the only row Ctrl-T moves.
-    #[test]
-    fn only_the_newest_folded_card_names_the_key() {
-        let tool = ToolItem {
-            name: "read_file".to_string(),
-            args: serde_json::json!({"path": "a.rs"}),
-            call_id: String::new(),
-            output: Some(crate::transcript::ToolItemOutput {
-                content: "one\ntwo".to_string(),
-                is_error: false,
-            }),
-            progress: String::new(),
-        };
-        assert!(flat(&tool_card_lines(&tool, true, true, 0, 200)[0]).ends_with("2 lines  ctrl+t"));
-        assert!(flat(&tool_card_lines(&tool, true, false, 0, 200)[0]).ends_with("2 lines"));
-        // An open card is not waiting on a key.
-        assert!(!flat(&tool_card_lines(&tool, false, true, 0, 200)[0]).contains("ctrl+t"));
     }
 
     #[test]

@@ -1120,13 +1120,7 @@ fn tool_header(tool: &ToolItem, kind: ToolKind, mode: Mode) -> Vec<Span<'static>
                 spans.push(Span::styled(path, operand));
             }
             if let Some(text) = output {
-                // Parenthesised here and bare on the house card, which is the
-                // only difference between the two readings
-                // (`P/src/scrollback/blocks/tool/search.rs:177-213`).
-                spans.push(Span::styled(
-                    format!(" ({})", super::match_summary(text)),
-                    detail,
-                ));
+                spans.push(Span::styled(format!(" {}", match_summary(text)), detail));
             }
         }
         ToolKind::ListDir => {
@@ -1193,6 +1187,32 @@ fn other_summary(tool: &ToolItem) -> String {
     {
         Some(serde_json::Value::String(subject)) => subject.clone(),
         _ => serde_json::to_string(&tool.args).unwrap_or_default(),
+    }
+}
+
+/// `(3 matches in 2 files)` and its neighbours.
+///
+/// Ported from `P/src/scrollback/blocks/tool/search.rs:177-213`. Wizard's
+/// `search_files` returns `path:line:text` rows, so the counts are read back
+/// off the output rather than carried alongside it.
+fn match_summary(output: &str) -> String {
+    let rows: Vec<&str> = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if rows.is_empty() {
+        return "(no matches)".to_string();
+    }
+    let mut files: Vec<&str> = rows
+        .iter()
+        .filter_map(|line| line.split_once(':').map(|(path, _)| path))
+        .collect();
+    files.sort_unstable();
+    files.dedup();
+    match (rows.len(), files.len()) {
+        (1, _) => "(1 match)".to_string(),
+        (n, 0 | 1) => format!("({n} matches)"),
+        (n, m) => format!("({n} matches in {m} files)"),
     }
 }
 

@@ -153,20 +153,6 @@ on the terminal's own background, so Grok Build's tinted blocks become the bar
 alone) and **no meaning carried by hue only** (glyphs and brightness say it
 first, so the skins still read under `NO_COLOR` and on a 16-color terminal).
 
-### Tool cards
-
-A tool call is one row: the glyph, the tool, what it was given, and what came
-back — `✓ search_files  todo  3 matches in 2 files`, `✗ execute  cargo build
-error[E0308]: mismatched types  (12 lines)`.
-
-The output itself only lands in the transcript when it is a single line, which
-is the case where the line *is* the result (`Edited src/parser.rs: replaced 1
-occurrence (line 3)`). Anything longer is the file, the listing or the build log
-the model asked for, and it stays behind the card until you ask: **Ctrl-T**
-opens the last one, a **click** opens any of them. A command still running is
-open the whole time it runs, so you can watch it work, and folds when it
-answers.
-
 Implementation notes and the full attribution live in
 [ui-skins.md](ui-skins.md).
 

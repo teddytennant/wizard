@@ -6,20 +6,6 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
-### Changed
-
-- **The transcript keeps the result and folds the payload.** A tool card used to
-  print up to six lines of whatever came back, so a `cat` of a short file, an
-  `ls` and a three-line test summary all landed between the question and the
-  answer to it. Now only a one-line result stays on screen, which is the case
-  where that line is the report (`Edited src/parser.rs: replaced 1 occurrence`,
-  `failed to read a.txt: No such file`); anything longer folds into the card,
-  which says what is behind it in the tool's own unit — `3 matches in 2 files`,
-  `12 entries`, `214 lines`, and for a failure the line that says why. Ctrl-T
-  opens the last card and a click opens any of them, as before; the newest
-  folded card now names the key. A command still running stays open while it
-  runs.
-
 ### Fixed
 
 - **Buzz-room skill stays off the terminal prompt.** Skills can set `when_env` so they are omitted unless those variables are set. The Buzz room skill uses it, so a TUI session without `BUZZ_PRIVATE_KEY` / `BUZZ_RELAY_URL` no longer lists room etiquette on every turn.
