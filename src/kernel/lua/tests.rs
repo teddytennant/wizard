@@ -505,6 +505,126 @@ async fn lua_and_rust_plugins_share_one_service_namespace() {
 }
 
 #[tokio::test]
+async fn rust_callable_is_invokable_from_lua() {
+    let dir = TempDir::new("lua-callable-rust");
+    let kernel = kernel_in(&dir.path);
+
+    kernel
+        .load(TestPlugin::boxed("echo", |ctx| {
+            ctx.provide(
+                "echo",
+                Service::callable(|v| async move {
+                    Ok(json!({"got": v}))
+                }),
+            );
+            Ok(())
+        }))
+        .expect("rust plugin");
+
+    load(
+        &kernel,
+        "caller",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            local echo = ctx:inject("echo")
+            assert(type(echo) == "function", "callable injects as a function")
+            local out = echo({ n = 3 })
+            ctx:provide("report", out)
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("lua plugin");
+
+    let report = kernel.services().inject("report").expect("provided");
+    assert_eq!(report.as_data(), Some(&json!({"got": {"n": 3}})));
+}
+
+#[tokio::test]
+async fn lua_callable_is_invokable_from_rust_and_lua() {
+    let dir = TempDir::new("lua-callable-lua");
+    let kernel = kernel_in(&dir.path);
+
+    load(
+        &kernel,
+        "provider",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            ctx:provide("double", function(args)
+              return { n = args.n * 2 }
+            end)
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("provider");
+
+    let service = kernel.services().inject("double").expect("provided");
+    assert!(service.is_callable());
+    let out = service
+        .call(json!({"n": 21}))
+        .await
+        .expect("rust call");
+    assert_eq!(out, json!({"n": 42}));
+
+    load(
+        &kernel,
+        "peer",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            local double = ctx:inject("double")
+            ctx:provide("report", double({ n = 11 }))
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("peer");
+
+    let report = kernel.services().inject("report").expect("provided");
+    assert_eq!(report.as_data(), Some(&json!({"n": 22})));
+}
+
+#[tokio::test]
+async fn unloading_withdraws_a_lua_callable() {
+    let dir = TempDir::new("lua-callable-unload");
+    let kernel = kernel_in(&dir.path);
+
+    let id = load(
+        &kernel,
+        "provider",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        return {
+          apply = function(ctx)
+            ctx:provide("ping", function(args)
+              return args
+            end)
+          end,
+        }
+        "#,
+    )
+    .await
+    .expect("provider");
+
+    assert!(kernel.services().inject("ping").expect("live").is_callable());
+    kernel.unload(&id).await.expect("unload");
+    assert!(kernel.services().inject("ping").is_none());
+}
+
+#[tokio::test]
 async fn a_lua_plugin_reads_its_config_slice() {
     let dir = TempDir::new("lua-config");
     let kernel = kernel_in(&dir.path);

@@ -531,7 +531,7 @@ fn build_ctx_table(
     table.set("provider", provider_fn(lua, ctx)?)?;
     table.set("on", on_fn(lua, ctx, handle, registry)?)?;
     table.set("emit", emit_fn(lua, ctx)?)?;
-    table.set("provide", provide_fn(lua, ctx)?)?;
+    table.set("provide", provide_fn(lua, ctx, handle, registry)?)?;
     table.set("inject", inject_fn(lua, ctx)?)?;
     table.set("plugin", plugin_fn(lua, ctx)?)?;
     table.set("effect", effect_fn(lua, registry)?)?;
@@ -722,11 +722,31 @@ fn emit_fn(lua: &Lua, ctx: &Ctx) -> mlua::Result<mlua::Function> {
     )
 }
 
-fn provide_fn(lua: &Lua, ctx: &Ctx) -> mlua::Result<mlua::Function> {
+fn provide_fn(
+    lua: &Lua,
+    ctx: &Ctx,
+    handle: &VmHandle,
+    registry: &Registry,
+) -> mlua::Result<mlua::Function> {
     let ctx = ctx.clone();
+    let handle = handle.clone();
+    let registry = registry.clone();
     lua.create_function(
         move |lua, (_this, name, value): (Table, String, LuaValue)| {
-            ctx.provide(name, Service::data(lua_to_json(lua, value)?));
+            // A function becomes a callable the other side can invoke. Anything
+            // else stays a JSON snapshot, which is what Lua could always provide.
+            let service = match value {
+                LuaValue::Function(func) => {
+                    let func = registry.hold(func);
+                    let handle = handle.clone();
+                    Service::callable(move |args| {
+                        let handle = handle.clone();
+                        async move { handle.call(func, vec![args]).await }
+                    })
+                }
+                other => Service::data(lua_to_json(lua, other)?),
+            };
+            ctx.provide(name, service);
             Ok(())
         },
     )
@@ -735,13 +755,28 @@ fn provide_fn(lua: &Lua, ctx: &Ctx) -> mlua::Result<mlua::Function> {
 fn inject_fn(lua: &Lua, ctx: &Ctx) -> mlua::Result<mlua::Function> {
     let ctx = ctx.clone();
     lua.create_function(move |lua, (_this, name): (Table, String)| {
-        // A native service is `nil` here, which is the same `nil` an absent one
-        // gives — see the `Ctx` module docs. Lua cannot call a Rust trait
-        // object, and pretending otherwise would only move the failure later.
-        match ctx.inject(&name).as_ref().and_then(Service::as_data) {
-            Some(value) => json_to_lua(lua, value),
-            None => Ok(LuaValue::Nil),
+        // Native stays `nil` — Lua cannot call a Rust trait object. Data is a
+        // table. A callable is a Lua function that round-trips JSON through it.
+        let Some(service) = ctx.inject(&name) else {
+            return Ok(LuaValue::Nil);
+        };
+        if let Some(value) = service.as_data() {
+            return json_to_lua(lua, value);
         }
+        let Some(call) = service.as_callable() else {
+            return Ok(LuaValue::Nil);
+        };
+        let call = Arc::clone(call);
+        let func = lua.create_async_function(move |lua, args: LuaValue| {
+            let call = Arc::clone(&call);
+            let args = lua_to_json(&lua, args);
+            async move {
+                let args = args?;
+                let out = call(args).await.map_err(mlua::Error::external)?;
+                json_to_lua(&lua, &out)
+            }
+        })?;
+        Ok(LuaValue::Function(func))
     })
 }
 

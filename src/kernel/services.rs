@@ -22,6 +22,15 @@
 //! cannot call the thing — and it is the same answer it gets for a service
 //! nobody provided, which means a Lua plugin's degrade path already covers it.
 //!
+//! # Callables
+//!
+//! [`Service::Callable`] is the third arm: a function both languages can invoke
+//! with JSON in and JSON out. Rust provides one with [`Service::callable`]; a
+//! Lua `ctx:provide(name, function)` holds the function in that plugin's VM and
+//! publishes a callable that resumes it. `ctx:inject` returns a callable to Lua
+//! as a function, and to Rust as [`Service::as_callable`]. Native services stay
+//! invisible to Lua; data stays a snapshot.
+//!
 //! # Withdrawal, and why `inject` is not the last word
 //!
 //! Unloading a plugin has to withdraw its services "from anyone who injected
@@ -33,11 +42,17 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::Value;
 
 use super::lifecycle::PluginId;
+
+/// JSON in, JSON out, sendable across the service table.
+pub type ServiceCall =
+    Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = anyhow::Result<Value>> + Send>> + Send + Sync>;
 
 /// Something one plugin exposed for others to take.
 #[derive(Clone)]
@@ -48,6 +63,8 @@ pub enum Service {
     /// Plain data, which is what a Lua plugin can provide and what either
     /// language can read.
     Data(Value),
+    /// A function both languages can invoke. See the module docs.
+    Callable(ServiceCall),
 }
 
 impl Service {
@@ -68,12 +85,21 @@ impl Service {
         Service::Data(value)
     }
 
+    /// Wrap an async JSON→JSON function.
+    pub fn callable<F, Fut>(f: F) -> Self
+    where
+        F: Fn(Value) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<Value>> + Send + 'static,
+    {
+        Service::Callable(Arc::new(move |args| Box::pin(f(args))))
+    }
+
     /// Recover the concrete type. `None` when this is data, or when the caller
     /// guessed a different type than the provider published.
     pub fn downcast<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         match self {
             Service::Native(any) => Arc::clone(any).downcast::<T>().ok(),
-            Service::Data(_) => None,
+            Service::Data(_) | Service::Callable(_) => None,
         }
     }
 
@@ -82,12 +108,33 @@ impl Service {
     pub fn as_data(&self) -> Option<&Value> {
         match self {
             Service::Data(value) => Some(value),
-            Service::Native(_) => None,
+            Service::Native(_) | Service::Callable(_) => None,
+        }
+    }
+
+    /// The function behind a callable service.
+    pub fn as_callable(&self) -> Option<&ServiceCall> {
+        match self {
+            Service::Callable(call) => Some(call),
+            Service::Native(_) | Service::Data(_) => None,
         }
     }
 
     pub fn is_native(&self) -> bool {
         matches!(self, Service::Native(_))
+    }
+
+    pub fn is_callable(&self) -> bool {
+        matches!(self, Service::Callable(_))
+    }
+
+    /// Invoke a callable. Errors when this is data or native.
+    pub async fn call(&self, args: Value) -> anyhow::Result<Value> {
+        match self {
+            Service::Callable(call) => call(args).await,
+            Service::Data(_) => anyhow::bail!("service is data, not a callable"),
+            Service::Native(_) => anyhow::bail!("service is native, not a callable"),
+        }
     }
 }
 
@@ -98,6 +145,7 @@ impl std::fmt::Debug for Service {
             // use, so this says what it is and stops.
             Service::Native(_) => f.write_str("Service::Native(..)"),
             Service::Data(value) => write!(f, "Service::Data({value})"),
+            Service::Callable(_) => f.write_str("Service::Callable(..)"),
         }
     }
 }
@@ -449,6 +497,28 @@ mod tests {
             "Service::Native(..)"
         );
         assert_eq!(format!("{:?}", Service::data(json!(1))), "Service::Data(1)");
+        assert_eq!(
+            format!("{:?}", Service::callable(|v| async move { Ok(v) })),
+            "Service::Callable(..)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_callable_service_rounds_json_through_rust() {
+        let registry = ServiceRegistry::new();
+        registry.provide(
+            &plugin("echo"),
+            "echo",
+            Service::callable(|v| async move { Ok(v) }),
+        );
+        let service = registry.inject("echo").expect("provided");
+        assert!(service.as_callable().is_some());
+        assert!(service.as_data().is_none());
+        let out = service
+            .call(json!({"n": 3}))
+            .await
+            .expect("call");
+        assert_eq!(out, json!({"n": 3}));
     }
 
     #[test]
