@@ -1,0 +1,7 @@
+name = "plain-writing"
+version = "0.1.0"
+author = "teddytennant"
+description = "Write prose that reads like a person wrote it. Use for comments, READMEs, commits, PRs, and docs."
+tags = ["writing", "docs", "style"]
+kind = "skill"
+checksum = "303eb3dde57015cf989a9b965d83b9369797ff8f45859789560bca6f3a90a96d"
