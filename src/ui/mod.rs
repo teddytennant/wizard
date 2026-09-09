@@ -349,29 +349,86 @@ pub(super) fn selection_rows(
 
 /// Extract the text under a selection from a rendered cell buffer, in reading
 /// order, one `\n` per screen row. Trailing whitespace is trimmed per line so
-/// the copy isn't padded out to the row width.
+/// the copy isn't padded out to the row width. Shared leading whitespace
+/// across the selected rows is then stripped, so a drag that covers the
+/// transcript gutter (the one-column side margin, the `· `/`❯ ` marker, the
+/// grok rail) does not paste as an indented block.
 pub fn selection_text(buf: &Buffer, selection: &Selection) -> String {
     let area = buf.area;
     let rows = selection_rows(selection, area.width, area.height);
-    let mut out = String::new();
-    for (i, (y, start, end)) in rows.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
+    // Stream selection starts the first row at the click and every row
+    // below it at column 0, so the highlight covers the gutter on
+    // continuation rows. Those columns were never under the cursor on
+    // the first row; remember how many we skipped so the indent strip
+    // can treat them as leading spaces the first line "has".
+    let first_omitted = rows.first().map(|&(_, start, _)| start).unwrap_or(0);
+    let mut lines: Vec<String> = Vec::with_capacity(rows.len());
+    for (y, start, end) in rows {
         let mut line = String::new();
-        for x in *start..*end {
-            if let Some(cell) = buf.cell(Position::new(x, *y)) {
+        for x in start..end {
+            if let Some(cell) = buf.cell(Position::new(x, y)) {
                 line.push_str(cell.symbol());
             }
         }
-        out.push_str(line.trim_end());
+        lines.push(line.trim_end().to_string());
     }
+    strip_shared_leading_indent(&mut lines, first_omitted);
+    let out = lines.join("\n");
     // A selection of only blank cells trims to nothing; report it as empty so
     // the caller skips the copy.
     if out.trim().is_empty() {
         String::new()
     } else {
         out
+    }
+}
+
+/// Drop the run of leading spaces every non-blank line shares.
+///
+/// A drag across a Wizard transcript almost always includes the gutter: the
+/// body is inset one column from the terminal edge, assistant rows start
+/// `· `, user rows `❯ `, grok rows a rail plus two pads. Those columns are
+/// chrome. Relative indent inside the selection (code fences, nested lists)
+/// is left alone because it is not shared.
+///
+/// `first_omitted` is the start column of the first selected row. Stream
+/// selection skips those cells on the first row and includes them on every
+/// row below, which is how a copy used to grow a left margin after line one.
+fn strip_shared_leading_indent(lines: &mut [String], first_omitted: u16) {
+    // A one-line drag of indented code has nothing to compare against, so the
+    // indent is content. The gutter only becomes obvious across several rows.
+    let leading = |line: &str| line.chars().take_while(|c| *c == ' ').count();
+    let mut min = None;
+    let mut count = 0usize;
+    for (index, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let n = leading(line)
+            + if index == 0 {
+                first_omitted as usize
+            } else {
+                0
+            };
+        count += 1;
+        min = Some(min.map_or(n, |m: usize| m.min(n)));
+    }
+    if count < 2 {
+        return;
+    }
+    let Some(indent) = min.filter(|&n| n > 0) else {
+        return;
+    };
+    for (index, line) in lines.iter_mut().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let skip = if index == 0 {
+            indent.saturating_sub(first_omitted as usize)
+        } else {
+            indent
+        };
+        *line = line.chars().skip(skip).collect();
     }
 }
 
@@ -4234,6 +4291,51 @@ mod tests {
         // Middle row "ghi" padded to width 6; the blanks must not be copied.
         let text = selection_text(&sample_buffer(), &sel((0, 1), (5, 1)));
         assert_eq!(text, "ghi");
+    }
+
+    #[test]
+    fn selection_strips_the_gutter_indent_shared_by_every_row() {
+        // What a drag across a Wizard transcript actually copies: the body is
+        // inset from the terminal edge, so every row begins with the same
+        // spaces. Those are chrome. Nested indent inside the selection is not
+        // shared, so it stays.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 3));
+        buf.set_string(0, 0, "  hello", Style::default());
+        buf.set_string(0, 1, "  world", Style::default());
+        buf.set_string(0, 2, "    nest", Style::default());
+        assert_eq!(
+            selection_text(&buf, &sel((0, 0), (9, 2))),
+            "hello\nworld\n  nest"
+        );
+    }
+
+    #[test]
+    fn selection_keeps_indent_that_is_not_shared() {
+        // A drag that starts on the text, not the gutter, has no shared
+        // leading spaces and must not eat indent that belongs to the content.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 2));
+        buf.set_string(0, 0, "hello", Style::default());
+        buf.set_string(0, 1, "  world", Style::default());
+        assert_eq!(selection_text(&buf, &sel((0, 0), (7, 1))), "hello\n  world");
+    }
+
+    #[test]
+    fn a_one_line_selection_keeps_its_own_indent() {
+        // Nothing to compare against, so the spaces might be code. Leave them.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
+        buf.set_string(0, 0, "    foo()", Style::default());
+        assert_eq!(selection_text(&buf, &sel((0, 0), (9, 0))), "    foo()");
+    }
+
+    #[test]
+    fn selection_does_not_grow_a_gutter_on_continuation_rows() {
+        // Drag starts on the text, not column 0. Stream selection still
+        // covers column 0 on every row below, which used to paste as a
+        // left margin the first line did not have.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        buf.set_string(0, 0, "  hello", Style::default());
+        buf.set_string(0, 1, "  world", Style::default());
+        assert_eq!(selection_text(&buf, &sel((2, 0), (9, 1))), "hello\nworld");
     }
 
     #[test]

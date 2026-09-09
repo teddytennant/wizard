@@ -207,7 +207,7 @@ Shift+Tab                   toggle plan mode\n  \
 PgUp/PgDn \u{b7} wheel           scroll the transcript (stays put while streaming)\n  \
 Esc \u{b7} Ctrl-End              jump back to the live tail\n  \
 drag                        select text \u{2014} copied to the clipboard on release\n  \
-Ctrl-Y                      copy the last reply (works over SSH and in tmux)\n  \
+Ctrl-Y                      copy the last reply (works over SSH, tmux, zellij)\n  \
 click a tool card           expand / collapse its output\n  \
 Ctrl-P                      model picker  \u{b7}  Ctrl-T toggle last tool card\n  \
 Ctrl-A/E Home/End \u{2190}/\u{2192}       move cursor   \u{b7} Ctrl-W/U/K kill word/to start/to end\n  \

@@ -297,7 +297,8 @@ pub(super) fn edit_prompt_in_editor(app: &mut App, terminal: &mut Tui) {
 //     sitting at while Wizard runs on a server.
 //   * tmux's paste buffer is where `prefix ]` pastes from, and is therefore
 //     what a tmux user means by "copy" regardless of what the outer terminal
-//     did with the escape.
+//     did with the escape. Zellij has no equivalent command; it intercepts
+//     OSC 52 from the pane and forwards the copy itself.
 //
 // Both of the interesting failures are silent by construction. A native tool
 // on a remote host exits zero after writing a clipboard nobody can see, and a
@@ -317,6 +318,9 @@ struct CopyEnv {
     tmux: bool,
     /// Running inside GNU screen, which frames escapes its own way.
     screen: bool,
+    /// Running inside Zellij (`$ZELLIJ`). Zellij intercepts OSC 52 itself
+    /// and forwards a copy to the outer terminal; it has no DCS wrapper.
+    zellij: bool,
     /// This process is on the far end of an SSH session.
     ssh: bool,
     /// A display the native clipboard tools could plausibly write to.
@@ -329,8 +333,9 @@ impl CopyEnv {
         Self::from_parts(
             set("TMUX"),
             set("STY"),
+            set("ZELLIJ"),
             &std::env::var("TERM").unwrap_or_default(),
-            set("SSH_CONNECTION") || set("SSH_TTY"),
+            set("SSH_CONNECTION") || set("SSH_TTY") || set("SSH_CLIENT"),
             set("DISPLAY") || set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") || cfg!(not(unix)),
         )
     }
@@ -339,11 +344,21 @@ impl CopyEnv {
     /// the one with a trap in it: tmux sets `TERM=screen-256color` on plenty
     /// of installs, so a `$TERM`-first reading of "am I under screen" says yes
     /// inside tmux and frames every escape the wrong way. `$TMUX` decides
-    /// first, and `$TERM` only gets a say when it does not.
-    fn from_parts(tmux: bool, sty: bool, term: &str, ssh: bool, display: bool) -> Self {
+    /// first, `$ZELLIJ` next, and `$TERM` only gets a say when neither is set.
+    /// Nested `tmux` inside Zellij is possible; tmux still owns the pane then,
+    /// so its wrapper wins.
+    fn from_parts(
+        tmux: bool,
+        sty: bool,
+        zellij: bool,
+        term: &str,
+        ssh: bool,
+        display: bool,
+    ) -> Self {
         Self {
             tmux,
-            screen: !tmux && (sty || term.starts_with("screen")),
+            screen: !tmux && !zellij && (sty || term.starts_with("screen")),
+            zellij: zellij && !tmux,
             ssh,
             display,
         }
@@ -355,14 +370,15 @@ impl CopyEnv {
     /// Over SSH they must be: `xclip` on the server writes a clipboard on the
     /// server, and exits zero doing it, so letting it answer first is how a
     /// copy comes to report success while the user's own clipboard never
-    /// changes. Inside tmux the same reordering is merely correct rather than
-    /// critical, since the paste about to be attempted is probably `prefix ]`.
+    /// changes. Inside tmux or Zellij the same reordering is merely correct
+    /// rather than critical, since the paste about to be attempted is probably
+    /// the multiplexer's own.
     ///
     /// Order only. No leg suppresses another any more, which is the other half
     /// of the same bug: the previous code returned the moment a native tool
     /// exited zero and never sent the escape at all.
     fn prefer_escape(self) -> bool {
-        self.ssh || self.tmux
+        self.ssh || self.tmux || self.zellij
     }
 
     /// Whether a native clipboard tool is worth spawning at all.
@@ -454,10 +470,9 @@ fn copy_with_env(text: &str, env: CopyEnv) -> Result<Option<String>> {
         record(copy_via_tmux_buffer(text), "tmux's paste buffer");
     }
 
-    let escape = clipboard_escape(text, env);
-    let oversize = escape.is_none();
-    if let Some(sequence) = escape {
-        record(write_escape(&sequence), "the terminal (OSC 52)");
+    let oversize = text.len() > OSC52_MAX_TEXT;
+    if !oversize {
+        record(write_escape(text, env), "the terminal (OSC 52)");
     }
 
     if native && env.prefer_escape() {
@@ -614,51 +629,88 @@ fn copy_via_tmux_buffer(text: &str) -> Result<()> {
     pipe_to("tmux", &["load-buffer", "-"], text.as_bytes()).context("loading tmux's paste buffer")
 }
 
-/// Write a terminal escape where the terminal will actually read it.
+/// Write the clipboard escape where each layer of the terminal stack will
+/// actually read it.
 ///
-/// stdout, because that is the handle the rest of this module drives: the
-/// ratatui backend, the alternate screen, the mouse capture and the keyboard
-/// flags all go through `std::io::stdout()`, so an escape sent anywhere else
-/// could reach a different device than the frame it belongs to. Under a
-/// multiplexer this is the pane's pty either way, and getting past the
-/// multiplexer is a framing problem rather than a file-descriptor one.
-///
-/// The tty is the fallback for the case where that reasoning breaks down,
-/// which is stdout redirected somewhere that is not a terminal at all. `$SSH_TTY`
-/// first because it names this session's pty outright, then `/dev/tty`, which
-/// needs a controlling terminal that a redirected process may not have.
-fn write_escape(sequence: &str) -> Result<()> {
+/// The pane (stdout, then `/dev/tty`) gets the sequence framed for the mux
+/// in the way: tmux's DCS passthrough, screen's chunked DCS, or the bare
+/// OSC 52 Zellij intercepts itself. `$SSH_TTY` is the sshd pty *outside*
+/// that mux, so a wrapped sequence there is bytes the laptop's emulator
+/// does not understand. Over SSH the bare OSC 52 is written there too.
+/// That is the route that reaches the clipboard of the machine the user
+/// is sitting at when tmux's `set-clipboard` is `external` and
+/// `allow-passthrough` is off, and when Zellij is between Wizard and sshd.
+fn write_escape(text: &str, env: CopyEnv) -> Result<()> {
     use std::io::{IsTerminal, Write};
 
-    let mut stdout = std::io::stdout();
-    if stdout.is_terminal() {
-        stdout
-            .write_all(sequence.as_bytes())
-            .context("writing clipboard escape")?;
-        return stdout.flush().context("flushing clipboard escape");
-    }
+    let Some(framed) = clipboard_escape(text, env) else {
+        anyhow::bail!("selection is past the clipboard-escape cap");
+    };
 
     let mut last: Option<anyhow::Error> = None;
-    for path in [std::env::var_os("SSH_TTY"), Some("/dev/tty".into())]
-        .into_iter()
-        .flatten()
-    {
-        match std::fs::OpenOptions::new().write(true).open(&path) {
-            Ok(mut tty) => {
-                tty.write_all(sequence.as_bytes())
-                    .with_context(|| format!("writing clipboard escape to {:?}", path))?;
-                return tty
-                    .flush()
-                    .with_context(|| format!("flushing clipboard escape to {:?}", path));
+    let mut wrote = false;
+    let mut stdout = std::io::stdout();
+    if stdout.is_terminal() {
+        match stdout
+            .write_all(framed.as_bytes())
+            .and_then(|_| stdout.flush())
+        {
+            Ok(()) => {
+                wrote = true;
+                if !env.ssh && !env.tmux && !env.zellij && !env.screen {
+                    return Ok(());
+                }
             }
             Err(err) => {
-                last = Some(anyhow::Error::new(err).context(format!("opening {:?}", path)));
+                last = Some(anyhow::Error::new(err).context("writing clipboard escape to stdout"));
             }
         }
+    }
+
+    match emit_to_path("/dev/tty", &framed) {
+        Ok(()) => wrote = true,
+        Err(err) => last = Some(err),
+    }
+
+    // `$SSH_TTY` is this session's pty as sshd sees it. Inside tmux or
+    // Zellij that is still the mux pane (same device as `/dev/tty`), so
+    // a second write of the same framed sequence is a no-op, and a bare
+    // OSC 52 would be the one tmux's default `set-clipboard external`
+    // discards. Only write it when there is no mux in the way, where it
+    // is the outer sshd pty and the framed sequence on stdout may have
+    // gone to a redirected handle the laptop never sees.
+    if env.ssh && !env.tmux && !env.zellij && !env.screen {
+        if let Some(ssh_tty) = std::env::var_os("SSH_TTY")
+            && !ssh_tty.is_empty()
+            && ssh_tty != "/dev/tty"
+        {
+            match emit_to_path(&ssh_tty, &framed) {
+                Ok(()) => wrote = true,
+                Err(err) => last = Some(err),
+            }
+        }
+    }
+
+    if wrote {
+        return Ok(());
     }
     Err(last.unwrap_or_else(|| {
         anyhow::anyhow!("stdout is not a terminal and no tty is available for the clipboard escape")
     }))
+}
+
+fn emit_to_path(path: impl AsRef<std::path::Path>, sequence: &str) -> Result<()> {
+    use std::io::Write;
+
+    let path = path.as_ref();
+    let mut tty = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {path:?}"))?;
+    tty.write_all(sequence.as_bytes())
+        .with_context(|| format!("writing clipboard escape to {path:?}"))?;
+    tty.flush()
+        .with_context(|| format!("flushing clipboard escape to {path:?}"))
 }
 
 /// Pipe `text` into the first available OS clipboard writer.
@@ -891,6 +943,7 @@ mod tests {
     const PLAIN: CopyEnv = CopyEnv {
         tmux: false,
         screen: false,
+        zellij: false,
         ssh: false,
         display: true,
     };
@@ -1020,6 +1073,10 @@ mod tests {
                 screen: true,
                 ..PLAIN
             },
+            CopyEnv {
+                zellij: true,
+                ..PLAIN
+            },
         ] {
             assert!(clipboard_escape(&"x".repeat(OSC52_MAX_TEXT + 1), env).is_none());
         }
@@ -1035,6 +1092,13 @@ mod tests {
         assert!(
             CopyEnv {
                 tmux: true,
+                ..PLAIN
+            }
+            .prefer_escape()
+        );
+        assert!(
+            CopyEnv {
+                zellij: true,
                 ..PLAIN
             }
             .prefer_escape()
@@ -1083,17 +1147,54 @@ mod tests {
         // tmux ships `TERM=screen-256color` on plenty of installs, so reading
         // $TERM first says "screen" inside tmux and frames every escape with
         // the wrong wrapper.
-        let inside_tmux = CopyEnv::from_parts(true, false, "screen-256color", true, false);
+        let inside_tmux = CopyEnv::from_parts(true, false, false, "screen-256color", true, false);
         assert!(inside_tmux.tmux);
         assert!(!inside_tmux.screen);
+        assert!(!inside_tmux.zellij);
 
-        let inside_screen = CopyEnv::from_parts(false, true, "screen.xterm-256color", false, true);
+        let inside_screen =
+            CopyEnv::from_parts(false, true, false, "screen.xterm-256color", false, true);
         assert!(inside_screen.screen);
         assert!(!inside_screen.tmux);
 
         // $STY is the reliable marker, but a screen session that lost it is
         // still recognisable from $TERM.
-        assert!(CopyEnv::from_parts(false, false, "screen", false, false).screen);
-        assert!(!CopyEnv::from_parts(false, false, "xterm-256color", false, false).screen);
+        assert!(CopyEnv::from_parts(false, false, false, "screen", false, false).screen);
+        assert!(!CopyEnv::from_parts(false, false, false, "xterm-256color", false, false).screen);
+    }
+
+    #[test]
+    fn zellij_gets_the_bare_osc_52_and_prefers_the_escape() {
+        // Zellij intercepts OSC 52 itself and forwards a copy. Wrapping it in
+        // tmux's DCS would print the sequence into the pane. Nested tmux
+        // inside Zellij still belongs to tmux: that pane's $TMUX is set.
+        let env = CopyEnv::from_parts(false, false, true, "xterm-256color", true, false);
+        assert!(env.zellij);
+        assert!(!env.tmux);
+        assert!(!env.screen);
+        assert!(env.prefer_escape());
+        let escape = clipboard_escape("hi", env).expect("fits");
+        assert_eq!(escape, "\x1b]52;c;aGk=\x07");
+
+        let nested = CopyEnv::from_parts(true, false, true, "tmux-256color", true, false);
+        assert!(nested.tmux);
+        assert!(!nested.zellij);
+        assert_eq!(
+            clipboard_escape("hi", nested).expect("fits"),
+            "\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\"
+        );
+    }
+
+    #[test]
+    fn ssh_client_alone_is_enough_to_prefer_the_escape() {
+        // Some sshds set SSH_CLIENT and not SSH_CONNECTION / SSH_TTY. Missing
+        // that used to lead with xclip on the server.
+        let env = CopyEnv {
+            ssh: true,
+            display: false,
+            ..PLAIN
+        };
+        assert!(env.prefer_escape());
+        assert!(!env.native_worth_trying());
     }
 }

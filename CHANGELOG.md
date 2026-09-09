@@ -15,6 +15,11 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   bridge gap that blocked Lua ports of `memory` / `image`.
 - **plain-writing and undercover in the stock skills registry.** `wizard skills search` can find them and `wizard skills install` can pull them from `registry/skills/teddytennant/`. Undercover here is the model-facing clean-history skill; the commit-guard hooks stay in the undercover repo.
 
+### Fixed
+
+- **A drag-copy no longer pastes with the transcript gutter in front of every line.** Shared leading spaces across the selected rows (the one-column side margin, the `· `/`❯ ` marker, the grok rail) are stripped. Relative indent inside the selection is kept, and a one-line drag of indented code is left alone.
+- **Copy over SSH reaches the terminal you are sitting at inside tmux and Zellij.** The OSC 52 is still framed for the mux on the pane, and over SSH with no mux it is also written to `$SSH_TTY`. Zellij has no `load-buffer -w` equivalent, so it is detected (`$ZELLIJ`) and gets the unwrapped escape rather than tmux's DCS wrapper. Nested tmux inside Zellij still uses tmux's wrapper.
+
 ## [3.0.1] - 2026-09-03
 
 ### Fixed

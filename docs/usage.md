@@ -187,13 +187,18 @@ which one you will actually paste from is not knowable from inside Wizard:
 |---|---|---|
 | Native tool | The clipboard of the machine Wizard runs on, via `wl-copy` / `xclip` / `xsel` / `pbcopy` / `clip.exe` | Always locally. Over SSH only when there is a display; first in a local session, last in a remote one |
 | tmux paste buffer | What `prefix ]` pastes, via `tmux load-buffer -w` | Inside tmux |
-| OSC 52 | The clipboard of the terminal you are *sitting at*, wrapped in tmux's or screen's passthrough when one is in the way | Always, up to 74994 bytes of text |
+| OSC 52 | The clipboard of the terminal you are *sitting at*, wrapped in tmux's or screen's passthrough when one is in the way | Always, up to 74994 bytes of text. Written to stdout and, over SSH or inside a mux, also to `/dev/tty` / `$SSH_TTY` |
 
 They are not fallbacks for each other. Over SSH the native tool is the wrong
 one: `xclip` on the server sets the server's clipboard, which nobody can see,
 and exits successfully doing it. OSC 52 is the only route that can reach your
 own machine. Inside tmux, the paste buffer is the route that is certain to
 work.
+
+A drag copies the cells on screen. Shared leading spaces across the selected
+rows (the transcript gutter, the `· ` / `❯ ` marker, the grok rail) are
+stripped so the paste is the text, not the chrome. Relative indent inside the
+selection is kept.
 
 **Inside tmux**, the load-bearing route is `tmux load-buffer -w`, which fills
 the paste buffer and asks tmux to push the text out to the real terminal with
@@ -202,6 +207,13 @@ default `set-clipboard external` ignores it, and the DCS passthrough Wizard
 also sends has been gated behind `set -g allow-passthrough on` since tmux
 3.3a. Turn that option on if you want the passthrough route too; nothing
 breaks without it.
+
+**Inside Zellij**, there is no DCS wrapper and no paste-buffer command
+equivalent to `tmux load-buffer -w`. Zellij intercepts a bare OSC 52 from the
+pane and forwards the copy, which is the only method that works over SSH.
+Wizard therefore sends the unwrapped escape, and prefers it over native tools
+the same way it does under tmux. Nested tmux inside Zellij still uses tmux's
+wrapper: that pane's `$TMUX` is set.
 
 **Over 74994 bytes** the escape is skipped rather than sent, because terminals
 drop an oversized OSC 52 in silence and a copy that reports success and pastes
