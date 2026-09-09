@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **plain-writing and undercover in the stock skills registry.** `wizard skills search` can find them and `wizard skills install` can pull them from `registry/skills/teddytennant/`. Undercover here is the model-facing clean-history skill; the commit-guard hooks stay in the undercover repo.
+
 ## [3.0.1] - 2026-09-03
 
 ### Fixed

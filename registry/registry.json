@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-08-21T14:04:59Z",
+  "generated_at": "2026-09-09T00:09:21Z",
   "entries": [
     {
       "name": "conventional-commit",
@@ -17,6 +17,21 @@
       "path": "skills/teddytennant/conventional-commit"
     },
     {
+      "name": "plain-writing",
+      "version": "0.1.0",
+      "author": "teddytennant",
+      "description": "Write prose that reads like a person wrote it. Use for comments, READMEs, commits, PRs, and docs.",
+      "tags": [
+        "writing",
+        "docs",
+        "style"
+      ],
+      "kind": "skill",
+      "checksum": "303eb3dde57015cf989a9b965d83b9369797ff8f45859789560bca6f3a90a96d",
+      "capabilities": [],
+      "path": "skills/teddytennant/plain-writing"
+    },
+    {
       "name": "pr-description",
       "version": "1.0.0",
       "author": "teddytennant",
@@ -30,6 +45,21 @@
       "checksum": "f06852d445ff082c06613c4ce1224b084c614f774162bbd7793e5ba8c7d72fe8",
       "capabilities": [],
       "path": "skills/teddytennant/pr-description"
+    },
+    {
+      "name": "undercover",
+      "version": "1.0.0",
+      "author": "teddytennant",
+      "description": "Keep public git history clean: no AI attribution footers, no blocklist leaks in commits or PRs.",
+      "tags": [
+        "git",
+        "privacy",
+        "style"
+      ],
+      "kind": "skill",
+      "checksum": "0be76bd6268f97ed24da3257a8c5a353df00e7dc5103cc5b2d1946b93fc88086",
+      "capabilities": [],
+      "path": "skills/teddytennant/undercover"
     }
   ]
 }

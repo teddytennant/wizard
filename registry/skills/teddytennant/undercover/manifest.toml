@@ -1,0 +1,7 @@
+name = "undercover"
+version = "1.0.0"
+author = "teddytennant"
+description = "Keep public git history clean: no AI attribution footers, no blocklist leaks in commits or PRs."
+tags = ["git", "privacy", "style"]
+kind = "skill"
+checksum = "0be76bd6268f97ed24da3257a8c5a353df00e7dc5103cc5b2d1946b93fc88086"
