@@ -513,9 +513,7 @@ async fn rust_callable_is_invokable_from_lua() {
         .load(TestPlugin::boxed("echo", |ctx| {
             ctx.provide(
                 "echo",
-                Service::callable(|v| async move {
-                    Ok(json!({"got": v}))
-                }),
+                Service::callable(|v| async move { Ok(json!({"got": v})) }),
             );
             Ok(())
         }))
@@ -569,10 +567,7 @@ async fn lua_callable_is_invokable_from_rust_and_lua() {
 
     let service = kernel.services().inject("double").expect("provided");
     assert!(service.is_callable());
-    let out = service
-        .call(json!({"n": 21}))
-        .await
-        .expect("rust call");
+    let out = service.call(json!({"n": 21})).await.expect("rust call");
     assert_eq!(out, json!({"n": 42}));
 
     load(
@@ -619,7 +614,13 @@ async fn unloading_withdraws_a_lua_callable() {
     .await
     .expect("provider");
 
-    assert!(kernel.services().inject("ping").expect("live").is_callable());
+    assert!(
+        kernel
+            .services()
+            .inject("ping")
+            .expect("live")
+            .is_callable()
+    );
     kernel.unload(&id).await.expect("unload");
     assert!(kernel.services().inject("ping").is_none());
 }

@@ -514,10 +514,7 @@ mod tests {
         let service = registry.inject("echo").expect("provided");
         assert!(service.as_callable().is_some());
         assert!(service.as_data().is_none());
-        let out = service
-            .call(json!({"n": 3}))
-            .await
-            .expect("call");
+        let out = service.call(json!({"n": 3})).await.expect("call");
         assert_eq!(out, json!({"n": 3}));
     }
 

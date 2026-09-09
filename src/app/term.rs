@@ -679,15 +679,17 @@ fn write_escape(text: &str, env: CopyEnv) -> Result<()> {
     // discards. Only write it when there is no mux in the way, where it
     // is the outer sshd pty and the framed sequence on stdout may have
     // gone to a redirected handle the laptop never sees.
-    if env.ssh && !env.tmux && !env.zellij && !env.screen {
-        if let Some(ssh_tty) = std::env::var_os("SSH_TTY")
-            && !ssh_tty.is_empty()
-            && ssh_tty != "/dev/tty"
-        {
-            match emit_to_path(&ssh_tty, &framed) {
-                Ok(()) => wrote = true,
-                Err(err) => last = Some(err),
-            }
+    if env.ssh
+        && !env.tmux
+        && !env.zellij
+        && !env.screen
+        && let Some(ssh_tty) = std::env::var_os("SSH_TTY")
+        && !ssh_tty.is_empty()
+        && ssh_tty != "/dev/tty"
+    {
+        match emit_to_path(&ssh_tty, &framed) {
+            Ok(()) => wrote = true,
+            Err(err) => last = Some(err),
         }
     }
 
