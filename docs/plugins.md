@@ -1651,11 +1651,12 @@ because its daemon supervises long-lived children and the host bridge has no
 shape to hold one in. The section at the end of this document is the argument,
 and it adds the two questions that would have caught them.
 
-**Blocked, not decided.** `memory` and `image` are Lua-shaped in body and
-blocked on a service: both need a *core* store reachable from a plugin, and
-`ctx:inject` hands Lua only JSON data. `Ctx::provide` with a callable service
-Lua could invoke is the missing piece, and it is the same piece
-`tools/image.rs`'s four-provider-id branch already needs.
+**Unblocked on the service side.** `memory` and `image` still need a *core*
+store reachable from a plugin, but the callable gap is closed: `Service::Callable`
+lets Rust and Lua `provide` a JSON→JSON function and `inject` it as a callable
+(Lua sees a function; Rust sees [`Service::as_callable`](../src/kernel/services.rs)).
+Native stays invisible to scripts; data stays a snapshot. The remaining work for
+those two plugins is the store itself, not the host bridge.
 ## As built: two more surfaces, and what three call sites did to `entrypoint.rs`
 
 `wizard acp` and `wizard fleet` went through the door the window opened.
@@ -2002,11 +2003,12 @@ implementation appearing between them.
 
 ### Host-bridge and kernel gaps these two found
 
-- **A Lua plugin cannot expose a callable.** `ctx:provide` from Lua is
-  `Service::data`, so core injects a snapshot. `Ctx::provide` with a callable
-  Lua service is already listed above as the piece `memory` and `image` are
-  blocked on; this is the same gap from the other side, and it would not have
-  been enough on its own, because the callers here also cannot await.
+- **A Lua plugin can expose a callable.** `ctx:provide(name, function)` holds
+  the function in that plugin's VM and publishes `Service::Callable`; injectors
+  in Rust or Lua can invoke it with JSON in and JSON out. That closes the
+  `memory` / `image` host-bridge gap named above. It would still not have been
+  enough on its own for `hardware` / `schedule`, because those callers also
+  cannot await.
 - **There is no synchronous door into a plugin VM**, and there should not be
   one: `load_source` is async because the VM is a task, and a `block_on` from a
   tokio worker is a panic. What is missing is not a door but a rule, which is

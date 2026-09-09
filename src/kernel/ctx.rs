@@ -29,7 +29,8 @@
 //!    service some Rust plugin provided as an `Arc<dyn Trait>` returns `nil`
 //!    (`undefined` in JavaScript), because a script cannot call it. It is the
 //!    same absent-service answer, so a scripted plugin's degrade path already
-//!    covers the case.
+//!    covers the case. A [`Service::Callable`](super::services::Service::Callable)
+//!    is the other door: JSON in, JSON out, visible to both languages.
 //! 2. **A script's teardown runs inside its own VM.** `ctx:effect(fn)` cannot
 //!    become a Rust `FnOnce`, so it is recorded in the VM and run there during
 //!    shutdown, after the registries are already clear. From Rust an effect is
