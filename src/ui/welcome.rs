@@ -102,9 +102,17 @@ fn welcome_notices(app: &App) -> Vec<Line<'static>> {
         .collect();
     for text in notices.iter().rev().take(MAX_WELCOME_NOTICES) {
         let line = text.lines().next().unwrap_or_default();
+        // The glyph is for something broken. A quiet notice (a server skipped
+        // because its command is not installed) is a dim line, as the
+        // transcript draws it.
+        let (glyph, style) = if line.starts_with("error") {
+            ("⚠ ", warning())
+        } else {
+            ("", dim())
+        };
         lines.push(Line::from(Span::styled(
-            format!("⚠ {}", truncate_width(line, WELCOME_NOTICE_WIDTH)),
-            warning(),
+            format!("{glyph}{}", truncate_width(line, WELCOME_NOTICE_WIDTH)),
+            style,
         )));
     }
     lines

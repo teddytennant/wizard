@@ -56,6 +56,7 @@
 //! failure is loud exactly when somebody asked for something this binary
 //! cannot do, and silent when they did not.
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -359,6 +360,51 @@ impl McpConfig {
         std::fs::write(path, raw)
             .with_context(|| format!("failed to write MCP config to {}", path.display()))
     }
+
+    /// The servers that can be dialed, and `(name, command)` for each stdio
+    /// server whose command is not on `PATH`.
+    ///
+    /// A missing command is not a failed connect: nothing was tried. The
+    /// caller says so in one quiet line instead of the error banner a server
+    /// that was reached and refused gets.
+    pub fn split_missing(&self, path: Option<&OsStr>) -> (Self, Vec<(String, String)>) {
+        let mut runnable = Vec::with_capacity(self.servers.len());
+        let mut missing = Vec::new();
+        for server in &self.servers {
+            match server.missing_command(path) {
+                Some(command) => missing.push((server.name.clone(), command.to_string())),
+                None => runnable.push(server.clone()),
+            }
+        }
+        (Self { servers: runnable }, missing)
+    }
+}
+
+/// Whether `program` can be spawned: a path (with `~` expanded) that exists,
+/// or a bare name found in one of `path`'s directories. On Windows a bare name
+/// also matches with each `PATHEXT` suffix, as the shell would find it.
+pub fn on_path(program: &str, path: Option<&OsStr>) -> bool {
+    let program = shellexpand::tilde(program).into_owned();
+    if program.contains('/') || program.contains(std::path::MAIN_SEPARATOR) {
+        return Path::new(&program).is_file();
+    }
+    let Some(path) = path else {
+        return false;
+    };
+    let suffixes: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_default()
+            .split(';')
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    std::env::split_paths(path).any(|dir| {
+        std::iter::once(String::new())
+            .chain(suffixes.iter().cloned())
+            .any(|suffix| dir.join(format!("{program}{suffix}")).is_file())
+    })
 }
 
 /// Transport used to reach an MCP server.
@@ -396,9 +442,157 @@ pub struct McpServerConfig {
     pub headers: std::collections::HashMap<String, String>,
 }
 
+impl McpServerConfig {
+    /// This server's stdio command, when it is not on `path` and so cannot be
+    /// spawned. `None` for HTTP servers and for a stdio entry with no
+    /// command at all, which the connect reports on its own terms.
+    pub fn missing_command(&self, path: Option<&OsStr>) -> Option<&str> {
+        match (self.transport, self.command.as_deref()) {
+            (McpTransport::Stdio, Some(command)) if !on_path(command, path) => Some(command),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stdio(name: &str, command: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.into(),
+            transport: McpTransport::Stdio,
+            command: Some(command.into()),
+            args: vec![],
+            url: None,
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_command_is_on_path_when_a_directory_there_holds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("npx"), "").unwrap();
+        let path = std::env::join_paths([dir.path().to_path_buf(), bin.clone()]).unwrap();
+
+        assert!(on_path("npx", Some(&path)));
+        assert!(!on_path("uvx", Some(&path)));
+        assert!(!on_path("npx", None), "no PATH at all finds nothing");
+        assert!(
+            on_path(bin.join("npx").to_str().unwrap(), None),
+            "a path is checked as one"
+        );
+        assert!(!on_path(bin.join("uvx").to_str().unwrap(), Some(&path)));
+    }
+
+    #[test]
+    fn split_missing_keeps_what_can_be_dialed_and_names_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here"), "").unwrap();
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        let mut http = stdio("remote", "unused");
+        http.transport = McpTransport::Http;
+        http.command = None;
+        http.url = Some("http://127.0.0.1:1/mcp".into());
+        let config = McpConfig {
+            servers: vec![stdio("a", "here"), stdio("playwright", "gone"), http],
+        };
+
+        assert_eq!(config.servers[0].missing_command(Some(&path)), None);
+        assert_eq!(config.servers[1].missing_command(Some(&path)), Some("gone"));
+        assert_eq!(config.servers[2].missing_command(Some(&path)), None);
+
+        let (runnable, missing) = config.split_missing(Some(&path));
+        let names: Vec<&str> = runnable.servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["a", "remote"]);
+        assert_eq!(
+            missing,
+            vec![("playwright".to_string(), "gone".to_string())]
+        );
+    }
+
+    /// `install.sh` embeds `loadout/mcp.toml` as a heredoc for the curl|bash
+    /// path. The file is the source; the copy must be it, byte for byte.
+    #[test]
+    fn install_sh_carries_the_loadout_mcp_toml_verbatim() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let loadout = std::fs::read_to_string(root.join("loadout/mcp.toml")).unwrap();
+        let installer = std::fs::read_to_string(root.join("install.sh")).unwrap();
+        assert!(
+            installer.contains(&loadout),
+            "install.sh's mcp.toml heredoc has drifted from loadout/mcp.toml"
+        );
+    }
+
+    /// The installer only declares a server it can start: with `npx` off
+    /// PATH the Playwright entry is written commented out, with it on PATH
+    /// the entry is live. Driven for real through `WIZARD_SELFTEST=1`.
+    #[test]
+    #[cfg(unix)]
+    fn install_sh_writes_the_playwright_server_disabled_when_npx_is_absent() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let run = |with_npx: bool| -> String {
+            let home = tempfile::tempdir().unwrap();
+            let bin = home.path().join("bin");
+            std::fs::create_dir(&bin).unwrap();
+            // What sourcing the installer and `install_loadout` run, plus npx or not.
+            let real = |tool: &str| {
+                std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                    .map(|dir| dir.join(tool))
+                    .find(|candidate| candidate.is_file())
+                    .expect(tool)
+            };
+            for tool in ["cat", "mkdir", "awk", "mktemp", "rm"] {
+                std::os::unix::fs::symlink(real(tool), bin.join(tool)).unwrap();
+            }
+            if with_npx {
+                std::fs::write(bin.join("npx"), "#!/bin/sh\n").unwrap();
+                std::fs::set_permissions(
+                    bin.join("npx"),
+                    std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            let out = std::process::Command::new(real("bash"))
+                .arg("-c")
+                .arg(format!(
+                    "source {} && install_loadout",
+                    root.join("install.sh").display()
+                ))
+                .env("PATH", &bin)
+                .env("WIZARD_SELFTEST", "1")
+                .env("WIZARD_MINIMAL", "0")
+                .env("HOME", home.path())
+                .output()
+                .expect("run bash");
+            assert!(
+                out.status.success(),
+                "install_loadout failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::fs::read_to_string(home.path().join(".wizard/mcp.toml")).unwrap()
+        };
+
+        let disabled = run(false);
+        assert!(
+            disabled.contains("#[[server]]\n#name = \"playwright\""),
+            "{disabled}"
+        );
+        assert!(!disabled.contains("\n[[server]]"), "{disabled}");
+        let parsed: McpConfig = toml::from_str(&disabled).unwrap();
+        assert!(
+            parsed.servers.is_empty(),
+            "a disabled loadout declares nothing"
+        );
+
+        let enabled = run(true);
+        let parsed: McpConfig = toml::from_str(&enabled).unwrap();
+        assert_eq!(parsed.servers.len(), 1);
+        assert_eq!(parsed.servers[0].command.as_deref(), Some("npx"));
+    }
 
     #[test]
     fn config_load_missing_file_is_empty() {

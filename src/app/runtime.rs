@@ -315,6 +315,7 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     {
         let manager = Arc::clone(&manager);
         let mcp_path = mcp_path.clone();
+        let notify = events.sender();
         // A panic while connecting (a malformed `initialize` reply, a server
         // that closes its pipe mid-handshake) would otherwise leave the
         // "connecting MCP…" indicator up for the rest of the session.
@@ -337,6 +338,19 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
                         });
                     }
                 };
+                // A server whose command is not on PATH is not dialed. That
+                // is a quiet line, not the error banner a server that was
+                // reached and refused gets: nothing failed, something is
+                // not installed.
+                let (mcp_config, missing) =
+                    mcp_config.split_missing(std::env::var_os("PATH").as_deref());
+                for (name, command) in missing {
+                    let _ = notify
+                        .send(Event::Notice(format!(
+                            "{name} MCP server skipped: {command} is not on PATH"
+                        )))
+                        .await;
+                }
                 if mcp_config.servers.is_empty() {
                     // Nothing to connect: keep the empty manager and skip the
                     // registry rebuild entirely (the agent already has every
