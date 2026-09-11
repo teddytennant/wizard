@@ -14,6 +14,27 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::theme::{self, Token};
+use crate::ui::truncate_width;
+
+/// Ctrl-C on any screen: the whole wizard is over, not just the step. Esc is
+/// the step's own back button; this is the door. Raised as an error so it
+/// passes through every `?` between the widget and the entry point, which
+/// turns it into "nothing saved" and a clean exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Interrupted;
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cancelled with ctrl-c")
+    }
+}
+
+impl std::error::Error for Interrupted {}
+
+/// Below this width the option rows drop their detail column: at 40 columns
+/// a label plus its detail is cut mid-word, and the label alone is the
+/// answer.
+const DETAIL_MIN_WIDTH: u16 = 60;
 
 // The wizard paints with the same semantic tokens as the main TUI, so
 // `NO_COLOR`, `WIZARD_COLOR` and `WIZARD_THEME` mean here what they mean
@@ -73,10 +94,13 @@ impl Opt {
     }
 }
 
-/// True when `key` is Esc or Ctrl-C — the universal cancel chord.
-pub(super) fn is_cancel(key: &KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Esc)
-        || (key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')))
+/// True when `key` is Esc, the step's back button. Ctrl-C is [`Interrupted`]:
+/// the wizard ends, whatever screen it was on.
+pub(super) fn cancelled(key: &KeyEvent) -> Result<bool> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        return Err(Interrupted.into());
+    }
+    Ok(matches!(key.code, KeyCode::Esc))
 }
 
 /// Render a vertical list of options; navigate with ↑/↓, confirm with Enter.
@@ -92,7 +116,7 @@ pub(super) fn select(
     loop {
         terminal.draw(|frame| draw_select(frame, title, subtitle, options, selected))?;
         let Some(key) = next_key()? else { continue };
-        if is_cancel(&key) {
+        if cancelled(&key)? {
             return Ok(None);
         }
         match key.code {
@@ -131,7 +155,7 @@ pub(super) fn multi_select(
         terminal
             .draw(|frame| draw_multi_select(frame, title, subtitle, options, &checked, selected))?;
         let Some(key) = next_key()? else { continue };
-        if is_cancel(&key) {
+        if cancelled(&key)? {
             return Ok(None);
         }
         match key.code {
@@ -192,7 +216,7 @@ fn input(
     loop {
         terminal.draw(|frame| draw_input(frame, title, subtitle, &buffer, default, secret))?;
         let Some(key) = next_key()? else { continue };
-        if is_cancel(&key) {
+        if cancelled(&key)? {
             return Ok(None);
         }
         match key.code {
@@ -225,19 +249,19 @@ pub(super) fn notice(terminal: &mut Tui, message: &str) -> Result<()> {
     loop {
         terminal.draw(|frame| draw_notice(frame, message, "press any key to continue"))?;
         if let Some(key) = next_key()?
-            && (is_cancel(&key) || matches!(key.code, KeyCode::Enter | KeyCode::Char(_)))
+            && (cancelled(&key)? || matches!(key.code, KeyCode::Enter | KeyCode::Char(_)))
         {
             return Ok(());
         }
     }
 }
 
-/// A yes-or-back question: Enter is `true`, Esc / Ctrl-C is `false`.
+/// A yes-or-back question: Enter is `true`, Esc is `false`.
 pub(super) fn confirm(terminal: &mut Tui, message: &str) -> Result<bool> {
     loop {
         terminal.draw(|frame| draw_notice(frame, message, "enter continue · esc back"))?;
         if let Some(key) = next_key()? {
-            if is_cancel(&key) {
+            if cancelled(&key)? {
                 return Ok(false);
             }
             if key.code == KeyCode::Enter {
@@ -261,7 +285,9 @@ fn next_key() -> Result<Option<KeyEvent>> {
 
 /// Compose the outer frame (header + bordered body + footer) and return the
 /// inner content area for the step to fill. The box is `rows` tall inside,
-/// as far as the screen allows, so four options are not a page of border.
+/// as far as the screen allows, and the footer sits right under it, so four
+/// options are not a page of border with the keys at the bottom of it. Every
+/// line of chrome is cut to the width with `…`.
 fn frame_body(
     frame: &mut ratatui::Frame,
     title: &str,
@@ -271,20 +297,24 @@ fn frame_body(
 ) -> Rect {
     let area = frame.area();
     let box_height = u16::try_from(rows.max(1) + 2).unwrap_or(u16::MAX);
-    let [header, body, _, foot] = Layout::vertical([
+    let [header, body, foot, _] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(box_height),
-        Constraint::Min(0),
         Constraint::Length(1),
+        Constraint::Min(0),
     ])
     .areas(area);
+    let width = area.width.saturating_sub(2) as usize;
 
     let header_lines = Text::from(vec![
         Line::from(Span::styled(
-            format!("  {title}"),
+            truncate_width(&format!("  {title}"), width),
             accent().add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(format!("  {subtitle}"), text_dim())),
+        Line::from(Span::styled(
+            truncate_width(&format!("  {subtitle}"), width),
+            text_dim(),
+        )),
     ]);
     frame.render_widget(Paragraph::new(header_lines), header);
 
@@ -297,10 +327,42 @@ fn frame_body(
     frame.render_widget(block, body);
 
     frame.render_widget(
-        Paragraph::new(Span::styled(format!("  {footer}"), dim())),
+        Paragraph::new(Span::styled(
+            truncate_width(&format!("  {footer}"), width),
+            dim(),
+        )),
         foot,
     );
     inner
+}
+
+/// The slice of `count` rows a box `height` tall shows with `selected` in
+/// view: the window slides so the selected row is never off the bottom.
+fn list_window(count: usize, height: usize, selected: usize) -> std::ops::Range<usize> {
+    if height == 0 || count <= height {
+        return 0..count;
+    }
+    let start = selected.saturating_sub(height - 1).min(count - height);
+    start..start + height
+}
+
+/// One option row: the marker, the label, and the detail when the screen
+/// has room for it, cut to `width` with `…`.
+fn option_row(option: &Opt, active: bool, prefix: &str, width: u16) -> Line<'static> {
+    let marker = if active { "▸ " } else { "  " };
+    let label_style = if active {
+        accent().add_modifier(Modifier::BOLD)
+    } else {
+        text_dim()
+    };
+    let mut spans = vec![
+        Span::styled(format!(" {marker}{prefix}"), accent()),
+        Span::styled(option.label.clone(), label_style),
+    ];
+    if !option.detail.is_empty() && width >= DETAIL_MIN_WIDTH {
+        spans.push(Span::styled(format!("   {}", option.detail), dim()));
+    }
+    crate::ui::truncate_line(Line::from(spans), width as usize)
 }
 
 fn draw_select(
@@ -314,26 +376,28 @@ fn draw_select(
         frame,
         title,
         subtitle,
-        "↑/↓ move · enter select · esc cancel",
+        "↑↓ move · enter select · esc back",
         options.len(),
     );
-    let mut lines = Vec::with_capacity(options.len());
-    for (index, option) in options.iter().enumerate() {
-        let active = index == selected;
-        let marker = if active { "▸ " } else { "  " };
-        let label_style = if active {
-            accent().add_modifier(Modifier::BOLD)
-        } else {
-            text_dim()
-        };
-        let mut spans = vec![
-            Span::styled(format!(" {marker}"), accent()),
-            Span::styled(option.label.clone(), label_style),
-        ];
-        if !option.detail.is_empty() {
-            spans.push(Span::styled(format!("   {}", option.detail), dim()));
+    // A list taller than the box scrolls with the selection; the last row
+    // says how many are below rather than letting them fall off unseen.
+    let window = list_window(options.len(), inner.height as usize, selected);
+    let below = options.len() - window.end;
+    let mut lines = Vec::with_capacity(inner.height as usize);
+    for index in window.clone() {
+        if below > 0 && index + 1 == window.end {
+            lines.push(Line::from(Span::styled(
+                format!("     … {} more", below + 1),
+                dim(),
+            )));
+            break;
         }
-        lines.push(Line::from(spans));
+        lines.push(option_row(
+            &options[index],
+            index == selected,
+            "",
+            inner.width,
+        ));
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
@@ -350,32 +414,23 @@ fn draw_multi_select(
         frame,
         title,
         subtitle,
-        "↑/↓ move · space toggle · enter confirm · esc skip",
+        "↑↓ move · space toggle · enter confirm · esc skip",
         options.len(),
     );
-    let mut lines = Vec::with_capacity(options.len());
-    for (index, option) in options.iter().enumerate() {
-        let active = index == selected;
-        let marker = if active { "▸ " } else { "  " };
+    let window = list_window(options.len(), inner.height as usize, selected);
+    let mut lines = Vec::with_capacity(inner.height as usize);
+    for index in window {
         let box_ = if checked.get(index).copied().unwrap_or(false) {
-            "[x]"
+            "[x] "
         } else {
-            "[ ]"
+            "[ ] "
         };
-        let label_style = if active {
-            accent().add_modifier(Modifier::BOLD)
-        } else {
-            text_dim()
-        };
-        let mut spans = vec![
-            Span::styled(format!(" {marker}"), accent()),
-            Span::styled(format!("{box_} "), accent()),
-            Span::styled(option.label.clone(), label_style),
-        ];
-        if !option.detail.is_empty() {
-            spans.push(Span::styled(format!("   {}", option.detail), dim()));
-        }
-        lines.push(Line::from(spans));
+        lines.push(option_row(
+            &options[index],
+            index == selected,
+            box_,
+            inner.width,
+        ));
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
@@ -388,7 +443,48 @@ fn draw_input(
     default: &str,
     secret: bool,
 ) {
-    let inner = frame_body(frame, title, subtitle, "enter accept · esc cancel", 2);
+    draw_input_with_footer(
+        frame,
+        title,
+        subtitle,
+        buffer,
+        default,
+        secret,
+        "enter accept · esc back",
+    );
+}
+
+/// The input screen held up while a pasted key is checked: the same frame,
+/// the key still masked, the subtitle saying which host is being asked,
+/// and a spinner where the keys were (none work until the answer is in).
+pub(super) fn draw_checking(
+    frame: &mut ratatui::Frame,
+    title: &str,
+    host: &str,
+    shown: &str,
+    tick: u64,
+) {
+    draw_input_with_footer(
+        frame,
+        title,
+        &format!("checking with {host}…"),
+        shown,
+        "",
+        false,
+        &crate::ui::spinner_frame(tick).to_string(),
+    );
+}
+
+fn draw_input_with_footer(
+    frame: &mut ratatui::Frame,
+    title: &str,
+    subtitle: &str,
+    buffer: &str,
+    default: &str,
+    secret: bool,
+    footer: &str,
+) {
+    let inner = frame_body(frame, title, subtitle, footer, 2);
     let shown = if buffer.is_empty() {
         Span::styled(
             if default.is_empty() {
@@ -418,7 +514,7 @@ fn draw_input(
 }
 
 /// The first four characters, then a dot per character typed.
-fn masked(secret: &str) -> String {
+pub(super) fn masked(secret: &str) -> String {
     let mut out = String::new();
     for (index, c) in secret.chars().enumerate() {
         out.push(if index < 4 { c } else { '•' });
@@ -490,20 +586,62 @@ mod tests {
         assert_eq!(text_dim().fg, Some(Color::Gray));
     }
 
+    /// Esc backs out of the step; Ctrl-C ends the wizard, from any step.
     #[test]
-    fn is_cancel_matches_esc_and_ctrl_c_only() {
-        assert!(is_cancel(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        assert!(is_cancel(&KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL
-        )));
-        assert!(!is_cancel(&KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::NONE
-        )));
-        assert!(!is_cancel(&KeyEvent::new(
-            KeyCode::Char('x'),
-            KeyModifiers::CONTROL
-        )));
+    fn esc_backs_out_and_ctrl_c_interrupts() {
+        assert!(cancelled(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).unwrap());
+        let err = cancelled(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+            .expect_err("ctrl-c is the door");
+        assert!(err.is::<Interrupted>());
+        assert!(!cancelled(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)).unwrap());
+        assert!(!cancelled(&KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)).unwrap());
+    }
+
+    /// A list taller than the box slides with the selection, and the row
+    /// that would fall off the bottom is counted instead of lost.
+    #[test]
+    fn a_long_list_scrolls_with_the_selection() {
+        assert_eq!(list_window(15, 14, 0), 0..14);
+        assert_eq!(list_window(15, 14, 13), 0..14);
+        assert_eq!(list_window(15, 14, 14), 1..15);
+        assert_eq!(list_window(3, 14, 2), 0..3);
+        assert_eq!(list_window(15, 0, 2), 0..15);
+    }
+
+    /// At 40 columns an option row ends in `…` rather than mid-word, and the
+    /// detail column is gone rather than cut.
+    #[test]
+    fn option_rows_fit_a_narrow_box() {
+        let _pin = theme::pin(theme::minimal());
+        let option = Opt::new(
+            "Paste an API key",
+            "Anthropic, OpenAI, xAI, Gemini and 11 more",
+        );
+        let wide: String = option_row(&option, true, "", 100)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(
+            wide,
+            " ▸ Paste an API key   Anthropic, OpenAI, xAI, Gemini and 11 more"
+        );
+        let narrow: String = option_row(&option, true, "", 36)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(narrow, " ▸ Paste an API key", "no detail under 60 columns");
+        let long = Opt::new(
+            "Another OpenAI-compatible endpoint, with a very long label",
+            "",
+        );
+        let cut: String = option_row(&long, false, "", 30)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(cut.ends_with('…'), "{cut:?}");
+        assert!(cut.chars().count() <= 30, "{cut:?}");
     }
 }

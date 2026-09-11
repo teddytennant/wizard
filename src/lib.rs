@@ -467,18 +467,23 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // First-run onboarding: one screen on a fresh install in an interactive
     // terminal; the full wizard when `--onboard` (or `wizard setup`) asked
     // for it. A cancelled wizard exits gracefully without touching anything.
-    let mut first_run = false;
+    let mut first_run: Option<onboarding::FirstRun> = None;
     let mut config = if should_onboard(&cli)? {
         let outcome = if cli.onboard {
             onboarding::run_full().await?
         } else {
-            first_run = true;
-            onboarding::run().await?
+            match onboarding::run().await? {
+                Some((config, card)) => {
+                    first_run = Some(card);
+                    Some(config)
+                }
+                None => None,
+            }
         };
         match outcome {
             Some(config) => config,
             None => {
-                println!("onboarding cancelled; run `wizard` again any time.");
+                println!("cancelled; run wizard again any time");
                 return Ok(0);
             }
         }

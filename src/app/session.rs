@@ -356,7 +356,7 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
     // Nothing usable: let the user bring their own provider interactively.
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         println!("no working provider — opening setup so you can pick one (Esc to cancel).");
-        if let Some(new_config) = crate::onboarding::run().await? {
+        if let Some((new_config, _)) = crate::onboarding::run().await? {
             let active = new_config.active();
             let client = try_provider(&active).await?;
             *config = new_config;

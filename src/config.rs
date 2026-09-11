@@ -719,7 +719,10 @@ pub struct ProviderConfig {
     /// Model tag.
     pub model: String,
     /// Name of the env var that overrides the stored key (cloud only); the key
-    /// itself is never persisted here; see [`Self::resolved_key`].
+    /// itself is never persisted here; see [`Self::resolved_key`]. An empty
+    /// name turns the variable off, the backend's default included: the first
+    /// run writes that when a key is pasted while the variable is exported, so
+    /// the stale export cannot shadow the key just typed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     /// Path to the GGUF model file (llamacpp only) — used when Wizard spawns
@@ -765,7 +768,11 @@ impl ProviderConfig {
         lookup: impl Fn(&str) -> Option<String>,
         stored: impl Fn(&str) -> Option<String>,
     ) -> String {
-        let env = self.api_key_env.as_deref().or(default_env);
+        let env = match self.api_key_env.as_deref() {
+            Some("") => None,
+            Some(name) => Some(name),
+            None => default_env,
+        };
         if let Some(key) = env.and_then(lookup)
             && !key.trim().is_empty()
         {
@@ -813,6 +820,17 @@ impl ProviderConfig {
         self.resolved_key(self.credentials().default_env())
     }
 
+    /// The variable a key for this provider can be exported in: the
+    /// configured one, else the backend's default. `None` when the config
+    /// turned the variable off or the backend has none to suggest.
+    pub fn key_env_name(&self) -> Option<String> {
+        match self.api_key_env.as_deref() {
+            Some("") => None,
+            Some(name) => Some(name.to_string()),
+            None => self.credentials().default_env().map(str::to_string),
+        }
+    }
+
     /// Warn that this provider has no credential, in the one wording every
     /// backend that warns has always used.
     ///
@@ -826,7 +844,10 @@ impl ProviderConfig {
         tracing::warn!(
             "provider '{}' has no {label} (store one via /provider or set {}); requests will likely 401",
             self.name,
-            self.api_key_env.as_deref().unwrap_or(fallback)
+            self.api_key_env
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(fallback)
         );
     }
 

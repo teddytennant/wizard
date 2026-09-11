@@ -518,6 +518,21 @@ fn the_env_var_wins_over_a_stored_provider_key() {
         provider.resolved_key_from(None, env_is("sk-exported\n"), stored_is("sk-pasted")),
         "sk-exported"
     );
+    // An empty variable name turns the lookup off, the backend's default
+    // variable included: this is what the first run writes when a key was
+    // pasted over a stale export, and the export must not win.
+    let mut no_env = provider.clone();
+    no_env.api_key_env = Some(String::new());
+    assert_eq!(
+        no_env.resolved_key_from(
+            Some("WIZARD_TEST_KEY_PRECEDENCE"),
+            env_is("sk-stale"),
+            stored_is("sk-pasted")
+        ),
+        "sk-pasted",
+        "api_key_env = \"\" means no variable at all"
+    );
+    assert_eq!(no_env.key_env_name(), None);
     // …but an empty or blank export is not an override.
     assert_eq!(
         provider.resolved_key_from(None, env_is("   "), stored_is("sk-pasted")),

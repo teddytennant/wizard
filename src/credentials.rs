@@ -105,8 +105,36 @@ fn write_at(path: &Path, store: &Store) -> Result<()> {
         .with_context(|| format!("storing credentials in {}", path.display()))
 }
 
-/// The stored API key for provider `name`, or `None` when none is set.
+/// Keys held in memory ahead of the file: the first run stages a pasted key
+/// here, checks it against the provider, and only then writes it. A
+/// rejected key never touches the disk, and a write that fails is reported
+/// as a write that failed, not as a bad key.
+static STAGED: std::sync::Mutex<BTreeMap<String, String>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// Hold `key` for `name` in memory, where [`get`] finds it first.
+pub fn stage(name: &str, key: &str) {
+    if let Ok(mut staged) = STAGED.lock() {
+        staged.insert(name.to_string(), key.to_string());
+    }
+}
+
+/// Forget the staged key for `name`, if any. The file is untouched.
+pub fn unstage(name: &str) {
+    if let Ok(mut staged) = STAGED.lock() {
+        staged.remove(name);
+    }
+}
+
+/// The API key for provider `name`: staged first, then stored; `None` when
+/// neither is set.
 pub fn get(name: &str) -> Option<String> {
+    if let Some(key) = STAGED
+        .lock()
+        .ok()
+        .and_then(|staged| staged.get(name).cloned())
+    {
+        return Some(key);
+    }
     let path = path().ok()?;
     get_at(&path, name)
 }
@@ -242,5 +270,15 @@ mod tests {
             secrets::protection_summary(&dir)
         );
         assert_eq!(get_at(&path, "openai"), Some("sk-secret".to_string()));
+    }
+
+    #[test]
+    fn a_staged_key_is_read_without_touching_the_file() {
+        let name = "staged-test-provider";
+        assert_eq!(get(name), None);
+        stage(name, "sk-staged");
+        assert_eq!(get(name).as_deref(), Some("sk-staged"));
+        unstage(name);
+        assert_eq!(get(name), None, "unstaging forgets it; nothing was written");
     }
 }

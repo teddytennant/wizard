@@ -18,6 +18,9 @@ Scenarios:
   oauth    pick xAI, stop at the URL with Ctrl-C, relaunch: the card names /login
   notty    no terminal, and `-p` in one: no onboarding, one line, exit 1
   narrow   the happy path at 80x24
+  compat   the last key-list row against an OpenAI-compatible server the
+           script runs itself (answers /models after a short delay, so the
+           "checking with host…" screen is captured), no key
 
 The child gets the pty as its controlling terminal, so Ctrl-C is a real SIGINT.
 """
@@ -229,7 +232,7 @@ def main():
     ap.add_argument(
         "--scenario",
         default="happy",
-        choices=["happy", "badkey", "stale", "oauth", "notty", "narrow"],
+        choices=["happy", "badkey", "stale", "oauth", "notty", "narrow", "compat"],
     )
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--keep", action="store_true", help="leave the temp HOME behind and print its path")
@@ -332,7 +335,7 @@ def main():
         session.send("\r")
         session.wait_for(lambda s: "rejected that key (401)" in s.text(), "the rejection")
         text = dump(session, "rejected")
-        assert "api.anthropic.com rejected that key (401). Paste another, or Esc." in text, text
+        assert "api.anthropic.com rejected that key (401): paste another, or esc." in text, text
         assert "{" not in text, f"raw JSON on screen: {text}"
         assert not os.path.exists(config), "a rejected key must not be saved"
         session.send("\x1b")
@@ -351,7 +354,7 @@ def main():
         session.send("\r")
         session.wait_for(lambda s: "$OPENAI_API_KEY is set (" in s.text(), "the keep-or-paste screen")
         text = dump(session, "keep-or-paste")
-        assert "Enter keeps it, or paste another key." in text, text
+        assert "$OPENAI_API_KEY is set (5 characters): enter keeps it, paste to replace it." in text, text
         session.send("\r")
         session.wait_for(lambda s: "rejected that key (401)" in s.text(), "the rejection")
         text = dump(session, "rejected")
@@ -401,6 +404,59 @@ def main():
         assert line in text and "How do you want" not in text, text
         assert session.proc.returncode != 0
         assert not os.path.exists(config)
+
+    elif args.scenario == "compat":
+        import http.server
+        import json
+        import threading
+
+        class Models(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                time.sleep(0.8)  # long enough for the checking screen to be seen
+                body = json.dumps({"object": "list", "data": [{"id": "demo-model"}]}).encode()
+                self.send_response(200 if self.path.endswith("/models") else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Models)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_port}/v1"
+        session = Session(args, home, project, env, cols, rows)
+        first_screen(session)
+        to_key_list(session)
+        session.send("\x1b[A")  # up from the top wraps to the last row
+        session.wait_for(lambda s: "▸ Another OpenAI-compatible endpoint" in s.text(), "the compat row")
+        dump(session, "compat-row")
+        session.send("\r")
+        session.wait_for(lambda s: "Base URL" in s.text(), "the URL screen")
+        type_key(session, url)
+        session.send("\r")
+        session.wait_for(lambda s: "Model id" in s.text(), "the model screen")
+        type_key(session, "demo-model")
+        session.send("\r")
+        session.wait_for(lambda s: "Endpoint API key" in s.text(), "the key screen")
+        dump(session, "compat-key")
+        t_enter = time.monotonic()
+        session.send("\r")
+        session.wait_for(lambda s: "checking with 127.0.0.1" in s.text(), "the checking screen")
+        text = dump(session, "checking")
+        assert "Endpoint API key" in text, text
+        t = session.wait_for(lambda s: "type a message" in s.text(), "the TUI prompt")
+        session.timings["enter_to_tui_prompt"] = t - t_enter
+        text = dump(session, "tui")
+        assert "⚠" not in text, f"the check passed, nothing to warn about: {text}"
+        assert "saved ~/.wizard/config.toml" in text, text
+        with open(config) as f:
+            saved = f.read()
+        assert f'base_url = "{url}"' in saved and 'model = "demo-model"' in saved, saved
+        assert not os.path.exists(os.path.join(home, ".wizard", "credentials.toml")), "no key, no file"
+        session.quit()
+        server.shutdown()
 
     session_timings = locals().get("session")
     if session_timings is not None:

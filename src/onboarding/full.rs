@@ -12,8 +12,8 @@ use crate::skin::Skin;
 use crate::theme;
 
 use super::widgets::{
-    Opt, Tui, multi_select, notice, restore_terminal_best_effort, select, setup_terminal,
-    text_input,
+    Interrupted, Opt, Tui, multi_select, notice, restore_terminal_best_effort, select,
+    setup_terminal, text_input,
 };
 use super::*;
 
@@ -56,6 +56,7 @@ pub fn run_full_blocking(print: bool) -> Result<Option<Config>> {
     let answers = match outcome {
         Ok(Some(answers)) => answers,
         Ok(None) => return Ok(None),
+        Err(err) if err.is::<Interrupted>() => return Ok(None),
         Err(err) => return Err(err),
     };
 
@@ -103,8 +104,11 @@ pub fn run_gateway_setup_blocking() -> Result<Option<Config>> {
     let mut terminal = setup_terminal()?;
     let outcome = collect_gateway(&mut terminal);
     restore_terminal_best_effort();
-    let Some(gateway) = outcome? else {
-        return Ok(None);
+    let gateway = match outcome {
+        Ok(Some(gateway)) => gateway,
+        Ok(None) => return Ok(None),
+        Err(err) if err.is::<Interrupted>() => return Ok(None),
+        Err(err) => return Err(err),
     };
     let mut config = Config::load().context("loading config for gateway setup")?;
     if let Some(token) = gateway

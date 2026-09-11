@@ -19,15 +19,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::config::{Config, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind};
+use crate::config::{
+    Config, Credentials, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind,
+};
 use crate::hardware::{self, GgufModel};
 use crate::import_claude::ImportSelection;
 use crate::skin::Skin;
 use crate::theme;
 
 use widgets::{
-    Opt, Tui, confirm, notice, restore_terminal_best_effort, secret_input, select, setup_terminal,
-    text_input,
+    Interrupted, Opt, Tui, confirm, notice, restore_terminal_best_effort, secret_input, select,
+    setup_terminal, text_input,
 };
 
 /// The collected answers from the wizard. Converting this into a [`Config`]
@@ -297,33 +299,118 @@ const CLOUDFLARE_KEY_ENV: &str = crate::llm::registry::defaults::CLOUDFLARE_KEY_
 /// Default Cloudflare Workers AI model (GLM 5.2).
 const CLOUDFLARE_MODEL: &str = crate::llm::registry::defaults::CLOUDFLARE_MODEL;
 
-/// The one-screen first run. Returns `Ok(Some(config))` with the config
-/// already saved, `Ok(None)` on Esc / Ctrl-C. A browser sign-in, when the
-/// answer needs one, runs after the screen is down and prints its URL to the
-/// plain terminal the way `wizard --login` does. A pasted key is checked
-/// with one request before the TUI opens; a rejected one comes back to the
-/// key screen with the reason.
-pub async fn run() -> Result<Option<Config>> {
+/// The one-screen first run. Returns the saved config and the card's
+/// [`FirstRun`] line, or `Ok(None)` on Esc at the first screen or Ctrl-C
+/// anywhere. A pasted key is checked with one request while the screen is
+/// still up (a "checking with host…" subtitle, not a bare shell prompt); a
+/// rejected one comes back to the key list with the reason and nothing on
+/// disk. A browser sign-in, when the answer needs one, runs after the screen
+/// is down and prints its URL to the plain terminal the way `wizard --login`
+/// does.
+pub async fn run() -> Result<Option<(Config, FirstRun)>> {
+    let mut screen: Option<Screen> = None;
     let mut retry: Option<String> = None;
-    loop {
+    let outcome = loop {
         let reason = retry.take();
-        let pick = tokio::task::spawn_blocking(move || first_run_screen(reason))
-            .await
-            .context("onboarding task panicked")??;
-        let Some(pick) = pick else { return Ok(None) };
-        match finish_first_run(pick).await? {
-            Finished::Config(config) => return Ok(Some(*config)),
-            Finished::Rejected(reason) => retry = Some(reason),
+        let taken = screen.take();
+        let (mut opened, pick) = tokio::task::spawn_blocking(move || {
+            let mut opened = match taken {
+                Some(opened) => opened,
+                None => {
+                    local_plan();
+                    match Screen::open() {
+                        Ok(opened) => opened,
+                        Err(err) => return Err(err),
+                    }
+                }
+            };
+            let pick = collect_first_run(&mut opened.terminal, reason);
+            Ok((opened, pick))
+        })
+        .await
+        .context("onboarding task panicked")??;
+        let pick = match pick {
+            Ok(Some(pick)) => pick,
+            Ok(None) => break Ok(None),
+            Err(err) => break Err(err),
+        };
+        match finish_first_run(&mut opened, pick).await {
+            Ok(Finished::Rejected(reason)) => {
+                retry = Some(reason);
+                screen = Some(opened);
+            }
+            Ok(Finished::Saved {
+                config,
+                notice,
+                login,
+            }) => {
+                opened.close();
+                if let Some(login) = login {
+                    sign_in(login).await?;
+                }
+                return Ok(Some((*config, FirstRun { notice })));
+            }
+            Err(err) => break Err(err),
+        }
+    };
+    if let Some(opened) = screen {
+        opened.close();
+    }
+    match outcome {
+        Err(err) if err.is::<Interrupted>() => Ok(None),
+        other => other,
+    }
+}
+
+/// What the first run hands the TUI's card besides the config: one warning
+/// when the credential check settled nothing (no answer in time, no key to
+/// check), otherwise none.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FirstRun {
+    pub notice: Option<String>,
+}
+
+/// The wizard's terminal: raw mode and the alternate screen, held across
+/// the screens and the credential check so nothing shows between them.
+struct Screen {
+    terminal: Tui,
+    /// A skin or theme name that would not load, printed once the terminal
+    /// is back.
+    warnings: Vec<String>,
+}
+
+impl Screen {
+    fn open() -> Result<Self> {
+        let skin_warning = crate::skin::init(None);
+        let theme_warning = theme::init(crate::skin::active().companion_theme());
+        let terminal = setup_terminal()?;
+        Ok(Self {
+            terminal,
+            warnings: [skin_warning, theme_warning]
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
+
+    fn close(self) {
+        restore_terminal_best_effort();
+        for warning in &self.warnings {
+            eprintln!("warning: {warning}");
         }
     }
 }
 
 /// What a pass over the screens came to.
 enum Finished {
-    /// Saved, and signed in where that was the answer.
-    Config(Box<Config>),
+    /// Saved, the key checked where there was one to check.
+    Saved {
+        config: Box<Config>,
+        notice: Option<String>,
+        login: Option<Login>,
+    },
     /// A pasted key the provider refused; nothing saved. The text is the key
-    /// screen's subtitle.
+    /// list's subtitle.
     Rejected(String),
 }
 
@@ -331,6 +418,8 @@ enum Finished {
 struct FirstRunPick {
     answers: ProviderAnswers,
     login: Option<Login>,
+    /// The paste screen's title, kept up while the key is checked.
+    title: String,
 }
 
 /// A browser sign-in the first screen can ask for.
@@ -342,18 +431,7 @@ enum Login {
 
 /// One pass over the screens. `retry` carries a rejected key's reason and
 /// starts at the key list; Esc there goes back to the first screen.
-fn first_run_screen(retry: Option<String>) -> Result<Option<FirstRunPick>> {
-    let skin_warning = crate::skin::init(None);
-    let theme_warning = theme::init(crate::skin::active().companion_theme());
-    let mut terminal = setup_terminal()?;
-    let outcome = collect_first_run(&mut terminal, retry);
-    restore_terminal_best_effort();
-    for warning in [skin_warning, theme_warning].into_iter().flatten() {
-        eprintln!("warning: {warning}");
-    }
-    outcome
-}
-
+///
 /// The first screen's rows, before `installed` narrows them. `local` is what
 /// the local row would do on this machine, so its size is on the row.
 fn first_run_choices(
@@ -434,19 +512,25 @@ fn local_row_detail(plan: &LocalPlan) -> String {
 }
 
 /// The local plan for this machine, or `None` when no local backend is in
-/// the build.
+/// the build. Probed once per process (`nvidia-smi`, `rocm-smi`, `ollama
+/// list`), and [`run`] asks before the terminal goes raw: a probe that hangs
+/// on a blank alternate screen is a hang where Ctrl-C does nothing.
 fn local_plan() -> Option<LocalPlan> {
-    let (suggested, _) = hardware::suggest_gguf();
-    let (suggested_tag, _) = hardware::suggest_model();
-    let dir = models_dir();
-    plan_local_auto(
-        &crate::llm::registry::kinds(),
-        &existing_ggufs(&dir),
-        &dir,
-        &installed_ollama_models(),
-        suggested,
-        &suggested_tag,
-    )
+    static PLAN: std::sync::OnceLock<Option<LocalPlan>> = std::sync::OnceLock::new();
+    PLAN.get_or_init(|| {
+        let (suggested, _) = hardware::suggest_gguf();
+        let (suggested_tag, _) = hardware::suggest_model();
+        let dir = models_dir();
+        plan_local_auto(
+            &crate::llm::registry::kinds(),
+            &existing_ggufs(&dir),
+            &dir,
+            &installed_ollama_models(),
+            suggested,
+            &suggested_tag,
+        )
+    })
+    .clone()
 }
 
 fn collect_first_run(terminal: &mut Tui, retry: Option<String>) -> Result<Option<FirstRunPick>> {
@@ -501,6 +585,7 @@ fn first_xai_oauth(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
             gguf_path: None,
         },
         login: Some(Login::Xai),
+        title: String::new(),
     }))
 }
 
@@ -518,6 +603,7 @@ fn first_chatgpt(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
             gguf_path: None,
         },
         login: Some(Login::ChatGpt),
+        title: String::new(),
     }))
 }
 
@@ -546,6 +632,7 @@ fn first_local(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
     Ok(collect_local_auto(terminal)?.map(|answers| FirstRunPick {
         answers,
         login: None,
+        title: String::new(),
     }))
 }
 
@@ -646,11 +733,13 @@ fn preselected_key_provider(exported: &[Option<String>]) -> Option<usize> {
     exported.iter().position(Option::is_some)
 }
 
-/// `sk-…ab12`: enough of a key to recognise it, never enough to use it.
+/// `sk-…ab12`: enough of a key to recognise it, never enough to use it. A
+/// value too short to show either end of is described by its length, so
+/// `(5 characters)` rather than a lone `…` that reads as a rendering bug.
 fn key_glimpse(key: &str) -> String {
     let chars: Vec<char> = key.chars().collect();
     if chars.len() <= 8 {
-        return "…".to_string();
+        return format!("{} characters", chars.len());
     }
     let head: String = chars[..3].iter().collect();
     let tail: String = chars[chars.len() - 4..].iter().collect();
@@ -658,8 +747,9 @@ fn key_glimpse(key: &str) -> String {
 }
 
 /// The answers for one keyed provider. A pasted key wins over an exported
-/// variable: the variable is dropped from the config so the stale value in
-/// the shell cannot shadow the key just typed.
+/// variable: the config names an empty variable, which turns the lookup off
+/// (the backend's default variable included) so the stale value in the
+/// shell cannot shadow the key just typed.
 fn key_answers(
     row: &KeyProvider,
     base_url: String,
@@ -667,7 +757,7 @@ fn key_answers(
     env_set: bool,
 ) -> ProviderAnswers {
     let api_key_env = if pasted.is_some() && env_set {
-        None
+        Some(String::new())
     } else {
         Some(row.key_env.to_string())
     };
@@ -686,13 +776,21 @@ fn first_api_key_row(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
     first_api_key(terminal, None)
 }
 
+/// The last row of the key list: any server that speaks the OpenAI wire
+/// format (vLLM, LM Studio, llama-server, a proxy), asked for its URL, its
+/// model id and a key it may not need.
+const COMPAT_ROW: &str = "Another OpenAI-compatible endpoint";
+
+/// Where such a server usually listens.
+const COMPAT_DEFAULT_URL: &str = "http://127.0.0.1:8080/v1";
+
 /// The key list, then the paste. `reason` is a rejected key's verdict, shown
 /// over the list. `Ok(None)` (Esc) goes back to the first screen.
 fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<FirstRunPick>> {
     let rows = key_providers(&crate::llm::registry::kinds());
     let env: Vec<Option<String>> = rows.iter().map(|row| exported(row.key_env)).collect();
     let preselected = preselected_key_provider(&env);
-    let options: Vec<Opt> = rows
+    let mut options: Vec<Opt> = rows
         .iter()
         .zip(&env)
         .map(|(row, value)| {
@@ -704,6 +802,16 @@ fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<Firs
             Opt::new(row.label, detail)
         })
         .collect();
+    let compat_row = rows
+        .iter()
+        .any(|row| row.kind == ProviderKind::OPENAI)
+        .then_some(options.len());
+    if compat_row.is_some() {
+        options.push(Opt::new(
+            COMPAT_ROW,
+            "vLLM, LM Studio, llama-server, any /v1",
+        ));
+    }
     let index = match select(
         terminal,
         "Which provider?",
@@ -714,6 +822,9 @@ fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<Firs
         Some(index) => index,
         None => return Ok(None),
     };
+    if Some(index) == compat_row {
+        return first_compat(terminal);
+    }
     let row = &rows[index];
     let env_value = env[index].as_deref();
 
@@ -734,16 +845,17 @@ fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<Firs
 
     let subtitle = match env_value {
         Some(value) => format!(
-            "${} is set ({}). Enter keeps it, or paste another key.",
+            "${} is set ({}): enter keeps it, paste to replace it.",
             row.key_env,
             key_glimpse(value)
         ),
         None => format!(
-            "Stored in ~/.wizard/credentials.toml (0600). Empty: use ${}.",
+            "Stored in ~/.wizard/credentials.toml (0600); empty uses ${}.",
             row.key_env
         ),
     };
-    let pasted = match secret_input(terminal, &format!("{} API key", row.label), &subtitle)? {
+    let title = format!("{} API key", row.label);
+    let pasted = match secret_input(terminal, &title, &subtitle)? {
         Some(value) => Some(value.trim().to_string()).filter(|key| !key.is_empty()),
         None => return Ok(None),
     };
@@ -751,87 +863,238 @@ fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<Firs
     Ok(Some(FirstRunPick {
         answers: key_answers(row, base_url, pasted, env_value.is_some()),
         login: None,
+        title,
     }))
 }
 
-/// Check a pasted key, save the config, run the sign-in if one was picked.
-/// A rejected key saves nothing, so the next `wizard` asks again; the config
-/// is saved before a sign-in, so an abandoned one leaves `wizard --login`
-/// as the only step left.
-async fn finish_first_run(pick: FirstRunPick) -> Result<Finished> {
-    let FirstRunPick { answers, login } = pick;
-    let keyed = login.is_none() && answers.api_key_env.is_some();
+/// The compat row: base URL, model id, then a key the server may not want
+/// (enter skips it). The same one-request check runs against that URL; a
+/// 200 from `/models` passes, key or no key. Esc at any step goes back to
+/// the list.
+fn first_compat(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    let base_url = match text_input(
+        terminal,
+        "Base URL",
+        "The server's /v1 root.",
+        COMPAT_DEFAULT_URL,
+    )? {
+        Some(value) => value.trim_end_matches('/').to_string(),
+        None => return Ok(None),
+    };
+    let model = loop {
+        match text_input(
+            terminal,
+            "Model id",
+            "As the server lists it under /models.",
+            "",
+        )? {
+            Some(value) if !value.trim().is_empty() => break value.trim().to_string(),
+            Some(_) => continue,
+            None => return Ok(None),
+        }
+    };
+    let title = "Endpoint API key".to_string();
+    let pasted = match secret_input(
+        terminal,
+        &title,
+        "Enter to skip if the server takes none. Stored in ~/.wizard/credentials.toml (0600).",
+    )? {
+        Some(value) => Some(value.trim().to_string()).filter(|key| !key.is_empty()),
+        None => return Ok(None),
+    };
+    Ok(Some(FirstRunPick {
+        answers: ProviderAnswers {
+            provider_name: "custom".to_string(),
+            kind: ProviderKind::OPENAI,
+            base_url,
+            model,
+            api_key_env: None,
+            api_key: pasted,
+            gguf_path: None,
+        },
+        login: None,
+        title,
+    }))
+}
+
+/// Check the credential, then save. The pasted key is staged in memory for
+/// the check and written only once the provider has not refused it, so a
+/// rejected key never reaches the disk and a write that fails is reported
+/// as that. The config is saved before a sign-in, so an abandoned one leaves
+/// `wizard --login` as the only step left.
+async fn finish_first_run(screen: &mut Screen, pick: FirstRunPick) -> Result<Finished> {
+    let FirstRunPick {
+        answers,
+        login,
+        title,
+    } = pick;
     let answers = Answers::first_run(answers);
-    store_pasted_secrets(&answers, crate::credentials::store);
+    let name = answers.provider_name.clone();
+    let pasted = answers.provider_api_key.clone();
     let config = answers.into_config();
-    if keyed {
-        match check_credential(&config).await {
-            Check::Ok => {}
-            Check::Rejected(reason) => return Ok(Finished::Rejected(reason)),
-            Check::Unreachable(reason) => eprintln!("warning: {reason}"),
+    let active = config.active();
+    let mut notice = None;
+    let exported = pasted.is_none() && !active.api_key().is_empty();
+    match credential_plan(
+        &active.credentials(),
+        active.key_env_name().as_deref(),
+        pasted.is_some(),
+        exported,
+        login.is_some(),
+    ) {
+        Plan::Skip => {}
+        Plan::NoKey(var) => {
+            notice = Some(format!(
+                "no key for {name}: export {var} and start again, or paste one with /setup"
+            ));
+        }
+        Plan::Check => {
+            if let Some(key) = &pasted {
+                crate::credentials::stage(&name, key);
+            }
+            let shown = match (&pasted, active.key_env_name()) {
+                (Some(key), _) => widgets::masked(key),
+                (None, Some(var)) => format!("${var}"),
+                (None, None) => "no key".to_string(),
+            };
+            let verdict = check_credential(screen, &config, &title, &shown).await;
+            crate::credentials::unstage(&name);
+            match verdict {
+                Check::Ok => {}
+                Check::Rejected(reason) => return Ok(Finished::Rejected(reason)),
+                Check::Unreachable(reason) => notice = Some(reason),
+            }
         }
     }
-    config.save().context("saving config from onboarding")?;
-
-    if let Some(login) = login {
-        let paste = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            crate::llm::oauth_callback::PasteChannel::Stdin
-        } else {
-            crate::llm::oauth_callback::PasteChannel::Disabled
-        };
-        let report = |line: &str| println!("{line}");
-        let (name, outcome) = match login {
-            Login::Xai => (
-                "xai",
-                crate::llm::xai_oauth::login(report, paste, false).await,
-            ),
-            #[cfg(feature = "provider-chatgpt")]
-            Login::ChatGpt => (
-                "chatgpt",
-                crate::plugins::chatgpt::oauth::login(report, paste).await,
-            ),
-        };
-        outcome.with_context(|| {
-            format!(
-                "sign-in failed; the config is saved, so run `wizard --login {name}` and \
-                 then `wizard`"
-            )
-        })?;
+    if let Some(key) = &pasted {
+        crate::credentials::store(&name, key).context("saving the API key")?;
     }
-    Ok(Finished::Config(Box::new(config)))
+    config.save().context("saving config from onboarding")?;
+    Ok(Finished::Saved {
+        config: Box::new(config),
+        notice,
+        login,
+    })
+}
+
+/// The browser sign-in, on the plain terminal.
+async fn sign_in(login: Login) -> Result<()> {
+    let paste = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        crate::llm::oauth_callback::PasteChannel::Stdin
+    } else {
+        crate::llm::oauth_callback::PasteChannel::Disabled
+    };
+    let report = |line: &str| println!("{line}");
+    let (name, outcome) = match login {
+        Login::Xai => (
+            "xai",
+            crate::llm::xai_oauth::login(report, paste, false).await,
+        ),
+        #[cfg(feature = "provider-chatgpt")]
+        Login::ChatGpt => (
+            "chatgpt",
+            crate::plugins::chatgpt::oauth::login(report, paste).await,
+        ),
+    };
+    outcome.with_context(|| {
+        format!(
+            "sign-in failed; the config is saved, so run `wizard --login {name}` and \
+             then `wizard`"
+        )
+    })
+}
+
+/// What the first run does about the credential before it saves.
+#[derive(Debug, PartialEq, Eq)]
+enum Plan {
+    /// One request against the provider, with the pasted key, the exported
+    /// variable, or (a server that wants none) no key at all.
+    Check,
+    /// Nothing to check: no key pasted and the named variable is not
+    /// exported. Saved as is, with the card told which variable to set.
+    NoKey(String),
+    /// Not a keyed backend, or a sign-in decides it.
+    Skip,
+}
+
+/// Decided from what the backend needs, never from which config field the
+/// key happened to land in: a key pasted over an exported variable used to
+/// clear `api_key_env`, and the check keyed off that field, so the one paste
+/// most likely to be wrong was the one never checked.
+fn credential_plan(
+    credentials: &Credentials,
+    key_env: Option<&str>,
+    pasted: bool,
+    exported: bool,
+    login: bool,
+) -> Plan {
+    if login || !matches!(credentials, Credentials::ApiKey { .. }) {
+        return Plan::Skip;
+    }
+    match (pasted || exported, key_env) {
+        (true, _) | (false, None) => Plan::Check,
+        (false, Some(var)) => Plan::NoKey(format!("${var}")),
+    }
 }
 
 /// The verdict of one request against the provider just configured.
 enum Check {
     Ok,
     /// The provider answered and refused the credential; the text is the
-    /// key screen's subtitle.
+    /// key list's subtitle.
     Rejected(String),
     /// No verdict: a transport failure or no answer in time. Not worth
-    /// holding the user at the key screen for.
+    /// holding the user at the key screen for; the card says so.
     Unreachable(String),
 }
 
 /// How long the first-run credential check waits for an answer.
 const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How often the checking screen's spinner turns.
+const CHECK_FRAME: std::time::Duration = std::time::Duration::from_millis(80);
+
 /// One request to the active provider, so a bad paste or a stale shell
-/// variable is caught here and not by the first turn.
-async fn check_credential(config: &Config) -> Check {
+/// variable is caught here and not by the first turn. The paste screen stays
+/// up meanwhile, saying which host it is waiting on.
+async fn check_credential(screen: &mut Screen, config: &Config, title: &str, shown: &str) -> Check {
     let provider = config.active();
     let host = url_host(&provider.base_url);
     let client = match provider.build() {
         Ok(client) => client,
         Err(err) => return Check::Unreachable(format!("could not build the provider: {err:#}")),
     };
-    match tokio::time::timeout(CHECK_TIMEOUT, client.health()).await {
+    let check = tokio::time::timeout(CHECK_TIMEOUT, client.health());
+    tokio::pin!(check);
+    let mut tick = 0u64;
+    let started = std::time::Instant::now();
+    let outcome = loop {
+        let _ = screen
+            .terminal
+            .draw(|frame| widgets::draw_checking(frame, title, &host, shown, tick));
+        tokio::select! {
+            outcome = &mut check => break outcome,
+            _ = tokio::time::sleep(CHECK_FRAME) => tick += 1,
+        }
+    };
+    let verdict = match outcome {
         Ok(Ok(())) => Check::Ok,
         Ok(Err(err)) => rejection(&host, &err),
         Err(_) => Check::Unreachable(format!(
             "{host} did not answer in {} seconds; the key is saved unchecked",
             CHECK_TIMEOUT.as_secs()
         )),
-    }
+    };
+    tracing::info!(
+        "first-run credential check against {host}: {} in {:.3}s",
+        match &verdict {
+            Check::Ok => "ok",
+            Check::Rejected(_) => "rejected",
+            Check::Unreachable(_) => "no verdict",
+        },
+        started.elapsed().as_secs_f64()
+    );
+    verdict
 }
 
 /// Plain words for a failed check: the status, never the response body.
@@ -839,9 +1102,16 @@ fn rejection(host: &str, err: &anyhow::Error) -> Check {
     let status = err
         .downcast_ref::<crate::llm::ProviderError>()
         .and_then(|provider| provider.status);
+    // Cloudflare answers 403 to a wrong account id as readily as to a bad
+    // token, so its line names both.
+    let what = if host.contains("cloudflare") {
+        "that token or account id"
+    } else {
+        "that key"
+    };
     match status {
         Some(code @ (401 | 403)) => Check::Rejected(format!(
-            "{host} rejected that key ({code}). Paste another, or Esc."
+            "{host} rejected {what} ({code}): paste another, or esc."
         )),
         Some(code) => Check::Unreachable(format!(
             "{host} answered HTTP {code}; the key is saved unchecked"
@@ -1862,8 +2132,25 @@ mod tests {
             Some("sk-new".to_string()),
             true,
         );
-        assert_eq!(pasted.api_key_env, None);
+        assert_eq!(
+            pasted.api_key_env.as_deref(),
+            Some(""),
+            "an empty name turns the variable off, default included"
+        );
         assert_eq!(pasted.api_key.as_deref(), Some("sk-new"));
+        // Through the resolver, for a backend with a default variable: the
+        // config it produces must not let the export back in.
+        let xai = rows.iter().find(|row| row.name == "xai").unwrap();
+        let config = Answers::first_run(key_answers(
+            xai,
+            XAI_BASE_URL.to_string(),
+            Some("xai-new".to_string()),
+            true,
+        ))
+        .into_config();
+        let active = config.active();
+        assert_eq!(active.api_key_env.as_deref(), Some(""));
+        assert_eq!(active.key_env_name(), None, "no variable, not the default");
 
         // With nothing exported, the variable stays as the documented override.
         let fresh = key_answers(
@@ -1886,10 +2173,18 @@ mod tests {
             Check::Rejected(reason) => {
                 assert_eq!(
                     reason,
-                    "api.anthropic.com rejected that key (401). Paste another, or Esc."
+                    "api.anthropic.com rejected that key (401): paste another, or esc."
                 );
             }
             _ => panic!("a 401 is a rejection"),
+        }
+        let forbidden = anyhow::Error::new(crate::llm::ProviderError::http(403, "nope"));
+        match rejection("api.cloudflare.com", &forbidden) {
+            Check::Rejected(reason) => assert_eq!(
+                reason,
+                "api.cloudflare.com rejected that token or account id (403): paste another, or esc."
+            ),
+            _ => panic!("a 403 is a rejection"),
         }
         let transport = anyhow::anyhow!("connection refused");
         assert!(matches!(
@@ -1909,6 +2204,58 @@ mod tests {
         assert_eq!(url_host("https://api.openai.com/v1"), "api.openai.com");
         assert_eq!(url_host("localhost:8000/v1"), "localhost:8000");
         assert_eq!(key_glimpse("sk-abcdefgh1234"), "sk-…1234");
-        assert_eq!(key_glimpse("short"), "…");
+        assert_eq!(key_glimpse("dummy"), "5 characters");
+    }
+
+    /// The check keys off what the backend needs, so a key pasted over an
+    /// exported variable (the paste most likely to be wrong) is checked
+    /// too; nothing pasted and nothing exported skips it and names the
+    /// variable; a server that takes no key is checked keyless.
+    #[test]
+    fn the_credential_check_runs_in_every_keyed_path() {
+        let keyed = Credentials::ApiKey {
+            default_env: Some("XAI_API_KEY".to_string()),
+        };
+        // Pasted over an export: `api_key_env` is empty, the check still runs.
+        assert_eq!(
+            credential_plan(&keyed, None, true, false, false),
+            Plan::Check
+        );
+        // Kept the export.
+        assert_eq!(
+            credential_plan(&keyed, Some("XAI_API_KEY"), false, true, false),
+            Plan::Check
+        );
+        // Nothing pasted, nothing exported: no request, the card names it.
+        assert_eq!(
+            credential_plan(&keyed, Some("XAI_API_KEY"), false, false, false),
+            Plan::NoKey("$XAI_API_KEY".to_string())
+        );
+        // A compat endpoint with no variable and no key: checked keyless.
+        let bare = Credentials::ApiKey { default_env: None };
+        assert_eq!(
+            credential_plan(&bare, None, false, false, false),
+            Plan::Check
+        );
+        // A sign-in or a local backend has nothing to check here.
+        assert_eq!(
+            credential_plan(&keyed, None, false, false, true),
+            Plan::Skip
+        );
+        assert_eq!(
+            credential_plan(&Credentials::Local, None, false, false, false),
+            Plan::Skip
+        );
+    }
+
+    /// A key is staged for the check and written only after it: a rejected
+    /// paste leaves the store as it was.
+    #[test]
+    fn a_rejected_key_is_never_written() {
+        let name = "first-run-rejected-test";
+        crate::credentials::stage(name, "sk-bad");
+        assert_eq!(crate::credentials::get(name).as_deref(), Some("sk-bad"));
+        crate::credentials::unstage(name);
+        assert_eq!(crate::credentials::get(name), None);
     }
 }
