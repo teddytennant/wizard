@@ -131,6 +131,28 @@ pub enum InputMode {
     Prompt,
 }
 
+/// One line for a failed provider probe. An auth failure names the command
+/// that fixes it; anything else is reported as unreachable, with the error.
+pub fn health_line(err: &str) -> String {
+    if err.contains("not signed in to xAI") {
+        return "not signed in to xAI: /login xai".to_string();
+    }
+    if err.contains("not signed in to ChatGPT") {
+        return "not signed in to ChatGPT: run wizard --login chatgpt".to_string();
+    }
+    for code in ["401", "403"] {
+        if err.contains(code) {
+            let host = err
+                .split("://")
+                .nth(1)
+                .and_then(|rest| rest.split(['/', ' ', ':']).next())
+                .unwrap_or("the provider");
+            return format!("{host} rejected the key ({code}): /provider to replace it");
+        }
+    }
+    format!("provider unreachable: {err}")
+}
+
 /// A setup flow the main loop runs with the TUI suspended, since the wizard
 /// owns the terminal while it asks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -673,7 +695,7 @@ impl App {
             (
                 "wizard",
                 "Setup wizard…".to_string(),
-                "every question, as on --onboard".to_string(),
+                "every question".to_string(),
             ),
         ]
     }
@@ -2669,6 +2691,7 @@ impl App {
             | Event::ProviderActivated(_)
             | Event::McpConnected { .. }
             | Event::ProviderHealthFailed(_)
+            | Event::StarterPrompts(_)
             | Event::BtwFinished => Ok(None),
         }
     }
@@ -3518,14 +3541,17 @@ impl App {
 
     /// Enter pressed: complete the highlighted suggestion if the command is
     /// still partial, then parse the input line into an action.
-    /// A starter prompt picked from the welcome screen: a number key, or ↓/↑
-    /// then Enter, on an empty composer. `None` when the key is not that.
+    /// A starter prompt picked from the welcome screen: ↓ then Enter on an
+    /// empty composer. `None` when the key is not that. Digits are never
+    /// claimed: a message can start with one.
     ///
     /// ↑ alone keeps recalling history, so ↓ is what enters the list.
     fn starter_key(&mut self, key: &KeyEvent) -> Option<Option<AppAction>> {
         if self.starter_prompts.is_empty()
             || !self.input.is_empty()
             || !self.suggestions.is_empty()
+            || self.prompt.is_some()
+            || self.web_key_backend.is_some()
             || !self.welcome_visible()
             || key
                 .modifiers
@@ -3535,12 +3561,6 @@ impl App {
         }
         let count = self.starter_prompts.len();
         match key.code {
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                let number = c.to_digit(10)? as usize;
-                (1..=count)
-                    .contains(&number)
-                    .then(|| self.pick_starter(number - 1))
-            }
             KeyCode::Down => {
                 self.starter_index = Some(self.starter_index.map_or(0, |i| (i + 1) % count));
                 Some(None)
@@ -3563,6 +3583,12 @@ impl App {
         let text = self.starter_prompts.get(index)?.clone();
         self.set_input(text);
         self.submit()
+    }
+
+    /// The card's one line about a provider that failed its probe: the
+    /// remedy, not the URL. `None` while the provider is fine.
+    pub fn provider_health_line(&self) -> Option<String> {
+        self.provider_health_error.as_deref().map(health_line)
     }
 
     fn submit(&mut self) -> Option<AppAction> {

@@ -154,10 +154,15 @@ pub(super) fn edit_config_file(app: &mut App, terminal: &mut Tui) {
 /// Suspend the TUI, run one of the setup wizards on the plain terminal, then
 /// restore the TUI and take the config it wrote. Driven by the `/setup` rows
 /// that ask questions; runs from the main loop because it owns `terminal`.
-pub(super) fn run_setup_suspended(app: &mut App, terminal: &mut Tui, section: SetupSection) {
+/// `true` when a config was saved and the agent should be rebuilt on it.
+pub(super) fn run_setup_suspended(
+    app: &mut App,
+    terminal: &mut Tui,
+    section: SetupSection,
+) -> bool {
     if let Err(err) = restore_terminal() {
         app.notice(format!("could not suspend the TUI: {err:#}"));
-        return;
+        return false;
     }
     let outcome = match section {
         SetupSection::Wizard => crate::onboarding::run_full_blocking(false),
@@ -172,7 +177,7 @@ pub(super) fn run_setup_suspended(app: &mut App, terminal: &mut Tui, section: Se
             app.notice(format!(
                 "could not restore the TUI: {err:#}; /quit and relaunch"
             ));
-            return;
+            return false;
         }
     }
     match outcome {
@@ -183,11 +188,16 @@ pub(super) fn run_setup_suspended(app: &mut App, terminal: &mut Tui, section: Se
             let _ = crate::theme::init(crate::skin::active().companion_theme());
             app.config = config;
             app.status.mode = app.config.mode;
-            app.status.model = app.config.active().model;
-            app.notice("config saved; restart for provider/model changes to take effect");
+            true
         }
-        Ok(None) => app.notice("setup cancelled, nothing changed"),
-        Err(err) => app.notice(format!("setup failed: {err:#}")),
+        Ok(None) => {
+            app.notice("setup cancelled, nothing changed");
+            false
+        }
+        Err(err) => {
+            app.notice(format!("setup failed: {err:#}"));
+            false
+        }
     }
 }
 

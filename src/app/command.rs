@@ -1030,7 +1030,7 @@ impl CommandContext<'_> {
     /// Rebuild the live client + agent from the current active provider (after
     /// a `/provider use`/`add`). Runs synchronously; reports `summary` on
     /// success. Mirrors how the model picker probes the backend inline.
-    async fn rebuild_active_provider(&mut self, summary: String) {
+    pub(super) async fn rebuild_active_provider(&mut self, summary: String) {
         let provider = self.app.config.active();
         let client = match provider.build() {
             Ok(client) => client,

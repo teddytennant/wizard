@@ -5154,23 +5154,15 @@ fn a_plugin_command_completes_and_submits_like_a_builtin() {
     }
 }
 
-/// A number key on the empty welcome composer submits that starter prompt;
-/// ↓ then Enter does the same; ↑ alone is still history, and nothing fires
-/// once the user has typed.
+/// ↓ then Enter on the empty welcome composer submits that starter prompt;
+/// ↑ alone is still history; digits are typed, never claimed; and an inline
+/// prompt (the `/provider add` key field) keeps every key.
 #[test]
-fn starter_prompts_are_picked_by_number_or_arrow_and_enter() {
+fn starter_prompts_are_picked_by_arrow_and_enter_only() {
     let mut app = super::App::new(Config::default());
     app.starter_prompts = vec!["Explain this".to_string(), "Review changes".to_string()];
     assert!(app.welcome_visible());
 
-    let action = press(&mut app, KeyCode::Char('2'));
-    assert!(
-        matches!(&action, Some(AppAction::Submit(prepared)) if prepared.text == "Review changes"),
-        "{action:?}"
-    );
-
-    let mut app = super::App::new(Config::default());
-    app.starter_prompts = vec!["Explain this".to_string(), "Review changes".to_string()];
     // ↑ on a fresh session is history, not the list.
     assert!(press(&mut app, KeyCode::Up).is_none());
     assert_eq!(app.starter_index, None);
@@ -5186,15 +5178,39 @@ fn starter_prompts_are_picked_by_number_or_arrow_and_enter() {
         "{action:?}"
     );
 
-    // A digit typed into a message is a digit; an out-of-range one too.
+    // A digit is a digit: "2 questions:" starts with one.
     let mut app = super::App::new(Config::default());
     app.starter_prompts = vec!["Explain this".to_string()];
-    assert!(press(&mut app, KeyCode::Char('9')).is_none());
-    assert_eq!(app.input, "9");
-    press(&mut app, KeyCode::Char('1'));
-    assert_eq!(app.input, "91");
+    assert!(press(&mut app, KeyCode::Char('2')).is_none());
+    assert_eq!(app.input, "2");
     // Enter on an empty composer with nothing selected submits nothing.
     let mut app = super::App::new(Config::default());
     app.starter_prompts = vec!["Explain this".to_string()];
     assert!(press(&mut app, KeyCode::Enter).is_none());
+
+    // An inline key prompt owns ↓ and Enter.
+    let mut app = super::App::new(Config::default());
+    app.starter_prompts = vec!["Explain this".to_string()];
+    app.web_key_backend = Some("brave".to_string());
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.starter_index, None);
+}
+
+/// The card's provider line carries the remedy, not the URL or the body.
+#[test]
+fn the_health_line_names_the_fix() {
+    assert_eq!(
+        super::health_line("not signed in to xAI; run `wizard --login xai` (or /login xai) first"),
+        "not signed in to xAI: /login xai"
+    );
+    assert_eq!(
+        super::health_line(
+            "https://api.anthropic.com rejected the API key (HTTP 401), check the env var"
+        ),
+        "api.anthropic.com rejected the key (401): /provider to replace it"
+    );
+    assert_eq!(
+        super::health_line("cannot reach https://api.x.ai/v1: connection refused"),
+        "provider unreachable: cannot reach https://api.x.ai/v1: connection refused"
+    );
 }

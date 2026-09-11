@@ -83,12 +83,9 @@ pub(crate) fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
 /// provider's own prose and is routinely wider than the screen it lands on.
 fn welcome_notices(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(err) = &app.provider_health_error {
+    if let Some(line) = app.provider_health_line() {
         lines.push(Line::from(Span::styled(
-            truncate_width(
-                &format!("⚠ provider unreachable: {err}"),
-                WELCOME_NOTICE_WIDTH,
-            ),
+            truncate_width(&format!("⚠ {line}"), WELCOME_NOTICE_WIDTH),
             warning().bold(),
         )));
     }
@@ -99,9 +96,6 @@ fn welcome_notices(app: &App) -> Vec<Line<'static>> {
             TranscriptItem::Notice(text) => Some(text),
             _ => None,
         })
-        // The first-run summary is drawn by `starter_prompt_lines`, dim, not
-        // as a warning.
-        .filter(|text| app.first_run_summary.as_ref() != Some(text))
         .collect();
     for text in notices.iter().rev().take(MAX_WELCOME_NOTICES) {
         let line = text.lines().next().unwrap_or_default();
@@ -311,19 +305,13 @@ fn welcome_hints(app: &App) -> Vec<Line<'static>> {
 fn starter_prompt_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(summary) = &app.first_run_summary {
-        lines.push(Line::from(Span::styled(
-            truncate_width(summary, WELCOME_NOTICE_WIDTH),
-            dim(),
-        )));
+        lines.push(Line::from(Span::styled(summary.clone(), dim())));
         lines.push(Line::raw(""));
     }
     if app.starter_prompts.is_empty() {
         return lines;
     }
-    lines.push(Line::from(Span::styled(
-        "or pick one: number, or ↓ then Enter",
-        dim(),
-    )));
+    lines.push(Line::from(Span::styled("or ↓ to pick one", dim())));
     // Padded to one width so the rows still line up when the card is
     // centered.
     let width = app

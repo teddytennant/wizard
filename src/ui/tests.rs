@@ -850,8 +850,7 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
         "Explain how this project is put together".to_string(),
         "Review my uncommitted changes".to_string(),
     ];
-    app.first_run_summary = Some("set up: xai · grok-4.6 · /setup changes it".to_string());
-    app.notice("set up: xai · grok-4.6 · /setup changes it");
+    app.first_run_summary = Some("saved ~/.wizard/config.toml · /setup changes it".to_string());
     let screen = render(&app).join("\n");
     assert!(
         screen.contains("1  Explain how this project is put together"),
@@ -861,12 +860,25 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
         screen.contains("2  Review my uncommitted changes"),
         "{screen}"
     );
-    assert!(screen.contains("set up: xai · grok-4.6"), "{screen}");
+    assert!(screen.contains("or ↓ to pick one"), "{screen}");
     assert!(
-        !screen.contains("⚠ set up"),
+        screen.contains("saved ~/.wizard/config.toml · /setup changes it"),
+        "whole, never cut: {screen}"
+    );
+    assert!(
+        !screen.contains("⚠ saved"),
         "the summary is not a warning: {screen}"
     );
     assert!(app.welcome_visible());
+
+    // A failed probe is one line with the remedy on it.
+    app.provider_health_error = Some("not signed in to xAI; run `wizard --login xai` first".into());
+    let screen = render(&app).join("\n");
+    assert!(
+        screen.contains("⚠ not signed in to xAI: /login xai"),
+        "{screen}"
+    );
+    app.provider_health_error = None;
 
     // No prompts, no hook: the card is what it was.
     app.starter_prompts.clear();
