@@ -63,7 +63,7 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     // beside the provider startup, so the first paint pays nothing for them.
     let starter = tokio::task::spawn_blocking(|| {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        crate::onboarding::starter_prompts(&crate::onboarding::CwdFacts::gather(&cwd))
+        crate::starter::starter_prompts(&crate::starter::CwdFacts::gather(&cwd))
     });
 
     let mut client = startup_client(&mut config).await?;
