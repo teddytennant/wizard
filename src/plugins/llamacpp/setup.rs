@@ -103,18 +103,20 @@ pub async fn download_gguf(tier: &GgufModel, dest: &Path, progress: &dyn Progres
     let mut stream = response.bytes_stream();
     // Ctrl-C ends the download cleanly and keeps nothing: the user said no
     // to a multi-GB file, so a resumable remnant is not what they asked for.
-    let interrupt = tokio::signal::ctrl_c();
-    tokio::pin!(interrupt);
+    let interrupt = InterruptScope::install();
+    let mut poll = tokio::time::interval(INTERRUPT_POLL);
     loop {
         let chunk = tokio::select! {
             chunk = stream.next() => match chunk {
                 Some(chunk) => chunk.with_context(|| format!("reading from {}", tier.url))?,
                 None => break,
             },
-            _ = &mut interrupt => {
+            _ = poll.tick() => {
+                if !interrupt.interrupted() {
+                    continue;
+                }
                 drop(file);
                 let _ = std::fs::remove_file(&partial);
-                restore_default_interrupt();
                 bail!("download cancelled; nothing was kept");
             }
         };
@@ -124,7 +126,7 @@ pub async fn download_gguf(tier: &GgufModel, dest: &Path, progress: &dyn Progres
         bar.inc(chunk.len() as u64);
     }
     drop(file);
-    restore_default_interrupt();
+    drop(interrupt);
 
     if let Some(total) = total
         && written < total
@@ -140,14 +142,65 @@ pub async fn download_gguf(tier: &GgufModel, dest: &Path, progress: &dyn Progres
     Ok(())
 }
 
-/// Give SIGINT its default back. `tokio::signal::ctrl_c` keeps its handler
-/// for the life of the process, and after the download nothing is waiting
-/// on it: the next Ctrl-C should end the process the way it always did.
-fn restore_default_interrupt() {
+/// How often the download loop looks at [`InterruptScope::interrupted`].
+const INTERRUPT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Set by [`on_interrupt`]; read by the download loop.
+static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn on_interrupt(_signal: libc::c_int) {
+    INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// SIGINT caught for the length of the download, and the disposition that
+/// was there before put back when this drops, on every exit path.
+///
+/// Not `tokio::signal::ctrl_c`: tokio installs its handler once per process
+/// and remembers that it did, so a `SIG_DFL` reset after the download left
+/// every later `ctrl_c()` (headless shutdown, the gateway's interrupt) with
+/// a future that never resolves. A raw handler that only sets a flag, and
+/// is removed again, leaves tokio's bookkeeping alone: a later `ctrl_c()`
+/// registers as if this had never happened.
+struct InterruptScope {
     #[cfg(unix)]
-    // SAFETY: resetting a signal disposition to SIG_DFL has no preconditions.
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    previous: libc::sigaction,
+}
+
+impl InterruptScope {
+    fn install() -> Self {
+        INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(unix)]
+        {
+            // SAFETY: a zeroed sigaction is a valid value to fill in; the
+            // handler only touches an atomic; both pointers are valid.
+            let previous = unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = on_interrupt as extern "C" fn(libc::c_int) as usize;
+                action.sa_flags = libc::SA_RESTART;
+                libc::sigemptyset(&raw mut action.sa_mask);
+                let mut previous: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(libc::SIGINT, &raw const action, &raw mut previous);
+                previous
+            };
+            Self { previous }
+        }
+        #[cfg(not(unix))]
+        Self {}
+    }
+
+    fn interrupted(&self) -> bool {
+        INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for InterruptScope {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: `previous` is what sigaction handed back at install time.
+        unsafe {
+            libc::sigaction(libc::SIGINT, &raw const self.previous, std::ptr::null_mut());
+        }
     }
 }
 
@@ -441,6 +494,121 @@ fn is_executable_file(_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-shot HTTP server that sends `total` bytes with a
+    /// `Content-Length`, one small chunk every few milliseconds, so a
+    /// download of it is in flight long enough to be interrupted.
+    fn slow_server(total: usize) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request);
+            let _ = write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
+            );
+            let mut sent = 0;
+            while sent < total {
+                let chunk = 64.min(total - sent);
+                if socket.write_all(&vec![b'x'; chunk]).is_err() {
+                    return;
+                }
+                let _ = socket.flush();
+                sent += chunk;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        format!("http://{addr}/model.gguf")
+    }
+
+    struct Quiet;
+    impl Progress for Quiet {
+        fn status(&self, _line: &str) {}
+        fn bytes(
+            &self,
+            _label: &str,
+            _total: Option<u64>,
+        ) -> Box<dyn crate::progress::ByteProgress> {
+            struct Bar;
+            impl crate::progress::ByteProgress for Bar {
+                fn inc(&self, _n: u64) {}
+                fn finish(self: Box<Self>, _msg: &str) {}
+            }
+            Box::new(Bar)
+        }
+    }
+
+    /// Both SIGINT tests raise the signal at this process, so they share one
+    /// lock: a raise while the other test holds SIG_DFL would kill the run.
+    static SIGINT_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_c_cancels_the_download_and_keeps_no_partial() {
+        let _serial = SIGINT_TESTS.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.gguf");
+        let tier = GgufModel {
+            name: "test",
+            file: "model.gguf",
+            url: Box::leak(slow_server(1 << 20).into_boxed_str()),
+            approx_gb: 1,
+        };
+        // An outer scope so a raise that lands before the download has
+        // installed its own is caught, not delivered as SIG_DFL to the test
+        // binary. The download's scope nests inside it and restores it.
+        let outer = InterruptScope::install();
+        let raise = tokio::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // SAFETY: raising a signal at our own process while a
+                // handler of ours is installed.
+                unsafe { libc::raise(libc::SIGINT) };
+            }
+        });
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            download_gguf(&tier, &dest, &Quiet),
+        )
+        .await
+        .expect("the download ends well before it would finish")
+        .expect_err("Ctrl-C ends the download");
+        raise.abort();
+        let _ = raise.await;
+        assert!(err.to_string().contains("download cancelled"), "{err:#}");
+        assert!(!dest.exists());
+        assert!(
+            !dest.with_extension("gguf.partial").exists(),
+            "the .partial is gone"
+        );
+        drop(outer);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_later_tokio_ctrl_c_still_fires_after_the_scope() {
+        let _serial = SIGINT_TESTS.lock().await;
+        {
+            let scope = InterruptScope::install();
+            // SAFETY: raising a signal at our own process; the scope's handler
+            // is installed, so this only sets the flag.
+            unsafe { libc::raise(libc::SIGINT) };
+            assert!(scope.interrupted(), "the scope's handler saw the signal");
+        }
+        // tokio registers its own handler now, as if the scope never was.
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("tokio SIGINT listener");
+        // SAFETY: tokio's handler is installed; the signal is delivered to it.
+        unsafe { libc::raise(libc::SIGINT) };
+        tokio::time::timeout(std::time::Duration::from_secs(5), sigint.recv())
+            .await
+            .expect("tokio's SIGINT handler fires after the scope is gone");
+    }
 
     #[test]
     fn asset_variants_end_with_a_cpu_fallback() {
