@@ -1,0 +1,8 @@
+FROM wizard-bench-base
+# A locally built binary (WIZARD_BINARY=/path on run.sh) in place of a release,
+# with the repo's loadout/ laid down where install.sh puts it: install.sh
+# embeds these same files as heredocs.
+COPY wizard /usr/local/bin/wizard
+COPY loadout/mcp.toml /root/.wizard/mcp.toml
+COPY loadout/subagents /root/.wizard/subagents
+RUN chmod 755 /usr/local/bin/wizard && wizard --version

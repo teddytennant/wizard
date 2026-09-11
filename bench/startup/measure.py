@@ -6,17 +6,18 @@ Runs inside the agent's container. Output is one JSON document on --out.
   measure.py --name wizard --marker '› ' --cmd wizard --runs 10 --out /out/wizard.json
 
 The clock starts right before fork+exec and stops when the ANSI-stripped
-output first matches --marker. After --settle seconds at the prompt the
-process tree's RSS is read from /proc (VmRSS summed over the child and every
-descendant, VmHWM for the peak), then the tree is killed. --version-cmd is
-timed separately as the simplest possible cold start. --dump writes the
-stripped output of the first run for eyeballing the marker.
+output first matches --marker. Run 1 is the cold start (nothing in the page
+cache yet); runs 2 to N are warm starts and give the median and p90. After
+--settle seconds at the prompt the process tree's RSS, PSS and CPU time are
+read from /proc (summed over the child and every descendant, VmHWM for the
+peak), then the tree is killed. --version-cmd is timed separately as the
+simplest possible start. --dump writes the stripped output of the first run
+for eyeballing the marker.
 """
 import argparse
 import fcntl
 import json
 import os
-import pty
 import re
 import select
 import signal
@@ -30,6 +31,7 @@ import time
 ANSI = re.compile(
     rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC
     rb"|\x1bP[^\x1b]*\x1b\\"  # DCS
+    rb"|\x1b_[^\x1b]*\x1b\\"  # APC (kitty graphics)
     rb"|\x1b\[[0-?]*[ -/]*[@-~]"  # CSI
     rb"|\x1b[@-Z\\-_]"  # two-byte escapes
     rb"|[\x00-\x08\x0b-\x1f\x7f]"  # other control bytes
@@ -113,9 +115,14 @@ def descendants(root):
 
 def mem(pids):
     rss = hwm = pss = 0
+    cpu_ticks = 0
     names = []
     for p in pids:
         try:
+            with open(f"/proc/{p}/stat", "rb") as f:
+                stat = f.read()
+            fields = stat[stat.rindex(b")") + 2 :].split()
+            cpu_ticks += int(fields[11]) + int(fields[12])  # utime + stime
             with open(f"/proc/{p}/status") as f:
                 for line in f:
                     if line.startswith("VmRSS:"):
@@ -130,7 +137,8 @@ def mem(pids):
                         pss += int(line.split()[1]) * 1024
         except OSError:
             pass
-    return {"rss": rss, "hwm": hwm, "pss": pss, "procs": names}
+    hz = os.sysconf("SC_CLK_TCK")
+    return {"rss": rss, "hwm": hwm, "pss": pss, "cpu_ms": cpu_ticks * 1000 // hz, "procs": names}
 
 
 def kill_tree(pid):
@@ -142,9 +150,14 @@ def kill_tree(pid):
 
 
 def one_run(cmd, marker, settle, timeout, dump):
+    # Size the pty before the child exists so nothing can read 0x0.
+    fd, child_fd = os.openpty()
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     t0 = time.monotonic()
-    pid, fd = pty.fork()
+    pid = os.fork()
     if pid == 0:
+        os.close(fd)
+        os.login_tty(child_fd)
         os.environ["TERM"] = "xterm-256color"
         os.environ["COLUMNS"] = "120"
         os.environ["LINES"] = "40"
@@ -153,7 +166,7 @@ def one_run(cmd, marker, settle, timeout, dump):
         except OSError as e:
             os.write(2, f"exec failed: {e}\n".encode())
             os._exit(127)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    os.close(child_fd)
     raw = bytearray()
     responder = Responder(fd)
     t_prompt = None
@@ -238,6 +251,7 @@ def main():
     cmd = shlex.split(a.cmd)
     marker = re.compile(a.marker.encode())
     times, mems, fails = [], [], 0
+    cold = None
     for i in range(a.runs):
         t, m, raw = one_run(cmd, marker, a.settle, a.timeout, a.dump if i == 0 else None)
         if t is None:
@@ -246,23 +260,30 @@ def main():
             tail = strip(raw)[-600:].decode(errors="replace")
             print(tail, file=sys.stderr)
             continue
-        times.append(t)
+        if i == 0:
+            cold = t
+        else:
+            times.append(t)
         mems.append(m)
-        print(f"[{a.name}] run {i + 1}: {t * 1000:.0f} ms, rss {m['rss'] / 1e6:.1f} MB", file=sys.stderr)
+        print(f"[{a.name}] run {i + 1}: {t * 1000:.0f} ms, rss {m['rss'] / 1e6:.1f} MB, cpu {m['cpu_ms']} ms", file=sys.stderr)
         time.sleep(0.5)
     res = {
         "name": a.name,
         "cmd": a.cmd,
         "marker": a.marker,
         "runs": a.runs,
+        "settle_s": a.settle,
         "failed_runs": fails,
-        "prompt_ms": [round(t * 1000, 1) for t in times],
-        "prompt_ms_first": round(times[0] * 1000, 1) if times else None,
-        "prompt_ms_median": round(statistics.median(times) * 1000, 1) if times else None,
-        "prompt_ms_p90": round(pctl(times, 0.9) * 1000, 1) if times else None,
+        "cold_ms": round(cold * 1000, 1) if cold is not None else None,
+        "warm_ms": [round(t * 1000, 1) for t in times],
+        "warm_ms_median": round(statistics.median(times) * 1000, 1) if times else None,
+        "warm_ms_p90": round(pctl(times, 0.9) * 1000, 1) if times else None,
+        "warm_ms_min": round(min(times) * 1000, 1) if times else None,
+        "warm_ms_max": round(max(times) * 1000, 1) if times else None,
         "rss_bytes_median": statistics.median(m["rss"] for m in mems) if mems else None,
         "hwm_bytes_median": statistics.median(m["hwm"] for m in mems) if mems else None,
         "pss_bytes_median": statistics.median(m["pss"] for m in mems) if mems else None,
+        "cpu_ms_median": statistics.median(m["cpu_ms"] for m in mems) if mems else None,
         "procs": mems[0]["procs"] if mems else None,
         "terminal_queries_answered": mems[0]["queries"] if mems else None,
     }

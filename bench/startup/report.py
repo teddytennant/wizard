@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""Fold the per-agent JSON from run.sh into results.md and results.json."""
+"""Fold the per-agent JSON from run.sh into a results .md and .json.
+
+  report.py OUT_DIR results.md results.json [agent ...]
+
+Only the named agents are reported (all seven when none are named), so a
+subset run never picks up stale rows from an earlier full run.
+"""
 import datetime
 import json
 import os
-import platform
-import subprocess
 import sys
 
 out_dir, md_path, json_path = sys.argv[1:4]
 ORDER = ["wizard", "claude", "codex", "opencode", "crush", "goose", "aider"]
+names = sys.argv[4:] or ORDER
 LABEL = {"wizard": "wizard", "claude": "Claude Code", "codex": "Codex CLI", "opencode": "OpenCode",
          "crush": "Crush", "goose": "Goose", "aider": "Aider"}
 
 rows = []
 for name in ORDER:
     p = os.path.join(out_dir, name + ".json")
-    if os.path.exists(p):
+    if name in names and os.path.exists(p):
         rows.append(json.load(open(p)))
+
+host = {}
+hp = os.path.join(out_dir, "host.json")
+if os.path.exists(hp):
+    host = json.load(open(hp))
 
 
 def mb(b):
@@ -32,35 +42,48 @@ def version(d):
     return v[0].strip() if v else ""
 
 
-def sh(cmd):
-    try:
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10).stdout.strip()
-    except Exception:
-        return ""
-
-
+first = rows[0] if rows else {}
 lines = ["# Startup benchmark", ""]
-lines.append(f"Measured {datetime.date.today().isoformat()} on {platform.machine()}, {sh('nproc')} CPUs, "
-             f"kernel {platform.release()}, {sh('docker --version')}. Container network: "
-             f"{rows[0].get('network', '?') if rows else '?'}. One ubuntu:24.04 container per agent, "
-             f"{rows[0].get('runs', '?') if rows else '?'} pty starts each.")
+lines.append(f"Measured {datetime.date.today().isoformat()} on {host.get('cpu_model', '?')}, "
+             f"{host.get('nproc', '?')} CPUs, kernel {host.get('kernel', '?')}, {host.get('docker', '?')}. "
+             f"One ubuntu:24.04 container per agent, {first.get('runs', '?')} pty starts each, "
+             f"container network {first.get('network', '?')}.")
 lines.append("")
-lines.append("| agent | version | install | bundle | cold start median | p90 | first run | `--version` | RSS at prompt | peak RSS |")
-lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+rule = first.get("rule")
+if rule:
+    lines.append(f"Rule for every agent: {rule} What each one was told is under its row.")
+else:
+    lines.append("This run predates the single phone-home rule: what each agent was told is under its row, "
+                 "and Claude Code, Codex and OpenCode were measured with their update, telemetry and policy "
+                 "fetches still on.")
+lines.append("")
+lines.append("| agent | version | command | install | bundle | warm start (median) | warm p90 | cold start | `--version` | RSS | PSS | peak RSS | CPU at 3 s |")
+lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 for d in rows:
     if d.get("install_failed"):
-        lines.append(f"| {LABEL[d['name']]} | | install failed | | | | | | | |")
+        lines.append(f"| {LABEL[d['name']]} | | | install failed | | | | | | | | | |")
         continue
-    lines.append("| {} | {} | {} MB | {} MB | {} ms | {} ms | {} ms | {} ms | {} MB | {} MB |".format(
-        LABEL[d["name"]], version(d), mb(d.get("install_bytes")), mb(d.get("bundle_bytes")),
-        ms(d.get("prompt_ms_median")), ms(d.get("prompt_ms_p90")), ms(d.get("prompt_ms_first")),
-        ms(d.get("version_ms_median")), mb(d.get("rss_bytes_median")), mb(d.get("hwm_bytes_median"))))
+    if d.get("measure_failed"):
+        lines.append(f"| {LABEL[d['name']]} | | `{d.get('cmd', '')}` | {mb(d.get('install_bytes'))} MB | | measurement failed | | | | | | | |")
+        continue
+    lines.append("| {} | {} | `{}` | {} MB | {} MB | {} ms | {} ms | {} ms | {} ms | {} MB | {} MB | {} MB | {} ms |".format(
+        LABEL[d["name"]], version(d), d["cmd"], mb(d.get("install_bytes")), mb(d.get("bundle_bytes")),
+        ms(d.get("warm_ms_median")), ms(d.get("warm_ms_p90")), ms(d.get("cold_ms")),
+        ms(d.get("version_ms_median")), mb(d.get("rss_bytes_median")), mb(d.get("pss_bytes_median")),
+        mb(d.get("hwm_bytes_median")), ms(d.get("cpu_ms_median"))))
 lines.append("")
 lines.append("install: bytes the install added on top of the shared base image (sum of its docker layers), "
-             "runtimes included. bundle: the agent's own artifact (binary, npm package or venv). "
-             "cold start: fork+exec to the first frame containing the prompt marker, over a pty that answers "
-             "terminal queries like xterm. first run: the first of the starts, before the page cache is warm. "
-             "RSS: VmRSS summed over the process tree 3 s after the prompt; peak is VmHWM summed the same way.")
+             "runtimes included (Node for the npm install of Codex, uv's CPython for Aider). "
+             "bundle: the agent's own artifact (a binary, the npm package, the uv tool venv). "
+             "warm start: fork+exec to the first frame that contains the agent's prompt marker, median and p90 "
+             f"of starts 2 to {first.get('runs', 'N')} in one container, page cache warm. "
+             "cold start: start 1 in that container, before anything is in the page cache. "
+             "All markers are the first frame with an input line, not a fully loaded agent: wizard's status bar "
+             "still says connecting tools, Codex still says model loading, Goose is still loading extensions. "
+             "The pty answers DA1, DSR, cell size, DECRQM and OSC color queries like xterm and leaves kitty "
+             "graphics and sixel probes unanswered. "
+             "RSS/PSS: VmRSS and Pss summed over the process tree 3 s after the prompt; peak is VmHWM summed "
+             "the same way; CPU is utime+stime over the same tree, so a slow wall time can be read as work or as waiting.")
 lines.append("")
 lines.append("## Per agent")
 lines.append("")
@@ -71,10 +94,16 @@ for d in rows:
         lines.append("Install failed; see the build log.")
         lines.append("")
         continue
+    if d.get("measure_failed"):
+        lines.append("Measurement failed; see run.sh output.")
+        lines.append("")
+        continue
     lines.append(f"- command: `{d['cmd']}`, prompt marker: `{d['marker']}`")
+    if d.get("env"):
+        lines.append(f"- environment: `{d['env']}`")
     if d.get("failed_runs"):
         lines.append(f"- {d['failed_runs']} of {d['runs']} runs never showed the prompt within the timeout")
-    lines.append(f"- runs (ms): {', '.join(str(int(x)) for x in d.get('prompt_ms', []))}")
+    lines.append(f"- cold {ms(d.get('cold_ms'))} ms, warm (ms): {', '.join(str(int(x)) for x in d.get('warm_ms', []))}")
     if d.get("procs"):
         lines.append(f"- processes at the prompt: {', '.join(d['procs'])}")
     if d.get("terminal_queries_answered"):
@@ -83,7 +112,22 @@ for d in rows:
     if d.get("note"):
         lines.append(f"- {d['note']}")
     lines.append("")
+lines.append("## Host")
+lines.append("")
+if not host:
+    lines.append("Host state was not recorded for this run; the load guard and this section came later.")
+    lines.append("")
+else:
+    swap = host.get("swap_used_bytes") or 0
+    lines.append(f"Load average at start {' '.join(host.get('loadavg', []))} on {host.get('nproc')} CPUs, "
+                 f"PSI cpu `{host.get('psi_cpu_some', '')}`, "
+                 f"{(host.get('mem_available_bytes') or 0) / 1e9:.1f} GB available of "
+                 f"{(host.get('mem_total_bytes') or 0) / 1e9:.1f} GB, swap in use {swap / 1e9:.1f} GB, "
+                 f"governor {host.get('governor') or 'n/a'}, RAPL package cap "
+                 f"{host.get('rapl_cap_w') if host.get('rapl_cap_w') is not None else 'n/a'} W. "
+                 "run.sh refuses to start above load nproc/4 or under 8 GB available unless LOAD_OK=1.")
+    lines.append("")
 
 open(md_path, "w").write("\n".join(lines) + "\n")
-json.dump({"generated": datetime.datetime.now().isoformat(timespec="seconds"), "agents": rows},
+json.dump({"generated": datetime.datetime.now().isoformat(timespec="seconds"), "host": host, "agents": rows},
           open(json_path, "w"), indent=2)
