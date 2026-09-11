@@ -23,6 +23,11 @@ mac_intel="$(digest_of wizard-x86_64-apple-darwin.tar.gz)"
 linux_arm="$(digest_of wizard-aarch64-unknown-linux-gnu.tar.gz)"
 linux_intel="$(digest_of wizard-x86_64-unknown-linux-gnu.tar.gz)"
 
+# `wizard --version` drops a trailing .0 (3.1.0 prints "wizard 3.1"); Homebrew's
+# version keeps it.
+short="${version%.0}"
+short_re="${short//./\\.}"
+
 cat <<RUBY
 class Wizard < Formula
   desc "One line. Your sovereign agent. Self-extending. Bring any model"
@@ -56,7 +61,7 @@ class Wizard < Formula
   end
 
   test do
-    assert_match "wizard #{version}", shell_output("#{bin}/wizard --version")
+    assert_match(/^wizard $short_re$/, shell_output("#{bin}/wizard --version"))
   end
 end
 RUBY
