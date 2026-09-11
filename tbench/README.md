@@ -133,6 +133,15 @@ its own container, and containers sharing one refresh token will race to refresh
 it; the resulting auth failures land in the score as task failures. OAuth is
 also unreproducible for anyone else trying to verify a result.
 
+If you have only the OAuth session, put a proxy in front of it and set
+`WIZARD_TB_BASE_URL` to the URL the containers should dial (a `host.docker.internal`
+address, or the host's LAN IP). The adapter then leaves `~/.wizard/xai_oauth.json`
+on the host, keeps the provider kind as `xai`, and sets `XAI_API_KEY` in the
+container to the placeholder `proxy`; the proxy is what holds the credential.
+A real `XAI_API_KEY` on the host still wins if one is set. Without
+`WIZARD_TB_BASE_URL` the adapter falls back to uploading the token file, with a
+warning, and the race above is yours.
+
 ## Leaderboard
 
 Submission is a PR flow against `harbor-framework/terminal-bench-2-1`

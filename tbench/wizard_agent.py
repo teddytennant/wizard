@@ -62,7 +62,10 @@ CONTAINER_BINARY = "/installed-agent/wizard"
 
 # Send the provider's traffic somewhere else (a local proxy, a gateway). Only
 # the URL Wizard dials changes; the provider kind and key env stay as chosen.
+# The proxy holds the credential, so with this set the OAuth fallback is off
+# and, absent a real key, the container gets this placeholder instead.
 BASE_URL_ENV = "WIZARD_TB_BASE_URL"
+PROXY_PLACEHOLDER_KEY = "proxy"
 
 # Wizard's own OAuth token store, used only as a fallback when no API key is
 # present (see `_auth`).
@@ -332,11 +335,18 @@ class WizardAgent(BaseInstalledAgent):
         to refresh it. Harbor records the resulting auth failures as reward 0,
         i.e. indistinguishable from Wizard genuinely failing the task. It is also
         unreproducible by anyone verifying a leaderboard submission.
+
+        With `WIZARD_TB_BASE_URL` set the proxy is the credential: the token file
+        stays on the host and Wizard gets a placeholder key, which it only needs
+        to be non-empty.
         """
         provider, _, key_env = self._provider()
         key = self._get_env(key_env)
         if key:
             return provider, key, None
+
+        if os.environ.get(BASE_URL_ENV):
+            return provider, PROXY_PLACEHOLDER_KEY, None
 
         if provider == "xai":
             token = self._oauth_token()

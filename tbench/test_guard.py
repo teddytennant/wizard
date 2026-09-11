@@ -27,6 +27,12 @@ def _stub_harbor() -> None:
         def __init__(self, *args, **kwargs):
             pass
 
+        # Harbor's: `--ae KEY=...` first, then the host environment.
+        def _get_env(self, key):
+            if key in self._extra_env:
+                return self._extra_env[key]
+            return os.environ.get(key)
+
     modules = {
         "harbor": {},
         "harbor.agents": {},
@@ -52,7 +58,10 @@ _stub_harbor()
 
 from tbench.wizard_agent import (  # noqa: E402
     ALLOW_STALE_ENV,
+    BASE_URL_ENV,
     BINARY_ENV,
+    OAUTH_TOKEN_ENV,
+    PROXY_PLACEHOLDER_KEY,
     SOURCE_ENV,
     WizardAgent,
 )
@@ -183,6 +192,56 @@ class GuardTestCase(unittest.TestCase):
         with self.assertRaises(FileNotFoundError) as caught:
             self.agent._binary()
         self.assertIn("docker build", str(caught.exception))
+
+
+class AuthTestCase(unittest.TestCase):
+    """Fixture: an xai run with an OAuth token on disk and no key in the env."""
+
+    ENV = (BASE_URL_ENV, OAUTH_TOKEN_ENV, "XAI_API_KEY")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.token = Path(self.tmp.name) / "xai_oauth.json"
+        self.token.write_text('{"refresh_token": "secret"}\n')
+
+        self.agent = object.__new__(WizardAgent)
+        self.agent.model_name = "xai/grok-4.5"
+        self.agent._extra_env = {}
+        self._saved_env = {k: os.environ.get(k) for k in self.ENV}
+        for key in self.ENV:
+            os.environ.pop(key, None)
+        os.environ[OAUTH_TOKEN_ENV] = str(self.token)
+
+    def tearDown(self) -> None:
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmp.cleanup()
+
+    def test_no_key_and_no_proxy_falls_back_to_the_token(self):
+        with self.assertLogs("tbench.wizard_agent", level="WARNING"):
+            self.assertEqual(self.agent._auth(), ("xaioauth", None, self.token))
+
+    def test_proxy_mode_never_touches_the_token(self):
+        os.environ[BASE_URL_ENV] = "http://host.docker.internal:8788/v1"
+        with self.assertNoLogs("tbench.wizard_agent", level="WARNING"):
+            self.assertEqual(self.agent._auth(), ("xai", PROXY_PLACEHOLDER_KEY, None))
+        config = self.agent._config_toml()
+        self.assertIn('kind = "xai"', config)
+        self.assertIn('base_url = "http://host.docker.internal:8788/v1"', config)
+        self.assertIn('api_key_env = "XAI_API_KEY"', config)
+        self.assertNotIn("xaioauth", config)
+
+    def test_proxy_mode_passes_a_real_key_through(self):
+        os.environ[BASE_URL_ENV] = "http://host.docker.internal:8788/v1"
+        self.agent._extra_env["XAI_API_KEY"] = "xai-real"
+        self.assertEqual(self.agent._auth(), ("xai", "xai-real", None))
+
+    def test_proxy_mode_still_uses_the_proxy_url(self):
+        os.environ[BASE_URL_ENV] = "http://127.0.0.1:8788/v1"
+        self.assertEqual(self.agent._provider()[1], "http://127.0.0.1:8788/v1")
 
 
 if __name__ == "__main__":
