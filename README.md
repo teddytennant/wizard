@@ -45,13 +45,14 @@ The first run is one screen: sign in with xAI or ChatGPT, paste an API key, or r
 ## Terminal-Bench
 
 <!-- BENCH:tbench -->
-| agent | model | Terminal-Bench 2.1 | tasks |
+| agent | model | as scored | with fetched-answer passes counted as fails |
 |---|---|---:|---:|
-| wizard 3.1 | Grok 4.6 | 80.9% (72 of 89) | 89 |
-| Terminus 2, the public reference (Artificial Analysis, on e2b) | Grok 4.6 | 88.4% | 89 |
+| wizard 3.1 | Grok 4.6 | 72 of 89 (80.9%) | 67 of 89 (75.3%) |
+| Terminus 2, same box and proxy | Grok 4.6 | 70 of 89 (78.7%) | 69 of 89 (77.5%) |
+| Terminus 2, public reference (Artificial Analysis, on e2b) | Grok 4.6 | 88.4% | |
 <!-- /BENCH -->
 
-Run 2026-09-11 with Harbor, one trial per task, through the [`tbench/`](tbench/README.md) adapter; the per-task list and every failure's reason are in [`tbench/RESULTS.md`](tbench/RESULTS.md). Two of the seventeen misses are tasks whose verifier is broken for every harness; eight are timeouts with the agent still working.
+Run 2026-09-11 with Harbor, one trial per task, both agents on the same machine through the same token proxy, via the [`tbench/`](tbench/README.md) adapter. Five of wizard's passes came after its web tools downloaded that task's tests, reference solution or README from a public copy of the benchmark, and one of Terminus 2's did; the right column counts those as failures, and it is the number to quote. Wizard's default prompt was also tuned on 10 of the 89 tasks. What went wrong on the rest, and what is being changed, is in [`tbench/RESULTS.md`](tbench/RESULTS.md).
 
 ## Also
 
