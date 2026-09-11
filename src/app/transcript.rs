@@ -526,9 +526,10 @@ impl TranscriptView {
 /// Whether a row starts folded.
 ///
 /// A call still running is always open — its card is where you watch it work.
-/// Once it answers, a failure folds (the ✗ carries the signal without dumping
-/// the payload; Ctrl-T or a click opens it) and so does anything long enough
-/// to bury the reply underneath it.
+/// Once it answers, only length folds it: output long enough to bury the reply
+/// underneath it. A failure stays open whatever its exit, because the lines
+/// under `✗` are the reason it failed, and a reason behind Ctrl-T is a reason
+/// nobody reads.
 ///
 /// One rule, applied to a live row and a replayed one alike. The TUI used to
 /// have two: replay folded *every* answered call whatever its size, so a
@@ -538,7 +539,7 @@ impl TranscriptView {
 fn folds_by_default(item: &TranscriptItem) -> bool {
     match item {
         TranscriptItem::Tool(tool) => match &tool.output {
-            Some(output) => output.is_error || collapse_long(&output.content),
+            Some(output) => collapse_long(&output.content),
             None => false,
         },
         _ => false,

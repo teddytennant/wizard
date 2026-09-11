@@ -1237,7 +1237,10 @@ fn the_tuis_live_turn_and_its_replay_agree() {
         serde_json::json!({"shape": "hat"}),
     ));
     // Answered out of call order, which is the case only the id gets right.
-    let mut results = ChatMessage::tool_result("toolu_b", "read_file", "body b");
+    // `b.rs` is long enough to fold, so the fold flags below have something
+    // to agree on.
+    let body_b = "body b\n".repeat(8);
+    let mut results = ChatMessage::tool_result("toolu_b", "read_file", &body_b);
     results.push_tool_result("toolu_a", "read_file", "body a");
     results.push_tool_result("toolu_c", "render", "Error: the canvas is empty");
 
@@ -1274,7 +1277,7 @@ fn the_tuis_live_turn_and_its_replay_agree() {
         (
             "read_file",
             serde_json::json!({"path": "b.rs"}),
-            crate::tools::ToolOutput::ok("body b"),
+            crate::tools::ToolOutput::ok(body_b.clone()),
         ),
         (
             "render",
@@ -1334,8 +1337,8 @@ fn the_tuis_live_turn_and_its_replay_agree() {
         "the failed call is in there"
     );
     // And the fold flags agree too, which is the half of the screen the model
-    // does not carry: the failed `render` card is shut on both paths, the
-    // short reads are open on both.
+    // does not carry: the long read is shut on both paths, the short read and
+    // the failed `render` card are open on both.
     let folds = |app: &App| -> Vec<bool> {
         (0..app.transcript.len())
             .map(|index| app.transcript.folded(index))
@@ -1714,24 +1717,38 @@ fn background_task_events_drive_the_live_status_bar_counter() {
 }
 
 #[test]
-fn failed_tool_cards_start_collapsed() {
+fn failed_tool_cards_start_open_unless_long() {
     let mut app = app();
     app.handle_agent_event(AgentEvent::ToolStarted {
-        name: "web_fetch".to_string(),
-        args: serde_json::json!({"url": "https://example.com"}),
+        name: "execute".to_string(),
+        args: serde_json::json!({"command": "cargo test -p nothing"}),
     });
     app.handle_agent_event(AgentEvent::ToolFinished {
-        name: "web_fetch".to_string(),
-        output: crate::tools::ToolOutput::error("HTTP 403 Forbidden\n<!DOCTYPE html>\n..."),
+        name: "execute".to_string(),
+        output: crate::tools::ToolOutput::error(
+            "error: could not find `nothing` in workspace\nexit code: 101",
+        ),
     });
     assert!(
         matches!(
             app.transcript.last(),
             Some(TranscriptItem::Tool(tool))
                 if tool.output.as_ref().expect("answered").is_error
-        ) && app.transcript.folded(app.transcript.len() - 1),
-        "errors show only the ✗ card line until expanded via Ctrl-T"
+        ) && !app.transcript.folded(app.transcript.len() - 1),
+        "the lines under ✗ are the reason it failed; they stay in view"
     );
+
+    // A failure that is also a wall of text still folds by length.
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "web_fetch".to_string(),
+        args: serde_json::json!({"url": "https://example.com"}),
+    });
+    let body = format!("HTTP 403 Forbidden\n{}", "<p>nope</p>\n".repeat(40));
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "web_fetch".to_string(),
+        output: crate::tools::ToolOutput::error(body),
+    });
+    assert!(app.transcript.folded(app.transcript.len() - 1));
 
     // Short successful outputs still arrive expanded.
     app.handle_agent_event(AgentEvent::ToolStarted {
@@ -3776,7 +3793,7 @@ fn assert_fixture_paints_tokens(name: &str) -> Buffer {
     let theme = Arc::new(theme::load(name).expect("theme loads"));
     let _pinned = theme::pin(theme.clone());
     let app = themed_fixture();
-    let buf = screen(&app, 100, 40);
+    let buf = screen(&app, 100, 42);
     for (needle, offset, token) in TOKEN_SITES {
         assert_eq!(
             fg_at(&buf, needle, *offset),
@@ -3934,7 +3951,7 @@ fn no_color_paints_nothing_but_still_renders_every_element() {
         .with_depth(ColorDepth::Mono);
     let _pinned = theme::pin(Arc::new(theme));
     let app = themed_fixture();
-    let buf = screen(&app, 100, 40);
+    let buf = screen(&app, 100, 42);
     for cell in buf.content() {
         assert_eq!(cell.fg, Color::Reset);
     }
