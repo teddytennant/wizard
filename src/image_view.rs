@@ -32,13 +32,16 @@
 //! frame that redraws an unchanged image does no pixel work at all.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageBuffer, Rgba, imageops};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
+use ratatui_image::picker::cap_parser::{Parser, QueryStdioOptions, Response};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::protocol::halfblocks::Halfblocks;
@@ -66,6 +69,14 @@ const FILTER: FilterType = FilterType::Triangle;
 /// Overrides the detected protocol: `off`, `halfblocks`, `kitty`, `sixel`,
 /// `iterm2`, or `auto` (the default — ask the terminal).
 const PROTOCOL_ENV: &str = "WIZARD_IMAGE_PROTOCOL";
+
+/// How long [`Query::answer`] waits for the terminal, and again for every
+/// byte after the first. A terminal answers in microseconds; one that has
+/// said nothing after this is not going to.
+const PATIENCE: Duration = Duration::from_millis(200);
+
+/// [`PATIENCE`] over SSH, where the reply has a network round trip in it.
+const SSH_PATIENCE: Duration = Duration::from_millis(1000);
 
 /// The cells an image block may spend: the column it hangs in, and the tallest
 /// it may grow.
@@ -135,36 +146,207 @@ impl std::fmt::Debug for ImageCache {
     }
 }
 
+/// What [`ImageCache::detect`] came back with: an answer, or a question the
+/// terminal has been asked and has not answered yet.
+pub enum Detection {
+    Done(ImageCache),
+    Asked(Query),
+}
+
+/// An image query written to the terminal, its reply still on the way.
+///
+/// Sent by [`ImageCache::detect`] after raw mode is on (a cooked tty would
+/// echo the reply and hold it for a newline) and before the alternate screen
+/// (a terminal that prints what it cannot parse prints it where the switch
+/// hides it), and answered by [`Self::answer`] before crossterm's event
+/// stream starts draining stdin, because that stream would read the reply
+/// as keystrokes.
+pub struct Query {
+    /// A protocol the user forced through [`PROTOCOL_ENV`]; the query is then
+    /// only for the cell size.
+    forced: Option<ProtocolType>,
+}
+
+impl Query {
+    fn send(forced: Option<ProtocolType>) -> Detection {
+        let query = Parser::query(false, QueryStdioOptions::default());
+        let mut stdout = std::io::stdout().lock();
+        if let Err(err) = stdout
+            .write_all(query.as_bytes())
+            .and_then(|()| stdout.flush())
+        {
+            tracing::debug!("cannot write the image query ({err}); half-blocks");
+            return Detection::Done(ImageCache::fallback());
+        }
+        Detection::Asked(Self { forced })
+    }
+
+    /// Read the terminal's reply, waiting at most [`PATIENCE`] for it, and
+    /// build the cache from what it said.
+    pub fn answer(self) -> ImageCache {
+        let patience = if std::env::var_os("SSH_TTY").is_some() {
+            SSH_PATIENCE
+        } else {
+            PATIENCE
+        };
+        let responses = collect(&mut read_byte, patience);
+        if responses.is_empty() {
+            tracing::debug!("terminal did not answer the image query; half-blocks");
+        }
+        let mut picker = picker_from(&responses, quirky_terminal(), fallback_font());
+        if let Some(forced) = self.forced {
+            picker.set_protocol_type(forced);
+        }
+        ImageCache::new(Some(picker))
+    }
+}
+
+/// Every response up to the terminal's status report, which ends the reply.
+///
+/// `next` yields one byte of stdin, or `None` once its wait has run out.
+/// `patience` is renewed by every byte: a terminal that has begun to answer
+/// finishes within microseconds, and one that has not begun by then never
+/// will.
+fn collect(next: &mut impl FnMut(Duration) -> Option<u8>, patience: Duration) -> Vec<Response> {
+    let mut parser = Parser::new();
+    let mut responses = Vec::new();
+    let mut deadline = Instant::now() + patience;
+    loop {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if wait.is_zero() {
+            return responses;
+        }
+        let Some(byte) = next(wait) else {
+            return responses;
+        };
+        deadline = Instant::now() + patience;
+        for response in parser.push(char::from(byte)) {
+            if response == Response::Status {
+                return responses;
+            }
+            responses.push(response);
+        }
+    }
+}
+
+/// The picker the terminal's reply describes, the way ratatui-image reads
+/// it: kitty over sixel over whatever the environment suggests, and
+/// half-blocks when there is no cell size to place pixels with. `quirky`
+/// drops kitty and sixel for the terminals that answer yes and draw them
+/// wrong (see [`quirky_terminal`]).
+fn picker_from(responses: &[Response], quirky: bool, fallback: Option<FontSize>) -> Picker {
+    if responses.is_empty() {
+        return Picker::halfblocks();
+    }
+    let mut protocol = None;
+    let mut font = None;
+    for response in responses {
+        match response {
+            Response::Kitty if !quirky => protocol = Some(ProtocolType::Kitty),
+            Response::Sixel if !quirky => protocol = protocol.or(Some(ProtocolType::Sixel)),
+            Response::CellSize(Some(size)) => font = Some(*size),
+            _ => {}
+        }
+    }
+    let Some(font) = font.or(fallback) else {
+        return Picker::halfblocks();
+    };
+    // The one constructor that takes a measured cell size. It reads the
+    // multiplexer and iTerm2 hints from the environment, as the query path does.
+    #[allow(deprecated)]
+    let mut picker = Picker::from_fontsize(font);
+    if let Some(protocol) = protocol {
+        picker.set_protocol_type(protocol);
+    }
+    picker
+}
+
+/// WezTerm and Konsole answer the kitty query but do not place the image
+/// where the cells are, and Konsole's sixel is broken; ratatui-image blacklists
+/// both and falls back to their iTerm2 support.
+fn quirky_terminal() -> bool {
+    ["WEZTERM_EXECUTABLE", "KONSOLE_VERSION"]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| !value.is_empty()))
+}
+
+/// The cell size from the tty's reported pixel dimensions, for a terminal that
+/// did not answer `CSI 16 t`.
+fn fallback_font() -> Option<FontSize> {
+    let size = crossterm::terminal::window_size().ok()?;
+    if size.width == 0 || size.height == 0 || size.columns == 0 || size.rows == 0 {
+        return None;
+    }
+    Some((size.width / size.columns, size.height / size.rows))
+}
+
+/// One byte of stdin, or `None` when `wait` passes without one.
+///
+/// A byte at a time, straight from the descriptor: a buffered read would
+/// swallow keystrokes typed behind the reply, which crossterm then never sees.
+#[cfg(unix)]
+fn read_byte(wait: Duration) -> Option<u8> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let mut fds = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `fds` is one valid pollfd and the count says so.
+        let ready =
+            unsafe { libc::poll(&mut fds, 1, left.as_millis().min(i32::MAX as u128) as i32) };
+        if ready < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if ready <= 0 {
+            return None;
+        }
+        let mut byte = 0u8;
+        // SAFETY: `byte` is a valid one-byte buffer for the length passed.
+        let read = unsafe { libc::read(libc::STDIN_FILENO, (&raw mut byte).cast(), 1) };
+        return (read == 1).then_some(byte);
+    }
+}
+
+/// Without `poll`, the reply is read the way ratatui-image reads it, which
+/// blocks: never called on the first-frame path, see [`ImageCache::detect`].
+#[cfg(not(unix))]
+fn read_byte(_wait: Duration) -> Option<u8> {
+    None
+}
+
 impl ImageCache {
     /// Ask the terminal what it can draw.
     ///
-    /// Must run **before** the TUI takes the screen: the query writes escape
-    /// sequences to stdout and reads the terminal's reply off stdin (in raw mode,
-    /// which it toggles itself), which only works while stdio is still the plain
-    /// terminal. A terminal that does not answer is not assumed to be capable —
-    /// it gets half-blocks, which every terminal can draw.
-    pub fn detect() -> Self {
+    /// Runs after raw mode is on, before the alternate screen, and returns at
+    /// once: the query goes out, the reply is read by [`Query::answer`] once
+    /// the first frame is painted and before the event stream starts. A terminal that does not answer is not
+    /// assumed to be capable — it gets half-blocks, which every terminal can
+    /// draw.
+    pub fn detect() -> Detection {
         match std::env::var(PROTOCOL_ENV).ok().as_deref() {
             // The user has told us what they have (or that they want none of
             // it). A lying terminal, a multiplexer that eats the query, a
             // recording session that must not have pixels in it.
-            Some("off") => return Self::new(None),
+            Some("off") => return Detection::Done(Self::new(None)),
             Some(forced) if forced != "auto" => {
                 let Some(protocol) = parse_protocol(forced) else {
                     // Unreadable value: fall through to detection rather than
                     // guess at what they meant and corrupt the screen.
-                    return Self::query();
+                    return Self::query(None);
                 };
                 // Still ask, for the terminal's real cell size — an image only
                 // lands on a whole number of rows if we know how tall one is.
                 // Except under a multiplexer, where asking costs the keyboard;
                 // see `multiplexer`.
-                let mut picker = match multiplexer() {
-                    Some(_) => Picker::halfblocks(),
-                    None => Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()),
-                };
-                picker.set_protocol_type(protocol);
-                return Self::new(Some(picker));
+                if multiplexer().is_some() {
+                    let mut picker = Picker::halfblocks();
+                    picker.set_protocol_type(protocol);
+                    return Detection::Done(Self::new(Some(picker)));
+                }
+                return Self::query(Some(protocol));
             }
             _ => {}
         }
@@ -173,16 +355,32 @@ impl ImageCache {
         // tmux passes through fine.
         if let Some(which) = multiplexer() {
             tracing::debug!("{which} detected: skipping the image query, using half-blocks");
-            return Self::fallback();
+            return Detection::Done(Self::fallback());
         }
         // Nothing to draw with: half-blocks are 24-bit colour, and without
         // colour there is nothing between them and noise.
         if std::env::var_os("NO_COLOR").is_some()
             || std::env::var("TERM").is_ok_and(|term| term.is_empty() || term == "dumb")
         {
-            return Self::new(None);
+            return Detection::Done(Self::new(None));
         }
-        Self::query()
+        Self::query(None)
+    }
+
+    /// Detection proper: the terminal is asked, and its silence is taken for
+    /// a no. Where stdin cannot be polled the query is the blocking one.
+    fn query(forced: Option<ProtocolType>) -> Detection {
+        if cfg!(unix) {
+            return Query::send(forced);
+        }
+        let mut picker = Picker::from_query_stdio().unwrap_or_else(|err| {
+            tracing::debug!("terminal did not answer the image query ({err}); half-blocks");
+            Picker::halfblocks()
+        });
+        if let Some(forced) = forced {
+            picker.set_protocol_type(forced);
+        }
+        Detection::Done(Self::new(Some(picker)))
     }
 
     /// Half-blocks against an assumed cell size — no I/O, no terminal query.
@@ -298,16 +496,6 @@ impl ImageCache {
             entries: HashMap::new(),
             order: Vec::new(),
         }
-    }
-
-    /// Detection proper: the terminal is asked, and its silence is taken for a
-    /// no. `from_query_stdio` also reports the real cell size, which is what
-    /// makes a graphics-protocol image land on an exact number of rows.
-    fn query() -> Self {
-        Self::new(Some(Picker::from_query_stdio().unwrap_or_else(|err| {
-            tracing::debug!("terminal did not answer the image query ({err}); half-blocks");
-            Picker::halfblocks()
-        })))
     }
 
     /// The terminal's cell size, and `None` when there is no terminal support to
@@ -828,6 +1016,105 @@ mod tests {
         assert!(
             matches!(symbol.as_str(), "▀" | "▄" | " "),
             "clipped rows are half-blocks, got {symbol:?}"
+        );
+    }
+
+    /// Bytes handed out one at a time, the way `read_byte` hands out stdin.
+    fn scripted(bytes: &'static [u8]) -> impl FnMut(Duration) -> Option<u8> {
+        let mut at = 0;
+        move |_wait| {
+            let byte = bytes.get(at).copied();
+            at += 1;
+            byte
+        }
+    }
+
+    /// The reply the benchmark pty gives: kitty, sixel, a 10×20 cell, DSR.
+    const XTERM_LIKE: &[u8] = b"\x1b_Gi=31;OK\x1b\\\x1b[?62;4;22c\x1b[6;20;10t\x1b[0n";
+
+    /// A terminal that says nothing costs one poll that comes back empty:
+    /// the reply is read after the first frame, and there is no thread left
+    /// behind on stdin to steal keystrokes.
+    #[test]
+    fn a_silent_terminal_is_halfblocks_and_nothing_waits_on_it() {
+        let mut polls = 0;
+        let started = Instant::now();
+        let responses = collect(
+            &mut |_wait| {
+                polls += 1;
+                None
+            },
+            PATIENCE,
+        );
+        assert!(responses.is_empty());
+        assert_eq!(polls, 1, "silence is one poll, not a retry loop");
+        assert!(
+            started.elapsed() < PATIENCE,
+            "the wait is the poll's, not ours"
+        );
+        let picker = picker_from(&responses, false, Some((9, 18)));
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+    }
+
+    /// A terminal that answers gets its own protocol at its own cell size,
+    /// and the reply is read up to the status report and not one byte past
+    /// it: the keystroke behind it stays on stdin for crossterm.
+    #[test]
+    fn a_reply_picks_the_real_protocol_and_leaves_the_next_byte_alone() {
+        let mut next = scripted(b"\x1b_Gi=31;OK\x1b\\\x1b[?62;4;22c\x1b[6;20;10t\x1b[0nq");
+        let responses = collect(&mut next, PATIENCE);
+        assert_eq!(
+            responses,
+            vec![
+                Response::Kitty,
+                Response::Sixel,
+                Response::CellSize(Some((10, 20)))
+            ]
+        );
+        assert_eq!(
+            next(PATIENCE),
+            Some(b'q'),
+            "typed behind the reply, still there"
+        );
+
+        let picker = picker_from(&responses, false, None);
+        assert_eq!(picker.protocol_type(), ProtocolType::Kitty);
+        assert_eq!(picker.font_size(), (10, 20));
+    }
+
+    /// Sixel alone is sixel; the tty's pixel size stands in for a missing
+    /// `CSI 16 t`; and without any cell size there is nothing to place pixels
+    /// with, so the answer is half-blocks whatever the terminal claimed.
+    #[test]
+    fn the_cell_size_decides_whether_a_protocol_is_usable() {
+        let mut next = scripted(b"\x1b[?62;4;22c\x1b[0n");
+        let responses = collect(&mut next, PATIENCE);
+        let picker = picker_from(&responses, false, Some((8, 16)));
+        assert_eq!(picker.protocol_type(), ProtocolType::Sixel);
+        assert_eq!(picker.font_size(), (8, 16));
+
+        let picker = picker_from(&[Response::Kitty], false, None);
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+    }
+
+    /// WezTerm and Konsole say yes to kitty and draw it wrong, so their yes
+    /// is not taken; the cell size still is.
+    #[test]
+    fn a_quirky_terminal_keeps_its_cell_size_but_not_its_kitty() {
+        let responses = collect(&mut scripted(XTERM_LIKE), PATIENCE);
+        let picker = picker_from(&responses, true, None);
+        assert_ne!(picker.protocol_type(), ProtocolType::Kitty);
+        assert_ne!(picker.protocol_type(), ProtocolType::Sixel);
+        assert_eq!(picker.font_size(), (10, 20));
+    }
+
+    /// A reply cut off before the status report keeps what did arrive.
+    #[test]
+    fn a_reply_that_never_finishes_still_counts_what_it_said() {
+        let responses = collect(&mut scripted(b"\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t"), PATIENCE);
+        assert_eq!(
+            responses,
+            vec![Response::Kitty, Response::CellSize(Some((10, 20)))]
         );
     }
 }

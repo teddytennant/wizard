@@ -22,8 +22,8 @@ Method:
 3. Extract the specific facts that answer the question. Note version numbers,
    dates, and exact quotes where precision matters.
 
-If the browser tools are unavailable (Node/npx not installed, server failed to
-start), say so plainly and report whatever you could determine from your own
+If the browser tools are unavailable (Node/npx not installed, the Playwright
+server left off in mcp.toml, or it failed to start), say so plainly and report whatever you could determine from your own
 knowledge, clearly labeled as un-verified — do not fabricate page contents or
 citations.
 

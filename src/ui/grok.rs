@@ -3024,12 +3024,18 @@ fn welcome_body(app: &App) -> Vec<Line<'static>> {
     }
     for item in app.transcript.iter().rev().take(3) {
         if let TranscriptItem::Notice(text) = item {
+            let first = text.lines().next().unwrap_or("");
+            // The glyph is for something broken. A quiet notice (a server
+            // skipped because its command is not installed) is a dim line,
+            // as `notice_entry` draws it in the transcript.
+            let (glyph, style) = if first.starts_with("error") {
+                ("\u{26a0} ", super::warning())
+            } else {
+                ("", super::dim())
+            };
             lines.push(Line::from(Span::styled(
-                format!(
-                    "\u{26a0} {}",
-                    super::truncate_width(text.lines().next().unwrap_or(""), 68)
-                ),
-                super::warning(),
+                format!("{glyph}{}", super::truncate_width(first, 68)),
+                style,
             )));
         }
     }

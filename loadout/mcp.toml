@@ -11,9 +11,9 @@
 # The Playwright MCP server below gives Wizard a real browser: navigate, click,
 # type, and snapshot tools for reading pages, filling forms, and computer-use
 # style tasks. It is spawned over stdio as `npx -y @playwright/mcp@latest`, so
-# it requires Node and `npx` on your PATH. If Node is missing, this server is
-# skipped with a warning at startup and the rest of Wizard works normally —
-# install Node, then `/reload`.
+# it needs Node and `npx` on your PATH. The installer writes it commented out
+# when npx is missing, and Wizard skips a server whose command is not on PATH
+# with a one-line notice at startup. Install Node, then `/reload`.
 
 [[server]]
 name = "playwright"

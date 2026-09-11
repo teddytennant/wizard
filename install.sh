@@ -2200,30 +2200,17 @@ install_loadout() {
     say "Laying down the default loadout (browser MCP + subagents) ..."
     mkdir -p "$HOME/.wizard/subagents"
 
-    loadout_file "$HOME/.wizard/mcp.toml" "MCP servers: Playwright browser" <<'EOF'
-# Wizard MCP server declarations — installed to ~/.wizard/mcp.toml
-#
-# Part of Wizard's default loadout. This directory (loadout/) is the canonical
-# source; install.sh embeds a verbatim copy as a heredoc so the curl|bash
-# one-liner works without a repo checkout — keep the two in sync.
-#
-# Each [[server]] is a Model Context Protocol server whose tools merge into
-# Wizard's tool registry. New servers (or edits here) become active the next
-# time Wizard starts, or immediately when you run /reload in the TUI.
-#
-# The Playwright MCP server below gives Wizard a real browser: navigate, click,
-# type, and snapshot tools for reading pages, filling forms, and computer-use
-# style tasks. It is spawned over stdio as `npx -y @playwright/mcp@latest`, so
-# it requires Node and `npx` on your PATH. If Node is missing, this server is
-# skipped with a warning at startup and the rest of Wizard works normally —
-# install Node, then `/reload`.
-
-[[server]]
-name = "playwright"
-transport = "stdio"
-command = "npx"
-args = ["-y", "@playwright/mcp@latest"]
-EOF
+    # The Playwright entry is declared live only when npx can start it.
+    # Without Node it is written commented out, so a fresh install never opens
+    # on a server that cannot connect.
+    if command -v npx >/dev/null 2>&1; then
+        mcp_loadout | loadout_file "$HOME/.wizard/mcp.toml" "MCP servers: Playwright browser"
+    else
+        mcp_loadout | disable_mcp_servers |
+            loadout_file "$HOME/.wizard/mcp.toml" "MCP servers: Playwright browser, off until Node is installed"
+        warn "Node/npx not found on PATH — the Playwright browser server is written to ~/.wizard/mcp.toml commented out."
+        warn "Install Node (https://nodejs.org), uncomment it, then run /reload in Wizard to activate the browser."
+    fi
 
     loadout_file "$HOME/.wizard/subagents/reviewer.toml" "subagent: reviewer" <<'EOF'
 name = "reviewer"
@@ -2287,8 +2274,8 @@ Method:
 3. Extract the specific facts that answer the question. Note version numbers,
    dates, and exact quotes where precision matters.
 
-If the browser tools are unavailable (Node/npx not installed, server failed to
-start), say so plainly and report whatever you could determine from your own
+If the browser tools are unavailable (Node/npx not installed, the Playwright
+server left off in mcp.toml, or it failed to start), say so plainly and report whatever you could determine from your own
 knowledge, clearly labeled as un-verified — do not fabricate page contents or
 citations.
 
@@ -2382,11 +2369,47 @@ Rules:
 Report: which files you wrote or updated, and a one-line summary of each change.
 """
 EOF
+}
 
-    if ! command -v npx >/dev/null 2>&1; then
-        warn "Node/npx not found on PATH — the Playwright browser server will be skipped at startup."
-        warn "Install Node (https://nodejs.org), then run /reload in Wizard to activate the browser."
-    fi
+# loadout/mcp.toml, verbatim.
+mcp_loadout() {
+    cat <<'EOF'
+# Wizard MCP server declarations — installed to ~/.wizard/mcp.toml
+#
+# Part of Wizard's default loadout. This directory (loadout/) is the canonical
+# source; install.sh embeds a verbatim copy as a heredoc so the curl|bash
+# one-liner works without a repo checkout — keep the two in sync.
+#
+# Each [[server]] is a Model Context Protocol server whose tools merge into
+# Wizard's tool registry. New servers (or edits here) become active the next
+# time Wizard starts, or immediately when you run /reload in the TUI.
+#
+# The Playwright MCP server below gives Wizard a real browser: navigate, click,
+# type, and snapshot tools for reading pages, filling forms, and computer-use
+# style tasks. It is spawned over stdio as `npx -y @playwright/mcp@latest`, so
+# it needs Node and `npx` on your PATH. The installer writes it commented out
+# when npx is missing, and Wizard skips a server whose command is not on PATH
+# with a one-line notice at startup. Install Node, then `/reload`.
+
+[[server]]
+name = "playwright"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
+EOF
+}
+
+# The loadout with every declaration commented out and a line saying how to
+# turn it back on. Comments and blank lines pass through as they are.
+disable_mcp_servers() {
+    awk '
+        /^\[\[server\]\]/ && !noted {
+            print "# Off: npx was not on PATH at install time. Install Node, remove the \"#\" from the lines below, then /reload."
+            noted = 1
+        }
+        /^[^#]/ { print "#" $0; next }
+        { print }
+    '
 }
 
 # --- main ---------------------------------------------------------------
