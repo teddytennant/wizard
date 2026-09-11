@@ -101,14 +101,30 @@ pub async fn download_gguf(tier: &GgufModel, dest: &Path, progress: &dyn Progres
     // the previous attempt left off.
     bar.inc(offset);
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.with_context(|| format!("reading from {}", tier.url))?;
+    // Ctrl-C ends the download cleanly and keeps nothing: the user said no
+    // to a multi-GB file, so a resumable remnant is not what they asked for.
+    let interrupt = tokio::signal::ctrl_c();
+    tokio::pin!(interrupt);
+    loop {
+        let chunk = tokio::select! {
+            chunk = stream.next() => match chunk {
+                Some(chunk) => chunk.with_context(|| format!("reading from {}", tier.url))?,
+                None => break,
+            },
+            _ = &mut interrupt => {
+                drop(file);
+                let _ = std::fs::remove_file(&partial);
+                restore_default_interrupt();
+                bail!("download cancelled; nothing was kept");
+            }
+        };
         std::io::Write::write_all(&mut file, &chunk)
             .with_context(|| format!("writing {}", partial.display()))?;
         written += chunk.len() as u64;
         bar.inc(chunk.len() as u64);
     }
     drop(file);
+    restore_default_interrupt();
 
     if let Some(total) = total
         && written < total
@@ -122,6 +138,17 @@ pub async fn download_gguf(tier: &GgufModel, dest: &Path, progress: &dyn Progres
         .with_context(|| format!("moving {} into place", partial.display()))?;
     bar.finish(&format!("saved {}", dest.display()));
     Ok(())
+}
+
+/// Give SIGINT its default back. `tokio::signal::ctrl_c` keeps its handler
+/// for the life of the process, and after the download nothing is waiting
+/// on it: the next Ctrl-C should end the process the way it always did.
+fn restore_default_interrupt() {
+    #[cfg(unix)]
+    // SAFETY: resetting a signal disposition to SIG_DFL has no preconditions.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
 }
 
 // ---------------------------------------------------------------------------
