@@ -71,7 +71,18 @@ build_wizard() {
         ctx="$here/agents/wizard/ctx"
         rm -rf "$ctx" && mkdir -p "$ctx"
         cp "$WIZARD_BINARY" "$ctx/wizard"
+        chmod 755 "$ctx/wizard"
         cp -r "$here/../../loadout" "$ctx/loadout"
+        # A binary built on NixOS names a loader under /nix/store. Point it at
+        # the system loader (same glibc major, 2.39 in ubuntu:24.04) so it
+        # runs in the bench image; the measured image never sees patchelf.
+        docker build -q -t wizard-bench-patchelf -f "$here/agents/wizard/Dockerfile.patchelf" "$here/agents/wizard" >/dev/null
+        interp=$(docker run --rm -v "$ctx:/ctx" wizard-bench-patchelf patchelf --print-interpreter /ctx/wizard)
+        if [ "$interp" != "/lib64/ld-linux-x86-64.so.2" ]; then
+            log "re-pointing $interp at /lib64/ld-linux-x86-64.so.2"
+            docker run --rm -v "$ctx:/ctx" wizard-bench-patchelf \
+                patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath /ctx/wizard
+        fi
         log "building wizard from $WIZARD_BINARY"
         docker build -q -t wizard-bench-wizard -f "$here/agents/wizard/Dockerfile.local" "$ctx"
     else

@@ -1,0 +1,6 @@
+# Helper for WIZARD_BINARY: a binary built on NixOS asks for a loader under
+# /nix/store, which the bench image does not have. This image only exists to
+# re-point the staged copy at /lib64/ld-linux-x86-64.so.2 before it is
+# copied in, so patchelf never lands in the measured image.
+FROM wizard-bench-base
+RUN apt-get update && apt-get install -y --no-install-recommends patchelf && rm -rf /var/lib/apt/lists/*
