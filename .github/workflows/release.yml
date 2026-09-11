@@ -710,7 +710,8 @@ jobs:
             exit 1
           fi
           git clone --depth 1 https://github.com/teddytennant/homebrew-tap tap
-          contrib/homebrew/formula.sh "$GITHUB_REF_NAME" checksums.txt > tap/Formula/wizard.rb
+          contrib/homebrew/formula.sh "$GITHUB_REF_NAME" checksums.txt > wizard.rb.new
+          mv wizard.rb.new tap/Formula/wizard.rb
           cd tap
           git add Formula/wizard.rb
           if git diff --cached --quiet; then
