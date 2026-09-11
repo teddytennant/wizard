@@ -280,7 +280,15 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
         }
         Detection::Asked(query) => Some(query),
     };
-    let mut terminal = setup_terminal()?;
+    let mut terminal = match setup_terminal() {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            // Raw mode went on before the image query; the guard that
+            // would undo it does not exist yet.
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(err);
+        }
+    };
     let _guard = TerminalGuard;
     if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
         tracing::warn!("first frame not drawn: {err}");
@@ -1306,9 +1314,39 @@ fn first_run_line() -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "~/.wizard/config.toml".to_string());
     let home = dirs::home_dir().map(|home| home.display().to_string());
-    let shown = match home {
-        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
-        _ => path,
-    };
-    format!("saved {shown} · /setup changes it")
+    format!(
+        "saved {} · /setup changes it",
+        tilde(&path, home.as_deref())
+    )
+}
+
+/// `path` with a leading `home` written as `~`. Only a whole component
+/// counts: `/home/ted` is not a prefix of `/home/teddy/.wizard`.
+fn tilde(path: &str, home: Option<&str>) -> String {
+    match home {
+        Some(home) => match path.strip_prefix(home) {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_string(),
+        },
+        None => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tilde;
+
+    #[test]
+    fn tilde_only_replaces_a_whole_home_component() {
+        assert_eq!(
+            tilde("/home/teddy/.wizard/config.toml", Some("/home/teddy")),
+            "~/.wizard/config.toml"
+        );
+        assert_eq!(
+            tilde("/home/teddy/.wizard/config.toml", Some("/home/ted")),
+            "/home/teddy/.wizard/config.toml"
+        );
+        assert_eq!(tilde("/home/teddy", Some("/home/teddy")), "~");
+        assert_eq!(tilde("/etc/wizard.toml", None), "/etc/wizard.toml");
+    }
 }
