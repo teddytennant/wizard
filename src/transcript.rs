@@ -64,6 +64,8 @@
 
 use std::collections::VecDeque;
 
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
 
 use crate::agent::session::SessionEntry;
@@ -156,6 +158,31 @@ pub struct ToolItem {
     /// output twice, and would make a live turn and its replay disagree — see
     /// the module docs on why that equality is worth protecting.
     pub progress: String,
+    /// When the call started and how long it took, on the live path only.
+    pub timing: ToolTiming,
+}
+
+/// Wall-clock timing of a tool call. Not part of the conversation's identity:
+/// two models built from the same events compare equal whether or not one of
+/// them watched the clock, which is what lets replay and live stay comparable.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToolTiming {
+    pub started: Option<Instant>,
+    pub took: Option<Duration>,
+}
+
+impl PartialEq for ToolTiming {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ToolTiming {
+    /// How long the call has run, or ran. `None` off the live path.
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.took
+            .or_else(|| self.started.map(|started| started.elapsed()))
+    }
 }
 
 /// What a tool call returned.
@@ -760,6 +787,10 @@ impl TranscriptModel {
             call_id,
             output: None,
             progress: String::new(),
+            timing: ToolTiming {
+                started: Some(Instant::now()),
+                took: None,
+            },
         }));
     }
 
@@ -776,6 +807,7 @@ impl TranscriptModel {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: ToolTiming::default(),
         }));
     }
 
@@ -818,6 +850,7 @@ impl TranscriptModel {
                 self.record(Change::Mutated(row));
                 if let TranscriptItem::Tool(item) = &mut self.items[row] {
                     item.output = Some(output);
+                    item.timing.took = item.timing.started.map(|started| started.elapsed());
                     // The live tail has been superseded by the real result,
                     // which contains the same bytes plus the exit status. See
                     // `ToolItem::progress`.
@@ -833,6 +866,7 @@ impl TranscriptModel {
                     call_id: call_id.to_string(),
                     output: Some(output),
                     progress: String::new(),
+                    timing: ToolTiming::default(),
                 }));
             }
         }

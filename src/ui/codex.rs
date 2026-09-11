@@ -1366,11 +1366,6 @@ fn status_details(app: &App, width: u16) -> Vec<Line<'static>> {
     }
     if let Some(label) = &app.rebuilding {
         rows.push(Line::from(Span::styled(format!("{label}…"), dim())));
-    } else if app.status.busy {
-        rows.push(Line::from(Span::styled(
-            format!("{}…", app.spinner_verb),
-            dim().italic(),
-        )));
     }
     if app.mcp_connecting {
         rows.push(Line::from(Span::styled("connecting tools…", dim())));
@@ -2853,6 +2848,7 @@ mod tests {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         }
     }
 

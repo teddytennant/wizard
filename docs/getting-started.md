@@ -301,14 +301,14 @@ The installer also lays down `~/.wizard/mcp.toml` (Playwright browser MCP) and `
 
 ### Spinner verbs (`[ui]`)
 
-While Wizard works, the chat-area spinner shows a wizard-flavored verb ("Conjuring…", "Scrying…", "Brewing…"): one is picked pseudo-randomly per busy period and held until the turn finishes, and the next turn draws a new one. Customize the list with an optional `[ui]` section:
+While the model has been asked and has not answered yet, the TUI shows a spinner and the time elapsed (`⠋ 3s`, plus `step 2/8` under a capped `max_steps`). Nothing else: the row is gone the moment text or a tool call arrives. If you want a word in front of the timer, give it one:
 
 ```toml
 [ui]
 spinner_verbs = ["Pondering", "Musing", "Noodling"]
 ```
 
-A non-empty list fully replaces the defaults; omitting the section or setting `spinner_verbs = []` keeps the built-in wizard verbs. The status bar (`step x · Ns`, or `step x/y` under a capped `max_steps`) and tool spinners are unaffected.
+One is picked per busy period and held until the turn finishes. Omitting the section or setting `spinner_verbs = []` shows the timer alone. Headless runs (`wizard -p`) still use their own stderr spinner and its stock verbs.
 
 ### Vim mode (`[ui]`)
 

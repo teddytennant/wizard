@@ -166,21 +166,17 @@ fn highlight_diff_uses_red_and_green() {
         "the default theme owns the deletion color"
     );
     assert_eq!(theme::minimal().color(Token::DiffAdd), Color::Green);
-    // File headers must not be mis-classified as add/delete.
+    // The four header rows collapse into the file's name, once.
     let meta = theme::style(Token::DiffMeta).add_modifier(Modifier::BOLD);
     assert_eq!(
-        styles
-            .iter()
-            .find(|(c, _)| c.starts_with("--- "))
-            .map(|(_, s)| *s),
+        styles.iter().find(|(c, _)| c == "a.txt").map(|(_, s)| *s),
         Some(meta),
     );
-    assert_eq!(
-        styles
-            .iter()
-            .find(|(c, _)| c.starts_with("+++ "))
-            .map(|(_, s)| *s),
-        Some(meta),
+    assert!(
+        !styles.iter().any(|(c, _)| {
+            c.starts_with("--- ") || c.starts_with("+++ ") || c.starts_with("diff ")
+        }),
+        "{styles:?}"
     );
     assert_eq!(
         styles
@@ -798,7 +794,7 @@ fn todo_band_sits_above_the_composer_without_covering_chat() {
 /// splash actively getting in the way, so the art is conditional and this
 /// pins both directions.
 #[test]
-fn the_mark_is_drawn_only_when_the_card_can_spare_the_room() {
+fn the_empty_state_is_three_plain_lines_at_every_width() {
     fn screen(width: u16, height: u16) -> String {
         let app = App::new(crate::config::Config::default());
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -814,30 +810,21 @@ fn the_mark_is_drawn_only_when_the_card_can_spare_the_room() {
             .collect::<Vec<_>>()
             .join("\n")
     }
-
-    // A braille cell from the mark's densest row. Not U+2800, which is the
-    // blank and would match a padded row of nothing.
-    let tall = screen(100, 40);
-    assert!(
-        tall.contains('⣿'),
-        "the mark should be drawn on a terminal with room for it"
-    );
-    assert!(tall.contains("w i z a r d"), "and the name stays");
-    assert!(
-        tall.contains("type a message"),
-        "and so do the hints: {tall}"
-    );
-
-    // The default terminal, where the hints matter more than the drawing.
-    let short = screen(80, 24);
-    assert!(
-        !short.contains('⣿'),
-        "the mark must yield on a short terminal: {short}"
-    );
-    assert!(
-        short.contains("type a message"),
-        "because this is what the room is for: {short}"
-    );
+    for (width, height) in [(120, 40), (80, 24), (40, 20)] {
+        let screen = screen(width, height);
+        let first = screen.lines().nth(1).unwrap_or_default();
+        assert!(first.starts_with(" wizard "), "{width}x{height}: {screen}");
+        assert!(
+            screen.contains("type a message"),
+            "{width}x{height}: {screen}"
+        );
+        for absent in ["⣿", "w i z a r d", "sovereign agent", "/model", "genie"] {
+            assert!(
+                !screen.contains(absent),
+                "{absent} at {width}x{height}: {screen}"
+            );
+        }
+    }
 }
 
 /// The empty-state hook: the starter prompts are numbered on the card, the
@@ -899,7 +886,7 @@ fn a_startup_notice_is_visible_on_the_welcome_screen() {
         screen.contains("unknown theme 'solarised'"),
         "the notice has to be on the card the user is looking at: {screen}"
     );
-    assert!(screen.contains("w i z a r d"), "still the welcome card");
+    assert!(screen.contains(" wizard "), "still the welcome card");
     // A notice does not start the conversation, so the card stays.
     assert!(app.welcome_visible());
 
@@ -1406,4 +1393,144 @@ fn no_overlay_panics_at_any_terminal_size() {
             }
         }
     }
+}
+
+fn card(tool: &crate::transcript::ToolItem) -> Vec<String> {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    flats(&tool_card_lines(tool, false, 0, 80))
+}
+
+#[test]
+fn a_finished_tool_card_carries_its_exit_code_and_elapsed_time() {
+    use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
+    let tool = ToolItem {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "make" }),
+        call_id: String::new(),
+        output: Some(ToolItemOutput {
+            content: "boom\nexit code: 2".to_string(),
+            is_error: true,
+        }),
+        progress: String::new(),
+        timing: ToolTiming {
+            started: None,
+            took: Some(std::time::Duration::from_millis(400)),
+        },
+    };
+    let rows = card(&tool);
+    assert_eq!(rows[0], "✗ execute  make  exit 2  0.4s", "{rows:?}");
+    assert_eq!(rows[1].trim(), "boom", "{rows:?}");
+    assert_eq!(rows.len(), 2, "the exit line moved to the header: {rows:?}");
+
+    // Folded, the header still says how it ended.
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let folded = flats(&tool_card_lines(&tool, true, 0, 80));
+    assert_eq!(folded, vec!["✗ execute  make  exit 2  0.4s  +1 lines"]);
+}
+
+#[test]
+fn an_edit_card_shows_the_change_as_a_diff() {
+    use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
+    let tool = ToolItem {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({
+            "path": "src/x.rs",
+            "old_string": "let a = 1;",
+            "new_string": "let a = 2;\nlet b = 3;",
+        }),
+        call_id: String::new(),
+        output: Some(ToolItemOutput {
+            content: "Edited src/x.rs: replaced 1 occurrence (line 12)".to_string(),
+            is_error: false,
+        }),
+        progress: String::new(),
+        timing: ToolTiming::default(),
+    };
+    let rows = card(&tool);
+    assert_eq!(rows[0], "✓ edit_file  src/x.rs:12", "{rows:?}");
+    assert_eq!(rows[1], "  - let a = 1;");
+    assert_eq!(rows[2], "  + let a = 2;");
+    assert_eq!(rows[3], "  + let b = 3;");
+    assert!(
+        !rows.iter().any(|row| row.contains("replaced")),
+        "the sentence is not the body: {rows:?}"
+    );
+}
+
+#[test]
+fn elapsed_time_keeps_only_the_precision_it_has() {
+    use std::time::Duration;
+    assert_eq!(fmt_elapsed(Duration::from_millis(420)), "0.4s");
+    assert_eq!(fmt_elapsed(Duration::from_secs(12)), "12s");
+    assert_eq!(fmt_elapsed(Duration::from_secs(125)), "2m05s");
+}
+
+#[test]
+fn the_busy_row_is_a_timer_unless_a_verb_was_configured() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.status.busy = true;
+    app.turn_started = Some(std::time::Instant::now());
+    let screen = render(&app).join("\n");
+    assert!(screen.contains("⠋ 0.0s"), "{screen}");
+    for verb in crate::config::UiConfig::DEFAULT_SPINNER_VERBS {
+        assert!(!screen.contains(verb), "{verb} is whimsy: {screen}");
+    }
+
+    let mut config = crate::config::Config::default();
+    config.ui.spinner_verbs = vec!["Pondering".to_string()];
+    let mut app = App::new(config);
+    app.welcome_dismissed = true;
+    app.status.busy = true;
+    app.turn_started = Some(std::time::Instant::now());
+    let screen = render(&app).join("\n");
+    assert!(screen.contains("⠋ Pondering… 0.0s"), "{screen}");
+}
+
+#[test]
+fn the_status_line_names_the_branch_and_drops_the_defaults() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/feature-x\n").unwrap();
+    let mut app = App::new(crate::config::Config::default());
+    app.project_root = dir.path().to_path_buf();
+    let rows = render(&app);
+    let status = rows.last().unwrap();
+    assert!(status.contains("feature-x"), "{status}");
+    assert!(
+        !status.contains("genie"),
+        "the default mode says nothing: {status}"
+    );
+    assert!(!status.contains("commands"), "no idle hint: {status}");
+    assert!(
+        !status.contains(&dir.path().display().to_string()),
+        "{status}"
+    );
+
+    // Sovereign is the mode worth a word.
+    app.status.mode = crate::config::Mode::Sovereign;
+    let rows = render(&app);
+    assert!(rows.last().unwrap().contains("sovereign"));
+
+    // Outside a repository there is no branch chip and no stray separator.
+    let bare = tempfile::tempdir().unwrap();
+    app.project_root = bare.path().to_path_buf();
+    app.status.mode = crate::config::Mode::Genie;
+    let rows = render(&app);
+    assert_eq!(rows.last().unwrap().trim(), app.status.model, "{rows:?}");
+}
+
+#[test]
+fn an_error_notice_leads_with_the_glyph() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.handle_agent_event(crate::agent::AgentEvent::Error(
+        "provider said no".to_string(),
+    ));
+    let screen = render(&app).join("\n");
+    assert!(screen.contains("✗ provider said no"), "{screen}");
+    assert!(!screen.contains("error:"), "{screen}");
 }
