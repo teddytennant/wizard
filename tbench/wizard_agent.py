@@ -60,6 +60,10 @@ SOURCE_INPUTS = ("src", "Cargo.toml", "Cargo.lock", "build.rs")
 
 CONTAINER_BINARY = "/installed-agent/wizard"
 
+# Send the provider's traffic somewhere else (a local proxy, a gateway). Only
+# the URL Wizard dials changes; the provider kind and key env stay as chosen.
+BASE_URL_ENV = "WIZARD_TB_BASE_URL"
+
 # Wizard's own OAuth token store, used only as a fallback when no API key is
 # present (see `_auth`).
 DEFAULT_OAUTH_TOKEN = Path.home() / ".wizard" / "xai_oauth.json"
@@ -306,6 +310,7 @@ class WizardAgent(BaseInstalledAgent):
                 f"Known: {', '.join(sorted(PROVIDERS))}"
             )
         _, base_url, key_env = PROVIDERS[provider]
+        base_url = os.environ.get(BASE_URL_ENV) or base_url
         return provider, base_url, key_env
 
     def _model_tag(self) -> str:
@@ -434,8 +439,10 @@ class WizardAgent(BaseInstalledAgent):
         # No --loop / --max-hours cap: Harbor already bounds each trial with the
         # task's own timeout, and a tighter cap here would make Wizard give up on
         # long tasks it could otherwise finish, quietly depressing the score.
+        # `--prompt=` rather than `-p`: clap rejects a bare value that starts
+        # with a hyphen, and one task's instruction opens with "- ".
         command = (
             "wizard --mode sovereign --output-format text "
-            f"-p {shlex.quote(instruction)} 2>&1 | tee /logs/agent/wizard.txt"
+            f"--prompt={shlex.quote(instruction)} 2>&1 | tee /logs/agent/wizard.txt"
         )
         await self.exec_as_agent(environment, command, env=env)
