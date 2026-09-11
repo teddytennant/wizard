@@ -356,10 +356,15 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
     // Nothing usable: let the user bring their own provider interactively.
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         println!("no working provider — opening setup so you can pick one (Esc to cancel).");
-        if let Some(new_config) = crate::onboarding::run().await? {
-            let active = new_config.active();
+        if let Some(picked) = crate::onboarding::run().await? {
+            let active = picked.active();
             let client = try_provider(&active).await?;
-            *config = new_config;
+            // The first-run screen wrote a default config with that one
+            // provider. Everything else here (gateway, mode, skin, the other
+            // providers) still stands, so the pick is merged in and the file
+            // rewritten from the merge.
+            adopt_provider(config, &picked);
+            config.save().context("saving the picked provider")?;
             return Ok(client);
         }
     }
@@ -368,6 +373,19 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
         "the local model is unavailable and no fallback provider is configured — \
          run `wizard --onboard` to set one up",
     ))
+}
+
+/// Make `picked`'s active provider the active one in `config`, replacing a
+/// same-named entry and carrying the legacy Ollama mirror fields with it.
+fn adopt_provider(config: &mut Config, picked: &Config) {
+    let provider = picked.active();
+    config.providers.retain(|p| p.name != provider.name);
+    config.active_provider = Some(provider.name.clone());
+    if provider.kind == ProviderKind::OLLAMA {
+        config.model = picked.model.clone();
+        config.ollama_host = picked.ollama_host.clone();
+    }
+    config.providers.push(provider);
 }
 
 /// Background half of `/model <tag>`: validate the tag against the
@@ -430,5 +448,68 @@ pub(super) async fn switch_model_task(
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(name: &str, kind: ProviderKind) -> ProviderConfig {
+        ProviderConfig {
+            name: name.to_string(),
+            kind,
+            base_url: format!("http://{name}.test"),
+            model: "m".to_string(),
+            api_key_env: None,
+            gguf_path: None,
+            usd_per_mtok_in: None,
+            usd_per_mtok_out: None,
+        }
+    }
+
+    #[test]
+    fn adopting_a_provider_keeps_the_rest_of_the_config() {
+        let mut config = Config {
+            mode: crate::config::Mode::Sovereign,
+            providers: vec![provider("dead", ProviderKind::OPENAI)],
+            active_provider: Some("dead".to_string()),
+            ..Config::default()
+        };
+        config.ui.skin = Some("codex".to_string());
+
+        let picked = Config {
+            providers: vec![provider("fresh", ProviderKind::OLLAMA)],
+            active_provider: Some("fresh".to_string()),
+            model: "qwen".to_string(),
+            ollama_host: "http://fresh.test".to_string(),
+            ..Config::default()
+        };
+
+        adopt_provider(&mut config, &picked);
+
+        assert_eq!(config.mode, crate::config::Mode::Sovereign);
+        assert_eq!(config.ui.skin.as_deref(), Some("codex"));
+        assert_eq!(config.active().name, "fresh");
+        assert_eq!(config.providers.len(), 2, "the old entry stays");
+        assert_eq!(config.model, "qwen");
+        assert_eq!(config.ollama_host, "http://fresh.test");
+    }
+
+    #[test]
+    fn adopting_replaces_a_same_named_entry() {
+        let mut config = Config {
+            providers: vec![provider("xai", ProviderKind::OPENAI)],
+            ..Config::default()
+        };
+        let mut fresh = provider("xai", ProviderKind::OPENAI);
+        fresh.model = "grok-5".to_string();
+        let picked = Config {
+            providers: vec![fresh],
+            ..Config::default()
+        };
+        adopt_provider(&mut config, &picked);
+        assert_eq!(config.providers.len(), 1);
+        assert_eq!(config.active().model, "grok-5");
     }
 }
