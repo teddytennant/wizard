@@ -39,7 +39,7 @@ use super::session::{
 };
 use super::term::{
     TerminalGuard, copy_to_clipboard, edit_config_file, edit_prompt_in_editor, is_terminal_armed,
-    restore_terminal_best_effort, setup_terminal,
+    restore_terminal_best_effort, run_setup_suspended, setup_terminal,
 };
 use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 
@@ -49,7 +49,7 @@ use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 /// the [`EventLoop`](crate::event::EventLoop) until quit. Restores the
 /// terminal on exit and on panic. Returns the process exit code: 0 from the
 /// TUI itself; the headless fallback propagates its outcome code.
-pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
+pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i32> {
     // No usable terminal: run headless when a task was given, otherwise we
     // cannot do anything sensible.
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
@@ -228,6 +228,11 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     if let Some(prompt) = cli.prompt.clone() {
         app.set_input(prompt);
     }
+    // The one line the old summary screen became. On the card only: the
+    // model is already two lines up, and a notice would repeat it.
+    if first_run {
+        app.first_run_summary = Some(first_run_line());
+    }
     // No startup notice: the welcome screen already shows the model, mode,
     // and help pointers until the first message arrives.
 
@@ -301,6 +306,24 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
                 let _ = notify
                     .send(Event::ProviderHealthFailed(format!("{err:#}")))
                     .await;
+            }
+        });
+    }
+
+    // The starter prompts read the cwd (two git calls at most). They arrive
+    // as an event, so a slow `git status` on a big tree lands on the card
+    // after the first frame instead of holding it.
+    {
+        let notify = events.sender();
+        let cwd = project_root.clone();
+        tokio::spawn(async move {
+            let prompts = tokio::task::spawn_blocking(move || {
+                crate::starter::starter_prompts(&crate::starter::CwdFacts::gather(&cwd))
+            })
+            .await
+            .unwrap_or_default();
+            if !prompts.is_empty() {
+                let _ = notify.send(Event::StarterPrompts(prompts)).await;
             }
         });
     }
@@ -573,6 +596,10 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
             app.provider_health_error = Some(err);
             continue;
         }
+        if let Event::StarterPrompts(prompts) = event {
+            app.starter_prompts = prompts;
+            continue;
+        }
 
         // A background sign-in succeeded: add and switch to the provider. Owned
         // here because it mutates config and the agent slot.
@@ -718,6 +745,26 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         if app.pending_edit_config {
             app.pending_edit_config = false;
             edit_config_file(&mut app, &mut terminal);
+        }
+        // A `/setup` row that asked questions on the plain terminal. The
+        // config it wrote is live now: the agent is rebuilt on it, the way
+        // the provider picker does, not after a restart.
+        if let Some(section) = app.pending_setup.take()
+            && run_setup_suspended(&mut app, &mut terminal, section)
+        {
+            CommandContext {
+                app: &mut app,
+                client: &mut client,
+                agent_slot: &mut agent_slot,
+                manager: &manager,
+                skills: &mut skills,
+                project_root: &project_root,
+                mcp_path: &mcp_path,
+                genie_max_steps,
+                events: &events,
+            }
+            .rebuild_active_provider("setup saved; the agent now runs on it".to_string())
+            .await;
         }
 
         // Ctrl-G: same suspend/restore dance, on the composer draft.
@@ -1240,4 +1287,18 @@ async fn drain_agent_commands(
         .run(command)
         .await;
     }
+}
+
+/// `saved ~/.wizard/config.toml · /setup changes it`: the card's line after
+/// a first run.
+fn first_run_line() -> String {
+    let path = Config::path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "~/.wizard/config.toml".to_string());
+    let home = dirs::home_dir().map(|home| home.display().to_string());
+    let shown = match home {
+        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
+        _ => path,
+    };
+    format!("saved {shown} · /setup changes it")
 }

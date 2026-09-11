@@ -8,7 +8,7 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::config::Config;
 
-use super::App;
+use super::{App, SetupSection};
 
 pub(super) type Tui = Terminal<CrosstermBackend<std::io::Stdout>>;
 
@@ -148,6 +148,56 @@ pub(super) fn edit_config_file(app: &mut App, terminal: &mut Tui) {
         },
         Ok(_) => app.notice("editor exited without success — config not reloaded"),
         Err(err) => app.notice(format!("could not launch editor: {err:#}")),
+    }
+}
+
+/// Suspend the TUI, run one of the setup wizards on the plain terminal, then
+/// restore the TUI and take the config it wrote. Driven by the `/setup` rows
+/// that ask questions; runs from the main loop because it owns `terminal`.
+/// `true` when a config was saved and the agent should be rebuilt on it.
+pub(super) fn run_setup_suspended(
+    app: &mut App,
+    terminal: &mut Tui,
+    section: SetupSection,
+) -> bool {
+    if let Err(err) = restore_terminal() {
+        app.notice(format!("could not suspend the TUI: {err:#}"));
+        return false;
+    }
+    let outcome = match section {
+        SetupSection::Wizard => crate::onboarding::run_full_blocking(false),
+        SetupSection::Gateway => crate::onboarding::run_gateway_setup_blocking(),
+    };
+    match setup_terminal() {
+        Ok(new_terminal) => {
+            *terminal = new_terminal;
+            let _ = terminal.clear();
+        }
+        Err(err) => {
+            app.notice(format!(
+                "could not restore the TUI: {err:#}; /quit and relaunch"
+            ));
+            return false;
+        }
+    }
+    match outcome {
+        Ok(Some(config)) => {
+            // The full wizard may have picked an interface; install it the
+            // way `App::new` does, or the old chrome stays up.
+            let _ = crate::skin::init(config.ui.skin.as_deref());
+            let _ = crate::theme::init(crate::skin::active().companion_theme());
+            app.config = config;
+            app.status.mode = app.config.mode;
+            true
+        }
+        Ok(None) => {
+            app.notice("setup cancelled, nothing changed");
+            false
+        }
+        Err(err) => {
+            app.notice(format!("setup failed: {err:#}"));
+            false
+        }
     }
 }
 

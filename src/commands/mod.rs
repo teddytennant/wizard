@@ -496,7 +496,7 @@ impl SlashCommand {
                 }),
                 _ => Err("usage: /login xai [force]".to_string()),
             },
-            "settings" => Ok(Self::Settings),
+            "settings" | "setup" => Ok(Self::Settings),
             "vim" => Ok(Self::Vim),
             // Joined so `/ui claude code` is the same request as `/ui claude`:
             // people type the product name, not the key.
@@ -1110,7 +1110,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "settings",
         args: "",
-        description: "open the settings menu (change config anytime)",
+        description: "open the settings menu (also /setup)",
         takes_args: false,
         tui: Execution::Ui,
         gui: Execution::Ui,

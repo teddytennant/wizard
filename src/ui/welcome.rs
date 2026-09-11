@@ -83,12 +83,9 @@ pub(crate) fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
 /// provider's own prose and is routinely wider than the screen it lands on.
 fn welcome_notices(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(err) = &app.provider_health_error {
+    if let Some(line) = app.provider_health_line() {
         lines.push(Line::from(Span::styled(
-            truncate_width(
-                &format!("⚠ provider unreachable: {err}"),
-                WELCOME_NOTICE_WIDTH,
-            ),
+            truncate_width(&format!("⚠ {line}"), WELCOME_NOTICE_WIDTH),
             warning().bold(),
         )));
     }
@@ -183,6 +180,17 @@ fn draw_welcome_mark(frame: &mut Frame, app: &App, area: Rect) {
     // index so they keep the order they were raised in.
     for notice in welcome_notices(app).into_iter().rev() {
         lines.insert(4, notice);
+    }
+    // The starter prompts sit under "type a message", before the commands.
+    let starters = starter_prompt_lines(app);
+    if !starters.is_empty() {
+        let at = lines
+            .iter()
+            .position(|line| line.spans.first().is_some_and(|s| s.content == "/"))
+            .unwrap_or(lines.len());
+        for line in starters.into_iter().rev() {
+            lines.insert(at, line);
+        }
     }
 
     // The mark, above the name, when the card can afford it.
@@ -280,6 +288,7 @@ fn welcome_hints(app: &App) -> Vec<Line<'static>> {
         Span::styled(" and press Enter to begin", dim()),
     ]));
     lines.push(Line::raw(""));
+    lines.extend(starter_prompt_lines(app));
     // Padded into a column: left-aligned, ragged blurbs read as a list of
     // unrelated fragments, and this is the part of the screen a first-time
     // user is actually meant to act on.
@@ -294,5 +303,39 @@ fn welcome_hints(app: &App) -> Vec<Line<'static>> {
             Span::styled(blurb, dim()),
         ]));
     }
+    lines
+}
+
+/// The empty-state hook: the first run's summary line when there is one,
+/// then the starter prompts numbered 1..3, the ↓-selected one in the accent.
+/// Empty when there are no prompts. One function on purpose, so a restyle
+/// touches one place.
+fn starter_prompt_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(summary) = &app.first_run_summary {
+        lines.push(Line::from(Span::styled(summary.clone(), dim())));
+        lines.push(Line::raw(""));
+    }
+    if app.starter_prompts.is_empty() {
+        return lines;
+    }
+    lines.push(Line::from(Span::styled("or ↓ to pick one", dim())));
+    // Padded to one width so the rows still line up when the card is
+    // centered.
+    let width = app
+        .starter_prompts
+        .iter()
+        .map(|prompt| prompt.chars().count())
+        .max()
+        .unwrap_or(0);
+    for (index, prompt) in app.starter_prompts.iter().enumerate() {
+        let selected = app.starter_index == Some(index);
+        let text = format!("{}  {prompt:<width$}", index + 1);
+        lines.push(Line::from(Span::styled(
+            text,
+            if selected { accent() } else { muted() },
+        )));
+    }
+    lines.push(Line::raw(""));
     lines
 }

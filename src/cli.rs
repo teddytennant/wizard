@@ -483,6 +483,11 @@ pub enum Command {
     /// how to grant them. It touches no config and starts no agent.
     /// See docs/computer-use.md.
     DesktopSetup,
+
+    /// Run the full setup wizard (provider, gateway, mode, interface, web
+    /// search, Claude import), then start Wizard. The same as `--onboard`;
+    /// the first run asks one question and `/setup` in the TUI has the rest.
+    Setup,
 }
 
 /// `wizard plugin` subcommands.

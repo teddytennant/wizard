@@ -46,6 +46,10 @@ pub enum Event {
     /// breakage shows at launch (welcome screen + status bar) rather than only
     /// when the first message fails.
     ProviderHealthFailed(String),
+    /// The starter prompts read off the cwd, once the git calls that derive
+    /// them are done. Sent after the first frame, so a slow `git status`
+    /// never delays the first paint.
+    StarterPrompts(Vec<String>),
     /// A background agent rebuild (model switch, crash recovery) finished.
     /// Carries the agent back to the main loop's slot (boxed: an [`Agent`]
     /// is large next to the input variants).

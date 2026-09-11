@@ -840,6 +840,53 @@ fn the_mark_is_drawn_only_when_the_card_can_spare_the_room() {
     );
 }
 
+/// The empty-state hook: the starter prompts are numbered on the card, the
+/// first-run summary is a dim line rather than a warning, and the ↓ pick is
+/// the row that moves.
+#[test]
+fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
+    let mut app = App::new(crate::config::Config::default());
+    app.starter_prompts = vec![
+        "Explain how this project is put together".to_string(),
+        "Review my uncommitted changes".to_string(),
+    ];
+    app.first_run_summary = Some("saved ~/.wizard/config.toml · /setup changes it".to_string());
+    let screen = render(&app).join("\n");
+    assert!(
+        screen.contains("1  Explain how this project is put together"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("2  Review my uncommitted changes"),
+        "{screen}"
+    );
+    assert!(screen.contains("or ↓ to pick one"), "{screen}");
+    assert!(
+        screen.contains("saved ~/.wizard/config.toml · /setup changes it"),
+        "whole, never cut: {screen}"
+    );
+    assert!(
+        !screen.contains("⚠ saved"),
+        "the summary is not a warning: {screen}"
+    );
+    assert!(app.welcome_visible());
+
+    // A failed probe is one line with the remedy on it.
+    app.provider_health_error = Some("not signed in to xAI; run `wizard --login xai` first".into());
+    let screen = render(&app).join("\n");
+    assert!(
+        screen.contains("⚠ not signed in to xAI: /login xai"),
+        "{screen}"
+    );
+    app.provider_health_error = None;
+
+    // No prompts, no hook: the card is what it was.
+    app.starter_prompts.clear();
+    app.first_run_summary = None;
+    let screen = render(&app).join("\n");
+    assert!(!screen.contains("pick one"), "{screen}");
+}
+
 /// visible after the user's first submission.
 #[test]
 fn a_startup_notice_is_visible_on_the_welcome_screen() {
