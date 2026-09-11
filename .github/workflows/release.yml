@@ -4,12 +4,13 @@ on:
   push:
     tags: ['v*']
 
-# Read at the top, write on exactly one job. Ten of the twelve jobs here only
-# compile and upload build artifacts — artifact storage is a separate scope and
-# needs nothing from `contents` — so the only step that writes to the
-# repository is the one that creates the release. A token that can write
-# releases is handed to every `cargo build` in the matrix otherwise, including
-# the ones that run third-party build scripts from the dependency tree.
+# Read at the top, write on exactly two jobs. Ten of the thirteen jobs here only
+# compile and upload build artifacts (artifact storage is a separate scope and
+# needs nothing from `contents`), so the only steps that write to the
+# repository are the one that creates the release and the one that commits the
+# AUR bump afterwards. A token that can write releases is handed to every
+# `cargo build` in the matrix otherwise, including the ones that run
+# third-party build scripts from the dependency tree.
 #
 # The same argument one layer down: every checkout sets `persist-credentials:
 # false`, so the token is not sitting in `.git/config` while those build
@@ -641,3 +642,83 @@ jobs:
           done
           echo "Mirrored ${GITHUB_REF_NAME} to R2 (${R2_BUCKET}): /${GITHUB_REF_NAME}/ and /latest/" \
             >>"$GITHUB_STEP_SUMMARY"
+
+  # Runs after the release is public, so a failure here never takes a release
+  # down with it. It only edits packaging metadata: the tap formula and the
+  # AUR files under contrib/aur, both rendered from checksums.txt.
+  packaging:
+    name: Update Homebrew tap and AUR files
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Fetch the release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt
+      - name: Point the AUR files at this release
+        run: contrib/aur/bump.sh "$GITHUB_REF_NAME" checksums.txt
+      - name: Commit the AUR bump
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          git add contrib/aur
+          if git diff --cached --quiet; then
+            echo "contrib/aur already points at ${GITHUB_REF_NAME}"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Point the AUR files at ${GITHUB_REF_NAME}"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "HEAD:${BRANCH}"
+      # The AUR push stays off until there is an AUR account. Once there is:
+      # add its ssh public key on aur.archlinux.org, `gh secret set AUR_SSH_KEY
+      # < ~/.ssh/aur`, check the host key against the fingerprints published on
+      # https://aur.archlinux.org, then uncomment this step. It publishes the
+      # two files bump.sh just committed, nothing else.
+      # - name: Push to the AUR
+      #   env:
+      #     AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+      #   run: |
+      #     set -eu
+      #     mkdir -p ~/.ssh && chmod 700 ~/.ssh
+      #     printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur && chmod 600 ~/.ssh/aur
+      #     ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+      #     export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+      #     for pkg in wizard-bin wizard; do
+      #       git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "aur-${pkg}"
+      #       cp "contrib/aur/${pkg}/PKGBUILD" "contrib/aur/${pkg}/.SRCINFO" "aur-${pkg}/"
+      #       git -C "aur-${pkg}" add PKGBUILD .SRCINFO
+      #       git -C "aur-${pkg}" -c user.name="Teddy Tennant" -c user.email="teddytennant@icloud.com" \
+      #         commit -m "Update to ${GITHUB_REF_NAME#v}"
+      #       git -C "aur-${pkg}" push
+      #     done
+      - name: Rewrite the tap formula
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${TAP_GITHUB_TOKEN}" ]; then
+            echo "::error::TAP_GITHUB_TOKEN is not set, so teddytennant/homebrew-tap still serves the previous release. Create a fine-grained PAT scoped to homebrew-tap with Contents: read and write, then: gh secret set TAP_GITHUB_TOKEN --repo ${GITHUB_REPOSITORY}" >&2
+            exit 1
+          fi
+          git clone --depth 1 https://github.com/teddytennant/homebrew-tap tap
+          contrib/homebrew/formula.sh "$GITHUB_REF_NAME" checksums.txt > tap/Formula/wizard.rb
+          cd tap
+          git add Formula/wizard.rb
+          if git diff --cached --quiet; then
+            echo "tap already at ${GITHUB_REF_NAME}"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "wizard ${GITHUB_REF_NAME#v}"
+          git push "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/teddytennant/homebrew-tap" HEAD:main
+          echo "Tap formula now at ${GITHUB_REF_NAME}" >>"$GITHUB_STEP_SUMMARY"
