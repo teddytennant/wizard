@@ -34,8 +34,9 @@ pub struct Cli {
     pub mode: Option<Mode>,
 
     /// Initial task. Pre-fills the first message in genie mode; the task to
-    /// complete in sovereign / evolve mode.
-    #[arg(short, long)]
+    /// complete in sovereign / evolve mode. A pasted task can start with
+    /// `-` (a list item, a diff line), so the value is taken as written.
+    #[arg(short, long, allow_hyphen_values = true)]
     pub prompt: Option<String>,
 
     /// Self-extension mode: run the /evolve pipeline from the CLI.
@@ -756,7 +757,7 @@ pub enum FleetCmd {
 
         /// Mission prompt, decomposed into independent tasks by a planning
         /// turn.
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true)]
         prompt: String,
     },
 
@@ -785,7 +786,7 @@ pub enum ScheduleCmd {
         cron: String,
 
         /// Task prompt handed to the spawned headless wizard run.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         prompt: String,
 
         /// Directory the run executes in (must exist).
@@ -1148,6 +1149,36 @@ mod tests {
     fn long_prompt_flag_works() {
         let cli = parse(&["--prompt", "task"]).expect("long form parses");
         assert_eq!(cli.prompt.as_deref(), Some("task"));
+    }
+
+    #[test]
+    fn prompt_may_start_with_a_hyphen() {
+        // Terminal-Bench's pytorch-model-recovery instruction starts with
+        // "- ", and clap refused it as an unknown flag before the run began.
+        let cli = parse(&["-p", "- do this"]).expect("list-item prompt parses");
+        assert_eq!(cli.prompt.as_deref(), Some("- do this"));
+
+        let cli = parse(&["-p", "--not-a-flag"]).expect("double-dash prompt parses");
+        assert_eq!(cli.prompt.as_deref(), Some("--not-a-flag"));
+
+        let cli = parse(&["--prompt=- x"]).expect("inline form parses");
+        assert_eq!(cli.prompt.as_deref(), Some("- x"));
+
+        let cli = parse(&["-p", "-x", "--mode", "sovereign"]).expect("later flags still parse");
+        assert_eq!(cli.prompt.as_deref(), Some("-x"));
+        assert_eq!(cli.mode, Some(Mode::Sovereign));
+
+        let err = parse(&["-p"]).expect_err("a bare -p still needs a value");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+
+        let cli =
+            parse(&["fleet", "run", "-n", "2", "-p", "- ship it"]).expect("fleet prompt parses");
+        match cli.command {
+            Some(Command::Fleet {
+                cmd: FleetCmd::Run { prompt, .. },
+            }) => assert_eq!(prompt, "- ship it"),
+            other => panic!("expected fleet run, got {other:?}"),
+        }
     }
 
     #[test]
