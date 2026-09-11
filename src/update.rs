@@ -35,6 +35,13 @@
 //! auto-update path does not take this fallback: compiling for minutes in a
 //! fire-and-forget task is worse than leaving the notice.
 //!
+//! A binary that a package manager put in place (Homebrew's Cellar, pacman's
+//! `/usr/bin`, the Nix store) is never swapped at all. Renaming over it works
+//! and is still wrong: the manager's database no longer matches the file, and
+//! the next `brew upgrade` or `pacman -Syu` puts its own copy back. Those
+//! installs get the manager's upgrade command instead of a download, from
+//! `wizard update` and from the startup notice alike ([`package_manager_for`]).
+//!
 //! A download mirror can be put in front of GitHub with `WIZARD_MIRROR` (off by
 //! default). It changes which host answers and nothing else: the rules above
 //! hold whoever that is, any mirror failure falls back to GitHub, and the user
@@ -450,6 +457,102 @@ fn current_exe_canonical() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("locating the current executable")?;
     exe.canonicalize()
         .with_context(|| format!("canonicalizing {}", exe.display()))
+}
+
+// ---------------------------------------------------------------------------
+// Package-managed installs
+// ---------------------------------------------------------------------------
+
+/// The package manager that owns the running binary, when one does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PackageManager {
+    /// `brew install teddytennant/tap/wizard`: the binary lives in a Cellar.
+    Homebrew,
+    /// The AUR `wizard-bin` or `wizard` package; `package` is whichever
+    /// `pacman -Qo` named.
+    Pacman { package: String },
+    /// `/nix/store`, whether from `nix profile`, Home Manager or a NixOS
+    /// configuration.
+    Nix,
+}
+
+impl PackageManager {
+    /// The one command that updates this install.
+    fn upgrade_command(&self) -> String {
+        match self {
+            Self::Homebrew => "brew upgrade wizard".to_string(),
+            Self::Pacman { package } => format!("sudo pacman -Syu {package}"),
+            Self::Nix => "nix profile upgrade wizard".to_string(),
+        }
+    }
+
+    /// What `wizard update` prints instead of downloading.
+    fn hands_off_line(&self) -> String {
+        let command = self.upgrade_command();
+        match self {
+            Self::Homebrew => {
+                format!("this wizard was installed by Homebrew; update it with `{command}`")
+            }
+            Self::Pacman { package } => {
+                format!("this wizard is the pacman package {package}; update it with `{command}`")
+            }
+            Self::Nix => format!(
+                "this wizard lives in the Nix store; update it with `{command}`, \
+                 or rebuild the configuration that installed it"
+            ),
+        }
+    }
+}
+
+/// Which package manager owns the binary at `exe` (already resolved through
+/// symlinks, so Homebrew's `bin/wizard` link reads as its Cellar target).
+/// Pure: `pacman_owner` is the package `pacman -Qo` reported for `exe`, or
+/// `None` when nothing does or the host has no pacman at all.
+fn package_manager_for(exe: &Path, pacman_owner: Option<&str>) -> Option<PackageManager> {
+    let path = exe.to_string_lossy();
+    if path.starts_with("/nix/store/") {
+        return Some(PackageManager::Nix);
+    }
+    if path.starts_with("/opt/homebrew/")
+        || path.starts_with("/usr/local/Cellar/")
+        || path.starts_with("/home/linuxbrew/.linuxbrew/")
+        || path.contains("/Cellar/")
+    {
+        return Some(PackageManager::Homebrew);
+    }
+    if path.starts_with("/usr/bin/")
+        && let Some(package) = pacman_owner
+    {
+        return Some(PackageManager::Pacman {
+            package: package.to_string(),
+        });
+    }
+    None
+}
+
+/// The package `pacman -Qqo` says owns `exe`. Only asked on a host with a
+/// pacman database and only for `/usr/bin`, so no other system ever spawns a
+/// process for this.
+fn pacman_owner(exe: &Path) -> Option<String> {
+    if !exe.starts_with("/usr/bin") || !Path::new("/var/lib/pacman").is_dir() {
+        return None;
+    }
+    let output = std::process::Command::new("pacman")
+        .arg("-Qqo")
+        .arg(exe)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let package = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!package.is_empty()).then_some(package)
+}
+
+/// [`package_manager_for`] applied to the running binary.
+fn package_manager() -> Option<PackageManager> {
+    let exe = current_exe_canonical().ok()?;
+    package_manager_for(&exe, pacman_owner(&exe).as_deref())
 }
 
 /// Suffix of the rollback copy `wizard update` leaves behind (`wizard.bak`,
@@ -1464,6 +1567,18 @@ pub async fn run(check: bool, to: Option<String>, force: bool, rollback: bool) -
         return rollback_binary(&dest_exe);
     }
 
+    // Decided before any network: the answer does not depend on what the
+    // latest release is, and the user should not wait on GitHub to be told to
+    // run brew. `--force` is the one way past it, and `--check` is read-only.
+    let manager = package_manager_for(&dest_exe, pacman_owner(&dest_exe).as_deref());
+    if let Some(manager) = &manager
+        && !check
+        && !force
+    {
+        println!("{}", manager.hands_off_line());
+        return Ok(0);
+    }
+
     let repo = DEFAULT_REPO;
     let current = current_version();
 
@@ -1479,7 +1594,11 @@ pub async fn run(check: bool, to: Option<String>, force: bool, rollback: bool) -
         println!("current: v{current}");
         println!("latest:  {tag}");
         if newer {
-            println!("update available — run `wizard update`");
+            let command = manager.as_ref().map_or_else(
+                || "wizard update".to_string(),
+                PackageManager::upgrade_command,
+            );
+            println!("update available — run `{command}`");
         } else {
             println!("up to date");
         }
@@ -1597,6 +1716,7 @@ async fn check_and_maybe_apply(cfg: UpdateConfig) -> Result<()> {
         if let Ok(exe) = current_exe_canonical()
             && let Some(dir) = exe.parent()
             && dir_is_writable(dir)
+            && package_manager_for(&exe, pacman_owner(&exe).as_deref()).is_none()
         {
             // Silent on screen — this task runs while the TUI owns it — but
             // not silent altogether.
@@ -1618,11 +1738,16 @@ async fn check_and_maybe_apply(cfg: UpdateConfig) -> Result<()> {
 }
 
 /// The passive "update available" line for a cached `latest` tag, or `None`
-/// when it is empty or not newer than `current`. Pure, so it is unit-testable.
-fn notice_line(latest: &str, current: &str) -> Option<String> {
+/// when it is empty or not newer than `current`. Names the package manager's
+/// command when one owns the binary. Pure, so it is unit-testable.
+fn notice_line(latest: &str, current: &str, manager: Option<&PackageManager>) -> Option<String> {
     if !latest.is_empty() && is_newer(latest, current) {
+        let command = manager.map_or_else(
+            || "wizard update".to_string(),
+            PackageManager::upgrade_command,
+        );
         Some(format!(
-            "wizard {latest} available (you have v{current}) — run `wizard update`"
+            "wizard {latest} available (you have v{current}) — run `{command}`"
         ))
     } else {
         None
@@ -1638,9 +1763,16 @@ pub fn print_startup_notice(cfg: &UpdateConfig) {
     if !cfg.notify || !std::io::stdout().is_terminal() {
         return;
     }
-    if let Some(cache) = read_cache()
-        && let Some(line) = notice_line(&cache.latest_tag, current_version())
-    {
+    let Some(cache) = read_cache() else {
+        return;
+    };
+    // The manager probe can spawn `pacman`, so it waits until there is a line
+    // to print.
+    if !is_newer(&cache.latest_tag, current_version()) {
+        return;
+    }
+    let manager = package_manager();
+    if let Some(line) = notice_line(&cache.latest_tag, current_version(), manager.as_ref()) {
         println!("{line}");
     }
 }
@@ -1874,13 +2006,121 @@ cccc3333  wizard-aarch64-apple-darwin.tar.gz
     #[test]
     fn notice_line_only_when_strictly_newer() {
         assert_eq!(
-            notice_line("v0.6.0", "0.5.0"),
+            notice_line("v0.6.0", "0.5.0", None),
             Some("wizard v0.6.0 available (you have v0.5.0) — run `wizard update`".to_string())
         );
         // Same version, older "latest", and an empty cache all stay quiet.
-        assert_eq!(notice_line("v0.5.0", "0.5.0"), None);
-        assert_eq!(notice_line("v0.4.0", "0.5.0"), None);
-        assert_eq!(notice_line("", "0.5.0"), None);
+        assert_eq!(notice_line("v0.5.0", "0.5.0", None), None);
+        assert_eq!(notice_line("v0.4.0", "0.5.0", None), None);
+        assert_eq!(notice_line("", "0.5.0", None), None);
+    }
+
+    #[test]
+    fn notice_line_names_the_package_manager_command() {
+        assert_eq!(
+            notice_line("v3.1.0", "3.0.1", Some(&PackageManager::Homebrew)),
+            Some(
+                "wizard v3.1.0 available (you have v3.0.1) — run `brew upgrade wizard`".to_string()
+            )
+        );
+        let pacman = PackageManager::Pacman {
+            package: "wizard-bin".to_string(),
+        };
+        assert_eq!(
+            notice_line("v3.1.0", "3.0.1", Some(&pacman)),
+            Some(
+                "wizard v3.1.0 available (you have v3.0.1) — run `sudo pacman -Syu wizard-bin`"
+                    .to_string()
+            )
+        );
+        // The manager never turns "up to date" into a notice.
+        assert_eq!(
+            notice_line("v3.0.1", "3.0.1", Some(&PackageManager::Nix)),
+            None
+        );
+    }
+
+    #[test]
+    fn package_manager_is_read_off_the_resolved_path() {
+        let detect = |path: &str| package_manager_for(Path::new(path), None);
+        // Homebrew: Apple Silicon, Intel, Linuxbrew, and any other prefix
+        // with a Cellar in it.
+        for path in [
+            "/opt/homebrew/Cellar/wizard/3.1.0/bin/wizard",
+            "/opt/homebrew/bin/wizard",
+            "/usr/local/Cellar/wizard/3.1.0/bin/wizard",
+            "/home/linuxbrew/.linuxbrew/Cellar/wizard/3.1.0/bin/wizard",
+            "/srv/brew/Cellar/wizard/3.1.0/bin/wizard",
+        ] {
+            assert_eq!(detect(path), Some(PackageManager::Homebrew), "{path}");
+        }
+        assert_eq!(
+            detect("/nix/store/abc123-wizard-3.1.0/bin/wizard"),
+            Some(PackageManager::Nix)
+        );
+        // The installer's own paths, and a source build, are not managed.
+        for path in [
+            "/usr/local/bin/wizard",
+            "/home/teddy/.local/bin/wizard",
+            "/home/teddy/wizard/target/release/wizard",
+            "/usr/bin/wizard",
+        ] {
+            assert_eq!(detect(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn pacman_owns_usr_bin_only_when_it_says_so() {
+        let owned = package_manager_for(Path::new("/usr/bin/wizard"), Some("wizard-bin"));
+        assert_eq!(
+            owned,
+            Some(PackageManager::Pacman {
+                package: "wizard-bin".to_string()
+            })
+        );
+        // A hand-copied binary in /usr/bin on Arch has no owner and updates
+        // the ordinary way; an owner claim for a path outside /usr/bin is
+        // not believed.
+        assert_eq!(
+            package_manager_for(Path::new("/usr/bin/wizard"), None),
+            None
+        );
+        assert_eq!(
+            package_manager_for(Path::new("/usr/local/bin/wizard"), Some("wizard-bin")),
+            None
+        );
+    }
+
+    #[test]
+    fn each_manager_has_one_upgrade_command() {
+        assert_eq!(
+            PackageManager::Homebrew.upgrade_command(),
+            "brew upgrade wizard"
+        );
+        assert_eq!(
+            PackageManager::Pacman {
+                package: "wizard".to_string()
+            }
+            .upgrade_command(),
+            "sudo pacman -Syu wizard"
+        );
+        assert_eq!(
+            PackageManager::Nix.upgrade_command(),
+            "nix profile upgrade wizard"
+        );
+        // The refusal names the command, so a user can copy it straight off
+        // the line.
+        for manager in [
+            PackageManager::Homebrew,
+            PackageManager::Pacman {
+                package: "wizard-bin".to_string(),
+            },
+            PackageManager::Nix,
+        ] {
+            let line = manager.hands_off_line();
+            assert!(line.contains(&manager.upgrade_command()), "{line}");
+            assert!(!line.contains("wizard update"), "{line}");
+        }
     }
 
     #[test]
