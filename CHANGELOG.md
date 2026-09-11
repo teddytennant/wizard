@@ -4,16 +4,87 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
-## [Unreleased]
+## [3.1.0] - 2026-09-11
+
+The fast start, made real: a first frame in single-digit milliseconds on every
+terminal, one screen from install to a checked key, and a house TUI held to a
+one-page design brief (`docs/design.md`).
 
 ### Changed
 
-- **The house TUI is quieter.** `docs/design.md` is the new standard. The empty state is three left-aligned lines (name and version, working directory, how to start) instead of the braille mark, tagline and command tips. The status line reads `model · branch · context · cost`; `genie`, the working directory and the idle key hints are gone from it, `sovereign` and the other modes show only while they are on, and the git branch and the session cost (when the provider carries a rate) are new. The chat-area spinner shows elapsed time (`⠋ 3s`) instead of a conjured verb; a custom `[ui] spinner_verbs` list still puts its word in front. The composer keeps its top rule and loses the bottom one.
-- **Tool cards carry their timing and exit status.** A finished card reads `✓ execute  ls -la  0.4s`; a failed command puts `exit 2` on the header, folded or not, instead of leaving it as the last line of the body. `edit_file` and `write_file` cards show the change as `-`/`+` lines under a `path:line` header rather than the confirmation sentence.
-- **Diffs name each file once.** The `/diff` sidebar folds `diff --git`, `index`, `---` and `+++` into one row with the file name and dims `@@` hunk headers. Error notices lead with `✗` in place of the word `error:`.
+- **Startup no longer waits on the terminal.** The first frame used to follow
+  the image-capability query, and a terminal that never answers it (some
+  multiplexers, `script`, a plain pty) held the screen blank for 2 s. The
+  frame paints first and the reply is read when it arrives.
+  `contrib/first-run-pty.py` prints the start-to-first-screen time and
+  `bench/startup/` the cold and warm starts, each with the conditions the
+  number was taken under.
+- **One screen to a working provider.** The first run asks one question (sign
+  in with xAI or ChatGPT, paste an API key, run a model locally) and opens the
+  TUI. A pasted key is checked with one request while the screen is still up;
+  a rejected one comes back to the list with the reason and nothing on disk. A
+  key pasted over an exported variable is the key that is used, for every
+  backend. A provider that does not answer in 3 s is saved unchecked and the
+  card says so; pasting nothing with the variable unset saves the provider and
+  the card names the variable. The last row of the key list is any
+  OpenAI-compatible endpoint (vLLM, LM Studio, llama-server): base URL, model
+  id, optional key, the same check. Esc goes back a screen; Ctrl-C quits from
+  any screen. Everything the first run skipped is under `/setup` (the same
+  menu as `/settings`); `wizard --onboard` and `wizard setup` still ask every
+  question.
+- **The house TUI is quieter.** `docs/design.md` is the standard. The empty
+  state is the name and version, how to start, and, whenever the transcript is
+  empty, up to three starter prompts read off the directory as muted `❯` rows
+  (↓ then Enter runs one); the braille mark, tagline, command tips and the
+  working directory are gone. The status line reads `model · branch · context
+  · cost`, shows `sovereign` and the other modes only while they are on, and
+  carries the one elapsed clock on the right; the chat-area spinner is the
+  spinner alone (a custom `[ui] spinner_verbs` list still puts its word next
+  to it). Key names are spelled one way on every hint (`enter`, `esc`,
+  `ctrl-c`), the `/diff` sidebar names its keys once, on the status line, and
+  no string the user reads carries an em dash.
+- **Tool cards carry their timing and exit status.** A finished card reads
+  `✓ execute  ls -la  0.4s`; under 100 ms the time is left off. A failed
+  command puts `exit 2` on the header and its output stays open, because the
+  lines under `✗` are the reason; only long output folds. `edit_file` and
+  `write_file` cards show the change as `-`/`+` lines under a `path:line`
+  header, the path relative to the project root.
+- **Diffs name each file once.** The `/diff` sidebar folds `diff --git`,
+  `index`, `---` and `+++` into one row with the file name and dims `@@` hunk
+  headers. Error notices lead with `✗` in place of the word `error:`.
+- **`wizard update` defers to the package manager.** A binary installed by
+  Homebrew, pacman or Nix is told to upgrade through it rather than
+  overwritten in place; the update notice names the command.
+- **A missing MCP command is skipped quietly.** A server in `mcp.toml` whose
+  command is not on `PATH` (the stock `npx` Playwright entry on a machine
+  without Node) is left out with one dim line on the card, not an error on
+  every launch, and the installer writes that entry commented out when `npx`
+  is absent.
+- **Headless runs need a config.** `wizard -p`, a piped run, `wizard acp` and
+  `wizard mcp-serve` never open onboarding; with no config they print ``no
+  config yet: run `wizard` once to pick a provider`` and exit 1. A sovereign or
+  continuous `-p` job still runs on the defaults and the `WIZARD_*`
+  environment. **What breaks:** a script that ran `wizard -p` on a fresh
+  install and got the local defaults now gets that line; run `wizard` once, or
+  export `WIZARD_LLAMACPP_HOST` and friends with `--mode sovereign`.
 
 ### Added
 
+- **`wizard -p` accepts a prompt that starts with a hyphen** (`-p "-- explain
+  the flags"`), so a task pasted from elsewhere does not read as an option.
+- **Homebrew tap and AUR packages.** `contrib/homebrew/formula.sh` renders the
+  tap formula from a release's checksums; `contrib/aur/` holds `wizard-bin`
+  and the source `PKGBUILD`; the release workflow bumps both after each
+  release.
+- **A startup benchmark harness.** `bench/startup/` times cold and warm
+  starts of Wizard against the other terminal agents under pinned images,
+  guarding the host and dropping the page cache for the cold column.
+- **A first-run driver.** `contrib/first-run-pty.py` runs the first run under
+  a pty for six scenarios (happy, bad key, stale variable, sign-in, no
+  terminal, 80 columns), dumps every screen and prints the timings.
+- **Terminal-Bench adapter fixes.** The task prompt goes in as `--prompt=`, so
+  a task that starts with a hyphen survives, and the adapter can dial a token
+  proxy instead of shipping a credential into the container.
 - **Callable plugin services.** `Service::Callable` is a JSON→JSON function both
   Rust and Lua can `provide` and `inject`. Lua `ctx:provide(name, fn)` holds the
   function in the plugin VM; `ctx:inject` returns it as a Lua function. Native
@@ -23,6 +94,9 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Fixed
 
+- **A GGUF download stops on Ctrl-C and keeps nothing.** The partial file is
+  removed and the config is not written, so the next `wizard` asks again
+  instead of loading a truncated model.
 - **A drag-copy no longer pastes with the transcript gutter in front of every line.** Shared leading spaces across the selected rows (the one-column side margin, the `· `/`❯ ` marker, the grok rail) are stripped. Relative indent inside the selection is kept, and a one-line drag of indented code is left alone.
 - **Copy over SSH reaches the terminal you are sitting at inside tmux and Zellij.** The OSC 52 is still framed for the mux on the pane, and over SSH with no mux it is also written to `$SSH_TTY`. Zellij has no `load-buffer -w` equivalent, so it is detected (`$ZELLIJ`) and gets the unwrapped escape rather than tmux's DCS wrapper. Nested tmux inside Zellij still uses tmux's wrapper.
 
