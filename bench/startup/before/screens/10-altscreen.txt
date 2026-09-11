@@ -1,0 +1,17 @@
+
+✓ Wizard is configured.
+
+  provider : openai (openai)
+  model    : gpt-5.6-sol
+  endpoint : https://api.openai.com/v1
+  gateway  : none
+  mode     : genie
+  config   : /root/.wizard/config.toml
+
+Next steps:
+  • API key: stored in ~/.wizard/credentials.toml (mode 0600)
+    (export OPENAI_API_KEY=... to override it for a run)
+  • start Wizard:    wizard
+  • change settings: run /settings anytime inside Wizard
+
+Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA

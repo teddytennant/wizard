@@ -1,0 +1,36 @@
+  Web search
+  Which backend should the web_search tool use?
+
+╭ wizard setup ────────────────────────────────────────────────────────────────────────────────────╮
+│ ▸ DuckDuckGo   free · no API key (recommended)                                                   │
+│   Brave Search   API key · brave.com/search/api                                                  │
+│   Tavily   API key · tavily.com                                                                  │
+│   Exa   API key · exa.ai                                                                         │
+│   Serper (Google)   API key · serper.dev                                                         │
+│   xAI (Grok)   your xAI sign-in, or an API key                                                   │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter select · esc cancel

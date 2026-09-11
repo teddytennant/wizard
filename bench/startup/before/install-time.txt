@@ -1,0 +1,2 @@
+install.sh: 3238 ms
+wizard --version: wizard 3.0.1

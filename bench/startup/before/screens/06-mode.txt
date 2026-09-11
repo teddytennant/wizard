@@ -1,0 +1,36 @@
+  Mode
+  How should Wizard behave by default?
+
+╭ wizard setup ────────────────────────────────────────────────────────────────────────────────────╮
+│ ▸ Genie — interactive   bypass permissions; acts without asking (recommended)                    │
+│   Sovereign — autonomous   autonomous; works continuously                                        │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter select · esc cancel

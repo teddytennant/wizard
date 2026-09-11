@@ -1,0 +1,36 @@
+  Interface
+  Which terminal UI should Wizard wear? (looks only — same commands either way; change it any time w
+
+╭ wizard setup ────────────────────────────────────────────────────────────────────────────────────╮
+│ ▸ wizard   the house look: braille mark, dim rules, no boxes (default)                           │
+│   codex   OpenAI Codex: >_ banner, › prompts, • bullets, └ output                                │
+│   grok build   Grok Build: a colored ┃ bar down every block, boxed composer                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter select · esc cancel

@@ -1,0 +1,12 @@
+# Shared base for every agent image. Only what the installers themselves need
+# (curl, gpg for the charm apt repo, bzip2 for goose's tarball) plus python3
+# and procps for the measurement script. Nothing here counts toward an
+# agent's install size.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg bzip2 xz-utils python3 procps strace \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+RUN git init -q /work && git -C /work config user.email bench@example.com && git -C /work config user.name bench \
+    && echo "# bench" > /work/README.md && git -C /work add . && git -C /work commit -qm init

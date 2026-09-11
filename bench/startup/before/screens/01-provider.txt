@@ -1,0 +1,36 @@
+  Provider
+  Where should Wizard send its requests?
+
+╭ wizard setup ────────────────────────────────────────────────────────────────────────────────────╮
+│ ▸ xAI account sign-in   grok-4.6 via OAuth, no API key                                           │
+│   xAI (Grok), API key   grok-4.6 via XAI_API_KEY                                                 │
+│   Local   one pick — llama.cpp & Ollama set up for you, model sized to this machine; private, no │
+│   OpenRouter   hundreds of models via OPENROUTER_API_KEY                                         │
+│   Cloudflare Workers AI   GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)                        │
+│   OpenAI / OpenAI-compatible   gpt-5.6 family and friends                                        │
+│   Anthropic (Claude)   claude-fable-5                                                            │
+│   More cloud providers   Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …                           │
+│   Custom OpenAI-compatible endpoint   any base URL                                               │
+│   BYOM — llama.cpp   bring your own model: any GGUF, your server URL                             │
+│   BYOM — Ollama   bring your own model: any Ollama tag, pulled on first run                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter select · esc cancel

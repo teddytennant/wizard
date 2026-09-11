@@ -1,0 +1,427 @@
+{
+  "generated": "2026-09-10T21:07:42",
+  "agents": [
+    {
+      "name": "wizard",
+      "cmd": "wizard",
+      "marker": "\u276f ",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        327.1,
+        28.4,
+        36.8,
+        21.0,
+        23.2,
+        33.0,
+        33.1,
+        30.8,
+        25.1,
+        29.9
+      ],
+      "prompt_ms_first": 327.1,
+      "prompt_ms_median": 30.4,
+      "prompt_ms_p90": 65.8,
+      "rss_bytes_median": 20109312.0,
+      "hwm_bytes_median": 20109312.0,
+      "pss_bytes_median": 18664448.0,
+      "procs": [
+        "wizard"
+      ],
+      "terminal_queries_answered": [
+        "\u001b[c",
+        "\u001b[16t",
+        "\u001b[5n"
+      ],
+      "version_cmd": "wizard --version",
+      "version_output": [
+        "wizard 3.0.1"
+      ],
+      "version_ms": [
+        14.3,
+        23.6,
+        16.1,
+        29.0,
+        11.3,
+        11.8,
+        7.6,
+        23.2,
+        12.8,
+        4.0
+      ],
+      "version_ms_median": 13.6,
+      "version_ms_p90": 24.2,
+      "bundle_bytes": 25080016,
+      "install_bytes": 25133056,
+      "network": "bridge",
+      "note": "Default install.sh (binary plus the MCP/subagent loadout). Config points at an OpenAI-compatible provider on 127.0.0.1:9."
+    },
+    {
+      "name": "claude",
+      "cmd": "claude",
+      "marker": "\u276f",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        3394.2,
+        1300.1,
+        1344.8,
+        1242.1,
+        1245.3,
+        1289.4,
+        1285.1,
+        1414.8,
+        1264.0,
+        1156.1
+      ],
+      "prompt_ms_first": 3394.2,
+      "prompt_ms_median": 1287.3,
+      "prompt_ms_p90": 1612.7,
+      "rss_bytes_median": 258541568.0,
+      "hwm_bytes_median": 267986944.0,
+      "pss_bytes_median": 257046528.0,
+      "procs": [
+        "claude"
+      ],
+      "terminal_queries_answered": [
+        "\u001b[>0q",
+        "\u001b[c",
+        "\u001b[?2026$p",
+        "\u001b[c"
+      ],
+      "version_cmd": "claude --version",
+      "version_output": [
+        "2.1.268 (Claude Code)"
+      ],
+      "version_ms": [
+        27.0,
+        28.0,
+        20.4,
+        15.9,
+        17.0,
+        18.1,
+        24.3,
+        18.9,
+        24.3,
+        18.6
+      ],
+      "version_ms_median": 19.7,
+      "version_ms_p90": 27.1,
+      "bundle_bytes": 218602992,
+      "install_bytes": 218689536,
+      "network": "bridge",
+      "note": "Native installer. Onboarding, API-key approval and folder trust pre-answered in ~/.claude.json; dummy ANTHROPIC_API_KEY, so its startup calls to api.anthropic.com get 401."
+    },
+    {
+      "name": "codex",
+      "cmd": "codex",
+      "marker": "Ask Codex",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        1036.3,
+        85.7,
+        90.2,
+        81.5,
+        88.9,
+        87.3,
+        80.7,
+        85.3,
+        73.7,
+        85.6
+      ],
+      "prompt_ms_first": 1036.3,
+      "prompt_ms_median": 85.6,
+      "prompt_ms_p90": 184.8,
+      "rss_bytes_median": 205834240.0,
+      "hwm_bytes_median": 206471168.0,
+      "pss_bytes_median": 197406720.0,
+      "procs": [
+        "node",
+        "codex",
+        "git",
+        "git",
+        "git",
+        "git-remote-http"
+      ],
+      "terminal_queries_answered": [
+        "\u001b[6n",
+        "\u001b]10;?\u001b\\",
+        "\u001b]11;?\u001b\\",
+        "\u001b[c"
+      ],
+      "version_cmd": "codex --version",
+      "version_output": [
+        "codex-cli 0.154.0"
+      ],
+      "version_ms": [
+        102.6,
+        91.5,
+        117.3,
+        90.7,
+        119.4,
+        89.2,
+        76.5,
+        84.9,
+        113.5,
+        89.6
+      ],
+      "version_ms_median": 91.1,
+      "version_ms_p90": 117.5,
+      "bundle_bytes": 339143792,
+      "install_bytes": 553439232,
+      "network": "bridge",
+      "note": "npm -g install on NodeSource Node 22; node is counted in the install size, the npm package (with its vendored native binary) as the bundle. Provider on 127.0.0.1:9, /work trusted in config.toml."
+    },
+    {
+      "name": "opencode",
+      "cmd": "opencode",
+      "marker": "Ask anything",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        9535.2,
+        8279.8,
+        13625.3,
+        7764.6,
+        9475.3,
+        9120.8,
+        8430.3,
+        8327.7,
+        8000.2,
+        7542.0
+      ],
+      "prompt_ms_first": 9535.2,
+      "prompt_ms_median": 8379.0,
+      "prompt_ms_p90": 9944.2,
+      "rss_bytes_median": 915501056.0,
+      "hwm_bytes_median": 916975616.0,
+      "pss_bytes_median": 914397184.0,
+      "procs": [
+        "opencode",
+        "git"
+      ],
+      "terminal_queries_answered": [
+        "\u001b]10;?\u0007",
+        "\u001b]11;?\u0007",
+        "\u001b[>0q",
+        "\u001b[6n",
+        "\u001bP+q4d73\u001b\\",
+        "\u001b[?1016$p",
+        "\u001b[?2027$p",
+        "\u001b[?2031$p",
+        "\u001b[?1004$p",
+        "\u001b[?2004$p",
+        "\u001b[?2026$p",
+        "\u001b[6n",
+        "\u001b[6n",
+        "\u001b[14t",
+        "\u001b]4;0;?\u0007",
+        "\u001b[c",
+        "\u001b]4;0;?\u0007",
+        "\u001b]4;1;?\u0007",
+        "\u001b]4;2;?\u0007",
+        "\u001b]4;3;?\u0007",
+        "\u001b]4;4;?\u0007",
+        "\u001b]4;5;?\u0007",
+        "\u001b]4;6;?\u0007",
+        "\u001b]4;7;?\u0007",
+        "\u001b]4;8;?\u0007",
+        "\u001b]4;9;?\u0007",
+        "\u001b]4;10;?\u0007",
+        "\u001b]4;11;?\u0007",
+        "\u001b]4;12;?\u0007",
+        "\u001b]4;13;?\u0007",
+        "\u001b]4;14;?\u0007",
+        "\u001b]4;15;?\u0007",
+        "\u001b]10;?\u0007",
+        "\u001b]11;?\u0007",
+        "\u001b]12;?\u0007"
+      ],
+      "version_cmd": "opencode --version",
+      "version_output": [
+        "1.18.30"
+      ],
+      "version_ms": [
+        1534.7,
+        1482.0,
+        1338.7,
+        1406.2,
+        1520.8,
+        1337.0,
+        1314.0,
+        1251.5,
+        1293.8,
+        1376.7
+      ],
+      "version_ms_median": 1357.7,
+      "version_ms_p90": 1522.2,
+      "bundle_bytes": 184825984,
+      "install_bytes": 184848384,
+      "network": "bridge",
+      "note": "opencode.ai/install. Custom @ai-sdk/openai-compatible provider on 127.0.0.1:9 in opencode.json."
+    },
+    {
+      "name": "crush",
+      "cmd": "crush",
+      "marker": "> Ready",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        1076.9,
+        185.8,
+        170.1,
+        189.5,
+        304.2,
+        194.8,
+        203.1,
+        203.2,
+        204.8,
+        211.0
+      ],
+      "prompt_ms_first": 1076.9,
+      "prompt_ms_median": 203.2,
+      "prompt_ms_p90": 381.4,
+      "rss_bytes_median": 83515392.0,
+      "hwm_bytes_median": 83515392.0,
+      "pss_bytes_median": 83507200.0,
+      "procs": [
+        "crush"
+      ],
+      "terminal_queries_answered": [
+        "\u001b[?2026$p",
+        "\u001b[?2027$p",
+        "\u001b[c",
+        "\u001b[?1004$p",
+        "\u001b[>q",
+        "\u001b[14t"
+      ],
+      "version_cmd": "crush --version",
+      "version_output": [
+        "crush version v0.93.1"
+      ],
+      "version_ms": [
+        127.3,
+        130.9,
+        140.0,
+        156.8,
+        127.8,
+        110.5,
+        112.8,
+        109.1,
+        106.6,
+        113.9
+      ],
+      "version_ms_median": 120.6,
+      "version_ms_p90": 141.7,
+      "bundle_bytes": 94875808,
+      "install_bytes": 95604736,
+      "network": "bridge",
+      "note": "Charm apt repo. OpenAI-type provider on 127.0.0.1:9, provider auto-update off, project init flag pre-written so the AGENTS.md dialog is skipped."
+    },
+    {
+      "name": "goose",
+      "cmd": "goose session",
+      "marker": "Enter to send",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        1106.9,
+        150.8,
+        496.8,
+        140.2,
+        170.1,
+        184.8,
+        156.4,
+        184.0,
+        157.7,
+        164.3
+      ],
+      "prompt_ms_first": 1106.9,
+      "prompt_ms_median": 167.2,
+      "prompt_ms_p90": 557.8,
+      "rss_bytes_median": 71303168.0,
+      "hwm_bytes_median": 71303168.0,
+      "pss_bytes_median": 69997056.0,
+      "procs": [
+        "goose"
+      ],
+      "terminal_queries_answered": [],
+      "version_cmd": "goose --version",
+      "version_output": [
+        "1.50.0"
+      ],
+      "version_ms": [
+        32.8,
+        171.8,
+        20.1,
+        14.6,
+        22.7,
+        23.5,
+        20.3,
+        25.8,
+        17.8,
+        21.0
+      ],
+      "version_ms_median": 21.9,
+      "version_ms_p90": 46.7,
+      "bundle_bytes": 314548064,
+      "install_bytes": 314564608,
+      "network": "bridge",
+      "note": "download_cli.sh with CONFIGURE=false. openai provider with OPENAI_HOST 127.0.0.1:9, telemetry opt-in pre-answered in config.yaml. Measured command is 'goose session' (bare 'goose' prints help)."
+    },
+    {
+      "name": "aider",
+      "cmd": "aider",
+      "marker": "\\n> ",
+      "runs": 10,
+      "failed_runs": 0,
+      "prompt_ms": [
+        19990.6,
+        2693.7,
+        2837.3,
+        2795.3,
+        2425.2,
+        3143.1,
+        2234.1,
+        2587.6,
+        3410.9,
+        2717.6
+      ],
+      "prompt_ms_first": 19990.6,
+      "prompt_ms_median": 2756.4,
+      "prompt_ms_p90": 5068.8,
+      "rss_bytes_median": 157728768.0,
+      "hwm_bytes_median": 157728768.0,
+      "pss_bytes_median": 154178560.0,
+      "procs": [
+        "aider"
+      ],
+      "terminal_queries_answered": [
+        "\u001b[6n"
+      ],
+      "version_cmd": "aider --version",
+      "version_output": [
+        "aider 0.86.2"
+      ],
+      "version_ms": [
+        2372.4,
+        2127.3,
+        1885.0,
+        2126.9,
+        2125.3,
+        2658.5,
+        1781.7,
+        1903.0,
+        2763.2,
+        1770.4
+      ],
+      "version_ms_median": 2126.1,
+      "version_ms_p90": 2669.0,
+      "bundle_bytes": 573923629,
+      "install_bytes": 698068992,
+      "network": "bridge",
+      "note": "aider.chat/install.sh (uv tool install, brings its own CPython). Model gpt-4o at 127.0.0.1:9; update check, analytics prompt, release notes and .gitignore prompt turned off in ~/.aider.conf.yml."
+    }
+  ]
+}

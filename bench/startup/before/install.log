@@ -1,0 +1,18 @@
+==> Wizard installer
+==> Platform: linux/x86_64
+==> Default install: binary + loadout — pick a provider in onboarding on first run
+==> Downloading wizard binary (teddytennant/wizard) ...
+==> Release checksums.txt signature verified (minisign, signed for v3.0.1)
+==> Checksum and signature verified for wizard-x86_64-unknown-linux-gnu.tar.gz
+==> Installed wizard to /usr/local/bin/wizard (from GitHub releases (teddytennant/wizard))
+==> No config written — the first 'wizard' run starts onboarding
+==> Laying down the default loadout (browser MCP + subagents) ...
+==> Installed MCP servers: Playwright browser (/root/.wizard/mcp.toml)
+==> Installed subagent: reviewer (/root/.wizard/subagents/reviewer.toml)
+==> Installed subagent: researcher (/root/.wizard/subagents/researcher.toml)
+==> Installed subagent: tester (/root/.wizard/subagents/tester.toml)
+==> Installed subagent: documenter (/root/.wizard/subagents/documenter.toml)
+warning: Node/npx not found on PATH — the Playwright browser server will be skipped at startup.
+warning: Install Node (https://nodejs.org), then run /reload in Wizard to activate the browser.
+
+==> Done. Run 'wizard' — it asks which provider to use (Local is one pick: it downloads a model sized to your hardware and sets up llama.cpp for you).
