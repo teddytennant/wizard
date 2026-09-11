@@ -2186,6 +2186,7 @@ loadout_file() {
     local dest="$1" label="$2"
     if [ -f "$dest" ]; then
         say "Existing ${dest} — leaving it untouched"
+        cat >/dev/null  # drain the pipe so the writer never takes SIGPIPE
         return
     fi
     cat >"$dest"
