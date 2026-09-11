@@ -298,7 +298,19 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
     // silent. The failure goes to `Event::ProviderHealthFailed` (not a plain
     // notice) so the main loop can show it where it's visible pre-conversation
     // — otherwise the welcome screen hides it until the first message fails.
-    if active_is_cloud {
+    // A keyed backend with no key and a variable to name gets the remedy
+    // straight away instead of a 401 dressed up as a rejected key.
+    let active = app.config.active();
+    let missing_key = matches!(active.credentials(), Credentials::ApiKey { .. })
+        && active.api_key().is_empty()
+        && active.key_env_name().is_some();
+    if missing_key {
+        let var = active.key_env_name().unwrap_or_default();
+        app.provider_health_error = Some(format!(
+            "no API key for {}: export ${var}, or paste one with /setup",
+            active.name
+        ));
+    } else if active_is_cloud {
         let probe = client.clone();
         let notify = events.sender();
         tokio::spawn(async move {
@@ -421,7 +433,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                     terminal = fresh;
                     let _ = terminal.clear();
                     app.notice(
-                        "the terminal was reset by a background failure — display restored \
+                        "the terminal was reset by a background failure: display restored \
                          (see the session log for the panic)",
                     );
                 }
@@ -510,7 +522,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                 RebuildRecovery::GiveUp => {
                     failed_rebuilds += 1;
                     app.notice(
-                        "error: the agent could not be rebuilt — this session cannot run \
+                        "error: the agent could not be rebuilt; this session cannot run \
                          another turn; /quit and relaunch",
                     );
                 }
@@ -617,7 +629,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
             }
             .add_provider_config(
                 *cfg,
-                "signed in to xAI — provider added and active".to_string(),
+                "signed in to xAI: provider added and active".to_string(),
             )
             .await;
             continue;
@@ -651,7 +663,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                         &events,
                         prepared,
                     ) {
-                        app.notice("the agent is busy — wait for the current turn to finish");
+                        app.notice("the agent is busy: wait for the current turn to finish");
                     }
                 }
                 AppAction::Command(command) => {
@@ -791,7 +803,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                         Event::AgentRebuilt(Box::new(AgentRebuild {
                             agent: None,
                             model: None,
-                            notice: "compacting crashed — restarting the agent".to_string(),
+                            notice: "compacting crashed: restarting the agent".to_string(),
                         })),
                         async move {
                             // Bounded for the same reason the rebuild is: a
@@ -824,7 +836,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                         },
                     );
                 }
-                None => app.notice("the agent is busy — try again in a moment"),
+                None => app.notice("the agent is busy: try again in a moment"),
             }
         }
 
@@ -858,7 +870,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                     // try a bare context from the idle agent once it's back,
                     // but right now there's nothing to ask against.
                     app.notice(
-                        "no conversation context for /btw yet — wait for the agent to finish rebuilding",
+                        "no conversation context for /btw yet: wait for the agent to finish rebuilding",
                     );
                 }
             }
@@ -903,7 +915,7 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
                 }
                 None => {
                     app.notice(
-                        "no conversation context for /fork yet — wait for the agent to finish rebuilding",
+                        "no conversation context for /fork yet: wait for the agent to finish rebuilding",
                     );
                 }
             }

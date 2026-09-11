@@ -80,7 +80,7 @@ use welcome::draw_welcome;
 /// different wheel — braille under `wizard`, a five-pointed star under
 /// `claude`, a half-circle under `grok` — and they have different frame
 /// counts, so the modulus has to come from the table rather than a constant.
-pub(super) fn spinner_frame(tick: u64) -> char {
+pub(crate) fn spinner_frame(tick: u64) -> char {
     let frames = skin::chrome().spinner;
     frames[(tick as usize) % frames.len()]
 }
@@ -760,30 +760,24 @@ fn tool_running(view: &TranscriptView) -> bool {
 }
 
 /// The row shown while the model has been asked and has not answered: the
-/// spinner and how long it has been. A custom `[ui] spinner_verbs` list still
-/// puts its word in front; the stock look has none.
+/// spinner, and the step count once there is one. The clock is the status
+/// line's; two of them ticking on one screen was one too many. A custom
+/// `[ui] spinner_verbs` list still puts its word after the spinner; the stock
+/// look has none.
 pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
-    let elapsed = app
-        .turn_started
-        .map(|started| started.elapsed())
-        .unwrap_or_default();
-    let mut spans = vec![Span::styled(
-        format!("{} ", spinner_frame(app.tick)),
-        accent(),
-    )];
+    let mut spans = vec![Span::styled(spinner_frame(app.tick).to_string(), accent())];
     if !app.config.ui.spinner_verbs.is_empty() {
         spans.push(Span::styled(
-            format!("{}… ", app.spinner_verb),
+            format!(" {}…", app.spinner_verb),
             dim().italic(),
         ));
     }
-    spans.push(Span::styled(fmt_elapsed(elapsed), dim()));
     // The round trips so far, once there is one; the budget too when the
     // turn has one.
     let step = match (app.status.step, app.status.max_steps.cap()) {
         (0, None) => None,
-        (step, None) => Some(format!(" · step {step}")),
-        (step, Some(cap)) => Some(format!(" · step {step}/{cap}")),
+        (step, None) => Some(format!(" step {step}")),
+        (step, Some(cap)) => Some(format!(" step {step}/{cap}")),
     };
     if let Some(step) = step {
         spans.push(Span::styled(step, dim()));
@@ -985,12 +979,35 @@ fn tool_label(name: &str, args: &serde_json::Value, grammar: ToolLabel) -> (Stri
     let summary = if args.is_null() {
         String::new()
     } else {
-        match args.get("command").or_else(|| args.get("path")) {
-            Some(serde_json::Value::String(subject)) => subject.clone(),
+        match (args.get("command"), args.get("path")) {
+            (Some(serde_json::Value::String(command)), _) => command.clone(),
+            (None, Some(serde_json::Value::String(path))) => relative_to_root(path),
             _ => serde_json::to_string(args).unwrap_or_default(),
         }
     };
     (label_for(name, grammar), summary)
+}
+
+/// `path` with the project root cut off the front: the model sends absolute
+/// paths, and `/home/me/project/src/x.rs` on every edit header is 20 columns
+/// of what the `/diff` sidebar already says in six. The root is the process
+/// working directory, read once.
+fn relative_to_root(path: &str) -> String {
+    static ROOT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|dir| dir.display().to_string())
+    });
+    match root {
+        Some(root) => path
+            .strip_prefix(root.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .filter(|rest| !rest.is_empty())
+            .unwrap_or(path)
+            .to_string(),
+        None => path.to_string(),
+    }
 }
 
 /// The label half of [`tool_label`].
@@ -1073,8 +1090,8 @@ fn tool_card_lines(
     if let Some(code) = exit_code {
         card.push(Span::styled(format!("  exit {code}"), muted()));
     }
-    if let Some(took) = tool.timing.elapsed() {
-        card.push(Span::styled(format!("  {}", fmt_elapsed(took)), dim()));
+    if let Some(took) = tool.timing.elapsed().and_then(fmt_elapsed) {
+        card.push(Span::styled(format!("  {took}"), dim()));
     }
     let hidden = match &edit {
         Some(rows) => rows.len(),
@@ -1201,16 +1218,19 @@ fn edit_diff_lines(
     Some(rows)
 }
 
-/// `0.4s`, `12s`, `2m05s`: as much precision as the number has.
-pub(super) fn fmt_elapsed(took: std::time::Duration) -> String {
+/// `0.4s`, `12s`, `2m05s`: as much precision as the number has. `None`
+/// under 100 ms, where the figure would round to `0.0s` and say nothing.
+pub(super) fn fmt_elapsed(took: std::time::Duration) -> Option<String> {
     let secs = took.as_secs_f64();
-    if secs < 10.0 {
-        format!("{secs:.1}s")
+    if secs < 0.1 {
+        None
+    } else if secs < 10.0 {
+        Some(format!("{secs:.1}s"))
     } else if secs < 60.0 {
-        format!("{}s", secs as u64)
+        Some(format!("{}s", secs as u64))
     } else {
         let whole = secs as u64;
-        format!("{}m{:02}s", whole / 60, whole % 60)
+        Some(format!("{}m{:02}s", whole / 60, whole % 60))
     }
 }
 
@@ -1322,11 +1342,8 @@ pub(super) fn draw_diff_sidebar(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::LEFT)
         .border_type(theme::border_type())
         .border_style(theme::style(Token::Border))
-        .title(Line::from(vec![
-            Span::styled(" ± ", accent()),
-            Span::styled("git diff", muted()),
-            Span::styled(" · esc closes", dim()),
-        ]));
+        // The keys are on the status line; the title is the name alone.
+        .title(Span::styled(" git diff ", muted()));
     let inner = block.inner(area);
     // A titled block takes the top row for its title, so on a one-row sidebar
     // `inner` is an empty rect sitting one row *below* the frame. The overflow
@@ -1630,31 +1647,36 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     let busy_hint;
     let hints: &str = if let Some(review) = &app.plan_review {
         if review.feedback.is_some() {
-            "type feedback · Enter reject · Esc back"
+            "type feedback · enter reject · esc back"
         } else {
-            "y/Enter approve · n reject · ↑↓ scroll"
+            "y/enter approve · n reject · ↑↓ scroll"
         }
     } else if app.interview.is_some() {
-        "1-9 pick · type answer · Enter next · Esc skip"
+        "1-9 pick · type answer · enter next · esc skip"
     } else if app.picker.is_some() {
-        "↑↓ move · Enter select · Esc cancel"
+        "↑↓ move · enter select · esc cancel"
     } else if suggestions_shown {
-        "↑↓ select · Tab complete · Enter run"
+        "↑↓ select · tab complete · enter run"
     } else if app.diff.is_some() {
-        "PgUp/PgDn diff · Esc close"
+        "pgup/pgdn diff · esc close"
     } else if app.console.is_some() {
         // Loudest of the lot, and first: while a command owns the composer,
         // Enter does something entirely different from what it does the rest of
         // the time, and the user has to be able to see that at a glance.
-        "Enter → command · Ctrl-D end input · Esc detach · Ctrl-C stop"
+        "enter → command · ctrl-d end input · esc detach · ctrl-c stop"
+    } else if app.ctrl_c_armed && app.status.busy {
+        // The first Ctrl-C is being acted on (the turn is stopping); what the
+        // second one does goes here, not in the transcript.
+        "ctrl-c again to exit"
     } else if app.status.busy {
         let elapsed = app
             .turn_started
             .map(|started| started.elapsed())
-            .unwrap_or_default();
-        busy_hint = match app.message_queue.len() {
-            0 => fmt_elapsed(elapsed),
-            n => format!("{} · queued {n}", fmt_elapsed(elapsed)),
+            .and_then(fmt_elapsed);
+        busy_hint = match (elapsed, app.message_queue.len()) {
+            (elapsed, 0) => elapsed.unwrap_or_default(),
+            (Some(elapsed), n) => format!("{elapsed} · queued {n}"),
+            (None, n) => format!("queued {n}"),
         };
         &busy_hint
     } else {
@@ -2269,7 +2291,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, app: &App) {
             Span::styled(format!("  ({count} live on this machine)"), dim()),
         ]))
         .title_bottom(
-            Line::from(Span::styled(" ↑↓ select · Ctrl-X stop · Esc close ", dim())).centered(),
+            Line::from(Span::styled(" ↑↓ select · ctrl-x stop · esc close ", dim())).centered(),
         );
     let outer = block.inner(area);
     frame.render_widget(block, area);
@@ -2374,7 +2396,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, app: &App) {
         input_area.width as usize,
     );
     let hint = Line::from(Span::styled(
-        "Enter dispatch · type to compose",
+        "enter dispatch · type to compose",
         dim().italic(),
     ));
     frame.render_widget(
@@ -2693,7 +2715,7 @@ pub(super) fn draw_plan_review(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, area);
 
     let hints = if review.feedback.is_some() {
-        " feedback · Enter reject · Esc back "
+        " feedback · enter reject · esc back "
     } else {
         " y approve · n reject · ↑↓ scroll "
     };
@@ -2795,7 +2817,7 @@ pub(super) fn draw_interview(frame: &mut Frame, app: &App) {
         ]))
         .title_bottom(
             Line::from(Span::styled(
-                " 1-9 pick · type answer · Enter next · Esc skip ",
+                " 1-9 pick · type answer · enter next · esc skip ",
                 dim(),
             ))
             .centered(),
@@ -3301,7 +3323,7 @@ fn format_cwd_from(root: &std::path::Path, home: Option<&std::path::Path>, max: 
 }
 
 /// Truncate to `max` display columns (not chars), appending `…` when cut.
-pub(super) fn truncate_width(text: &str, max: usize) -> String {
+pub(crate) fn truncate_width(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_string();
     }
@@ -3313,7 +3335,7 @@ pub(super) fn truncate_width(text: &str, max: usize) -> String {
 /// Truncate a styled line to `max` display columns, appending a dim `…`
 /// when cut so clipped content is visible as such (used by the diff
 /// sidebar, where long lines would otherwise just stop mid-word).
-pub(super) fn truncate_line(mut line: Line<'static>, max: usize) -> Line<'static> {
+pub(crate) fn truncate_line(mut line: Line<'static>, max: usize) -> Line<'static> {
     if line.width() <= max {
         return line;
     }
@@ -3765,7 +3787,7 @@ impl MarkdownRenderer {
                 {
                     self.code_lang.push_str(&lang);
                     self.lines
-                        .push(Line::from(Span::styled(format!("  ⌜{lang}⌟"), dim())));
+                        .push(Line::from(Span::styled(format!("  {lang}"), dim())));
                 }
                 self.code_block = true;
                 self.code_buffer.clear();

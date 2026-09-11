@@ -827,51 +827,125 @@ fn the_empty_state_is_three_plain_lines_at_every_width() {
     }
 }
 
-/// The empty-state hook: the starter prompts are numbered on the card, the
-/// first-run summary is a dim line rather than a warning, and the ↓ pick is
-/// the row that moves.
+/// The empty-state hook: the starter prompts are muted `❯` rows under the
+/// hint, never numbered and never introduced by a key hint; the first-run
+/// summary is a dim line after them, not a warning; the ↓ pick is the row
+/// that moves.
 #[test]
 fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let mut app = App::new(crate::config::Config::default());
     app.starter_prompts = vec![
         "Explain how this project is put together".to_string(),
         "Review my uncommitted changes".to_string(),
     ];
     app.first_run_summary = Some("saved ~/.wizard/config.toml · /setup changes it".to_string());
-    let screen = render(&app).join("\n");
-    assert!(
-        screen.contains("1  Explain how this project is put together"),
+    let rows = render(&app);
+    let screen = rows.join("\n");
+    let hint = rows
+        .iter()
+        .position(|row| row.contains("type a message · / lists commands"))
+        .expect("the hint");
+    assert_eq!(
+        rows[hint + 1].trim(),
+        "❯ Explain how this project is put together",
         "{screen}"
     );
-    assert!(
-        screen.contains("2  Review my uncommitted changes"),
-        "{screen}"
+    assert_eq!(rows[hint + 2].trim(), "❯ Review my uncommitted changes");
+    assert_eq!(rows[hint + 3].trim(), "");
+    assert_eq!(
+        rows[hint + 4].trim(),
+        "saved ~/.wizard/config.toml · /setup changes it",
+        "the summary comes after the prompts, apart: {screen}"
     );
-    assert!(screen.contains("or ↓ to pick one"), "{screen}");
-    assert!(
-        screen.contains("saved ~/.wizard/config.toml · /setup changes it"),
-        "whole, never cut: {screen}"
-    );
+    assert!(!screen.contains("1  Explain"), "no digits: {screen}");
+    assert!(!screen.contains("pick one"), "no key hint: {screen}");
     assert!(
         !screen.contains("⚠ saved"),
         "the summary is not a warning: {screen}"
     );
     assert!(app.welcome_visible());
 
-    // A failed probe is one line with the remedy on it.
+    // A failed probe is one line with the remedy on it, and what the first
+    // run could not settle is one more.
     app.provider_health_error = Some("not signed in to xAI; run `wizard --login xai` first".into());
+    app.first_run_notice =
+        Some("api.x.ai did not answer in 3 seconds; the key is saved unchecked".into());
     let screen = render(&app).join("\n");
     assert!(
         screen.contains("⚠ not signed in to xAI: /login xai"),
         "{screen}"
     );
+    assert!(screen.contains("⚠ api.x.ai did not answer"), "{screen}");
+    // The same fact from the probe and the first run is said once.
+    app.provider_health_error = Some("cannot reach https://api.x.ai/v1: refused".into());
+    app.first_run_notice = Some("cannot reach api.x.ai; the key is saved unchecked".into());
+    let screen = render(&app).join("\n");
+    assert_eq!(
+        screen.matches("cannot reach api.x.ai").count(),
+        1,
+        "{screen}"
+    );
     app.provider_health_error = None;
+    app.first_run_notice = None;
 
-    // No prompts, no hook: the card is what it was.
+    // No prompts, no hook: the card is the name, the hint and nothing else.
     app.starter_prompts.clear();
     app.first_run_summary = None;
-    let screen = render(&app).join("\n");
-    assert!(!screen.contains("pick one"), "{screen}");
+    let rows = render(&app);
+    let text: Vec<&str> = rows
+        .iter()
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty())
+        .collect();
+    assert_eq!(
+        &text[..2],
+        &[
+            format!("wizard {}", env!("CARGO_PKG_VERSION")).as_str(),
+            "type a message · / lists commands"
+        ],
+        "{rows:?}"
+    );
+}
+
+/// At 40 columns every card row that does not fit ends in `…` instead of
+/// clipping mid-word, and none is wider than the screen.
+#[test]
+fn the_welcome_card_truncates_with_an_ellipsis_at_forty_columns() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.starter_prompts = vec!["Explain how this project is put together".to_string()];
+    app.first_run_summary = Some("saved ~/.wizard/config.toml · /setup changes it".to_string());
+    app.provider_health_error =
+        Some("cannot reach https://api.anthropic.com: error sending request for url".into());
+    let backend = ratatui::backend::TestBackend::new(40, 20);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let rows: Vec<String> = (0..20)
+        .map(|y| {
+            (0..40)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    // The probe's line is reduced to the host, so it fits whole.
+    assert!(
+        rows.iter()
+            .any(|row| row.trim() == "⚠ cannot reach api.anthropic.com"),
+        "{rows:?}"
+    );
+    let cut: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.contains("Explain") || row.contains("saved"))
+        .collect();
+    assert_eq!(cut.len(), 2, "{rows:?}");
+    for row in cut {
+        assert!(row.ends_with('…'), "{row:?}");
+        assert!(row.chars().count() <= 40, "{row:?}");
+    }
 }
 
 /// visible after the user's first submission.
@@ -1460,20 +1534,31 @@ fn an_edit_card_shows_the_change_as_a_diff() {
 #[test]
 fn elapsed_time_keeps_only_the_precision_it_has() {
     use std::time::Duration;
-    assert_eq!(fmt_elapsed(Duration::from_millis(420)), "0.4s");
-    assert_eq!(fmt_elapsed(Duration::from_secs(12)), "12s");
-    assert_eq!(fmt_elapsed(Duration::from_secs(125)), "2m05s");
+    assert_eq!(
+        fmt_elapsed(Duration::from_millis(420)).as_deref(),
+        Some("0.4s")
+    );
+    assert_eq!(fmt_elapsed(Duration::from_secs(12)).as_deref(), Some("12s"));
+    assert_eq!(
+        fmt_elapsed(Duration::from_secs(125)).as_deref(),
+        Some("2m05s")
+    );
+    // A figure that would round to 0.0s is left off.
+    assert_eq!(fmt_elapsed(Duration::from_millis(40)), None);
 }
 
 #[test]
-fn the_busy_row_is_a_timer_unless_a_verb_was_configured() {
+fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let mut app = App::new(crate::config::Config::default());
     app.welcome_dismissed = true;
     app.status.busy = true;
-    app.turn_started = Some(std::time::Instant::now());
-    let screen = render(&app).join("\n");
-    assert!(screen.contains("⠋ 0.0s"), "{screen}");
+    app.turn_started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+    let rows = render(&app);
+    let screen = rows.join("\n");
+    assert!(rows.iter().any(|row| row.trim() == "⠋"), "{screen}");
+    // One clock, on the status line.
+    assert_eq!(screen.matches("3.0s").count(), 1, "{screen}");
     for verb in crate::config::UiConfig::DEFAULT_SPINNER_VERBS {
         assert!(!screen.contains(verb), "{verb} is whimsy: {screen}");
     }
@@ -1485,7 +1570,8 @@ fn the_busy_row_is_a_timer_unless_a_verb_was_configured() {
     app.status.busy = true;
     app.turn_started = Some(std::time::Instant::now());
     let screen = render(&app).join("\n");
-    assert!(screen.contains("⠋ Pondering… 0.0s"), "{screen}");
+    assert!(screen.contains("⠋ Pondering…"), "{screen}");
+    assert!(!screen.contains("Pondering… 0.0s"), "{screen}");
 }
 
 #[test]

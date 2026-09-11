@@ -4096,7 +4096,7 @@ fn a_command_that_prompts_takes_the_composer_and_announces_it() {
     assert!(
         matches!(
             app.transcript.last(),
-            Some(TranscriptItem::Notice(text)) if text.contains("Enter now types into this command")
+            Some(TranscriptItem::Notice(text)) if text.contains("enter now types into this command")
         ),
         "a composer that quietly meant something else would be the worse bug"
     );
@@ -5228,6 +5228,6 @@ fn the_health_line_names_the_fix() {
     );
     assert_eq!(
         super::health_line("cannot reach https://api.x.ai/v1: connection refused"),
-        "provider unreachable: cannot reach https://api.x.ai/v1: connection refused"
+        "cannot reach api.x.ai"
     );
 }

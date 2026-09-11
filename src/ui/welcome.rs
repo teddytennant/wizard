@@ -13,7 +13,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
-use super::{accent, dim, format_cwd, mode_span, model_span, muted, truncate_width, warning};
+use super::{accent, dim, format_cwd, mode_span, model_span, muted, truncate_line, warning};
 use crate::app::App;
 use crate::skin::{self, WelcomeStyle};
 use crate::theme::{self, Token};
@@ -22,9 +22,6 @@ use crate::transcript::TranscriptItem;
 /// How many startup notices the welcome card shows. Enough for the handful a
 /// broken config raises, few enough that the card stays a card.
 const MAX_WELCOME_NOTICES: usize = 3;
-
-/// Display columns one welcome notice may take before it is cut.
-const WELCOME_NOTICE_WIDTH: usize = 68;
 
 /// Welcome screen shown before the first message. Which one depends on the
 /// active skin; they all say the same four things (who you are talking to,
@@ -40,7 +37,8 @@ pub(crate) fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Anything the user has to read before they start: a provider that did not
-/// answer its health probe, then the startup notices.
+/// answer its health probe, what the first run's credential check could not
+/// settle, then the startup notices.
 ///
 /// Startup notices (a theme name that would not load, a config that did not
 /// parse) go into the transcript, and the transcript is not drawn while a
@@ -50,15 +48,26 @@ pub(crate) fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
 /// solarised wizard` opened on the default theme with no hint that the name
 /// was wrong, and the notice only appeared after the first submission.
 ///
-/// Every line is truncated, because a provider error carries a URL and the
-/// provider's own prose and is routinely wider than the screen it lands on.
+/// Every line is cut to the card by [`draw_welcome_lines`], because a
+/// provider error carries a URL and the provider's own prose and is routinely
+/// wider than the screen it lands on.
 fn welcome_notices(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(line) = app.provider_health_line() {
+    // The first run's line already says the host did not answer; the probe
+    // repeating it word for word above would be the same fact twice.
+    let repeated = |line: &str| {
+        app.first_run_notice
+            .as_deref()
+            .is_some_and(|notice| notice.starts_with(line))
+    };
+    if let Some(line) = app.provider_health_line().filter(|line| !repeated(line)) {
         lines.push(Line::from(Span::styled(
-            truncate_width(&format!("⚠ {line}"), WELCOME_NOTICE_WIDTH),
+            format!("⚠ {line}"),
             warning().bold(),
         )));
+    }
+    if let Some(notice) = &app.first_run_notice {
+        lines.push(Line::from(Span::styled(format!("⚠ {notice}"), warning())));
     }
     let notices: Vec<&String> = app
         .transcript
@@ -78,10 +87,7 @@ fn welcome_notices(app: &App) -> Vec<Line<'static>> {
         } else {
             ("", dim())
         };
-        lines.push(Line::from(Span::styled(
-            format!("{glyph}{}", truncate_width(line, WELCOME_NOTICE_WIDTH)),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(format!("{glyph}{line}"), style)));
     }
     lines
 }
@@ -96,7 +102,8 @@ fn welcome_status(app: &App) -> Line<'static> {
 }
 
 /// Draw `lines` down the left of `area`, one blank row of margin at the top and
-/// one column at the left, clipped to what fits.
+/// one column at the left. A line wider than the card ends in `…`; a row
+/// that clips mid-word looks like a rendering bug at 40 columns.
 fn draw_welcome_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
     let body = Rect {
         x: area.x + 1,
@@ -107,28 +114,26 @@ fn draw_welcome_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) 
     if body.width == 0 || body.height == 0 {
         return;
     }
+    let lines: Vec<Line<'static>> = lines
+        .into_iter()
+        .map(|line| truncate_line(line, body.width as usize))
+        .collect();
     frame.render_widget(Paragraph::new(Text::from(lines)), body);
 }
 
-/// The house empty state: three lines, left-aligned, at the top.
+/// The house empty state: the name and version, then how to start.
 ///
-/// The name and version, where you are, and how to start. The model is not
-/// repeated here because the status line below already says it, and the
-/// mode only appears when it is `sovereign`. Startup problems go between,
-/// where they cannot be missed. Suggested prompts, when there are any, belong
-/// under the hint as one muted `❯ …` row each; the function that produces
-/// them is onboarding's, and this is the call site that draws them.
+/// Nothing else is repeated here: the status line already says the model and
+/// the branch, and `/status` has the path. The mode only appears when it is
+/// `sovereign`. Startup problems go between, where they cannot be missed.
+/// Starter prompts, when the directory suggested any, hang under the hint as
+/// one muted `❯` row each; the first run's one line about where the config
+/// went comes last, apart from the rest.
 fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::from(vec![
-            Span::styled("wizard", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}", env!("CARGO_PKG_VERSION")), dim()),
-        ]),
-        Line::from(Span::styled(
-            format_cwd(&app.project_root, area.width.saturating_sub(4) as usize),
-            dim(),
-        )),
-    ];
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled("wizard", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {}", env!("CARGO_PKG_VERSION")), dim()),
+    ])];
     if app.status.mode == crate::config::Mode::Sovereign {
         lines.push(Line::from(mode_span(app.status.mode)));
     }
@@ -142,10 +147,10 @@ fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("type a message", muted()),
         Span::styled(" · / lists commands", dim()),
     ]));
-    let starters = starter_prompt_lines(app);
-    if !starters.is_empty() {
+    lines.extend(starter_prompt_lines(app));
+    if let Some(summary) = &app.first_run_summary {
         lines.push(Line::raw(""));
-        lines.extend(starters);
+        lines.push(Line::from(Span::styled(summary.clone(), dim())));
     }
     draw_welcome_lines(frame, area, lines);
 }
@@ -210,8 +215,11 @@ fn welcome_hints(app: &App) -> Vec<Line<'static>> {
         Span::styled("type a message", muted()),
         Span::styled(" and press Enter to begin", dim()),
     ]));
-    lines.push(Line::raw(""));
     lines.extend(starter_prompt_lines(app));
+    if let Some(summary) = &app.first_run_summary {
+        lines.push(Line::from(Span::styled(summary.clone(), dim())));
+    }
+    lines.push(Line::raw(""));
     // Padded into a column: left-aligned, ragged blurbs read as a list of
     // unrelated fragments, and this is the part of the screen a first-time
     // user is actually meant to act on.
@@ -229,36 +237,20 @@ fn welcome_hints(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-/// The empty-state hook: the first run's summary line when there is one,
-/// then the starter prompts numbered 1..3, the ↓-selected one in the accent.
-/// Empty when there are no prompts. One function on purpose, so a restyle
-/// touches one place.
+/// The starter prompts as one muted `❯` row each, the ↓-selected one in the
+/// accent. No numbers (digits type into the composer, they never pick) and no
+/// "↓ to pick one": the rows wear the composer's own glyph, which is the
+/// hint. Empty when there are no prompts.
 fn starter_prompt_lines(app: &App) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    if let Some(summary) = &app.first_run_summary {
-        lines.push(Line::from(Span::styled(summary.clone(), dim())));
-        lines.push(Line::raw(""));
-    }
-    if app.starter_prompts.is_empty() {
-        return lines;
-    }
-    lines.push(Line::from(Span::styled("or ↓ to pick one", dim())));
-    // Padded to one width so the rows still line up when the card is
-    // centered.
-    let width = app
-        .starter_prompts
+    app.starter_prompts
         .iter()
-        .map(|prompt| prompt.chars().count())
-        .max()
-        .unwrap_or(0);
-    for (index, prompt) in app.starter_prompts.iter().enumerate() {
-        let selected = app.starter_index == Some(index);
-        let text = format!("{}  {prompt:<width$}", index + 1);
-        lines.push(Line::from(Span::styled(
-            text,
-            if selected { accent() } else { muted() },
-        )));
-    }
-    lines.push(Line::raw(""));
-    lines
+        .enumerate()
+        .map(|(index, prompt)| {
+            let selected = app.starter_index == Some(index);
+            Line::from(vec![
+                Span::styled("❯ ", if selected { accent() } else { dim() }),
+                Span::styled(prompt.clone(), if selected { accent() } else { muted() }),
+            ])
+        })
+        .collect()
 }

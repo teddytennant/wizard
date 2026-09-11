@@ -152,7 +152,7 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
         },
         ProviderChoice {
             label: "Local",
-            detail: "one pick — llama.cpp & Ollama set up for you, model sized to this \
+            detail: "one pick: llama.cpp & Ollama set up for you, model sized to this \
                      machine; private, no API key"
                 .to_string(),
             kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
@@ -198,13 +198,13 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
             collect: collect_custom,
         },
         ProviderChoice {
-            label: "BYOM — llama.cpp",
+            label: "BYOM: llama.cpp",
             detail: "bring your own model: any GGUF, your server URL".to_string(),
             kinds: vec![ProviderKind::LLAMACPP],
             collect: collect_llamacpp,
         },
         ProviderChoice {
-            label: "BYOM — Ollama",
+            label: "BYOM: Ollama",
             detail: "bring your own model: any Ollama tag, pulled on first run".to_string(),
             kinds: vec![ProviderKind::OLLAMA],
             collect: collect_ollama,
@@ -262,10 +262,10 @@ fn collect_full_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     // Step 4 — mode.
     let mode_options = [
         Opt::new(
-            "Genie — interactive",
+            "Genie, interactive",
             "bypass permissions; acts without asking (recommended)",
         ),
-        Opt::new("Sovereign — autonomous", "autonomous; works continuously"),
+        Opt::new("Sovereign, autonomous", "autonomous; works continuously"),
     ];
     let mode = match select(
         terminal,
@@ -290,7 +290,7 @@ fn collect_full_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     let skin = match select(
         terminal,
         "Interface",
-        "Which terminal UI should Wizard wear? (looks only — same commands either way; \
+        "Which terminal UI should Wizard wear? (looks only, same commands either way; \
          change it any time with /ui)",
         &skin_options,
         0,
@@ -511,10 +511,7 @@ fn collect_web_search(terminal: &mut Tui) -> Result<Option<(String, Option<Strin
     };
     let key = key.trim();
     if key.is_empty() {
-        notice(
-            terminal,
-            "No key entered — using DuckDuckGo for web search.",
-        )?;
+        notice(terminal, "No key entered: using DuckDuckGo for web search.")?;
         return Ok(Some(("duckduckgo".to_string(), None)));
     }
     Ok(Some((id.to_string(), Some(key.to_string()))))
@@ -542,7 +539,7 @@ fn collect_claude_import(terminal: &mut Tui) -> Result<Option<ImportSelection>> 
     let checked = match multi_select(
         terminal,
         "Import from Claude Code",
-        "Found ~/.claude — bring over any of these?",
+        "Found ~/.claude: bring over any of these?",
         &options,
     )? {
         Some(checked) => checked,
@@ -667,7 +664,7 @@ fn collect_llamacpp(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
             continue; // already listed as a downloaded model
         }
         let detail = if tier.file == suggested.file {
-            format!("{} — recommended for this machine", tier.name)
+            format!("{}, recommended for this machine", tier.name)
         } else {
             tier.name.to_string()
         };
@@ -744,7 +741,7 @@ fn ollama_model_options(installed: &[String], suggested: &str) -> Vec<(String, S
     let mut rows: Vec<(String, String)> = Vec::new();
     for tag in installed {
         let detail = if tag == suggested {
-            "already pulled — recommended for this machine"
+            "already pulled, recommended for this machine"
         } else {
             "already pulled"
         };
@@ -753,7 +750,7 @@ fn ollama_model_options(installed: &[String], suggested: &str) -> Vec<(String, S
     if !installed.iter().any(|tag| tag == suggested) {
         rows.push((
             suggested.to_string(),
-            "recommended for this machine — pulled on first run".to_string(),
+            "recommended for this machine, pulled on first run".to_string(),
         ));
     }
     for tier in OLLAMA_TIERS {
@@ -907,11 +904,11 @@ fn collect_cloudflare(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     let models: Vec<(String, String)> = vec![
         (
             CLOUDFLARE_MODEL.to_string(),
-            "GLM 5.2 — most capable (default)".to_string(),
+            "GLM 5.2, most capable (default)".to_string(),
         ),
         (
             "@cf/zai-org/glm-4.7-flash".to_string(),
-            "GLM 4.7 Flash — cheaper, faster".to_string(),
+            "GLM 4.7 Flash: cheaper, faster".to_string(),
         ),
     ];
     let model = match pick_model(
@@ -1018,7 +1015,7 @@ fn collect_compat_menu(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     let index = match select(
         terminal,
         "Provider",
-        "All OpenAI-compatible — pick one.",
+        "All OpenAI-compatible: pick one.",
         &options,
         0,
     )? {
@@ -1263,7 +1260,7 @@ fn print_summary(config: &Config) {
         // presents as a bot that never answers.
         if config.gateway.allowed_chat_ids.is_empty() {
             println!("  ⚠  no allowed chat IDs: the gateway will refuse every message.");
-            println!("     Run `wizard gateway setup` — it has you message the bot, reports");
+            println!("     Run `wizard gateway setup`: it has you message the bot, reports");
             println!("     your chat id, and (with your say-so) writes it here:");
             println!();
             println!("        [gateway]");
@@ -1275,7 +1272,7 @@ fn print_summary(config: &Config) {
             );
         }
         println!();
-        println!("  ⚠  The gateway is a long-running process — messages get no reply");
+        println!("  ⚠  The gateway is a long-running process: messages get no reply");
         println!("     until it is running. Start it in the project you want it to");
         println!("     operate on:");
         println!();
@@ -1294,7 +1291,7 @@ fn print_summary(config: &Config) {
     }
 
     println!("  • start Wizard:    wizard");
-    println!("  • change settings: run /settings anytime inside Wizard");
+    println!("  • change settings: run /setup anytime inside Wizard");
     println!();
 }
 
@@ -1495,8 +1492,8 @@ mod tests {
                 "Anthropic (Claude)",
                 "More cloud providers",
                 "Custom OpenAI-compatible endpoint",
-                "BYOM — llama.cpp",
-                "BYOM — Ollama",
+                "BYOM: llama.cpp",
+                "BYOM: Ollama",
             ]
         );
     }

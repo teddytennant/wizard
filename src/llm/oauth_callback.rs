@@ -225,7 +225,7 @@ where
                     // line. Say so and keep both channels open.
                     Callback::Ignored => {
                         eprintln!(
-                            "that does not look like the redirect URL — it should contain \
+                            "that does not look like the redirect URL: it should contain \
                              `?code=…&state=…`"
                         );
                         prompt_for_paste();
@@ -396,7 +396,7 @@ where
 
     Some(format!(
         "this session has no browser of its own, and the sign-in redirects to \
-         127.0.0.1:{port} — which, opened from another machine, is that machine's \
+         127.0.0.1:{port}, which, opened from another machine, is that machine's \
          loopback and not this one's. Either:\n\
          \x20 1. forward the port, then open the URL above in your local browser:\n\
          \x20      ssh -N -L {port}:127.0.0.1:{port} {destination}\n\

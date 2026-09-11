@@ -301,14 +301,14 @@ The installer also lays down `~/.wizard/mcp.toml` (Playwright browser MCP) and `
 
 ### Spinner verbs (`[ui]`)
 
-While the model has been asked and has not answered yet, the TUI shows a spinner and the time elapsed (`⠋ 3s`, plus `step 2/8` under a capped `max_steps`). Nothing else: the row is gone the moment text or a tool call arrives. If you want a word in front of the timer, give it one:
+While the model has been asked and has not answered yet, the TUI shows a spinner (plus `step 2/8` under a capped `max_steps`); the elapsed time is on the status line. Nothing else: the row is gone the moment text or a tool call arrives. If you want a word next to the spinner, give it one:
 
 ```toml
 [ui]
 spinner_verbs = ["Pondering", "Musing", "Noodling"]
 ```
 
-One is picked per busy period and held until the turn finishes. Omitting the section or setting `spinner_verbs = []` shows the timer alone. Headless runs (`wizard -p`) still use their own stderr spinner and its stock verbs.
+One is picked per busy period and held until the turn finishes. Omitting the section or setting `spinner_verbs = []` shows the spinner alone. Headless runs (`wizard -p`) still use their own stderr spinner and its stock verbs.
 
 ### Vim mode (`[ui]`)
 

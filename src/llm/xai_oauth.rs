@@ -395,7 +395,7 @@ async fn begin_login(redirect_uri: &str) -> Result<PendingLogin> {
 async fn complete_login(pending: PendingLogin, code: &str, state: &str) -> Result<StoredTokens> {
     anyhow::ensure!(
         state == pending.state,
-        "the sign-in state did not match — start again"
+        "the sign-in state did not match; start again"
     );
     let http = crate::llm::oauth_http_client();
     let token = exchange_code(
@@ -600,7 +600,7 @@ async fn bind_callback_listener() -> Result<TcpListener> {
                     format!(
                         "could not bind 127.0.0.1:{port} for the xAI sign-in callback; \
                          it is the only redirect xAI accepts for this client, so the sign-in \
-                         cannot run elsewhere — close whatever is using it (another wizard \
+                         cannot run elsewhere; close whatever is using it (another wizard \
                          sign-in?) and retry"
                     )
                 });

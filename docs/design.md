@@ -22,8 +22,11 @@ else's chrome and are held to theirs.
 - **Spacing.** One blank row between turns. Tool cards in a run stay tight so
   they read as one group. Nothing is centered.
 - **Nothing on screen the user did not ask for.** No splash art, no tagline, no
-  tips, no idle key hints. The empty state says what you are talking to, where,
-  and how to start, in three lines.
+  tips, no idle key hints. The empty state is the name and version, then how to
+  start; a startup problem sits between them. When the directory suggests
+  any, up to three starter prompts hang under the hint as muted `❯` rows: the
+  composer's own glyph, so they need no key hint, and ↓ moves onto them. On the
+  first run one dim line after them says where the config went.
 - **Fast.** No animation delays paint. Nothing waits on a spinner frame. A
   spinner never replaces output: while text streams there is no spinner at all.
 
@@ -37,15 +40,19 @@ else's chrome and are held to theirs.
   of a running turn, or the keys a modal state needs. Idle shows no hints.
 - **Streaming text** renders as markdown as it arrives, with a dim `▍` at the
   tail. No spinner next to it.
-- **Waiting on the model** (nothing streaming yet): one row, `⠋ 3s`, replaced
-  by the text the moment it starts. After the first round trip it carries the
-  count, `⠋ 3s · step 2`, and the budget when there is one, `step 2/8`.
-- **Tool call**: one header row, `✓ bash  ls -la  0.4s`. The glyph is the
+- **Waiting on the model** (nothing streaming yet): one row, the spinner alone,
+  replaced by the text the moment it starts. After the first round trip it
+  carries the count, `⠋ step 2`, and the budget when there is one, `step 2/8`.
+  The clock is the status line's; the screen has one.
+- **Tool call**: one header row, `✓ execute  ls -la  0.4s`. The glyph is the
   state (spinner running, `✓` done, `✗` failed), the name is accent, the
-  argument is dim, the elapsed time is dim. A non-zero exit puts `exit 2` on
-  the header. The output hangs below, indented two columns, dim. A running
-  command shows its tail; a finished one its head, then `… +N lines`.
-- **Diff**: the file name once, on the tool header (`✓ edit  src/x.rs:12`). The
+  argument is dim, the elapsed time is dim and left off under 100 ms. A
+  non-zero exit puts `exit 2` on the header. The output hangs below, indented
+  two columns, dim. A running command shows its tail; a finished one its head,
+  then `… +N lines`; a failed one stays open, because the lines under `✗` are
+  the reason.
+- **Diff**: the file name once, on the tool header (`✓ edit_file  src/x.rs:12`),
+  relative to the project root when it is under it. The
   body is the change as `-` and `+` lines in the diff colors. The `/diff`
   sidebar shows each file once, then `@@` hunk headers dim, then the lines.
   `diff --git`, `index`, `---` and `+++` rows are not shown.
@@ -59,8 +66,8 @@ else's chrome and are held to theirs.
 - **80 columns**: everything above holds. Tool arguments truncate with `…` at
   the header's right edge; the status line drops chips from the right.
 - **40 columns**: the status line keeps the model and drops the rest in order;
-  the empty state is three short lines; tool headers keep the glyph and name.
-  Nothing wraps a header onto a second row.
+  every empty-state row that does not fit ends in `…`; tool headers keep the
+  glyph and name. Nothing wraps a header onto a second row.
 
 ## Deliberately absent
 

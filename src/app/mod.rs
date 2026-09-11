@@ -134,6 +134,9 @@ pub enum InputMode {
 /// One line for a failed provider probe. An auth failure names the command
 /// that fixes it; anything else is reported as unreachable, with the error.
 pub fn health_line(err: &str) -> String {
+    if err.starts_with("no API key") {
+        return err.to_string();
+    }
     if err.contains("not signed in to xAI") {
         return "not signed in to xAI: /login xai".to_string();
     }
@@ -150,7 +153,17 @@ pub fn health_line(err: &str) -> String {
             return format!("{host} rejected the key ({code}): /provider to replace it");
         }
     }
-    format!("provider unreachable: {err}")
+    // A transport error carries the URL and the library's prose; the host is
+    // the part the user can act on, and it fits a 40-column card.
+    let host = err
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split(['/', ' ', ':', ')']).next())
+        .filter(|host| !host.is_empty());
+    match host {
+        Some(host) => format!("cannot reach {host}"),
+        None => format!("provider unreachable: {err}"),
+    }
 }
 
 /// A setup flow the main loop runs with the TUI suspended, since the wizard
@@ -371,6 +384,9 @@ pub struct App {
     pub starter_index: Option<usize>,
     /// The first run's one-line summary, when this session followed one.
     pub first_run_summary: Option<String>,
+    /// What the first run's credential check could not settle (no answer in
+    /// time, no key to check): one warning on the card, gone with it.
+    pub first_run_notice: Option<String>,
     /// Set by Ctrl-G; the main loop suspends the TUI, opens the composer draft
     /// in `$EDITOR`, and reads the result back. Cleared once handled.
     pub pending_edit_prompt: bool,
@@ -527,6 +543,7 @@ impl App {
             starter_prompts: Vec::new(),
             starter_index: None,
             first_run_summary: None,
+            first_run_notice: None,
             pending_edit_prompt: false,
             pending_compact: false,
             compacting: false,
@@ -714,7 +731,7 @@ impl App {
             .collect();
         self.picker = Some(Picker {
             kind: PickerKind::Settings,
-            title: " settings · ↑/↓ move · enter select · esc close ".to_string(),
+            title: " settings · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
         });
@@ -850,9 +867,7 @@ impl App {
     /// Enter saves `[fusion]` (first toggled row = synthesizer).
     pub fn open_fusion_picker(&mut self) {
         if self.config.providers.is_empty() {
-            self.notice(
-                "fusion needs configured providers — add at least two with /provider first",
-            );
+            self.notice("fusion needs configured providers: add at least two with /provider first");
             return;
         }
         let in_panel: std::collections::HashSet<String> = self
@@ -900,7 +915,7 @@ impl App {
         items.push(PickerItem {
             value: ULTRA_JUDGE_ROW.to_string(),
             detail: match ultra.judges {
-                0 => "off — the drafts go to the agent uncompared".to_string(),
+                0 => "off: the drafts go to the agent uncompared".to_string(),
                 1 => "compares the drafts head-to-head before the agent executes".to_string(),
                 n => format!("{n} judges compare the drafts head-to-head"),
             },
@@ -943,7 +958,7 @@ impl App {
             .collect();
         self.picker = Some(Picker {
             kind: PickerKind::Resume,
-            title: " resume session · ↑/↓ move · enter select · esc close ".to_string(),
+            title: " resume session · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
         });
@@ -1047,7 +1062,7 @@ impl App {
         });
         self.picker = Some(Picker {
             kind: PickerKind::Provider,
-            title: " providers · ↑/↓ move · enter select · esc close ".to_string(),
+            title: " providers · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
         });
@@ -1077,7 +1092,7 @@ impl App {
         // like a hung key rather than an answer.
         if items.is_empty() {
             self.notice(
-                "this build has no provider backends compiled in — every one of them is a \
+                "this build has no provider backends compiled in: every one of them is a \
                  plugin behind a cargo feature, and all are on by default. Install a stock \
                  release binary, or rebuild with the ones you want.",
             );
@@ -1085,7 +1100,7 @@ impl App {
         }
         self.picker = Some(Picker {
             kind: PickerKind::ProviderType,
-            title: " add provider · ↑/↓ move · enter select · esc close ".to_string(),
+            title: " add provider · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
         });
@@ -1099,13 +1114,13 @@ impl App {
             .iter()
             .map(|(value, label, detail)| PickerItem {
                 value: (*value).to_string(),
-                detail: format!("{label} — {detail}"),
+                detail: format!("{label}: {detail}"),
                 current: *value == active || (*value == "xai" && active == "grok"),
             })
             .collect();
         self.picker = Some(Picker {
             kind: PickerKind::WebBackend,
-            title: " web search · ↑/↓ move · enter select · esc close ".to_string(),
+            title: " web search · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
         });
@@ -1139,7 +1154,7 @@ impl App {
                 } else {
                     self.set_web_backend(
                         "xai",
-                        "web search set to xAI — run /login xai to sign in, or set XAI_API_KEY",
+                        "web search set to xAI: run /login xai to sign in, or set XAI_API_KEY",
                     );
                 }
             }
@@ -1160,7 +1175,7 @@ impl App {
         self.suggestions.clear();
         self.suggestion_index = 0;
         self.notice(format!(
-            "paste your {} API key, then Enter (Esc to cancel):",
+            "paste your {} API key, then enter (esc to cancel):",
             web_backend_label(id)
         ));
     }
@@ -1600,7 +1615,7 @@ impl App {
         let (name, bg) = (pane.name.clone(), pane.bg);
         let Some(bg) = bg else {
             self.notice(format!(
-                "subagent '{name}' is running in the foreground — Ctrl-C interrupts the turn it \
+                "subagent '{name}' is running in the foreground; ctrl-c interrupts the turn it \
                  is blocking"
             ));
             return;
@@ -1702,7 +1717,7 @@ impl App {
             return;
         };
         if session.id == self.session_id {
-            self.notice("that's this session — use /quit to leave it");
+            self.notice("that's this session: use /quit to leave it");
             return;
         }
         let (id, name, pid) = (session.id.clone(), session.name.clone(), session.pid as i32);
@@ -2041,7 +2056,7 @@ impl App {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.notice(if on {
-            "vim mode on — Esc for NORMAL (hjkl/w/b/e move · i/a/I/A insert · \
+            "vim mode on: esc for NORMAL (hjkl/w/b/e move · i/a/I/A insert · \
              x/dd/dw/cw edit · u undo), i to type. /vim to leave"
         } else {
             "vim mode off"
@@ -2655,7 +2670,7 @@ impl App {
                 // produces a window that repaints forever and answers nothing.
                 // The notice is recorded before quitting so the reason lands in
                 // the transcript on disk, where it can still be read afterwards.
-                self.notice(format!("{why} — ending the session"));
+                self.notice(format!("{why}: ending the session"));
                 self.should_quit = true;
                 Ok(None)
             }
@@ -2731,18 +2746,13 @@ impl App {
                     if self.status.busy {
                         // The cancel handle reaches a parked `execute` from
                         // inside the tool, which kills the command's whole
-                        // process group — the same kill the timeout does. Say
-                        // what is being stopped, because with a console open
-                        // "interrupting" is ambiguous between the two.
-                        self.notice(match &self.console {
-                            Some(console) => {
-                                format!("stopping {}… (Ctrl-C again to exit)", console.command)
-                            }
-                            None => "interrupting… (Ctrl-C again to exit)".to_string(),
-                        });
+                        // process group — the same kill the timeout does. No
+                        // notice here: `turn stopped` lands once the turn has
+                        // actually ended, after the text it interrupted, and
+                        // the status line says what a second Ctrl-C does.
                         return Ok(Some(AppAction::Interrupt));
                     }
-                    self.notice("press Ctrl-C again to exit");
+                    self.notice("press ctrl-c again to exit");
                     return Ok(None);
                 }
                 KeyCode::Char('d') => {
@@ -2753,7 +2763,7 @@ impl App {
                     // with would be the wrong reading of the same key.
                     if let Some(console) = self.console.as_ref() {
                         console.writer.eof();
-                        self.notice("stdin closed (Ctrl-D) — the command sees end of input");
+                        self.notice("stdin closed (ctrl-d): the command sees end of input");
                         return Ok(None);
                     }
                     self.should_quit = true;
@@ -3135,9 +3145,9 @@ impl App {
                                 return Ok(None);
                             }
                             let tail = if self.fusion_active {
-                                " — /fusion off then on to apply"
+                                "; /fusion off then on to apply"
                             } else {
-                                " — /fusion to turn on"
+                                "; /fusion to turn on"
                             };
                             self.notice(format!(
                                 "fusion: {} · synthesizer {synthesizer} · {rounds} round(s){tail}",
@@ -3161,7 +3171,7 @@ impl App {
                                 .collect();
                             if lenses.is_empty() {
                                 self.notice(
-                                    "select at least one lens (Space toggles) — ultra has nothing \
+                                    "select at least one lens (Space toggles): ultra has nothing \
                                      to fan out over without one",
                                 );
                                 return Ok(None);
@@ -3688,7 +3698,7 @@ impl App {
             // queue is full because it is not reading. Say so and hand the
             // composer back rather than dropping the line in silence.
             self.console = None;
-            self.notice("that command is no longer reading input — Enter goes to the agent again");
+            self.notice("that command is no longer reading input: enter goes to the agent again");
             return None;
         }
         // Echo it into the running command's card. Nothing else will: a pipe
@@ -3711,7 +3721,7 @@ impl App {
         // turn and keeps a dead command's clock stopped.
         self.console_pending = None;
         if self.console.take().is_some() {
-            self.notice("the command ended — Enter goes to the agent again");
+            self.notice("the command ended: enter goes to the agent again");
         }
     }
 
@@ -3728,7 +3738,7 @@ impl App {
             return;
         };
         self.notice(format!(
-            "detached from {} — Enter goes to the agent again (Ctrl-C stops the command)",
+            "detached from {}: enter goes to the agent again (ctrl-c stops the command)",
             console.command
         ));
     }
@@ -3744,7 +3754,7 @@ impl App {
     /// bounce again.
     fn submit_prompt(&mut self, input: String) -> Option<AppAction> {
         if self.rebuilding.is_some() {
-            self.notice("the agent is rebuilding — try again in a moment");
+            self.notice("the agent is rebuilding: try again in a moment");
             return None;
         }
         let mut prepared =
@@ -3758,7 +3768,7 @@ impl App {
         if self.status.busy {
             if self.message_queue.len() >= MESSAGE_QUEUE_CAP {
                 self.notice(format!(
-                    "message queue is full ({MESSAGE_QUEUE_CAP}) — wait for a turn to finish"
+                    "message queue is full ({MESSAGE_QUEUE_CAP}): wait for a turn to finish"
                 ));
                 // Put the staged images back so the user doesn't lose them.
                 self.pending_images.append(&mut prepared.images);
@@ -3769,7 +3779,7 @@ impl App {
             self.record_prompt(input);
             let position = self.message_queue.len() + 1;
             self.message_queue.push_back(prepared);
-            self.notice(format!("queued — will send after this turn (#{position})"));
+            self.notice(format!("queued: will send after this turn (#{position})"));
             return None;
         }
         self.push_history(&input);
@@ -3805,7 +3815,7 @@ impl App {
     pub fn queue_goal_kickoff(&mut self, goal: &str) {
         if self.message_queue.len() >= MESSAGE_QUEUE_CAP {
             self.notice(format!(
-                "goal saved, but the message queue is full ({MESSAGE_QUEUE_CAP}) — \
+                "goal saved, but the message queue is full ({MESSAGE_QUEUE_CAP}): \
                  work will not auto-start; send a message once a turn finishes"
             ));
             return;
@@ -4035,9 +4045,9 @@ impl App {
         }
         if approved {
             self.plan_mode = false;
-            self.notice("plan approved — executing it");
+            self.notice("plan approved: executing it");
         } else {
-            self.notice("plan rejected — still in plan mode");
+            self.notice("plan rejected: still in plan mode");
         }
     }
 
@@ -4110,9 +4120,9 @@ impl App {
             let _ = respond.send(answers);
         }
         self.notice(if answered {
-            "answers sent — the agent is finishing its plan"
+            "answers sent: the agent is finishing its plan"
         } else {
-            "interview dismissed — the agent will use its best judgment"
+            "interview dismissed: the agent will use its best judgment"
         });
     }
 
@@ -4240,7 +4250,7 @@ impl App {
                     && let Some(console) = self.console_pending.take()
                 {
                     self.notice(format!(
-                        "▶ {} — Enter now types into this command \
+                        "▶ {}: enter now types into this command \
                          (Esc detaches · Ctrl-D ends input · Ctrl-C stops it)",
                         console.command
                     ));
@@ -4266,7 +4276,7 @@ impl App {
                 // take the composer back from one we did.
                 if self.console.as_ref().is_some_and(|open| open.gate == gate) {
                     self.console = None;
-                    self.notice("command finished — Enter goes to the agent again");
+                    self.notice("command finished: enter goes to the agent again");
                 }
             }
             AgentEvent::OmakaseProceeding { .. } => {
@@ -4277,7 +4287,7 @@ impl App {
                 self.plan_mode = false;
                 self.omakase = false;
                 self.transcript.set_last_tool_folded(false);
-                self.notice("omakase — chef's choice: proceeding with the agent's own plan");
+                self.notice("omakase, chef's choice: proceeding with the agent's own plan");
             }
             AgentEvent::Usage {
                 prompt_tokens,
@@ -4385,7 +4395,7 @@ impl App {
                 match reason {
                     DoneReason::Completed => {}
                     DoneReason::MaxSteps => self.notice(format!(
-                        "step budget reached ({}) — send another message to continue",
+                        "step budget reached ({}): send another message to continue",
                         self.status.max_steps
                     )),
                     DoneReason::TimeLimit => self.notice("time limit reached"),

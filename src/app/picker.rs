@@ -138,11 +138,11 @@ impl Picker {
     /// different hint than the Enter-to-select pickers.
     pub fn footer_hint(&self) -> &'static str {
         match self.kind {
-            PickerKind::ClaudeImport => " ↑↓ move · space toggles · enter runs · Esc cancel ",
+            PickerKind::ClaudeImport => " ↑↓ move · space toggles · enter runs · esc cancel ",
             PickerKind::FusionPanel | PickerKind::UltraLenses => {
-                " ↑↓ move · space toggles · enter saves · Esc cancel "
+                " ↑↓ move · space toggles · enter saves · esc cancel "
             }
-            _ => " ↑↓ move · Enter select · Esc cancel ",
+            _ => " ↑↓ move · enter select · esc cancel ",
         }
     }
 }

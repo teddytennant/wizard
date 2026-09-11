@@ -223,7 +223,7 @@ pub(super) fn prompt_question(field: PromptField, prompt: &ProviderPrompt) -> St
         PromptField::BaseUrl => "Base URL:".to_string(),
         PromptField::Model => "Model:".to_string(),
         PromptField::ApiKey => format!(
-            "Paste your {} API key, then Enter (input hidden):",
+            "Paste your {} API key, then enter (input hidden):",
             provider_display(&prompt.kind)
         ),
     }
