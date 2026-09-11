@@ -1,1 +1,4 @@
 out/
+agents/wizard/ctx/
+results-*.md
+results-*.json
