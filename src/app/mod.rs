@@ -131,6 +131,16 @@ pub enum InputMode {
     Prompt,
 }
 
+/// A setup flow the main loop runs with the TUI suspended, since the wizard
+/// owns the terminal while it asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupSection {
+    /// Every question, as `wizard --onboard` asks them.
+    Wizard,
+    /// The messaging-gateway questions alone.
+    Gateway,
+}
+
 /// Full TUI state. [`crate::ui::draw`] renders it; [`App::handle_event`]
 /// mutates it.
 #[derive(Debug)]
@@ -329,6 +339,16 @@ pub struct App {
     /// the terminal) suspends the TUI, opens `$EDITOR` on the config file, then
     /// reloads config. Cleared once handled.
     pub pending_edit_config: bool,
+    /// A `/setup` row that needs the terminal: run by the main loop, like
+    /// the config editor.
+    pub pending_setup: Option<SetupSection>,
+    /// Prompts an empty session offers, from the cwd. Empty once the
+    /// conversation starts, or when nothing was derived.
+    pub starter_prompts: Vec<String>,
+    /// The starter prompt ↓/↑ landed on; `None` until they were used.
+    pub starter_index: Option<usize>,
+    /// The first run's one-line summary, when this session followed one.
+    pub first_run_summary: Option<String>,
     /// Set by Ctrl-G; the main loop suspends the TUI, opens the composer draft
     /// in `$EDITOR`, and reads the result back. Cleared once handled.
     pub pending_edit_prompt: bool,
@@ -481,6 +501,10 @@ impl App {
             spinner_verb,
             verb_rolls: 0,
             pending_edit_config: false,
+            pending_setup: None,
+            starter_prompts: Vec::new(),
+            starter_index: None,
+            first_run_summary: None,
             pending_edit_prompt: false,
             pending_compact: false,
             compacting: false,
@@ -636,11 +660,21 @@ impl App {
                 import_detail,
             ),
             (
+                "gateway",
+                "Messaging gateway…".to_string(),
+                self.config.gateway.kind.to_string(),
+            ),
+            (
                 "provider",
                 "Manage providers…".to_string(),
                 format!("{providers} configured"),
             ),
             ("config_file", "Open config file…".to_string(), config_path),
+            (
+                "wizard",
+                "Setup wizard…".to_string(),
+                "every question, as on --onboard".to_string(),
+            ),
         ]
     }
 
@@ -680,6 +714,14 @@ impl App {
             }
             "import" => {
                 self.open_claude_import_picker();
+                return None;
+            }
+            "gateway" => {
+                self.pending_setup = Some(SetupSection::Gateway);
+                return None;
+            }
+            "wizard" => {
+                self.pending_setup = Some(SetupSection::Wizard);
                 return None;
             }
             "config_file" => {
@@ -3299,6 +3341,10 @@ impl App {
             }
         }
 
+        if let Some(action) = self.starter_key(&key) {
+            return Ok(action);
+        }
+
         let suggesting = !self.suggestions.is_empty();
         let action = match key.code {
             // Shift+Enter (terminals with keyboard enhancement) or Alt+Enter
@@ -3472,6 +3518,53 @@ impl App {
 
     /// Enter pressed: complete the highlighted suggestion if the command is
     /// still partial, then parse the input line into an action.
+    /// A starter prompt picked from the welcome screen: a number key, or ↓/↑
+    /// then Enter, on an empty composer. `None` when the key is not that.
+    ///
+    /// ↑ alone keeps recalling history, so ↓ is what enters the list.
+    fn starter_key(&mut self, key: &KeyEvent) -> Option<Option<AppAction>> {
+        if self.starter_prompts.is_empty()
+            || !self.input.is_empty()
+            || !self.suggestions.is_empty()
+            || !self.welcome_visible()
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return None;
+        }
+        let count = self.starter_prompts.len();
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                let number = c.to_digit(10)? as usize;
+                (1..=count)
+                    .contains(&number)
+                    .then(|| self.pick_starter(number - 1))
+            }
+            KeyCode::Down => {
+                self.starter_index = Some(self.starter_index.map_or(0, |i| (i + 1) % count));
+                Some(None)
+            }
+            KeyCode::Up if self.starter_index.is_some() => {
+                self.starter_index = self
+                    .starter_index
+                    .map(|i| if i == 0 { count - 1 } else { i - 1 });
+                Some(None)
+            }
+            KeyCode::Enter => {
+                let index = self.starter_index?;
+                Some(self.pick_starter(index))
+            }
+            _ => None,
+        }
+    }
+
+    fn pick_starter(&mut self, index: usize) -> Option<AppAction> {
+        let text = self.starter_prompts.get(index)?.clone();
+        self.set_input(text);
+        self.submit()
+    }
+
     fn submit(&mut self) -> Option<AppAction> {
         // The inline prompts intercept Enter: each submission is an answer to a
         // field (provider setup) or a pasted web-search key, not a message.

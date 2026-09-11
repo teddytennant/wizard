@@ -840,6 +840,41 @@ fn the_mark_is_drawn_only_when_the_card_can_spare_the_room() {
     );
 }
 
+/// The empty-state hook: the starter prompts are numbered on the card, the
+/// first-run summary is a dim line rather than a warning, and the ↓ pick is
+/// the row that moves.
+#[test]
+fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
+    let mut app = App::new(crate::config::Config::default());
+    app.starter_prompts = vec![
+        "Explain how this project is put together".to_string(),
+        "Review my uncommitted changes".to_string(),
+    ];
+    app.first_run_summary = Some("set up: xai · grok-4.6 · /setup changes it".to_string());
+    app.notice("set up: xai · grok-4.6 · /setup changes it");
+    let screen = render(&app).join("\n");
+    assert!(
+        screen.contains("1  Explain how this project is put together"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("2  Review my uncommitted changes"),
+        "{screen}"
+    );
+    assert!(screen.contains("set up: xai · grok-4.6"), "{screen}");
+    assert!(
+        !screen.contains("⚠ set up"),
+        "the summary is not a warning: {screen}"
+    );
+    assert!(app.welcome_visible());
+
+    // No prompts, no hook: the card is what it was.
+    app.starter_prompts.clear();
+    app.first_run_summary = None;
+    let screen = render(&app).join("\n");
+    assert!(!screen.contains("pick one"), "{screen}");
+}
+
 /// visible after the user's first submission.
 #[test]
 fn a_startup_notice_is_visible_on_the_welcome_screen() {

@@ -1,7 +1,7 @@
 //! Genie-mode entry point: the terminal event loop that drives [`App`],
 //! starts agent turns, and drains queued messages and agent commands.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,7 +39,7 @@ use super::session::{
 };
 use super::term::{
     TerminalGuard, copy_to_clipboard, edit_config_file, edit_prompt_in_editor, is_terminal_armed,
-    restore_terminal_best_effort, setup_terminal,
+    restore_terminal_best_effort, run_setup_suspended, setup_terminal,
 };
 use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 
@@ -58,6 +58,13 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         }
         anyhow::bail!("wizard needs a terminal for the TUI; pass -p \"task\" to run headless");
     }
+
+    // The starter prompts read the cwd (two git calls at most); off-thread,
+    // beside the provider startup, so the first paint pays nothing for them.
+    let starter = tokio::task::spawn_blocking(|| {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        crate::onboarding::starter_prompts(&crate::onboarding::CwdFacts::gather(&cwd))
+    });
 
     let mut client = startup_client(&mut config).await?;
     // A cloud provider's health probe was skipped at startup (it would block the
@@ -227,6 +234,13 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
     }
     if let Some(prompt) = cli.prompt.clone() {
         app.set_input(prompt);
+    }
+    app.starter_prompts = starter.await.unwrap_or_default();
+    // A first run's summary is the one line the old summary screen became:
+    // dim, in the transcript, no keypress to dismiss it.
+    if let Some(line) = crate::onboarding::first_run_summary() {
+        app.first_run_summary = Some(line.clone());
+        app.notice(line);
     }
     // No startup notice: the welcome screen already shows the model, mode,
     // and help pointers until the first message arrives.
@@ -685,6 +699,9 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         if app.pending_edit_config {
             app.pending_edit_config = false;
             edit_config_file(&mut app, &mut terminal);
+        }
+        if let Some(section) = app.pending_setup.take() {
+            run_setup_suspended(&mut app, &mut terminal, section);
         }
 
         // Ctrl-G: same suspend/restore dance, on the composer draft.

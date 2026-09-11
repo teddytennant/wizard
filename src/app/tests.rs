@@ -5153,3 +5153,48 @@ fn a_plugin_command_completes_and_submits_like_a_builtin() {
         other => panic!("expected the plugin command, got {other:?}"),
     }
 }
+
+/// A number key on the empty welcome composer submits that starter prompt;
+/// ↓ then Enter does the same; ↑ alone is still history, and nothing fires
+/// once the user has typed.
+#[test]
+fn starter_prompts_are_picked_by_number_or_arrow_and_enter() {
+    let mut app = super::App::new(Config::default());
+    app.starter_prompts = vec!["Explain this".to_string(), "Review changes".to_string()];
+    assert!(app.welcome_visible());
+
+    let action = press(&mut app, KeyCode::Char('2'));
+    assert!(
+        matches!(&action, Some(AppAction::Submit(prepared)) if prepared.text == "Review changes"),
+        "{action:?}"
+    );
+
+    let mut app = super::App::new(Config::default());
+    app.starter_prompts = vec!["Explain this".to_string(), "Review changes".to_string()];
+    // ↑ on a fresh session is history, not the list.
+    assert!(press(&mut app, KeyCode::Up).is_none());
+    assert_eq!(app.starter_index, None);
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.starter_index, Some(0));
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.starter_index, Some(1));
+    assert!(press(&mut app, KeyCode::Up).is_none());
+    assert_eq!(app.starter_index, Some(0));
+    let action = press(&mut app, KeyCode::Enter);
+    assert!(
+        matches!(&action, Some(AppAction::Submit(prepared)) if prepared.text == "Explain this"),
+        "{action:?}"
+    );
+
+    // A digit typed into a message is a digit; an out-of-range one too.
+    let mut app = super::App::new(Config::default());
+    app.starter_prompts = vec!["Explain this".to_string()];
+    assert!(press(&mut app, KeyCode::Char('9')).is_none());
+    assert_eq!(app.input, "9");
+    press(&mut app, KeyCode::Char('1'));
+    assert_eq!(app.input, "91");
+    // Enter on an empty composer with nothing selected submits nothing.
+    let mut app = super::App::new(Config::default());
+    app.starter_prompts = vec!["Explain this".to_string()];
+    assert!(press(&mut app, KeyCode::Enter).is_none());
+}

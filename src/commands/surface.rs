@@ -1615,7 +1615,15 @@ mod tests {
             Some(Execution::Agent),
             "/model <tag> is typeable in a chat, picker or no picker"
         );
-        for screen_only in ["diff", "todos", "dashboard", "vim", "ui", "settings"] {
+        for screen_only in [
+            "diff",
+            "todos",
+            "dashboard",
+            "vim",
+            "ui",
+            "settings",
+            "setup",
+        ] {
             assert_eq!(
                 spec(screen_only).map(|spec| spec.gateway),
                 Some(Execution::Unavailable),

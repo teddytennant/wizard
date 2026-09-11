@@ -496,7 +496,7 @@ impl SlashCommand {
                 }),
                 _ => Err("usage: /login xai [force]".to_string()),
             },
-            "settings" => Ok(Self::Settings),
+            "settings" | "setup" => Ok(Self::Settings),
             "vim" => Ok(Self::Vim),
             // Joined so `/ui claude code` is the same request as `/ui claude`:
             // people type the product name, not the key.
@@ -1115,6 +1115,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         tui: Execution::Ui,
         gui: Execution::Ui,
         // An in-app menu; every entry of it is a choice made at a picker.
+        gateway: Execution::Unavailable,
+        agent_arg: "",
+    },
+    CommandSpec {
+        name: "setup",
+        args: "",
+        description: "the setup menu: provider, mode, gateway, web search, Claude import",
+        takes_args: false,
+        tui: Execution::Ui,
+        gui: Execution::Ui,
         gateway: Execution::Unavailable,
         agent_arg: "",
     },
