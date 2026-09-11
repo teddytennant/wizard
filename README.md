@@ -47,9 +47,11 @@ The first run is one screen: sign in with xAI or ChatGPT, paste an API key, or r
 <!-- BENCH:tbench -->
 | agent | model | Terminal-Bench 2.1 | tasks |
 |---|---|---:|---:|
-| wizard 3.1 | Grok 4.6 | run in progress | 89 |
-| Terminus 2, the public reference (Artificial Analysis, on e2b) | Grok 4.6 | 88.4% | |
+| wizard 3.1 | Grok 4.6 | 80.9% (72 of 89) | 89 |
+| Terminus 2, the public reference (Artificial Analysis, on e2b) | Grok 4.6 | 88.4% | 89 |
 <!-- /BENCH -->
+
+Run 2026-09-11 with Harbor, one trial per task, through the [`tbench/`](tbench/README.md) adapter; the per-task list and every failure's reason are in [`tbench/RESULTS.md`](tbench/RESULTS.md). Two of the seventeen misses are tasks whose verifier is broken for every harness; eight are timeouts with the agent still working.
 
 ## Also
 
