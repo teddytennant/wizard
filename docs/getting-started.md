@@ -40,7 +40,7 @@ The same script has four mutually exclusive flavors:
 | (default) | binary + loadout; no model, no config. The first `wizard` run starts [onboarding](#first-run) |
 | `WIZARD_LOCAL=1` | the default plus a preinstalled local stack: llama.cpp runtime + VRAM-tiered Qwen GGUF + `config.toml` |
 | `WIZARD_MINIMAL=1` | binary only: no loadout either; onboarding on first run as with the default |
-| `WIZARD_BYOM=1` | Ollama runtime + binary + loadout; model choice happens in onboarding, which pulls the tag you pick on first run (or set `WIZARD_MODEL=<tag>` to pull + write the config headlessly); see [byom.md](byom.md) |
+| `WIZARD_BYOM=1` | Ollama runtime + binary + loadout; the first run's "Run a model on this machine" reuses the install and pulls a tag sized to the hardware, `wizard --onboard` offers any tag (or set `WIZARD_MODEL=<tag>` to pull + write the config headlessly); see [byom.md](byom.md) |
 
 `WIZARD_USE_OLLAMA=1` is the Ollama variant of the local flavor (installs Ollama, starts it, pulls the same auto-tiered model) and implies it: no need to also set `WIZARD_LOCAL`. Combining `WIZARD_LOCAL`, `WIZARD_MINIMAL`, or `WIZARD_BYOM` is an error. `WIZARD_BESPOKE=1` is a deprecated alias for `WIZARD_MINIMAL=1`; it's stricter than the old bespoke flavor, which still installed the model runtime. Minimal installs nothing but the binary and leaves everything to onboarding.
 
@@ -224,7 +224,18 @@ These override `~/.wizard/config.toml` for a single run:
 wizard
 ```
 
-With no config present (the default and minimal installs), the first launch opens onboarding: a Ratatui wizard that asks which provider to use (provider, model, messaging gateway, mode) and writes `~/.wizard/config.toml`. xAI (Grok) is listed first: account sign-in, then API key. Picking Local is one step: Wizard detects your hardware, downloads a GGUF sized to it, and installs and starts `llama-server` itself (or reuses an existing Ollama install). The other options take an API key: OpenRouter, Cloudflare Workers AI (GLM 5.2), OpenAI, Anthropic, a **More cloud providers** list (Google Gemini, DeepSeek, Groq, Mistral, Moonshot, Z.AI, MiniMax, Together, Fireworks, Cerebras), or any OpenAI-compatible endpoint. Alongside them sit two BYOM picks, llama.cpp (your own GGUF and server URL) and Ollama (any model tag, installed models are listed, and a missing tag is pulled automatically on first run), for bringing your own model. Re-run it any time with `wizard --onboard`.
+With no config present (the default and minimal installs), the first launch asks one question, "How do you want to run Wizard?", with four answers:
+
+- **Sign in with xAI**: a browser sign-in, no API key; grok-4.6.
+- **Sign in with ChatGPT**: a browser sign-in on your ChatGPT plan; gpt-5.6.
+- **Paste an API key**: pick the provider from one list (xAI, Anthropic, OpenAI, OpenRouter, Cloudflare Workers AI, Gemini, DeepSeek, Groq, Mistral, and the rest), paste the key, done. If `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or another provider's variable is already exported, that provider is preselected and nothing is pasted.
+- **Run a model on this machine**: Wizard detects your hardware, downloads a GGUF sized to it, and installs and starts `llama-server` itself (or reuses an existing Ollama install).
+
+The model is the provider's best coding model; mode is genie; there is no gateway, DuckDuckGo is the web search backend, and nothing is imported. The config is written to `~/.wizard/config.toml`, a sign-in prints its URL and waits for the browser, and Wizard opens the TUI with a one-line summary in the transcript. The empty transcript also offers up to three starter prompts read off the directory (a README, uncommitted changes, a CI config, a package manifest): a number key picks one, or ↓ then Enter.
+
+Everything the first run skipped is under `/setup` inside Wizard (the same menu as `/settings`): the provider list, model, mode, interface, web search backend, the Telegram gateway, importing from Claude Code, and a **Setup wizard** row that asks every question. `wizard --onboard` (or `wizard setup`) runs that full wizard from the shell: provider (including BYOM llama.cpp and Ollama, and any OpenAI-compatible endpoint), model, gateway, mode, interface, web search, Claude import, then a summary.
+
+A run given a prompt on the command line (`wizard -p …`), a piped run, `wizard acp` and `wizard mcp-serve` never open onboarding; with no config they say so and exit.
 
 With a config present (after onboarding, or a `WIZARD_LOCAL=1` install), launching Wizard with a local llama.cpp provider:
 

@@ -1,6 +1,11 @@
-//! First-run onboarding: a small full-screen wizard that asks for a provider,
-//! model, optional messaging gateway, and mode, then writes
-//! `~/.wizard/config.toml`.
+//! First-run onboarding.
+//!
+//! A first run is one screen ([`run`]): how do you want to run Wizard, four
+//! answers, then straight into the TUI with every other setting at its
+//! default. The full wizard ([`run_full`]) still asks everything (provider,
+//! model, gateway, mode, interface, web search, Claude import) and writes
+//! `~/.wizard/config.toml`; `wizard --onboard`, `wizard setup` and the
+//! `/setup` menu run it.
 //!
 //! The module is split into two halves:
 //! - **Pure logic** ([`Answers`], [`Answers::into_config`], [`parse_chat_ids`],
@@ -96,7 +101,9 @@ pub struct Answers {
     pub mode: Mode,
     /// Which coding agent's terminal chrome the TUI wears. Cosmetic: it
     /// changes glyphs, framing and wording, never the commands or the model.
-    pub skin: Skin,
+    /// `None` when the question was never asked (a first run), so the config
+    /// keeps deferring to `WIZARD_SKIN` and the default.
+    pub skin: Option<Skin>,
     /// `web_search` backend id (`"duckduckgo"`, `"brave"`, `"tavily"`,
     /// `"exa"`, `"serper"`, or `"xai"`).
     pub web_search_backend: String,
@@ -155,7 +162,7 @@ impl Answers {
         // Written even when it is the default, because it was answered: a key
         // that is present means "this was chosen", and `/ui` rewrites the same
         // key when it is chosen again.
-        config.ui.skin = Some(self.skin.key().to_string());
+        config.ui.skin = self.skin.map(|skin| skin.key().to_string());
         config.web.search_backend = self.web_search_backend;
         config.gateway = GatewayConfig {
             kind: self.gateway_kind,
@@ -290,25 +297,442 @@ const CLOUDFLARE_KEY_ENV: &str = crate::llm::registry::defaults::CLOUDFLARE_KEY_
 const CLOUDFLARE_MODEL: &str = crate::llm::registry::defaults::CLOUDFLARE_MODEL;
 
 // ---------------------------------------------------------------------------
-// TUI entry point
+// First run: one screen
 // ---------------------------------------------------------------------------
 
-/// Run the onboarding wizard. Returns `Ok(Some(config))` once the user
-/// finishes (the config has already been saved to `~/.wizard/config.toml` and
-/// a plaintext summary printed), or `Ok(None)` if the user cancelled
-/// (Esc / Ctrl-C). Terminal setup/teardown is restored on every exit path,
+/// The one-screen first run. Returns `Ok(Some(config))` with the config
+/// already saved, `Ok(None)` on Esc / Ctrl-C. A browser sign-in, when the
+/// answer needs one, runs after the screen is down and prints its URL to the
+/// plain terminal the way `wizard --login` does.
+pub async fn run() -> Result<Option<Config>> {
+    let pick = tokio::task::spawn_blocking(first_run_screen)
+        .await
+        .context("onboarding task panicked")??;
+    let Some(pick) = pick else { return Ok(None) };
+    finish_first_run(pick).await.map(Some)
+}
+
+/// What the first screen resolved to.
+struct FirstRunPick {
+    answers: ProviderAnswers,
+    login: Option<Login>,
+}
+
+/// A browser sign-in the first screen can ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Login {
+    Xai,
+    ChatGpt,
+}
+
+/// The summary of a first run, read back by the TUI for its transcript.
+static FIRST_RUN_SUMMARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The one-line summary of a first run that happened in this process, if
+/// one did.
+pub fn first_run_summary() -> Option<String> {
+    FIRST_RUN_SUMMARY.get().cloned()
+}
+
+fn first_run_screen() -> Result<Option<FirstRunPick>> {
+    let skin_warning = crate::skin::init(None);
+    let theme_warning = theme::init(crate::skin::active().companion_theme());
+    let mut terminal = setup_terminal()?;
+    let outcome = collect_first_run(&mut terminal);
+    restore_terminal_best_effort();
+    for warning in [skin_warning, theme_warning].into_iter().flatten() {
+        eprintln!("warning: {warning}");
+    }
+    outcome
+}
+
+/// The first screen's rows, before `installed` narrows them. The key row is
+/// offered when any keyed provider is.
+fn first_run_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice<FirstRunPick>> {
+    let keyed: Vec<ProviderKind> = key_providers(installed)
+        .into_iter()
+        .map(|row| row.kind)
+        .collect();
+    let all = vec![
+        ProviderChoice {
+            label: "Sign in with xAI",
+            detail: "grok-4.6 · browser sign-in, no API key",
+            kinds: vec![ProviderKind::XAI_OAUTH],
+            collect: first_xai_oauth,
+        },
+        ProviderChoice {
+            label: "Sign in with ChatGPT",
+            detail: "gpt-5.6 · browser sign-in, uses your ChatGPT plan",
+            kinds: vec![ProviderKind::CHATGPT_OAUTH],
+            collect: first_chatgpt,
+        },
+        ProviderChoice {
+            label: "Paste an API key",
+            detail: "xAI, Anthropic, OpenAI, OpenRouter, Gemini, …",
+            kinds: keyed,
+            collect: first_api_key,
+        },
+        ProviderChoice {
+            label: "Run a model on this machine",
+            detail: "llama.cpp or Ollama, sized to this machine, private",
+            kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
+            collect: first_local,
+        },
+    ];
+    all.into_iter()
+        .filter(|choice| choice.kinds.iter().any(|kind| installed.contains(kind)))
+        .collect()
+}
+
+fn collect_first_run(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    let choices = first_run_choices(&crate::llm::registry::kinds());
+    if choices.is_empty() {
+        anyhow::bail!(
+            "this build has no provider backends compiled in, so there is nothing to \
+             onboard to. Every backend is a plugin behind a cargo feature and all of \
+             them are on by default; rebuild with the ones you want, or install a \
+             stock release binary. See docs/plugins.md."
+        );
+    }
+    let options: Vec<Opt> = choices
+        .iter()
+        .map(|choice| Opt::new(choice.label, choice.detail))
+        .collect();
+    let index = match select(
+        terminal,
+        "How do you want to run Wizard?",
+        "Everything else starts at a default; /setup changes it later.",
+        &options,
+        0,
+    )? {
+        Some(index) => index,
+        None => return Ok(None),
+    };
+    (choices[index].collect)(terminal)
+}
+
+fn first_xai_oauth(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    Ok(Some(FirstRunPick {
+        answers: ProviderAnswers {
+            provider_name: "xai".to_string(),
+            kind: ProviderKind::XAI_OAUTH,
+            base_url: XAI_BASE_URL.to_string(),
+            model: XAI_MODELS[0].to_string(),
+            api_key_env: None,
+            api_key: None,
+            gguf_path: None,
+        },
+        login: Some(Login::Xai),
+    }))
+}
+
+fn first_chatgpt(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    #[cfg(feature = "provider-chatgpt")]
+    {
+        let provider = crate::plugins::chatgpt::oauth::provider_config();
+        Ok(Some(FirstRunPick {
+            answers: ProviderAnswers {
+                provider_name: provider.name,
+                kind: provider.kind,
+                base_url: provider.base_url,
+                model: provider.model,
+                api_key_env: None,
+                api_key: None,
+                gguf_path: None,
+            },
+            login: Some(Login::ChatGpt),
+        }))
+    }
+    #[cfg(not(feature = "provider-chatgpt"))]
+    {
+        anyhow::bail!("this build has no ChatGPT sign-in (the `provider-chatgpt` feature is off)")
+    }
+}
+
+fn first_local(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    Ok(collect_local_auto(terminal)?.map(|answers| FirstRunPick {
+        answers,
+        login: None,
+    }))
+}
+
+/// One keyed cloud provider on the first run's compact list.
+struct KeyProvider {
+    label: &'static str,
+    name: &'static str,
+    kind: ProviderKind,
+    base_url: &'static str,
+    model: &'static str,
+    key_env: &'static str,
+}
+
+/// The compact list: the keyed clouds, then every OpenAI-compatible preset.
+/// Cloudflare's base URL is a template; `first_api_key` fills the account in.
+fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
+    let mut rows = vec![
+        KeyProvider {
+            label: "xAI (Grok)",
+            name: "xai",
+            kind: ProviderKind::XAI,
+            base_url: XAI_BASE_URL,
+            model: XAI_MODELS[0],
+            key_env: XAI_KEY_ENV,
+        },
+        KeyProvider {
+            label: "Anthropic (Claude)",
+            name: "claude",
+            kind: ProviderKind::ANTHROPIC,
+            base_url: ANTHROPIC_BASE_URL,
+            model: ANTHROPIC_MODELS[0],
+            key_env: ANTHROPIC_KEY_ENV,
+        },
+        KeyProvider {
+            label: "OpenAI",
+            name: "openai",
+            kind: ProviderKind::OPENAI,
+            base_url: OPENAI_BASE_URL,
+            model: OPENAI_MODELS[0],
+            key_env: OPENAI_KEY_ENV,
+        },
+        KeyProvider {
+            label: "OpenRouter",
+            name: "openrouter",
+            kind: ProviderKind::OPENROUTER,
+            base_url: OPENROUTER_BASE_URL,
+            model: OPENROUTER_MODEL,
+            key_env: OPENROUTER_KEY_ENV,
+        },
+        KeyProvider {
+            label: "Cloudflare Workers AI",
+            name: "cloudflare",
+            kind: ProviderKind::CLOUDFLARE,
+            base_url: "",
+            model: CLOUDFLARE_MODEL,
+            key_env: CLOUDFLARE_KEY_ENV,
+        },
+    ];
+    for preset in crate::llm::compat::PRESETS {
+        rows.push(KeyProvider {
+            label: preset.label,
+            name: preset.name,
+            kind: ProviderKind::OPENAI,
+            base_url: preset.base_url,
+            model: preset.default_model(),
+            key_env: preset.key_env,
+        });
+    }
+    rows.retain(|row| installed.contains(&row.kind));
+    rows
+}
+
+/// True when `name` is exported with a non-blank value.
+fn env_exported(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+}
+
+/// The first row whose key variable is already exported: that provider is
+/// preselected and its key is never asked for.
+fn preselected_key_provider(
+    rows: &[KeyProvider],
+    exported: impl Fn(&str) -> bool,
+) -> Option<usize> {
+    rows.iter().position(|row| exported(row.key_env))
+}
+
+fn first_api_key(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    let rows = key_providers(&crate::llm::registry::kinds());
+    let preselected = preselected_key_provider(&rows, env_exported);
+    let options: Vec<Opt> = rows
+        .iter()
+        .map(|row| {
+            let detail = if env_exported(row.key_env) {
+                format!("use ${}", row.key_env)
+            } else {
+                format!("{} · ${}", row.model, row.key_env)
+            };
+            Opt::new(row.label, detail)
+        })
+        .collect();
+    let index = match select(
+        terminal,
+        "API key",
+        "Which provider is the key for?",
+        &options,
+        preselected.unwrap_or(0),
+    )? {
+        Some(index) => index,
+        None => return Ok(None),
+    };
+    let row = &rows[index];
+
+    let base_url = if row.kind == ProviderKind::CLOUDFLARE {
+        let account_id = match text_input(
+            terminal,
+            "Cloudflare account ID",
+            "Dashboard → Workers AI (or `wrangler whoami`).",
+            "",
+        )? {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        crate::llm::registry::defaults::cloudflare_base_url(&account_id)
+    } else {
+        row.base_url.to_string()
+    };
+
+    let api_key = if env_exported(row.key_env) {
+        None
+    } else {
+        match text_input(
+            terminal,
+            &format!("{} API key", row.label),
+            &format!(
+                "Paste the key. Stored in ~/.wizard/credentials.toml (0600), never in \
+                 config.toml. Leave empty to export {} instead.",
+                row.key_env
+            ),
+            "",
+        )? {
+            Some(value) => Some(value.trim().to_string()).filter(|key| !key.is_empty()),
+            None => return Ok(None),
+        }
+    };
+
+    Ok(Some(FirstRunPick {
+        answers: ProviderAnswers {
+            provider_name: row.name.to_string(),
+            kind: row.kind.clone(),
+            base_url,
+            model: row.model.to_string(),
+            api_key_env: Some(row.key_env.to_string()),
+            api_key,
+            gguf_path: None,
+        },
+        login: None,
+    }))
+}
+
+impl Answers {
+    /// A first run: the provider answered, everything else at its default.
+    fn first_run(provider: ProviderAnswers) -> Self {
+        Self {
+            provider_name: provider.provider_name,
+            kind: provider.kind,
+            base_url: provider.base_url,
+            model: provider.model,
+            api_key_env: provider.api_key_env,
+            provider_api_key: provider.api_key,
+            gguf_path: provider.gguf_path,
+            gateway_kind: GatewayKind::None,
+            gateway_token_env: None,
+            gateway_allowed_chat_ids: Vec::new(),
+            mode: Mode::Genie,
+            skin: None,
+            web_search_backend: "duckduckgo".to_string(),
+            web_search_api_key: None,
+            gateway_bot_token: None,
+            claude_import: None,
+        }
+    }
+}
+
+/// Save the config, run the sign-in if one was picked, and record the
+/// summary line for the TUI. The config is saved first, so a sign-in that is
+/// abandoned leaves `wizard --login` as the only step left.
+async fn finish_first_run(pick: FirstRunPick) -> Result<Config> {
+    let FirstRunPick { answers, login } = pick;
+    let answers = Answers::first_run(answers);
+    store_pasted_secrets(&answers, crate::credentials::store);
+    let config = answers.into_config();
+    config.save().context("saving config from onboarding")?;
+
+    if let Some(login) = login {
+        let paste = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            crate::llm::oauth_callback::PasteChannel::Stdin
+        } else {
+            crate::llm::oauth_callback::PasteChannel::Disabled
+        };
+        let report = |line: &str| println!("{line}");
+        let (name, outcome) = match login {
+            Login::Xai => (
+                "xai",
+                crate::llm::xai_oauth::login(report, paste, false).await,
+            ),
+            Login::ChatGpt => ("chatgpt", chatgpt_login(report, paste).await),
+        };
+        outcome.with_context(|| {
+            format!(
+                "sign-in failed; the config is saved, so run `wizard --login {name}` and \
+                 then `wizard`"
+            )
+        })?;
+    }
+
+    let _ = FIRST_RUN_SUMMARY.set(first_run_summary_line(&config));
+    Ok(config)
+}
+
+#[cfg(feature = "provider-chatgpt")]
+async fn chatgpt_login(
+    report: impl Fn(&str) + Send + Sync,
+    paste: crate::llm::oauth_callback::PasteChannel,
+) -> Result<()> {
+    crate::plugins::chatgpt::oauth::login(report, paste).await
+}
+
+#[cfg(not(feature = "provider-chatgpt"))]
+async fn chatgpt_login(
+    _report: impl Fn(&str) + Send + Sync,
+    _paste: crate::llm::oauth_callback::PasteChannel,
+) -> Result<()> {
+    anyhow::bail!("this build has no ChatGPT sign-in (the `provider-chatgpt` feature is off)")
+}
+
+/// The one dim line the TUI shows in place of the old summary screen.
+fn first_run_summary_line(config: &Config) -> String {
+    let provider = config.active();
+    let path = Config::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "~/.wizard/config.toml".to_string());
+    let mut line = format!(
+        "set up: {} · {} · saved to {path} · /setup changes it",
+        provider.name, provider.model
+    );
+    if let Credentials::ApiKey { .. } = provider.credentials() {
+        let stored =
+            crate::credentials::get(&provider.name).is_some_and(|key| !key.trim().is_empty());
+        let env = provider.api_key_env.as_deref();
+        if !stored && !env.is_some_and(env_exported) {
+            line.push_str(&format!(
+                " · no API key yet: export {}=… or /provider",
+                env.unwrap_or("the key")
+            ));
+        }
+    }
+    line
+}
+
+// ---------------------------------------------------------------------------
+// The full wizard
+// ---------------------------------------------------------------------------
+
+/// Run the full wizard: every question, then the config is saved and a
+/// plaintext summary printed. `Ok(None)` if the user cancelled (Esc /
+/// Ctrl-C). Terminal setup/teardown is restored on every exit path,
 /// including errors.
 ///
 /// The interactive loop is synchronous (blocking crossterm reads); it runs on
 /// a blocking thread so it never stalls the async runtime.
-pub async fn run() -> Result<Option<Config>> {
-    tokio::task::spawn_blocking(run_blocking)
+pub async fn run_full() -> Result<Option<Config>> {
+    tokio::task::spawn_blocking(|| run_full_blocking(true))
         .await
         .context("onboarding task panicked")?
 }
 
-/// Synchronous core of [`run`].
-fn run_blocking() -> Result<Option<Config>> {
+/// Synchronous core of [`run_full`]. The TUI's `/setup` row calls it with
+/// the terminal suspended and `print` off, since the screen is cleared on
+/// return.
+pub fn run_full_blocking(print: bool) -> Result<Option<Config>> {
     // Install the skin and theme before anything is drawn: there is no config
     // yet on a first run, so this is `WIZARD_SKIN` / `WIZARD_THEME` plus the
     // terminal's colour depth (`NO_COLOR`, `WIZARD_COLOR`, `TERM`). A name
@@ -322,7 +746,7 @@ fn run_blocking() -> Result<Option<Config>> {
     let skin_warning = crate::skin::init(None);
     let theme_warning = theme::init(crate::skin::active().companion_theme());
     let mut terminal = setup_terminal()?;
-    let outcome = collect_answers(&mut terminal);
+    let outcome = collect_full_answers(&mut terminal);
     restore_terminal_best_effort();
     for warning in [skin_warning, theme_warning].into_iter().flatten() {
         eprintln!("warning: {warning}");
@@ -355,6 +779,9 @@ fn run_blocking() -> Result<Option<Config>> {
     };
 
     config.save().context("saving config from onboarding")?;
+    if !print {
+        return Ok(Some(config));
+    }
     print_summary(&config);
     if let Some(summary) = import_summary
         && !summary.is_empty()
@@ -368,6 +795,34 @@ fn run_blocking() -> Result<Option<Config>> {
     Ok(Some(config))
 }
 
+/// The gateway questions alone, from the TUI's `/setup` menu: collect, store
+/// the token, write the `[gateway]` section into the existing config.
+/// `Ok(None)` on Esc.
+pub fn run_gateway_setup_blocking() -> Result<Option<Config>> {
+    let mut terminal = setup_terminal()?;
+    let outcome = collect_gateway(&mut terminal);
+    restore_terminal_best_effort();
+    let Some(gateway) = outcome? else {
+        return Ok(None);
+    };
+    let mut config = Config::load().context("loading config for gateway setup")?;
+    if let Some(token) = gateway
+        .bot_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+        && let Err(err) = crate::credentials::store(crate::credentials::GATEWAY_TOKEN, token)
+    {
+        eprintln!("warning: could not save the Telegram bot token: {err:#}");
+    }
+    config.gateway = GatewayConfig {
+        kind: gateway.kind,
+        token_env: gateway.token_env,
+        allowed_chat_ids: gateway.allowed_chat_ids,
+    };
+    config.save().context("saving config from gateway setup")?;
+    Ok(Some(config))
+}
+
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 /// One row of the provider menu.
@@ -378,7 +833,7 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// as eleven literals offered whatever it was written with, and a build
 /// without `provider-anthropic` still had a row that produced a config failing
 /// at `build()` — an entry that should never have been on the screen.
-struct ProviderChoice {
+struct ProviderChoice<T = ProviderAnswers> {
     label: &'static str,
     detail: &'static str,
     /// The kinds this row can produce. Offered when *any* of them is
@@ -390,7 +845,7 @@ struct ProviderChoice {
     /// index into a `match`, so a row that is filtered out cannot shift the
     /// meaning of the ones after it — which is what an index-dispatched menu
     /// does the first time it is filtered.
-    collect: fn(&mut Tui) -> Result<Option<ProviderAnswers>>,
+    collect: fn(&mut Tui) -> Result<Option<T>>,
 }
 
 /// The provider menu, in display order, before `installed` narrows it.
@@ -483,9 +938,9 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
         .collect()
 }
 
-/// Drive the sequence of steps. Returns `Ok(None)` as soon as any step is
-/// cancelled.
-fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
+/// Drive the full sequence of steps. Returns `Ok(None)` as soon as any step
+/// is cancelled.
+fn collect_full_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     // Step 1 — provider, xAI first, and only the ones this build can reach.
     let choices = provider_choices(&crate::llm::registry::kinds());
     if choices.is_empty() {
@@ -522,89 +977,9 @@ fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     };
 
     // Step 3 — messaging gateway.
-    let gateway_options = [
-        Opt::new("None — terminal only", "recommended"),
-        Opt::new("Telegram", "chat with Wizard from a bot"),
-    ];
-    let gateway = match select(
-        terminal,
-        "Messaging gateway",
-        "Expose Wizard over a chat platform?",
-        &gateway_options,
-        0,
-    )? {
-        Some(index) => index,
+    let gateway = match collect_gateway(terminal)? {
+        Some(gateway) => gateway,
         None => return Ok(None),
-    };
-
-    let (gateway_kind, gateway_token_env, gateway_allowed_chat_ids, gateway_bot_token) = if gateway
-        == 1
-    {
-        // Paste the bot token itself (stored in credentials.toml, 0600).
-        // Leave empty only if the user prefers an env var (next prompt).
-        let bot_token = match text_input(
-            terminal,
-            "Telegram bot token",
-            "Paste the token from @BotFather. Stored in ~/.wizard/credentials.toml (0600). Leave empty to use an env var instead.",
-            "",
-        )? {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        let bot_token = bot_token.trim().to_string();
-        let gateway_bot_token = (!bot_token.is_empty()).then_some(bot_token);
-
-        // Optional env-var fallback name (used when no credential is stored).
-        let token_env = match text_input(
-            terminal,
-            "Telegram bot token env var (optional fallback)",
-            "Used only when no token is stored in credentials.toml.",
-            GatewayConfig::DEFAULT_TOKEN_ENV,
-        )? {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        // Allowed chat IDs: re-prompt on a parse error rather than discarding
-        // the answer. The list is a closed allow-list (see
-        // `gateway::is_authorized`), so an empty answer is not "allow all",
-        // it is "allow nobody". Say so before and after the prompt, because
-        // from the outside the bot then looks broken rather than locked.
-        let allowed = loop {
-            let raw = match text_input(
-                terminal,
-                "Allowed chat IDs",
-                "Comma-separated numeric chat IDs. Only these chats can drive the agent; \
-                 an empty list refuses every message.",
-                "",
-            )? {
-                Some(value) => value,
-                None => return Ok(None),
-            };
-            match parse_chat_ids(&raw) {
-                Ok(ids) => {
-                    if ids.is_empty() {
-                        notice(
-                            terminal,
-                            "No chat IDs entered: the gateway will refuse every message. \
-                             Run `wizard gateway setup` afterwards — it has you message the \
-                             bot, reports your chat id, and adds it for you.",
-                        )?;
-                    }
-                    break ids;
-                }
-                Err(message) => {
-                    notice(terminal, &message)?;
-                }
-            }
-        };
-        (
-            GatewayKind::Telegram,
-            Some(token_env),
-            allowed,
-            gateway_bot_token,
-        )
-    } else {
-        (GatewayKind::None, None, Vec::new(), None)
     };
 
     // Step 4 — mode.
@@ -643,7 +1018,7 @@ fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
         &skin_options,
         0,
     )? {
-        Some(index) => Skin::ALL[index],
+        Some(index) => Some(Skin::ALL[index]),
         None => return Ok(None),
     };
 
@@ -672,15 +1047,114 @@ fn collect_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
         api_key_env: collected.api_key_env,
         provider_api_key: collected.api_key,
         gguf_path: collected.gguf_path,
-        gateway_kind,
-        gateway_token_env,
-        gateway_allowed_chat_ids,
+        gateway_kind: gateway.kind,
+        gateway_token_env: gateway.token_env,
+        gateway_allowed_chat_ids: gateway.allowed_chat_ids,
         mode,
         skin,
         web_search_backend,
         web_search_api_key,
-        gateway_bot_token,
+        gateway_bot_token: gateway.bot_token,
         claude_import,
+    }))
+}
+
+/// The gateway step's answers.
+struct GatewayAnswers {
+    kind: GatewayKind,
+    token_env: Option<String>,
+    allowed_chat_ids: Vec<i64>,
+    bot_token: Option<String>,
+}
+
+/// The messaging-gateway step: none, or Telegram with its token, env var and
+/// allow-list. `Ok(None)` on cancel.
+fn collect_gateway(terminal: &mut Tui) -> Result<Option<GatewayAnswers>> {
+    let gateway_options = [
+        Opt::new("None — terminal only", "recommended"),
+        Opt::new("Telegram", "chat with Wizard from a bot"),
+    ];
+    let gateway = match select(
+        terminal,
+        "Messaging gateway",
+        "Expose Wizard over a chat platform?",
+        &gateway_options,
+        0,
+    )? {
+        Some(index) => index,
+        None => return Ok(None),
+    };
+
+    if gateway != 1 {
+        return Ok(Some(GatewayAnswers {
+            kind: GatewayKind::None,
+            token_env: None,
+            allowed_chat_ids: Vec::new(),
+            bot_token: None,
+        }));
+    }
+    // Paste the bot token itself (stored in credentials.toml, 0600).
+    // Leave empty only if the user prefers an env var (next prompt).
+    let bot_token = match text_input(
+        terminal,
+        "Telegram bot token",
+        "Paste the token from @BotFather. Stored in ~/.wizard/credentials.toml (0600). Leave empty to use an env var instead.",
+        "",
+    )? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    let bot_token = bot_token.trim().to_string();
+    let gateway_bot_token = (!bot_token.is_empty()).then_some(bot_token);
+
+    // Optional env-var fallback name (used when no credential is stored).
+    let token_env = match text_input(
+        terminal,
+        "Telegram bot token env var (optional fallback)",
+        "Used only when no token is stored in credentials.toml.",
+        GatewayConfig::DEFAULT_TOKEN_ENV,
+    )? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    // Allowed chat IDs: re-prompt on a parse error rather than discarding
+    // the answer. The list is a closed allow-list (see
+    // `gateway::is_authorized`), so an empty answer is not "allow all",
+    // it is "allow nobody". Say so before and after the prompt, because
+    // from the outside the bot then looks broken rather than locked.
+    let allowed = loop {
+        let raw = match text_input(
+            terminal,
+            "Allowed chat IDs",
+            "Comma-separated numeric chat IDs. Only these chats can drive the agent; \
+             an empty list refuses every message.",
+            "",
+        )? {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        match parse_chat_ids(&raw) {
+            Ok(ids) => {
+                if ids.is_empty() {
+                    notice(
+                        terminal,
+                        "No chat IDs entered: the gateway will refuse every message. \
+                         Run `wizard gateway setup` afterwards — it has you message the \
+                         bot, reports your chat id, and adds it for you.",
+                    )?;
+                }
+                break ids;
+            }
+            Err(message) => {
+                notice(terminal, &message)?;
+            }
+        }
+    };
+    Ok(Some(GatewayAnswers {
+        kind: GatewayKind::Telegram,
+        token_env: Some(token_env),
+        allowed_chat_ids: allowed,
+        bot_token: gateway_bot_token,
     }))
 }
 
@@ -2111,6 +2585,166 @@ fn draw_notice(frame: &mut ratatui::Frame, message: &str) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Starter prompts: what an empty session suggests
+// ---------------------------------------------------------------------------
+
+/// What the starter prompts are read off. Gathered once at startup, from the
+/// directory alone: no model call.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CwdFacts {
+    pub git_repo: bool,
+    pub readme: bool,
+    /// Tracked files with uncommitted changes.
+    pub dirty: bool,
+    pub ci_config: bool,
+    /// A package manifest (Cargo.toml, package.json, pyproject.toml, …).
+    pub manifest: bool,
+    /// The source file changed most recently: an uncommitted one first, else
+    /// one from the last commit.
+    pub recent_source: Option<String>,
+}
+
+const CI_FILES: &[&str] = &[
+    ".github/workflows",
+    ".gitlab-ci.yml",
+    ".circleci/config.yml",
+    "Jenkinsfile",
+    ".travis.yml",
+    "azure-pipelines.yml",
+    "bitbucket-pipelines.yml",
+];
+
+const MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "setup.py",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "mix.exs",
+    "composer.json",
+    "Package.swift",
+    "CMakeLists.txt",
+];
+
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "py", "js", "ts", "tsx", "jsx", "go", "rb", "java", "kt", "swift", "c", "cc", "cpp", "h",
+    "hpp", "cs", "ex", "exs", "php", "scala", "lua", "zig", "ml", "hs", "m", "mm",
+];
+
+fn is_source_file(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| SOURCE_EXTENSIONS.contains(&ext))
+}
+
+impl CwdFacts {
+    /// Read the directory and ask git twice at most (status, then the last
+    /// commit's file list when nothing is uncommitted).
+    pub fn gather(cwd: &Path) -> Self {
+        let readme = std::fs::read_dir(cwd).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.to_ascii_uppercase().starts_with("README"))
+            })
+        });
+        let ci_config = CI_FILES.iter().any(|file| cwd.join(file).exists());
+        let manifest = MANIFESTS.iter().any(|file| cwd.join(file).exists());
+
+        let git = |args: &[&str]| -> Option<String> {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let status = git(&["status", "--porcelain", "--untracked-files=no"]);
+        let git_repo = status.is_some();
+        let dirty = status.as_deref().is_some_and(|out| !out.trim().is_empty());
+        let mut recent_source = status.as_deref().and_then(|out| {
+            out.lines()
+                .filter_map(|line| line.get(3..))
+                .map(|path| {
+                    path.rsplit(" -> ")
+                        .next()
+                        .unwrap_or(path)
+                        .trim()
+                        .to_string()
+                })
+                .find(|path| is_source_file(path))
+        });
+        if recent_source.is_none() && git_repo {
+            recent_source = git(&["log", "-1", "--name-only", "--format="]).and_then(|out| {
+                out.lines()
+                    .map(str::trim)
+                    .find(|path| is_source_file(path))
+                    .map(str::to_string)
+            });
+        }
+        Self {
+            git_repo,
+            readme,
+            dirty,
+            ci_config,
+            manifest,
+            recent_source,
+        }
+    }
+}
+
+/// Up to three prompts for `facts`, most specific first, filled from the
+/// generic ones. Pure.
+pub fn starter_prompts(facts: &CwdFacts) -> Vec<String> {
+    let mut prompts = Vec::new();
+    if facts.git_repo && facts.readme {
+        prompts.push("Explain how this project is put together".to_string());
+    }
+    if facts.dirty {
+        prompts.push("Review my uncommitted changes".to_string());
+    }
+    if facts.ci_config {
+        prompts.push("Why is CI failing".to_string());
+    }
+    if facts.manifest
+        && let Some(file) = &facts.recent_source
+    {
+        prompts.push(format!("Add a test for {file}"));
+    }
+    let generic = if facts.git_repo && facts.readme {
+        &[
+            "What can you do?",
+            "Find the biggest source of complexity here",
+        ][..]
+    } else {
+        &[
+            "Explain what is in this directory",
+            "What can you do?",
+            "Start a new project here",
+        ][..]
+    };
+    for prompt in generic {
+        if prompts.len() >= 3 {
+            break;
+        }
+        prompts.push((*prompt).to_string());
+    }
+    prompts.truncate(3);
+    prompts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2128,7 +2762,7 @@ mod tests {
             gateway_token_env: None,
             gateway_allowed_chat_ids: Vec::new(),
             mode: Mode::Genie,
-            skin: Skin::Wizard,
+            skin: Some(Skin::Wizard),
             web_search_backend: "duckduckgo".to_string(),
             web_search_api_key: None,
             gateway_bot_token: None,
@@ -3009,5 +3643,176 @@ mod tests {
             tags,
             vec!["qwen3.5:9b", "qwen3.6:35b", "qwen3.6:27b", "qwen3.5:4b"]
         );
+    }
+
+    #[test]
+    fn a_first_run_answers_only_the_provider() {
+        let config = Answers::first_run(ProviderAnswers {
+            provider_name: "xai".to_string(),
+            kind: ProviderKind::XAI_OAUTH,
+            base_url: XAI_BASE_URL.to_string(),
+            model: XAI_MODELS[0].to_string(),
+            api_key_env: None,
+            api_key: None,
+            gguf_path: None,
+        })
+        .into_config();
+        assert_eq!(config.active_provider.as_deref(), Some("xai"));
+        assert_eq!(config.active().kind, ProviderKind::XAI_OAUTH);
+        assert_eq!(config.mode, Mode::Genie);
+        assert_eq!(config.gateway.kind, GatewayKind::None);
+        assert_eq!(config.web.search_backend, "duckduckgo");
+        // Never asked, so never written: `WIZARD_SKIN` keeps working.
+        assert_eq!(config.ui.skin, None);
+    }
+
+    #[test]
+    fn the_first_screen_offers_only_what_this_build_installed() {
+        assert!(first_run_choices(&[]).is_empty());
+        let labels = |kinds: &[ProviderKind]| -> Vec<&str> {
+            first_run_choices(kinds)
+                .iter()
+                .map(|choice| choice.label)
+                .collect()
+        };
+        assert_eq!(labels(&[ProviderKind::XAI_OAUTH]), ["Sign in with xAI"]);
+        assert_eq!(
+            labels(&[ProviderKind::CHATGPT_OAUTH]),
+            ["Sign in with ChatGPT"]
+        );
+        assert_eq!(labels(&[ProviderKind::ANTHROPIC]), ["Paste an API key"]);
+        assert_eq!(
+            labels(&[ProviderKind::OLLAMA]),
+            ["Run a model on this machine"]
+        );
+        assert_eq!(
+            labels(&all_shipped_kinds()),
+            [
+                "Sign in with xAI",
+                "Sign in with ChatGPT",
+                "Paste an API key",
+                "Run a model on this machine",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_key_list_leads_with_xai_and_carries_every_preset() {
+        let rows = key_providers(&all_shipped_kinds());
+        assert_eq!(rows[0].name, "xai");
+        assert_eq!(rows[0].model, XAI_MODELS[0]);
+        for preset in crate::llm::compat::PRESETS {
+            assert!(
+                rows.iter().any(|row| row.name == preset.name),
+                "{} is missing",
+                preset.name
+            );
+        }
+        // Only what the build can reach.
+        let openai_only = key_providers(&[ProviderKind::OPENAI]);
+        assert!(
+            openai_only
+                .iter()
+                .all(|row| row.kind == ProviderKind::OPENAI)
+        );
+        assert!(openai_only.iter().any(|row| row.name == "gemini"));
+        assert!(openai_only.iter().all(|row| row.name != "xai"));
+    }
+
+    #[test]
+    fn an_exported_key_variable_preselects_its_provider() {
+        let rows = key_providers(&all_shipped_kinds());
+        let anthropic = rows
+            .iter()
+            .position(|row| row.name == "claude")
+            .expect("anthropic row");
+        assert_eq!(
+            preselected_key_provider(&rows, |env| env == "ANTHROPIC_API_KEY"),
+            Some(anthropic)
+        );
+        // Blank counts as unset, and the caller decides that.
+        assert_eq!(preselected_key_provider(&rows, |_| false), None);
+        // The first exported one wins, in list order.
+        assert_eq!(
+            preselected_key_provider(&rows, |env| {
+                env == "XAI_API_KEY" || env == "OPENAI_API_KEY"
+            }),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn starter_prompts_follow_the_directory() {
+        let empty = starter_prompts(&CwdFacts::default());
+        assert_eq!(
+            empty,
+            [
+                "Explain what is in this directory",
+                "What can you do?",
+                "Start a new project here",
+            ]
+        );
+
+        let project = CwdFacts {
+            git_repo: true,
+            readme: true,
+            dirty: true,
+            ci_config: true,
+            manifest: true,
+            recent_source: Some("src/onboarding.rs".to_string()),
+        };
+        assert_eq!(
+            starter_prompts(&project),
+            [
+                "Explain how this project is put together",
+                "Review my uncommitted changes",
+                "Why is CI failing",
+            ]
+        );
+
+        let clean = CwdFacts {
+            dirty: false,
+            ci_config: false,
+            ..project.clone()
+        };
+        assert_eq!(
+            starter_prompts(&clean),
+            [
+                "Explain how this project is put together",
+                "Add a test for src/onboarding.rs",
+                "What can you do?",
+            ]
+        );
+
+        // A manifest with no source file to name gets no test prompt.
+        let bare = CwdFacts {
+            recent_source: None,
+            readme: false,
+            ..clean
+        };
+        assert_eq!(
+            starter_prompts(&bare),
+            [
+                "Explain what is in this directory",
+                "What can you do?",
+                "Start a new project here",
+            ]
+        );
+    }
+
+    #[test]
+    fn cwd_facts_read_this_checkout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let facts = CwdFacts::gather(root);
+        assert!(facts.git_repo);
+        assert!(facts.readme);
+        assert!(facts.ci_config);
+        assert!(facts.manifest);
+        assert!(
+            facts.recent_source.as_deref().is_some_and(is_source_file),
+            "{facts:?}"
+        );
+        let nowhere = CwdFacts::gather(Path::new("/nonexistent/wizard-cwd"));
+        assert_eq!(nowhere, CwdFacts::default());
     }
 }

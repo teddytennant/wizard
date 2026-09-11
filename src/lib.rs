@@ -99,6 +99,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // invocation into the `--resume` one it is equivalent to), so a check
     // placed after the chain would see no subcommand and let
     // `wizard --plan resume` through with the flag silently dropped.
+    rewrite_setup_subcommand(&mut cli);
     if let Some(command) = &cli.command
         && !matches!(command, cli::Command::Agents)
     {
@@ -462,14 +463,19 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         };
     }
 
-    // First-run onboarding: build a fresh config interactively when requested,
-    // or automatically on a fresh install in an interactive terminal. A
-    // cancelled wizard exits gracefully without touching anything.
+    // First-run onboarding: one screen on a fresh install in an interactive
+    // terminal; the full wizard when `--onboard` (or `wizard setup`) asked
+    // for it. A cancelled wizard exits gracefully without touching anything.
     let mut config = if should_onboard(&cli)? {
-        match onboarding::run().await? {
+        let outcome = if cli.onboard {
+            onboarding::run_full().await?
+        } else {
+            onboarding::run().await?
+        };
+        match outcome {
             Some(config) => config,
             None => {
-                println!("onboarding cancelled — run `wizard --onboard` any time.");
+                println!("onboarding cancelled; run `wizard` again any time.");
                 return Ok(0);
             }
         }
@@ -578,12 +584,22 @@ fn doctor_request(cli: &cli::Cli) -> Option<bool> {
     }
 }
 
+/// `wizard setup` is `wizard --onboard` spelled as a subcommand: the full
+/// wizard, then the TUI. Rewritten before the subcommand checks so the two
+/// take the same path and the same top-level flags.
+fn rewrite_setup_subcommand(cli: &mut cli::Cli) {
+    if matches!(cli.command, Some(cli::Command::Setup)) {
+        cli.command = None;
+        cli.onboard = true;
+    }
+}
+
 /// Decide whether to run onboarding before the normal flow.
 ///
 /// `--onboard` forces it (when a terminal is available); otherwise it runs
 /// only on a genuine first run: the config file is absent, stdin/stdout are a
-/// terminal, and this is not a publish / evolve / gateway invocation or a
-/// headless-with-prompt sovereign run. A non-interactive run never onboards,
+/// terminal, and this is not a publish / evolve / gateway invocation or a run
+/// given a prompt on the command line. A non-interactive run never onboards,
 /// so piping into Wizard never blocks.
 fn should_onboard(cli: &cli::Cli) -> Result<bool> {
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
@@ -607,11 +623,12 @@ fn should_onboard_given(cli: &cli::Cli, interactive: bool) -> Result<bool> {
     if cli.onboard {
         return Ok(true);
     }
-    // Headless-with-prompt sovereign runs are batch jobs — don't interrupt them.
-    let headless_with_prompt =
-        cli.prompt.is_some() && (cli.mode == Some(Mode::Sovereign) || cli.continuous);
-    let config_missing = !config::Config::path()?.exists();
-    Ok(config_missing && !headless_with_prompt)
+    // A prompt on the command line is a job, not a first visit: it never
+    // stops to ask questions, whatever the mode.
+    if cli.prompt.is_some() {
+        return Ok(false);
+    }
+    Ok(!config::Config::path()?.exists())
 }
 
 #[cfg(test)]
@@ -678,5 +695,33 @@ mod tests {
         assert!(!should_onboard_given(&sovereign, true).unwrap());
         let continuous = parse(&["wizard", "--continuous", "-p", "task"]);
         assert!(!should_onboard_given(&continuous, true).unwrap());
+    }
+
+    #[test]
+    fn a_prompt_on_the_command_line_never_onboards() {
+        assert!(!should_onboard_given(&parse(&["wizard", "-p", "task"]), true).unwrap());
+        assert!(!should_onboard_given(&parse(&["wizard", "-p", "task"]), false).unwrap());
+    }
+
+    #[test]
+    fn the_editor_and_mcp_surfaces_never_onboard() {
+        for args in [&["wizard", "acp"][..], &["wizard", "mcp-serve"]] {
+            for interactive in [true, false] {
+                assert!(
+                    !should_onboard_given(&parse(args), interactive).unwrap(),
+                    "{args:?} must not onboard"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wizard_setup_is_the_onboard_flag() {
+        let mut cli = parse(&["wizard", "setup"]);
+        rewrite_setup_subcommand(&mut cli);
+        assert!(cli.command.is_none());
+        assert!(cli.onboard);
+        assert!(should_onboard_given(&cli, true).unwrap());
+        assert!(!should_onboard_given(&cli, false).unwrap());
     }
 }

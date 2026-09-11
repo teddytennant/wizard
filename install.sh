@@ -2498,17 +2498,17 @@ main() {
     fi
     if [ "$BINARY_INSTALLED" = "1" ]; then
         if is_termux; then
-            say "Done. Run 'wizard' from Termux — pick a cloud provider in onboarding (or a Termux-built local runtime)."
+            say "Done. Run 'wizard' from Termux. It asks one question: sign in, paste a key, or a Termux-built local runtime."
         elif [ "$WIZARD_MINIMAL" = "1" ]; then
-            say "Done. Run 'wizard' to start onboarding (pick your model, provider, and gateway)."
+            say "Done. Run 'wizard'. It asks one question (sign in, paste a key, or run a model here) and starts."
         elif [ "$WIZARD_BYOM" = "1" ] && [ -z "$MODEL" ]; then
-            say "Done. Run 'wizard' — pick your Ollama model in onboarding; it is pulled on first run."
+            say "Done. Run 'wizard' and pick 'Run a model on this machine'; the Ollama model is pulled on first run."
         elif [ "$WIZARD_BYOM" = "1" ] || [ "$WIZARD_USE_OLLAMA" = "1" ]; then
             say "Done. Run: wizard"
         elif [ "$WIZARD_LOCAL" = "1" ]; then
             say "Done. Run: wizard — it starts llama-server with your model automatically."
         else
-            say "Done. Run 'wizard' — it asks which provider to use (Local is one pick: it downloads a model sized to your hardware and sets up llama.cpp for you)."
+            say "Done. Run 'wizard'. It asks one question: sign in, paste a key, or run a model here (that one downloads a model sized to your hardware and sets up llama.cpp for you)."
         fi
     else
         say "Setup finished, but the wizard binary was NOT installed — see the build-from-source steps above."
