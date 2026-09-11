@@ -6,15 +6,15 @@ This run predates the single phone-home rule: what each agent was told is under 
 
 | agent | version | command | install | bundle | warm start (median) | warm p90 | cold start | `--version` | RSS | PSS | peak RSS | CPU at 3 s |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| wizard | wizard 3.0.1 | `wizard` | 25 MB | 25 MB | 30 ms | 34 ms | 327 ms | 14 ms | 20 MB | 19 MB | 20 MB |  ms |
-| Claude Code | 2.1.268 (Claude Code) | `claude` | 219 MB | 219 MB | 1285 ms | 1359 ms | 3394 ms | 20 ms | 259 MB | 257 MB | 268 MB |  ms |
-| Codex CLI | codex-cli 0.154.0 | `codex` | 553 MB | 339 MB | 86 ms | 89 ms | 1036 ms | 91 ms | 206 MB | 197 MB | 206 MB |  ms |
-| OpenCode | 1.18.30 | `opencode` | 185 MB | 185 MB | 8328 ms | 10305 ms | 9535 ms | 1358 ms | 916 MB | 914 MB | 917 MB |  ms |
-| Crush | crush version v0.93.1 | `crush` | 96 MB | 95 MB | 203 ms | 230 ms | 1077 ms | 121 ms | 84 MB | 84 MB | 84 MB |  ms |
-| Goose | 1.50.0 | `goose session` | 315 MB | 315 MB | 164 ms | 247 ms | 1107 ms | 22 ms | 71 MB | 70 MB | 71 MB |  ms |
-| Aider | aider 0.86.2 | `aider` | 698 MB | 574 MB | 2718 ms | 3197 ms | 19991 ms | 2126 ms | 158 MB | 154 MB | 158 MB |  ms |
+| wizard | wizard 3.0.1 | `wizard` | 25 MB | 25 MB | 30 ms | 34 ms | 327 ms | 14 ms | 20 MB | 19 MB | 20 MB | n/a |
+| Claude Code | 2.1.268 (Claude Code) | `claude` | 219 MB | 219 MB | 1285 ms | 1359 ms | 3394 ms | 20 ms | 259 MB | 257 MB | 268 MB | n/a |
+| Codex CLI | codex-cli 0.154.0 | `codex` | 553 MB | 339 MB | 86 ms | 89 ms | 1036 ms | 91 ms | 206 MB | 197 MB | 206 MB | n/a |
+| OpenCode | 1.18.30 | `opencode` | 185 MB | 185 MB | 8328 ms | 10305 ms | 9535 ms | 1358 ms | 916 MB | 914 MB | 917 MB | n/a |
+| Crush | crush version v0.93.1 | `crush` | 96 MB | 95 MB | 203 ms | 230 ms | 1077 ms | 121 ms | 84 MB | 84 MB | 84 MB | n/a |
+| Goose | 1.50.0 | `goose session` | 315 MB | 315 MB | 164 ms | 247 ms | 1107 ms | 22 ms | 71 MB | 70 MB | 71 MB | n/a |
+| Aider | aider 0.86.2 | `aider` | 698 MB | 574 MB | 2718 ms | 3197 ms | 19991 ms | 2126 ms | 158 MB | 154 MB | 158 MB | n/a |
 
-install: bytes the install added on top of the shared base image (sum of its docker layers), runtimes included (Node for the npm install of Codex, uv's CPython for Aider). bundle: the agent's own artifact (a binary, the npm package, the uv tool venv). warm start: fork+exec to the first frame that contains the agent's prompt marker, median and p90 of starts 2 to 10 in one container, page cache warm. cold start: start 1 in that container, before anything is in the page cache. All markers are the first frame with an input line, not a fully loaded agent: wizard's status bar still says connecting tools, Codex still says model loading, Goose is still loading extensions. The pty answers DA1, DSR, cell size, DECRQM and OSC color queries like xterm and leaves kitty graphics and sixel probes unanswered. RSS/PSS: VmRSS and Pss summed over the process tree 3 s after the prompt; peak is VmHWM summed the same way; CPU is utime+stime over the same tree, so a slow wall time can be read as work or as waiting.
+install: bytes the install added on top of the shared base image (sum of its docker layers), runtimes included (Node for the npm install of Codex, uv's CPython for Aider). bundle: the agent's own artifact (a binary, the npm package, the uv tool venv). warm start: fork+exec to the first frame that contains the agent's prompt marker, median and p90 of starts 2 to 10 in one container, page cache warm. cold start: start 1 in that container, before anything is in the page cache. All markers are the first frame with an input line, not a fully loaded agent: wizard's status bar still says connecting tools, Codex still says model loading, Goose is still loading extensions. The pty answers DA1 (VT220, no sixel), DSR, cell size, DECRQM and OSC color queries; no kitty graphics probe was answered in this run. RSS/PSS: VmRSS and Pss summed over the process tree 3 s after the prompt; peak is VmHWM summed the same way; CPU is utime+stime over the same tree, so a slow wall time can be read as work or as waiting.
 
 ## Per agent
 
