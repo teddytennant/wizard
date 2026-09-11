@@ -23,6 +23,7 @@ The child gets the pty as its controlling terminal, so Ctrl-C is a real SIGINT.
 """
 
 import argparse
+import codecs
 import fcntl
 import os
 import pty
@@ -137,6 +138,16 @@ def make_project(home):
     return project
 
 
+def _child_setup():
+    # A shell that started this in the background left SIGINT ignored, and
+    # the child would inherit that; Ctrl-C has to mean what it means. Reset
+    # here, in the child only: the parent keeps KeyboardInterrupt so its
+    # cleanup still runs.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # The pty becomes the controlling terminal, so Ctrl-C is SIGINT.
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+
 class Session:
     """One `wizard` process on a pty, with a screen model and step dumps."""
 
@@ -144,6 +155,8 @@ class Session:
         self.args = args
         self.timings = {}
         self.screen = Screen(cols, rows)
+        # One read can end mid-glyph; the decoder holds the tail for the next.
+        self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.answered = False
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -160,8 +173,7 @@ class Session:
             cwd=project,
             close_fds=True,
             start_new_session=True,
-            # The pty becomes the controlling terminal, so Ctrl-C is SIGINT.
-            preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0),
+            preexec_fn=_child_setup,
         )
         os.close(slave)
         self.master = master
@@ -175,8 +187,9 @@ class Session:
         except OSError:
             data = b""
         if not data:
+            self.screen.feed(self.decoder.decode(b"", final=True))
             return False
-        self.screen.feed(data.decode("utf-8", "replace"))
+        self.screen.feed(self.decoder.decode(data))
         # The TUI asks the terminal what it can draw (DA1, cell size) and
         # waits for the reply; answer as a plain xterm would, once.
         if not self.answered and "\x1b[c" in self.screen.raw:
@@ -213,6 +226,12 @@ class Session:
     def exited(self):
         return self.proc.poll() is not None
 
+    def close(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait()
+        os.close(self.master)
+
     def quit(self):
         self.send("\x03")
         time.sleep(0.3)
@@ -235,12 +254,24 @@ def main():
     ap.add_argument("--keep", action="store_true", help="leave the temp HOME behind and print its path")
     args = ap.parse_args()
     args.bin = os.path.abspath(args.bin)
-    # A shell that started this in the background left SIGINT ignored, and
-    # the child would inherit that; Ctrl-C has to mean what it means.
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     os.makedirs(args.out, exist_ok=True)
     home = tempfile.mkdtemp(prefix="wizard-first-run-")
+    sessions = []
+    try:
+        run_scenario(args, home, sessions)
+    finally:
+        # Runs on Ctrl-C, on a timed-out wait and on a failed assert alike, so
+        # the typed key never outlives the run and no child is left on the pty.
+        for session in sessions:
+            session.close()
+        if args.keep:
+            print(f"kept {home}")
+        else:
+            shutil.rmtree(home, ignore_errors=True)
+
+
+def run_scenario(args, home, sessions):
     project = make_project(home)
     env = {
         "HOME": home,
@@ -253,6 +284,11 @@ def main():
         env["WIZARD_LOG"] = os.environ["WIZARD_LOG"]
     cols, rows = (80, 24) if args.scenario == "narrow" else (100, 30)
     step = [0]
+
+    def start(**kw):
+        session = Session(args, home, project, env, cols, rows, **kw)
+        sessions.append(session)
+        return session
 
     def dump(session, name):
         session.settle()
@@ -300,7 +336,7 @@ def main():
             print("no WIZARD_PTY_KEY: running offline, the check is inconclusive and the key is saved unchecked")
             key = "ANTHROPIC_API_KEY=sk-ant-offline"
         var, value = key.split("=", 1)
-        session = Session(args, home, project, env, cols, rows, offline=offline)
+        session = start(offline=offline)
         text = first_screen(session)
         for row in text.splitlines():
             assert len(row) <= cols, f"row wider than {cols}: {row!r}"
@@ -320,7 +356,7 @@ def main():
         session.quit()
 
     elif args.scenario == "badkey":
-        session = Session(args, home, project, env, cols, rows)
+        session = start()
         first_screen(session)
         to_key_list(session)
         session.send("\x1b[B")
@@ -344,7 +380,7 @@ def main():
 
     elif args.scenario == "stale":
         env["OPENAI_API_KEY"] = "dummy"
-        session = Session(args, home, project, env, cols, rows)
+        session = start()
         first_screen(session)
         text = to_key_list(session)
         assert "▸ OpenAI   gpt-5.6-sol · $OPENAI_API_KEY is set" in text, text
@@ -363,7 +399,7 @@ def main():
         session.wait_for(lambda s: session.exited(), "exit", budget=5)
 
     elif args.scenario == "oauth":
-        session = Session(args, home, project, env, cols, rows)
+        session = start()
         first_screen(session)
         t_enter = time.monotonic()
         session.send("\r")
@@ -378,7 +414,7 @@ def main():
         for k, v in session.timings.items():
             print(f"{k}: {v:.3f}s")
         # Relaunch: no wizard, straight to the TUI, the card says what to do.
-        session = Session(args, home, project, env, cols, rows)
+        session = start()
         session.wait_for(lambda s: "type a message" in s.text(), "the TUI after an abandoned sign-in")
         session.wait_for(lambda s: "not signed in to xAI" in s.text(), "the card's remedy line", budget=10)
         text = dump(session, "relaunch-tui")
@@ -395,21 +431,16 @@ def main():
             f.write(piped.stderr)
         print(f"wrote {os.path.join(args.out, '01-piped.txt')}")
         # A terminal, but a prompt on the command line: still no wizard.
-        session = Session(args, home, project, env, cols, rows, extra_args=["-p", "hi"])
+        session = start(extra_args=["-p", "hi"])
         session.wait_for(lambda s: session.exited(), "exit", budget=10)
         text = dump(session, "prompt-in-a-terminal")
         assert line in text and "How do you want" not in text, text
         assert session.proc.returncode != 0
         assert not os.path.exists(config)
 
-    session_timings = locals().get("session")
-    if session_timings is not None:
-        for k, v in session_timings.timings.items():
+    if sessions:
+        for k, v in sessions[-1].timings.items():
             print(f"{k}: {v:.3f}s")
-    if args.keep:
-        print(f"kept {home}")
-    else:
-        shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":
