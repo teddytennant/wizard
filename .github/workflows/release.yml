@@ -674,9 +674,11 @@ jobs:
             echo "contrib/aur already points at ${GITHUB_REF_NAME}"
             exit 0
           fi
-          git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "Point the AUR files at ${GITHUB_REF_NAME}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Point the AUR files at ${GITHUB_REF_NAME}"
+          # Anything merged to main since checkout would make the push a non-fast-forward.
+          git pull --rebase "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${BRANCH}"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "HEAD:${BRANCH}"
       # The AUR push stays off until there is an AUR account. Once there is:
       # add its ssh public key on aur.archlinux.org, `gh secret set AUR_SSH_KEY

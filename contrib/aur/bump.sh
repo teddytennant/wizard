@@ -50,7 +50,7 @@ bump() {
     set_key "$file" pkgver "$version"
     set_key "$file" pkgrel 1
     # .SRCINFO spells the version out in every source line; PKGBUILD uses $pkgver.
-    sed -i "s|$old|$version|g" "$file"
+    sed -i "s|${old//./\\.}|$version|g" "$file"
     local kv
     for kv in "$@"; do
       set_key "$file" "${kv%%=*}" "${kv#*=}"

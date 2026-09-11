@@ -221,13 +221,19 @@ def one_run(cmd, marker, settle, timeout, dump):
     return t_prompt, m, bytes(raw)
 
 
-def time_version(cmd, runs):
-    out = []
-    for _ in range(runs):
+def time_version(name, cmd, runs, timeout):
+    out, lines = [], []
+    for i in range(runs):
         t0 = time.monotonic()
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            print(f"[{name}] version run {i + 1}: no exit within {timeout}s", file=sys.stderr)
+            print((e.output or b"")[-600:].decode(errors="replace"), file=sys.stderr)
+            continue
         out.append(time.monotonic() - t0)
-    return out, p.stdout.decode(errors="replace").strip().splitlines()[:3]
+        lines = p.stdout.decode(errors="replace").strip().splitlines()[:3]
+    return out, lines
 
 
 def pctl(xs, q):
@@ -293,12 +299,13 @@ def main():
         "terminal_queries_answered": mems[0]["queries"] if mems else None,
     }
     if a.version_cmd:
-        vt, vout = time_version(shlex.split(a.version_cmd), a.runs)
+        vt, vout = time_version(a.name, shlex.split(a.version_cmd), a.runs, a.timeout)
         res["version_cmd"] = a.version_cmd
         res["version_output"] = vout
+        res["version_failed_runs"] = a.runs - len(vt)
         res["version_ms"] = [round(t * 1000, 1) for t in vt]
-        res["version_ms_median"] = round(statistics.median(vt) * 1000, 1)
-        res["version_ms_p90"] = round(pctl(vt, 0.9) * 1000, 1)
+        res["version_ms_median"] = round(statistics.median(vt) * 1000, 1) if vt else None
+        res["version_ms_p90"] = round(pctl(vt, 0.9) * 1000, 1) if vt else None
     with open(a.out, "w") as f:
         json.dump(res, f, indent=2)
     print(json.dumps({k: v for k, v in res.items() if not isinstance(v, list)}, indent=1), file=sys.stderr)

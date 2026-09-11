@@ -25,6 +25,9 @@ from measure import Responder  # noqa: E402  (same replies, same order, as the b
 
 COLS, ROWS = 100, 36
 APC = re.compile(rb"\x1b_[^\x1b]*\x1b\\")
+# An escape that a read cut short: a bare ESC, an APC with no terminator yet,
+# or a CSI still in its parameters. Held back until the next read completes it.
+CUT = re.compile(rb"\x1b(?:_[^\x1b]*\x1b?|\[[0-?]*)?$")
 KEYS = {"enter": b"\r", "down": b"\x1b[B", "up": b"\x1b[A", "tab": b"\t", "esc": b"\x1b", "ctrl-c": b"\x03",
         "space": b" ", "backspace": b"\x7f"}
 
@@ -43,6 +46,7 @@ def main():
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     n = 0
     raw = bytearray()
+    held = b""
     responder = Responder(fd)
     log = open(os.path.join(outdir, "session.log"), "a")
 
@@ -61,7 +65,7 @@ def main():
         print(f"{path}: {sum(1 for l in lines if l)} non-empty lines", file=log, flush=True)
 
     def pump(quiet=0.5, limit=15.0):
-        nonlocal raw
+        nonlocal raw, held
         last = time.monotonic()
         start = last
         while True:
@@ -80,8 +84,13 @@ def main():
                 # screen, and start from a blank one, which is what a
                 # terminal would show.
                 # pyte does not know the kitty graphics APC and would print
-                # it as text; a terminal shows nothing for it.
-                chunk = APC.sub(b"", chunk)
+                # it as text; a terminal shows nothing for it. The APC or the
+                # altscreen switch can straddle two reads, so the unfinished
+                # tail waits for the next one.
+                chunk = held + chunk
+                cut = CUT.search(chunk)
+                held = chunk[cut.start():] if cut else b""
+                chunk = APC.sub(b"", chunk[: cut.start()] if cut else chunk)
                 at = 0
                 for m in re.finditer(rb"\x1b\[\?1049[hl]", chunk):
                     stream.feed(chunk[at : m.start()])
@@ -91,6 +100,9 @@ def main():
                 stream.feed(chunk[at:])
                 last = time.monotonic()
             elif time.monotonic() - last > quiet or time.monotonic() - start > limit:
+                # Quiet with a tail still held: it was a real bare ESC, not a cut.
+                stream.feed(held)
+                held = b""
                 return True
 
     for step in steps:
