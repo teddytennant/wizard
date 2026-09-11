@@ -20,18 +20,13 @@ import time
 
 import pyte
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from measure import Responder  # noqa: E402  (same replies, same order, as the benchmark)
+
 COLS, ROWS = 100, 36
+APC = re.compile(rb"\x1b_[^\x1b]*\x1b\\")
 KEYS = {"enter": b"\r", "down": b"\x1b[B", "up": b"\x1b[A", "tab": b"\t", "esc": b"\x1b", "ctrl-c": b"\x03",
         "space": b" ", "backspace": b"\x7f"}
-# Same terminal-query answers as measure.py, so nothing waits on a reply.
-QUERIES = [
-    (re.compile(rb"\x1b\[5n"), b"\x1b[0n"),
-    (re.compile(rb"\x1b\[6n"), b"\x1b[1;1R"),
-    (re.compile(rb"\x1b\[0?c"), b"\x1b[?62;22c"),
-    (re.compile(rb"\x1b\[16t"), b"\x1b[6;20;10t"),
-    (re.compile(rb"\x1b\[\?(\d+)\$p"), lambda m: b"\x1b[?" + m.group(1) + b";0$y"),
-    (re.compile(rb"\x1b\]1[012];\?(?:\x07|\x1b\\)"), b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
-]
 
 
 def main():
@@ -47,6 +42,8 @@ def main():
         os.execvp(cmd[0], cmd)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     n = 0
+    raw = bytearray()
+    responder = Responder(fd)
     log = open(os.path.join(outdir, "session.log"), "a")
 
     def dump(name):
@@ -64,6 +61,7 @@ def main():
         print(f"{path}: {sum(1 for l in lines if l)} non-empty lines", file=log, flush=True)
 
     def pump(quiet=0.5, limit=15.0):
+        nonlocal raw
         last = time.monotonic()
         start = last
         while True:
@@ -75,16 +73,22 @@ def main():
                     return False
                 if not chunk:
                     return False
-                for q, reply in QUERIES:
-                    for m in q.finditer(chunk):
-                        os.write(fd, reply(m) if callable(reply) else reply)
+                raw += chunk
+                responder.feed(raw)
                 # pyte has no alternate screen. When the app switches to
-                # or from it, save what was on the main screen and start
-                # from a blank one, which is what a terminal would show.
-                for _ in re.finditer(rb"\x1b\[\?1049[hl]", chunk):
+                # or from it, feed what came before the switch, save the
+                # screen, and start from a blank one, which is what a
+                # terminal would show.
+                # pyte does not know the kitty graphics APC and would print
+                # it as text; a terminal shows nothing for it.
+                chunk = APC.sub(b"", chunk)
+                at = 0
+                for m in re.finditer(rb"\x1b\[\?1049[hl]", chunk):
+                    stream.feed(chunk[at : m.start()])
                     dump("altscreen")
                     screen.reset()
-                stream.feed(chunk)
+                    at = m.end()
+                stream.feed(chunk[at:])
                 last = time.monotonic()
             elif time.monotonic() - last > quiet or time.monotonic() - start > limit:
                 return True

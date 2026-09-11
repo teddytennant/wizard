@@ -80,8 +80,8 @@ lines.append("install: bytes the install added on top of the shared base image (
              "cold start: start 1 in that container, before anything is in the page cache. "
              "All markers are the first frame with an input line, not a fully loaded agent: wizard's status bar "
              "still says connecting tools, Codex still says model loading, Goose is still loading extensions. "
-             "The pty answers DA1, DSR, cell size, DECRQM and OSC color queries like xterm and leaves kitty "
-             "graphics and sixel probes unanswered. "
+             "The pty answers DA1 (VT220, no sixel), DSR, cell size, DECRQM and OSC color queries, and says yes "
+             "to the kitty graphics probe. "
              "RSS/PSS: VmRSS and Pss summed over the process tree 3 s after the prompt; peak is VmHWM summed "
              "the same way; CPU is utime+stime over the same tree, so a slow wall time can be read as work or as waiting.")
 lines.append("")

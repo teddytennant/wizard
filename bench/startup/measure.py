@@ -45,10 +45,12 @@ def strip(b):
     return ANSI.sub(b"", b)
 
 
-# What a plain xterm answers when an agent asks the terminal about itself.
+# What a terminal answers when an agent asks about it: VT220 DA1, no sixel,
+# kitty graphics yes (Ghostty, WezTerm, kitty), xterm's version and colors.
 # Without these every agent that queries (DSR, DA1, cell size, colors) sits in
 # its own reply timeout, which no real terminal makes it do.
 QUERIES = [
+    (re.compile(rb"\x1b_Gi=(\d+)[^\x1b]*\x1b\\"), lambda m: b"\x1b_Gi=" + m.group(1) + b";OK\x1b\\"),  # kitty graphics
     (re.compile(rb"\x1b\[5n"), b"\x1b[0n"),  # DSR: ok
     (re.compile(rb"\x1b\[6n"), b"\x1b[1;1R"),  # cursor position
     (re.compile(rb"\x1b\[\?6n"), b"\x1b[?1;1R"),  # DECXCPR
@@ -76,6 +78,9 @@ class Responder:
         self.answered = []
 
     def feed(self, raw):
+        # One pass over the stream in byte order, so replies go back in the
+        # order the queries were sent: ratatui-image stops parsing at the DSR
+        # reply, so it must come last.
         last = None
         for m in QUERY_RE.finditer(raw, self.pos):
             seq = m.group(0)

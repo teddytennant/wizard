@@ -13,5 +13,3 @@ Next steps:
     (export OPENAI_API_KEY=... to override it for a run)
   • start Wizard:    wizard
   • change settings: run /settings anytime inside Wizard
-
-Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA
