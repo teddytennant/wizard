@@ -3003,7 +3003,7 @@ fn welcome_body(app: &App) -> Vec<Line<'static>> {
             Span::styled("Wizard  ", theme::style(Token::Text).bold()),
             Span::styled(env!("CARGO_PKG_VERSION"), super::dim()),
         ]),
-        Line::from(Span::styled("your sovereign agent", super::dim().italic())),
+        Line::from(Span::styled("the fastest agent in your terminal", super::dim().italic())),
         Line::raw(""),
         Line::from(vec![
             super::model_span(app),

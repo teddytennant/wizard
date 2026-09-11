@@ -147,7 +147,7 @@ fn draw_welcome_mark(frame: &mut Frame, app: &App, area: Rect) {
             "w i z a r d",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled("your sovereign agent", dim().italic())),
+        Line::from(Span::styled("the fastest agent in your terminal", dim().italic())),
         Line::raw(""),
         Line::from(vec![
             model_span(app),
@@ -233,7 +233,7 @@ fn draw_welcome_banner(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled(">_ ", accent().bold()),
             Span::styled("Wizard", theme::style(Token::Text).bold()),
-            Span::styled(", your sovereign agent", dim()),
+            Span::styled(", the fastest agent in your terminal", dim()),
         ]),
         Line::raw(""),
         welcome_status(app),
@@ -252,7 +252,7 @@ fn draw_welcome_banner(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_welcome_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![
         Line::from(Span::styled("Wizard", theme::style(Token::Text).bold())),
-        Line::from(Span::styled("your sovereign agent", dim().italic())),
+        Line::from(Span::styled("the fastest agent in your terminal", dim().italic())),
         Line::raw(""),
         welcome_status(app),
         Line::from(Span::styled(

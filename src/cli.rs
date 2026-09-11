@@ -25,7 +25,7 @@ fn parse_max_hours(raw: &str) -> Result<f64, String> {
     Ok(hours)
 }
 
-/// Wizard — your sovereign agent. Self-extending. Bring any model.
+/// Wizard, the fastest agent in your terminal.
 #[derive(Debug, Clone, Parser)]
 #[command(name = "wizard", version = crate::update::display_version(), about, long_about = None)]
 pub struct Cli {
