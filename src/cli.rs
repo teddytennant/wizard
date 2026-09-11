@@ -339,8 +339,10 @@ pub enum Command {
 
     /// Update Wizard in place: download the latest release binary from GitHub,
     /// verify its checksum against `checksums.txt`, and swap it in atomically
-    /// (the previous binary is kept as `<name>.bak`). Self-contained: never
-    /// loads config or triggers onboarding.
+    /// (the previous binary is kept as `<name>.bak`). A binary that Homebrew,
+    /// pacman or Nix installed is left alone; this prints that manager's
+    /// upgrade command instead. Self-contained: never loads config or
+    /// triggers onboarding.
     Update {
         /// Report whether a newer release exists without installing anything.
         #[arg(long)]
@@ -350,7 +352,8 @@ pub enum Command {
         #[arg(long, value_name = "TAG")]
         to: Option<String>,
 
-        /// Reinstall even when the running version is already up to date.
+        /// Reinstall even when the running version is already up to date, or
+        /// when a package manager owns the binary.
         #[arg(long)]
         force: bool,
 
