@@ -25,7 +25,7 @@ fn parse_max_hours(raw: &str) -> Result<f64, String> {
     Ok(hours)
 }
 
-/// Wizard — your sovereign agent. Self-extending. Bring any model.
+/// Wizard, the fastest agent in your terminal.
 #[derive(Debug, Clone, Parser)]
 #[command(name = "wizard", version = crate::update::display_version(), about, long_about = None)]
 pub struct Cli {
@@ -35,7 +35,9 @@ pub struct Cli {
 
     /// Initial task. Pre-fills the first message in genie mode; the task to
     /// complete in sovereign / evolve mode. A pasted task can start with
-    /// `-` (a list item, a diff line), so the value is taken as written.
+    /// `-` (a list item, a diff line), so the value is taken as written:
+    /// put it last, or write `--prompt=TEXT`, since a flag right after
+    /// `--prompt` is read as the task.
     #[arg(short, long, allow_hyphen_values = true)]
     pub prompt: Option<String>,
 

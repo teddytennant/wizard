@@ -286,7 +286,15 @@ pub async fn run_tui(
         }
         Detection::Asked(query) => Some(query),
     };
-    let mut terminal = setup_terminal()?;
+    let mut terminal = match setup_terminal() {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            // Raw mode went on before the image query; the guard that
+            // would undo it does not exist yet.
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(err);
+        }
+    };
     let _guard = TerminalGuard;
     if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
         tracing::warn!("first frame not drawn: {err}");
@@ -760,35 +768,45 @@ pub async fn run_tui(
 
         // The `/settings` "Open config file" row asks the main loop (the
         // terminal owner) to suspend the TUI and run an external editor.
+        // Each of the three suspends takes the reader off stdin first: the
+        // editor and the wizard read the terminal themselves, and a key the
+        // stream won instead would land in the composer afterwards.
         if app.pending_edit_config {
             app.pending_edit_config = false;
+            events.pause().await;
             edit_config_file(&mut app, &mut terminal);
+            events.resume();
         }
         // A `/setup` row that asked questions on the plain terminal. The
         // config it wrote is live now: the agent is rebuilt on it, the way
         // the provider picker does, not after a restart.
-        if let Some(section) = app.pending_setup.take()
-            && run_setup_suspended(&mut app, &mut terminal, section)
-        {
-            CommandContext {
-                app: &mut app,
-                client: &mut client,
-                agent_slot: &mut agent_slot,
-                manager: &manager,
-                skills: &mut skills,
-                project_root: &project_root,
-                mcp_path: &mcp_path,
-                genie_max_steps,
-                events: &events,
+        if let Some(section) = app.pending_setup.take() {
+            events.pause().await;
+            let saved = run_setup_suspended(&mut app, &mut terminal, section);
+            events.resume();
+            if saved {
+                CommandContext {
+                    app: &mut app,
+                    client: &mut client,
+                    agent_slot: &mut agent_slot,
+                    manager: &manager,
+                    skills: &mut skills,
+                    project_root: &project_root,
+                    mcp_path: &mcp_path,
+                    genie_max_steps,
+                    events: &events,
+                }
+                .rebuild_active_provider("setup saved; the agent now runs on it".to_string())
+                .await;
             }
-            .rebuild_active_provider("setup saved; the agent now runs on it".to_string())
-            .await;
         }
 
         // Ctrl-G: same suspend/restore dance, on the composer draft.
         if app.pending_edit_prompt {
             app.pending_edit_prompt = false;
+            events.pause().await;
             edit_prompt_in_editor(&mut app, &mut terminal);
+            events.resume();
         }
 
         // `/compact`: take the agent and summarize history off the event loop
@@ -1314,9 +1332,39 @@ fn first_run_line() -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "~/.wizard/config.toml".to_string());
     let home = dirs::home_dir().map(|home| home.display().to_string());
-    let shown = match home {
-        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
-        _ => path,
-    };
-    format!("saved {shown} · /setup changes it")
+    format!(
+        "saved {} · /setup changes it",
+        tilde(&path, home.as_deref())
+    )
+}
+
+/// `path` with a leading `home` written as `~`. Only a whole component
+/// counts: `/home/ted` is not a prefix of `/home/teddy/.wizard`.
+fn tilde(path: &str, home: Option<&str>) -> String {
+    match home {
+        Some(home) => match path.strip_prefix(home) {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_string(),
+        },
+        None => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tilde;
+
+    #[test]
+    fn tilde_only_replaces_a_whole_home_component() {
+        assert_eq!(
+            tilde("/home/teddy/.wizard/config.toml", Some("/home/teddy")),
+            "~/.wizard/config.toml"
+        );
+        assert_eq!(
+            tilde("/home/teddy/.wizard/config.toml", Some("/home/ted")),
+            "/home/teddy/.wizard/config.toml"
+        );
+        assert_eq!(tilde("/home/teddy", Some("/home/teddy")), "~");
+        assert_eq!(tilde("/etc/wizard.toml", None), "/etc/wizard.toml");
+    }
 }

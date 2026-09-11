@@ -180,12 +180,8 @@ pub(super) fn run_setup_suspended(
             return false;
         }
     }
-    match outcome {
+    let saved = match outcome {
         Ok(Some(config)) => {
-            // The full wizard may have picked an interface; install it the
-            // way `App::new` does, or the old chrome stays up.
-            let _ = crate::skin::init(config.ui.skin.as_deref());
-            let _ = crate::theme::init(crate::skin::active().companion_theme());
             app.config = config;
             app.status.mode = app.config.mode;
             true
@@ -198,7 +194,13 @@ pub(super) fn run_setup_suspended(
             app.notice(format!("setup failed: {err:#}"));
             false
         }
-    }
+    };
+    // The wizard draws in its own plain style and installs that skin
+    // process-wide on entry, so the session's skin goes back up on every
+    // outcome: the one it just picked, or the one it had before Esc.
+    let _ = crate::skin::init(app.config.ui.skin.as_deref());
+    let _ = crate::theme::init(crate::skin::active().companion_theme());
+    saved
 }
 
 /// The name every composer draft starts with. The pid keeps two live sessions

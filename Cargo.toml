@@ -13,7 +13,7 @@ edition = "2024"
 # derivative work be *given* a copy of the license, which is why LICENSE-APACHE
 # is a file in the tree rather than a URL in NOTICE.
 license = "MIT AND Apache-2.0"
-description = "One line. Your sovereign agent. Self-extending. Bring any model."
+description = "The fastest agent in your terminal."
 repository = "https://github.com/teddytennant/wizard"
 # There is no separate project website — the README, the docs/ directory and the
 # release assets all live in the repository — so this points at the same place

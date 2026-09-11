@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 import sys
+import time
 
 out_dir, md_path, json_path = sys.argv[1:4]
 ORDER = ["wizard", "claude", "codex", "opencode", "crush", "goose", "aider"]
@@ -30,11 +31,11 @@ if os.path.exists(hp):
 
 
 def mb(b):
-    return "" if b in (None, 0) else f"{b / 1e6:.0f}"
+    return "n/a" if b in (None, 0) else f"{b / 1e6:.0f} MB"
 
 
 def ms(x):
-    return "" if x is None else f"{x:.0f}"
+    return "n/a" if x is None else f"{x:.0f} ms"
 
 
 def version(d):
@@ -43,8 +44,12 @@ def version(d):
 
 
 first = rows[0] if rows else {}
+# SOURCE_DATE_EPOCH lets a report be regenerated from an old run's JSON
+# without moving its date.
+now = datetime.datetime.fromtimestamp(int(os.environ.get("SOURCE_DATE_EPOCH") or time.time()))
+kitty_answered = any(q.startswith("\x1b_G") for d in rows for q in d.get("terminal_queries_answered") or [])
 lines = ["# Startup benchmark", ""]
-lines.append(f"Measured {datetime.date.today().isoformat()} on {host.get('cpu_model', '?')}, "
+lines.append(f"Measured {now.date().isoformat()} on {host.get('cpu_model', '?')}, "
              f"{host.get('nproc', '?')} CPUs, kernel {host.get('kernel', '?')}, {host.get('docker', '?')}. "
              f"One ubuntu:24.04 container per agent, {first.get('runs', '?')} pty starts each, "
              f"container network {first.get('network', '?')}.")
@@ -64,14 +69,16 @@ for d in rows:
         lines.append(f"| {LABEL[d['name']]} | | | install failed | | | | | | | | | |")
         continue
     if d.get("measure_failed"):
-        lines.append(f"| {LABEL[d['name']]} | | `{d.get('cmd', '')}` | {mb(d.get('install_bytes'))} MB | | measurement failed | | | | | | | |")
+        lines.append(f"| {LABEL[d['name']]} | | `{d.get('cmd', '')}` | {mb(d.get('install_bytes'))} | | measurement failed | | | | | | | |")
         continue
-    lines.append("| {} | {} | `{}` | {} MB | {} MB | {} ms | {} ms | {} ms | {} ms | {} MB | {} MB | {} MB | {} ms |".format(
+    lines.append("| {} | {} | `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
         LABEL[d["name"]], version(d), d["cmd"], mb(d.get("install_bytes")), mb(d.get("bundle_bytes")),
         ms(d.get("warm_ms_median")), ms(d.get("warm_ms_p90")), ms(d.get("cold_ms")),
         ms(d.get("version_ms_median")), mb(d.get("rss_bytes_median")), mb(d.get("pss_bytes_median")),
         mb(d.get("hwm_bytes_median")), ms(d.get("cpu_ms_median"))))
 lines.append("")
+kitty = (", and says yes to the kitty graphics probe" if kitty_answered
+         else "; no kitty graphics probe was answered in this run")
 lines.append("install: bytes the install added on top of the shared base image (sum of its docker layers), "
              "runtimes included (Node for the npm install of Codex, uv's CPython for Aider). "
              "bundle: the agent's own artifact (a binary, the npm package, the uv tool venv). "
@@ -80,8 +87,7 @@ lines.append("install: bytes the install added on top of the shared base image (
              "cold start: start 1 in that container, before anything is in the page cache. "
              "All markers are the first frame with an input line, not a fully loaded agent: wizard's status bar "
              "still says connecting tools, Codex still says model loading, Goose is still loading extensions. "
-             "The pty answers DA1 (VT220, no sixel), DSR, cell size, DECRQM and OSC color queries, and says yes "
-             "to the kitty graphics probe. "
+             f"The pty answers DA1 (VT220, no sixel), DSR, cell size, DECRQM and OSC color queries{kitty}. "
              "RSS/PSS: VmRSS and Pss summed over the process tree 3 s after the prompt; peak is VmHWM summed "
              "the same way; CPU is utime+stime over the same tree, so a slow wall time can be read as work or as waiting.")
 lines.append("")
@@ -103,7 +109,7 @@ for d in rows:
         lines.append(f"- environment: `{d['env']}`")
     if d.get("failed_runs"):
         lines.append(f"- {d['failed_runs']} of {d['runs']} runs never showed the prompt within the timeout")
-    lines.append(f"- cold {ms(d.get('cold_ms'))} ms, warm (ms): {', '.join(str(int(x)) for x in d.get('warm_ms', []))}")
+    lines.append(f"- cold {ms(d.get('cold_ms'))}, warm (ms): {', '.join(str(int(x)) for x in d.get('warm_ms', []))}")
     if d.get("procs"):
         lines.append(f"- processes at the prompt: {', '.join(d['procs'])}")
     if d.get("terminal_queries_answered"):
@@ -131,5 +137,5 @@ else:
     lines.append("")
 
 open(md_path, "w").write("\n".join(lines) + "\n")
-json.dump({"generated": datetime.datetime.now().isoformat(timespec="seconds"), "host": host, "agents": rows},
+json.dump({"generated": now.isoformat(timespec="seconds"), "host": host, "agents": rows},
           open(json_path, "w"), indent=2)

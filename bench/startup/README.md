@@ -4,7 +4,12 @@ Cold and warm start, idle memory and install size of wizard next to Claude Code,
 Codex CLI, OpenCode, Crush, Goose and Aider. Each agent gets its own ubuntu:24.04
 image (pinned by digest), installed the way its README says at a pinned version,
 and is started N times under a pty that answers terminal queries the way a
-kitty-graphics terminal would. The numbers in `results.md` come from `run.sh` and nothing else.
+kitty-graphics terminal would.
+
+The checked-in `results.md` is an older run: wizard 3.0.1, made before the
+phone-home rule, the pinned images, the load guard and the host record existed
+(its host section is empty and its pty left the kitty probe unanswered). It
+stands until 3.1 is measured on an idle host with `run.sh`.
 
 ## Run
 
@@ -60,7 +65,8 @@ is printed under its row in `results.md`. `OPENAI_API_KEY` and
 - Your terminal. The pty answers DA1 (VT220, no sixel), DSR, cell size,
   DECRQM and OSC color queries, and says yes to the kitty graphics probe, in
   the order the queries arrive. wizard sends its kitty/DA1 probe before the
-  first frame, so a terminal that never answers DA1 costs it a 2 s timeout;
-  xterm, kitty, Ghostty and this harness answer.
+  first frame and waits 200 ms for a reply (1 s when `SSH_TTY` is set), so a
+  terminal that never answers costs it that wait; xterm, kitty, Ghostty and
+  this harness answer.
 - A quiet machine is required, not provided. The guard above and the host
   line in the results are all it can do.

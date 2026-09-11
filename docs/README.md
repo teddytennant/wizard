@@ -1,29 +1,19 @@
 # Wizard documentation
 
-Start with [Getting started](getting-started.md). Everything else is grouped by what you are
-trying to do.
+Wizard is the fastest agent in your terminal. Start with [Getting started](getting-started.md);
+the numbers behind that sentence, and the script that regenerates them, are in
+[bench/startup](../bench/startup/README.md). Everything else is grouped by what you are trying
+to do.
 
 ## Start here
 
 | Doc | What it covers |
 | --- | --- |
-| [Getting started](getting-started.md) | Install flavors, providers, model tiers, the first run |
+| [Getting started](getting-started.md) | Install, providers, model tiers, the first run and how long it takes |
 | [Usage](usage.md) | The TUI, slash commands, agent-managed context |
 | [Commands](commands.md) | Every slash command, and what each surface allows |
 | [Modes](modes.md) | Genie, sovereign, `--continuous`, plan mode |
-
-## New in 2.0
-
-| Doc | What it covers |
-| --- | --- |
-| [Native GUI](native-gui.md) | `wizard gui`: the iced window, and what went with the browser GUI |
-| [Computer use](computer-use.md) | Desktop control on Linux and macOS, and what it does not gate |
-| [Interactive commands](interactive-commands.md) | Answering a shell command that stops to ask |
-| [Mesh](mesh.md) | `wizard peers`, three-state trust, the QUIC listener |
-| [UI skins](ui-skins.md) | `/ui wizard`, `codex`, `grok` |
-| [Services](services.md) | Running the gateway and scheduler as systemd or launchd units |
-| [Logging](logging.md) | Structured JSONL diagnostics and `WIZARD_LOG` |
-| [Buzz](buzz.md) | Joining a Buzz room as an ACP member |
+| [Startup benchmark](../bench/startup/README.md) | Cold and warm start, memory and install size next to six other agents, and `run.sh` |
 
 ## Models and providers
 
@@ -44,13 +34,20 @@ trying to do.
 | [Hooks](hooks.md) | Lifecycle hooks, and the project trust gate |
 | [Loadout](loadout.md) | Shipping a preconfigured tool surface |
 | [Fork and distribute](market.md) | `/publish`, and the `wizard skills` registry client |
+| [Computer use](computer-use.md) | Desktop control on Linux and macOS, and what it does not gate |
 
-## Driving it from elsewhere
+## Other surfaces
 
 | Doc | What it covers |
 | --- | --- |
+| [Native GUI](native-gui.md) | `wizard gui`: the iced window, and what went with the browser GUI |
+| [UI skins](ui-skins.md) | `/ui wizard`, `codex`, `grok` |
+| [Interactive commands](interactive-commands.md) | Answering a shell command that stops to ask |
 | [ACP](acp.md) | `wizard acp`: Zed, Neovim, Emacs |
 | [Gateway](gateway.md) | The Telegram bot, and the fail-closed allow-list |
+| [Services](services.md) | Running the gateway and scheduler as systemd or launchd units |
+| [Buzz](buzz.md) | Joining a Buzz room as an ACP member |
+| [Mesh](mesh.md) | `wizard peers`, three-state trust, the QUIC listener |
 | [Headless](headless.md) | `wizard -p`, JSON and stream-JSON output |
 | [Fleet](fleet.md) | Running several agents at once |
 | [Scheduler](scheduler.md) | Recurring runs |
@@ -65,6 +62,7 @@ trying to do.
 | [Memory](memory.md) | Typed markdown memory under `~/.wizard/memory/` |
 | [Checkpoints](checkpoints.md) | `/rewind` and what it restores |
 | [Doctor](doctor.md) | `wizard doctor`, and `--bundle` for bug reports |
+| [Logging](logging.md) | Structured JSONL diagnostics and `WIZARD_LOG` |
 | [Architecture](architecture.md) | How the crate fits together |
 
 ## Design records

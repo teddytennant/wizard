@@ -144,7 +144,7 @@ pub fn health_line(err: &str) -> String {
         return "not signed in to ChatGPT: run wizard --login chatgpt".to_string();
     }
     for code in ["401", "403"] {
-        if err.contains(code) {
+        if rejected_with(err, code) {
             let host = err
                 .split("://")
                 .nth(1)
@@ -164,6 +164,23 @@ pub fn health_line(err: &str) -> String {
         Some(host) => format!("cannot reach {host}"),
         None => format!("provider unreachable: {err}"),
     }
+}
+
+/// True when `err` reports HTTP status `code`, as the providers word it
+/// (`HTTP 401`, `status 401`, `401 Unauthorized`, `(401)`): the digits as a
+/// word of their own, not inside a port, a request id or a byte count.
+fn rejected_with(err: &str, code: &str) -> bool {
+    let is_boundary = |c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == ':');
+    let mut rest = err;
+    while let Some(at) = rest.find(code) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + code.len()..].chars().next();
+        if before.is_none_or(is_boundary) && after.is_none_or(is_boundary) {
+            return true;
+        }
+        rest = &rest[at + code.len()..];
+    }
+    false
 }
 
 /// A setup flow the main loop runs with the TUI suspended, since the wizard

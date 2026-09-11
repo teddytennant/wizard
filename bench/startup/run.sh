@@ -149,7 +149,7 @@ d["bundle_bytes"] = int(sys.argv[2] or 0)
 json.dump(d, open(p, "w"), indent=2)
 EOF
             chown -R "$HOST_UID" /out
-        ' _ "$a" "$RUNS" "$CMD" "$MARKER" "$VERSION_CMD" "$BUNDLE" 2>&1 | grep -v '^ ' | sed "s/^/  /" >&2
+        ' _ "$a" "$RUNS" "$CMD" "$MARKER" "$VERSION_CMD" "$BUNDLE" 2>&1 | sed "s/^/  /" >&2
     status=${PIPESTATUS[0]}
     set -e
     if [ "$status" -ne 0 ]; then

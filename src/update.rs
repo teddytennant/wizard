@@ -506,6 +506,9 @@ impl PackageManager {
 
 /// Which package manager owns the binary at `exe` (already resolved through
 /// symlinks, so Homebrew's `bin/wizard` link reads as its Cellar target).
+/// Only a Cellar path is Homebrew's: a file the installer put in
+/// `/opt/homebrew/bin` has no formula behind it, and `brew upgrade` would
+/// not know it.
 /// Pure: `pacman_owner` is the package `pacman -Qo` reported for `exe`, or
 /// `None` when nothing does or the host has no pacman at all.
 fn package_manager_for(exe: &Path, pacman_owner: Option<&str>) -> Option<PackageManager> {
@@ -513,11 +516,7 @@ fn package_manager_for(exe: &Path, pacman_owner: Option<&str>) -> Option<Package
     if path.starts_with("/nix/store/") {
         return Some(PackageManager::Nix);
     }
-    if path.starts_with("/opt/homebrew/")
-        || path.starts_with("/usr/local/Cellar/")
-        || path.starts_with("/home/linuxbrew/.linuxbrew/")
-        || path.contains("/Cellar/")
-    {
+    if path.contains("/Cellar/") {
         return Some(PackageManager::Homebrew);
     }
     if path.starts_with("/usr/bin/")
@@ -2047,7 +2046,6 @@ cccc3333  wizard-aarch64-apple-darwin.tar.gz
         // with a Cellar in it.
         for path in [
             "/opt/homebrew/Cellar/wizard/3.1.0/bin/wizard",
-            "/opt/homebrew/bin/wizard",
             "/usr/local/Cellar/wizard/3.1.0/bin/wizard",
             "/home/linuxbrew/.linuxbrew/Cellar/wizard/3.1.0/bin/wizard",
             "/srv/brew/Cellar/wizard/3.1.0/bin/wizard",
@@ -2061,6 +2059,7 @@ cccc3333  wizard-aarch64-apple-darwin.tar.gz
         // The installer's own paths, and a source build, are not managed.
         for path in [
             "/usr/local/bin/wizard",
+            "/opt/homebrew/bin/wizard",
             "/home/teddy/.local/bin/wizard",
             "/home/teddy/wizard/target/release/wizard",
             "/usr/bin/wizard",

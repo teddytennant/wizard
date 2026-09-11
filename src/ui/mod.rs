@@ -1114,7 +1114,14 @@ fn tool_card_lines(
     if collapsed {
         return lines;
     }
-    if let Some(rows) = edit {
+    if let Some(mut rows) = edit {
+        // The same cap as text output: a 3000-line write_file is not read
+        // in the transcript, and rewrapping it every frame is not free.
+        let over = rows.len().saturating_sub(MAX_OUTPUT_LINES);
+        if over > 0 {
+            rows.truncate(MAX_OUTPUT_LINES);
+            rows.push(Line::from(Span::styled(format!("… +{over} lines"), dim())));
+        }
         lines.extend(prefix_rows(
             wrap_all(rows, body_width),
             first_arm,
