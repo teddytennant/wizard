@@ -3237,6 +3237,7 @@ mod tests {
                 call_id: String::new(),
                 output: None,
                 progress: String::new(),
+                timing: crate::transcript::ToolTiming::default(),
             },
             &app(),
             false,
@@ -3255,6 +3256,7 @@ mod tests {
                     is_error: false,
                 }),
                 progress: String::new(),
+                timing: crate::transcript::ToolTiming::default(),
             },
             &app(),
             true,
@@ -3336,6 +3338,7 @@ mod tests {
                     is_error: false,
                 }),
                 progress: String::new(),
+                timing: crate::transcript::ToolTiming::default(),
             },
             &app(),
             false,
@@ -3510,6 +3513,7 @@ mod tests {
             call_id: String::new(),
             output: None,
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         };
         let header = text(&Line::from(tool_header(
             &read,
@@ -3527,6 +3531,7 @@ mod tests {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         };
         let header = text(&Line::from(tool_header(
             &search,
@@ -3563,6 +3568,7 @@ mod tests {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         };
         let rows = tool_output(&command, ToolKind::Execute, false, 60);
         let joined: Vec<String> = rows.iter().map(|row| text(&row.line)).collect();
@@ -3582,6 +3588,7 @@ mod tests {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         };
         let rows = tool_output(&file, ToolKind::Read, false, 60);
         let joined: Vec<String> = rows.iter().map(|row| text(&row.line)).collect();

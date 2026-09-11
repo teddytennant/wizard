@@ -2853,6 +2853,7 @@ mod tests {
                 is_error: false,
             }),
             progress: String::new(),
+            timing: crate::transcript::ToolTiming::default(),
         }
     }
 
