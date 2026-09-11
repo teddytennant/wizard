@@ -742,35 +742,45 @@ pub async fn run_tui(mut config: Config, cli: Cli, first_run: bool) -> Result<i3
 
         // The `/settings` "Open config file" row asks the main loop (the
         // terminal owner) to suspend the TUI and run an external editor.
+        // Each of the three suspends takes the reader off stdin first: the
+        // editor and the wizard read the terminal themselves, and a key the
+        // stream won instead would land in the composer afterwards.
         if app.pending_edit_config {
             app.pending_edit_config = false;
+            events.pause().await;
             edit_config_file(&mut app, &mut terminal);
+            events.resume();
         }
         // A `/setup` row that asked questions on the plain terminal. The
         // config it wrote is live now: the agent is rebuilt on it, the way
         // the provider picker does, not after a restart.
-        if let Some(section) = app.pending_setup.take()
-            && run_setup_suspended(&mut app, &mut terminal, section)
-        {
-            CommandContext {
-                app: &mut app,
-                client: &mut client,
-                agent_slot: &mut agent_slot,
-                manager: &manager,
-                skills: &mut skills,
-                project_root: &project_root,
-                mcp_path: &mcp_path,
-                genie_max_steps,
-                events: &events,
+        if let Some(section) = app.pending_setup.take() {
+            events.pause().await;
+            let saved = run_setup_suspended(&mut app, &mut terminal, section);
+            events.resume();
+            if saved {
+                CommandContext {
+                    app: &mut app,
+                    client: &mut client,
+                    agent_slot: &mut agent_slot,
+                    manager: &manager,
+                    skills: &mut skills,
+                    project_root: &project_root,
+                    mcp_path: &mcp_path,
+                    genie_max_steps,
+                    events: &events,
+                }
+                .rebuild_active_provider("setup saved; the agent now runs on it".to_string())
+                .await;
             }
-            .rebuild_active_provider("setup saved; the agent now runs on it".to_string())
-            .await;
         }
 
         // Ctrl-G: same suspend/restore dance, on the composer draft.
         if app.pending_edit_prompt {
             app.pending_edit_prompt = false;
+            events.pause().await;
             edit_prompt_in_editor(&mut app, &mut terminal);
+            events.resume();
         }
 
         // `/compact`: take the agent and summarize history off the event loop
