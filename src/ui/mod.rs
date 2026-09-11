@@ -736,15 +736,13 @@ pub(super) fn transcript_text(
             None => text.lines.push(Line::from(tail)),
         }
         decorate(&mut lines, BlockKind::Assistant, text);
-    } else if app.status.busy {
+    } else if app.status.busy && !tool_running(&app.transcript) {
+        // Waiting on the model with nothing to show for it yet. A running
+        // tool's card is its own indicator, so this row stays away then.
         if !first {
             lines.push(Line::raw(""));
         }
-        let spinner = spinner_frame(app.tick);
-        lines.push(Line::from(vec![
-            Span::styled(format!("{spinner} "), accent()),
-            Span::styled(format!("{}…", app.spinner_verb), dim().italic()),
-        ]));
+        lines.push(Line::from(busy_row(app)));
     }
 
     tags.resize(lines.len(), RowTag::Text);
@@ -754,6 +752,43 @@ pub(super) fn transcript_text(
         blocks,
         empty: first,
     }
+}
+
+/// Whether the newest tool row is still waiting on its result.
+fn tool_running(view: &TranscriptView) -> bool {
+    matches!(view.last(), Some(TranscriptItem::Tool(tool)) if tool.output.is_none())
+}
+
+/// The row shown while the model has been asked and has not answered: the
+/// spinner and how long it has been. A custom `[ui] spinner_verbs` list still
+/// puts its word in front; the stock look has none.
+pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
+    let elapsed = app
+        .turn_started
+        .map(|started| started.elapsed())
+        .unwrap_or_default();
+    let mut spans = vec![Span::styled(
+        format!("{} ", spinner_frame(app.tick)),
+        accent(),
+    )];
+    if !app.config.ui.spinner_verbs.is_empty() {
+        spans.push(Span::styled(
+            format!("{}… ", app.spinner_verb),
+            dim().italic(),
+        ));
+    }
+    spans.push(Span::styled(fmt_elapsed(elapsed), dim()));
+    // The round trips so far, once there is one; the budget too when the
+    // turn has one.
+    let step = match (app.status.step, app.status.max_steps.cap()) {
+        (0, None) => None,
+        (step, None) => Some(format!(" · step {step}")),
+        (step, Some(cap)) => Some(format!(" · step {step}/{cap}")),
+    };
+    if let Some(step) = step {
+        spans.push(Span::styled(step, dim()));
+    }
+    spans
 }
 
 /// Render a conversation to lines, tagging each row with what it belongs to
@@ -866,10 +901,13 @@ pub(super) fn items_text(
                 Vec::new()
             }
             TranscriptItem::Notice(message) => {
-                let style = if message.starts_with("error") {
-                    error().bold()
-                } else {
-                    dim().italic()
+                // An error leads with the same glyph a failed tool gets, so
+                // it reads as one under every color depth; the word is gone
+                // because the glyph is the word.
+                let (style, message) = match message.strip_prefix("error: ") {
+                    Some(rest) => (error().bold(), format!("✗ {rest}")),
+                    None if message.starts_with("error") => (error().bold(), message.clone()),
+                    None => (dim().italic(), message.clone()),
                 };
                 wrap_all(
                     message
@@ -996,6 +1034,13 @@ fn tool_card_lines(
         None if !tool.progress.is_empty() => Some(tool.progress.as_str()),
         None => None,
     };
+    // `execute` folds a non-zero exit into its last output line; the header
+    // is where the reader looks for it, so it moves up there and the body
+    // keeps only what the command printed.
+    let (output, exit_code) = match output {
+        Some(text) if is_error => split_exit_code(text),
+        other => (other, None),
+    };
 
     let chrome = skin::chrome();
     let glyph = match (running, is_error) {
@@ -1007,7 +1052,15 @@ fn tool_card_lines(
         (false, true) => Span::styled(chrome.tool_failed, theme::style(Token::ToolFailed).bold()),
     };
 
-    let (label, summary) = tool_label(name, args, chrome.tool_label);
+    let (label, mut summary) = tool_label(name, args, chrome.tool_label);
+    // An edit names its file once, here, with the line it landed on; the body
+    // below is the change itself rather than a sentence about it.
+    let edit = edit_diff_lines(name, args, output.filter(|_| !is_error));
+    if edit.is_some()
+        && let Some(line) = edited_line(output.unwrap_or(""))
+    {
+        summary = format!("{summary}:{line}");
+    }
     let mut card = vec![glyph, Span::raw(" "), Span::styled(label, accent())];
     if !summary.is_empty() {
         // `Call` has already folded the arguments into the label's parentheses;
@@ -1017,7 +1070,16 @@ fn tool_card_lines(
             dim(),
         ));
     }
-    let hidden = output.map(|text| text.lines().count()).unwrap_or(0);
+    if let Some(code) = exit_code {
+        card.push(Span::styled(format!("  exit {code}"), muted()));
+    }
+    if let Some(took) = tool.timing.elapsed() {
+        card.push(Span::styled(format!("  {}", fmt_elapsed(took)), dim()));
+    }
+    let hidden = match &edit {
+        Some(rows) => rows.len(),
+        None => output.map(|text| text.lines().count()).unwrap_or(0),
+    };
     if collapsed && hidden > 0 {
         card.push(Span::styled(format!("  +{hidden} lines"), dim().italic()));
     }
@@ -1025,14 +1087,26 @@ fn tool_card_lines(
     // that wraps onto a second line has stopped being one.
     lines.push(truncate_line(Line::from(card), width));
 
-    if !collapsed && let Some(text) = output {
-        let (first_arm, rest_arm) = chrome.tool_output;
-        // The arm is drawn once, on the first body row, and replaced by blanks
-        // of the same width below it — that is what makes Claude Code's `⎿`
-        // and Codex's `└` read as one arm rather than a column of them. The
-        // body is wrapped to what is left *after* the arm and prefixed
-        // afterwards, so a long output line keeps the indent when it wraps.
-        let body_width = width.saturating_sub(first_arm.width()).max(1);
+    let (first_arm, rest_arm) = chrome.tool_output;
+    // The arm is drawn once, on the first body row, and replaced by blanks
+    // of the same width below it — that is what makes Claude Code's `⎿`
+    // and Codex's `└` read as one arm rather than a column of them. The
+    // body is wrapped to what is left *after* the arm and prefixed
+    // afterwards, so a long output line keeps the indent when it wraps.
+    let body_width = width.saturating_sub(first_arm.width()).max(1);
+    if collapsed {
+        return lines;
+    }
+    if let Some(rows) = edit {
+        lines.extend(prefix_rows(
+            wrap_all(rows, body_width),
+            first_arm,
+            rest_arm,
+            dim(),
+        ));
+        return lines;
+    }
+    if let Some(text) = output {
         let out_lines: Vec<&str> = text.lines().collect();
         let over = out_lines.len().saturating_sub(MAX_OUTPUT_LINES);
         // A finished result is read from the top; a running command is read
@@ -1072,6 +1146,72 @@ fn tool_card_lines(
         ));
     }
     lines
+}
+
+/// Split the `exit code: N` line [`crate::tools::shell::render_command_result`]
+/// appends off a failed command's output. The body that comes back may be
+/// empty, which is a command that failed silently, and that is worth showing
+/// as exactly that.
+fn split_exit_code(text: &str) -> (Option<&str>, Option<i32>) {
+    let (body, last) = text.rsplit_once('\n').unwrap_or(("", text));
+    match last
+        .strip_prefix("exit code: ")
+        .and_then(|n| n.trim().parse().ok())
+    {
+        Some(code) => (Some(body).filter(|body| !body.is_empty()), Some(code)),
+        None => (Some(text), None),
+    }
+}
+
+/// The line number an `edit_file` confirmation names (`… (line 12)`).
+fn edited_line(output: &str) -> Option<u32> {
+    let (_, rest) = output.split_once("(line ")?;
+    rest.split(')').next()?.trim().parse().ok()
+}
+
+/// An edit's body as the change itself: the removed lines with `-`, the added
+/// lines with `+`, in the diff colors, from the arguments the model sent.
+/// `write_file` is all additions. `None` for any other tool, or for an edit
+/// that failed, whose output is the error and stays as text.
+fn edit_diff_lines(
+    name: &str,
+    args: &serde_json::Value,
+    output: Option<&str>,
+) -> Option<Vec<Line<'static>>> {
+    let arg = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
+    let (old, new) = match name {
+        "edit_file" => (arg("old_string")?, arg("new_string")?),
+        "write_file" => ("", arg("content")?),
+        _ => return None,
+    };
+    output?;
+    let mut rows = Vec::new();
+    for line in old.lines() {
+        rows.push(Line::from(Span::styled(
+            format!("- {line}"),
+            theme::style(Token::DiffDel),
+        )));
+    }
+    for line in new.lines() {
+        rows.push(Line::from(Span::styled(
+            format!("+ {line}"),
+            theme::style(Token::DiffAdd),
+        )));
+    }
+    Some(rows)
+}
+
+/// `0.4s`, `12s`, `2m05s`: as much precision as the number has.
+pub(super) fn fmt_elapsed(took: std::time::Duration) -> String {
+    let secs = took.as_secs_f64();
+    if secs < 10.0 {
+        format!("{secs:.1}s")
+    } else if secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else {
+        let whole = secs as u64;
+        format!("{}m{:02}s", whole / 60, whole % 60)
+    }
 }
 
 /// Wrap every line to `width`, keeping them in order. The rows that come out
@@ -1357,12 +1497,16 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
         return;
     }
     let spinner = spinner_frame(app.tick);
-    let mut spans = vec![
-        Span::raw(" "),
-        model_span(app),
-        sep(),
-        mode_span(app.status.mode),
-    ];
+    // What is on the line, and why (`docs/design.md`): the model, then only
+    // the states that are true right now, then where you are and what the
+    // next call costs. The default mode and the working directory are not
+    // here: `genie` is the default and says nothing, and the branch names the
+    // repo (`/status` has the path).
+    let mut spans = vec![Span::raw(" "), model_span(app)];
+    if app.status.mode == Mode::Sovereign {
+        spans.push(sep());
+        spans.push(mode_span(app.status.mode));
+    }
     // Vim mode indicator: NORMAL stands out (bold accent), INSERT stays quiet.
     if let Some(label) = app.vim.label() {
         spans.push(sep());
@@ -1390,8 +1534,10 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
             accent().bold(),
         ));
     }
-    spans.push(sep());
-    spans.push(Span::styled(format_cwd(&app.project_root, 32), dim()));
+    if let Some(branch) = git_branch(&app.project_root) {
+        spans.push(sep());
+        spans.push(Span::styled(truncate_width(&branch, 24), dim()));
+    }
     // Context meter: tokens that will load into the next model call — last
     // reported prompt size, or a post-compact / post-clear estimate. Not the
     // session-lifetime sum (that double-counts multi-step history and stays
@@ -1403,26 +1549,14 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
             dim(),
         ));
     }
+    if let Some(cost) = session_cost(app) {
+        spans.push(sep());
+        spans.push(Span::styled(cost, dim()));
+    }
     if let Some(label) = &app.rebuilding {
         spans.push(sep());
         spans.push(Span::styled(format!("{spinner} "), accent()));
         spans.push(Span::styled(format!("{label}…"), dim().italic()));
-    } else if app.status.busy {
-        let elapsed = app
-            .turn_started
-            .map(|started| started.elapsed().as_secs())
-            .unwrap_or(0);
-        spans.push(sep());
-        spans.push(Span::styled(format!("{spinner} "), accent()));
-        spans.extend(busy_spans(app, elapsed));
-        // How many user prompts are waiting behind this turn.
-        if !app.message_queue.is_empty() {
-            spans.push(sep());
-            spans.push(Span::styled(
-                format!("queued {}", app.message_queue.len()),
-                accent(),
-            ));
-        }
     }
     // Background tasks (`/bashes`): a persistent marker while any are
     // running, so a detached command doesn't silently vanish from view.
@@ -1490,9 +1624,11 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     let left_width = line.width() as u16;
     frame.render_widget(Paragraph::new(line), area);
 
-    // Contextual key hints, right-aligned in a sub-rect so the left side is
-    // never overdrawn.
-    let hints = if let Some(review) = &app.plan_review {
+    // The right side: the keys a modal state needs, or how long the turn has
+    // been running. Idle shows whatever the skin's idle hint is, and the house
+    // skin's is nothing.
+    let busy_hint;
+    let hints: &str = if let Some(review) = &app.plan_review {
         if review.feedback.is_some() {
             "type feedback · Enter reject · Esc back"
         } else {
@@ -1512,7 +1648,15 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
         // the time, and the user has to be able to see that at a glance.
         "Enter → command · Ctrl-D end input · Esc detach · Ctrl-C stop"
     } else if app.status.busy {
-        "PgUp/PgDn scroll · Enter queues"
+        let elapsed = app
+            .turn_started
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+        busy_hint = match app.message_queue.len() {
+            0 => fmt_elapsed(elapsed),
+            n => format!("{} · queued {n}", fmt_elapsed(elapsed)),
+        };
+        &busy_hint
     } else {
         // The only hint a skin gets to reword: the idle one, which is the line
         // people quote when they describe what a TUI looks like ("? for
@@ -1521,6 +1665,9 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
         // them harder to act on, which is the opposite of what a hint is for.
         skin::chrome().idle_hint
     };
+    if hints.is_empty() {
+        return;
+    }
     let width = hints.width() as u16 + 1;
     if area.width > left_width + width {
         let hint_area = Rect {
@@ -1585,15 +1732,6 @@ pub(super) fn composer_budget(width: u16) -> usize {
 /// The composer's top row: the rule, the console banner, or nothing.
 pub(super) fn top_row(area: Rect) -> Rect {
     Rect { height: 1, ..area }
-}
-
-/// The composer's bottom row.
-pub(super) fn bottom_row(area: Rect) -> Rect {
-    Rect {
-        y: area.bottom().saturating_sub(1),
-        height: 1,
-        ..area
-    }
 }
 
 /// The rows between a composer's top and bottom rows.
@@ -1721,8 +1859,10 @@ pub(super) fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
                 Some(console) => console_rule(&console.command, area.width),
                 None => rule.clone(),
             };
+            // One rule, above: it says where the transcript stops scrolling.
+            // The row below the draft is left blank; the status line is the
+            // boundary there and a second rule would only repeat it.
             frame.render_widget(Paragraph::new(Text::from(vec![head])), top_row(area));
-            frame.render_widget(Paragraph::new(Text::from(vec![rule])), bottom_row(area));
             (inset(area), 1usize)
         }
         // A box in the theme's border style. The console banner becomes its
@@ -3040,6 +3180,83 @@ fn take_width(text: &str, max: usize) -> &str {
 /// `~`, and when wider than `max` columns drop leading components (prefixing
 /// `…/`) so the leaf directory — the part you actually care about — stays
 /// visible instead of being clipped off the end.
+/// The checked-out branch of `root`, read from `.git/HEAD` (following a
+/// worktree's `gitdir:` pointer), or the short hash when detached. `None`
+/// outside a repository. Re-read at most every two seconds: the file is tiny,
+/// but the status line asks on every frame.
+pub(super) fn git_branch(root: &std::path::Path) -> Option<String> {
+    type Cached = (std::path::PathBuf, std::time::Instant, Option<String>);
+    static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((path, at, branch)) = cache.as_ref()
+        && path == root
+        && at.elapsed() < std::time::Duration::from_secs(2)
+    {
+        return branch.clone();
+    }
+    let branch = read_git_head(root);
+    *cache = Some((
+        root.to_path_buf(),
+        std::time::Instant::now(),
+        branch.clone(),
+    ));
+    branch
+}
+
+fn read_git_head(root: &std::path::Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let git_dir = if dot_git.is_file() {
+        let pointer = std::fs::read_to_string(&dot_git).ok()?;
+        let target = pointer.trim().strip_prefix("gitdir:")?.trim();
+        let target = std::path::Path::new(target);
+        if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            root.join(target)
+        }
+    } else {
+        dot_git
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    Some(match head.strip_prefix("ref: refs/heads/") {
+        Some(branch) => branch.to_string(),
+        None => head.chars().take(7).collect(),
+    })
+}
+
+/// The session's cost so far, when the active provider carries a rate. The
+/// same arithmetic `/cost` uses, priced as all-fresh tokens because the
+/// status bar mirrors only the two flat totals.
+fn session_cost(app: &App) -> Option<String> {
+    if app.status.prompt_tokens == 0 && app.status.completion_tokens == 0 {
+        return None;
+    }
+    let config = &app.config;
+    let provider = config
+        .active_provider
+        .as_ref()
+        .and_then(|name| config.providers.iter().find(|p| &p.name == name))
+        .or_else(|| config.providers.first())?;
+    let cost = crate::usage::cost_usd(
+        crate::usage::TurnTokens {
+            prompt: app.status.prompt_tokens,
+            completion: app.status.completion_tokens,
+            cache_read: 0,
+            cache_write: 0,
+        },
+        provider.usd_per_mtok_in,
+        provider.usd_per_mtok_out,
+    )?;
+    Some(if cost < 0.01 {
+        "<$0.01".to_string()
+    } else {
+        format!("${cost:.2}")
+    })
+}
+
 pub(super) fn format_cwd(root: &std::path::Path, max: usize) -> String {
     format_cwd_from(root, dirs::home_dir().as_deref(), max)
 }
@@ -3144,26 +3361,52 @@ fn syntect_assets() -> &'static (SyntaxSet, Option<SyntectTheme>) {
 /// `diff.del` deletions, dim context. Prefix-based (not syntect) so the
 /// meaning stays legible regardless of the code-highlight theme.
 pub fn highlight_diff(diff: &str) -> Text<'static> {
-    let lines: Vec<Line<'static>> = diff
-        .lines()
-        .map(|line| Line::from(Span::styled(line.to_string(), diff_line_style(line))))
-        .collect();
+    // Each file is named once. `diff --git`, `index`, `---` and `+++` say the
+    // same name four times over, so they collapse into one row carrying the
+    // `+++` side (or the `---` side when the file was deleted).
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut removed: Option<&str> = None;
+    for line in diff.lines() {
+        if line.starts_with("diff ") || line.starts_with("index ") {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("--- ") {
+            removed = Some(name);
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("+++ ") {
+            let name = if name == "/dev/null" {
+                removed.unwrap_or(name)
+            } else {
+                name
+            };
+            let name = name
+                .strip_prefix("a/")
+                .or_else(|| name.strip_prefix("b/"))
+                .unwrap_or(name);
+            lines.push(Line::from(Span::styled(
+                name.to_string(),
+                theme::style(Token::DiffMeta).add_modifier(Modifier::BOLD),
+            )));
+            continue;
+        }
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            diff_line_style(line),
+        )));
+    }
     Text::from(lines)
 }
 
-/// Style for one unified-diff line. File headers (`---`/`+++`) are checked
-/// before bare `+`/`-` so they don't paint as add/delete.
+/// Style for one unified-diff line, after [`highlight_diff`] has folded the
+/// file headers away.
 fn diff_line_style(line: &str) -> Style {
-    if line.starts_with("+++") || line.starts_with("---") {
-        theme::style(Token::DiffMeta).add_modifier(Modifier::BOLD)
-    } else if line.starts_with('+') {
+    if line.starts_with('+') {
         theme::style(Token::DiffAdd)
     } else if line.starts_with('-') {
         theme::style(Token::DiffDel)
     } else if line.starts_with("@@") {
         theme::style(Token::DiffHunk)
-    } else if line.starts_with("diff ") || line.starts_with("index ") {
-        theme::style(Token::DiffMeta).bold()
     } else {
         dim()
     }

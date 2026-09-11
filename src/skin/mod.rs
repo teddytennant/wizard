@@ -5,8 +5,9 @@
 //! tool-card glyphs and label grammar, the composer frame, the welcome screen,
 //! the spinner, and the wording of the status line. Four ship:
 //!
-//! - `wizard` — the house look: braille mark, dim rules around the composer,
-//!   `❯`/`·` gutters, a chip-separated status line.
+//! - `wizard` — the house look: one rule over the composer, `❯`/`·` gutters,
+//!   a status line of facts and nothing decorative. `docs/design.md` is its
+//!   standard.
 //! - `codex` — OpenAI Codex's: a `>_` banner, `›` for the user and `•` for the
 //!   agent, `Ran <cmd>` with a `└` output arm, a bare composer under a `›`
 //!   prompt, and `Working (12s • esc to interrupt)`.
@@ -102,7 +103,7 @@ impl Skin {
     /// One line for `/ui` and the onboarding picker.
     pub fn description(self) -> &'static str {
         match self {
-            Skin::Wizard => "the house look: braille mark, dim rules, no boxes (default)",
+            Skin::Wizard => "the house look: one rule, no boxes, nothing decorative (default)",
             Skin::Codex => "OpenAI Codex: >_ banner, › prompts, • bullets, └ output",
             Skin::Grok => "Grok Build: a colored ┃ bar down every block, boxed composer",
         }
@@ -299,7 +300,7 @@ pub struct Chrome {
     pub status_above: bool,
 }
 
-/// The house look. Everything `src/ui/mod.rs` did before skins existed.
+/// The house look. `docs/design.md` says why each of these is what it is.
 const WIZARD: Chrome = Chrome {
     blocks: Blocks {
         user: plain(Marker::hanging("❯ ", Token::Faint, true)),
@@ -318,7 +319,9 @@ const WIZARD: Chrome = Chrome {
     welcome: WelcomeStyle::Mark,
     separator: " · ",
     busy: BusyStyle::Steps,
-    idle_hint: "/ commands · ↑ history",
+    // Nothing when idle: a hint nobody asked for is chrome, and `/` is one
+    // keystroke away from listing every command.
+    idle_hint: "",
     status_above: false,
 };
 

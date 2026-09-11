@@ -49,7 +49,7 @@ success = "green"
 "diff.add" = "green"
 "diff.del" = "red"
 "diff.meta" = "gray"
-"diff.hunk" = "white"
+"diff.hunk" = "darkgray"
 
 # Backgrounds. `reset` is the house rule: this UI paints on the terminal’s
 # own background so transparency and the user’s colour scheme survive. The
