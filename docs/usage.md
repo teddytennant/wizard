@@ -124,7 +124,7 @@ and `/ui <name>` switches immediately:
 
 | Interface | Look |
 |-----------|------|
-| `wizard` (default) | The house look: the braille wand-and-spark mark on the home screen, dim rules around the composer, `❯` for you and `·` for the agent, a chip-separated status line |
+| `wizard` (default) | The house look: one rule over the composer, `❯` for you and `·` for the agent, and a status line that reads `model · branch · context · cost`. [design.md](design.md) is the standard it is held to |
 | `codex` | OpenAI Codex's: a `>_` banner, `›` for you and `•` for the agent, `Ran <cmd>` headers with a `└` output arm, no composer frame at all, and `Working (step 3 • 12s • esc to interrupt)` |
 | `grok` | Grok Build's: a `┃` bar down the left of every block, colored by whose block it is, a boxed composer, and `Thinking… step 3 · 12s` |
 

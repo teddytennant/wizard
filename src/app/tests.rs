@@ -3760,11 +3760,11 @@ const TOKEN_SITES: &[(&str, u16, Token)] = &[
     ("✗ explode", 0, Token::ToolFailed),
     ("output line", 0, Token::Muted),
     ("plain notice", 0, Token::Faint),
-    ("error: something broke", 0, Token::Error),
+    ("✗ something broke", 0, Token::Error),
     ("sovereign", 0, Token::Warning),
     ("≡", 0, Token::Accent),
     ("git diff", 0, Token::Muted),
-    ("+++ b/file.txt", 0, Token::DiffMeta),
+    ("file.txt", 0, Token::DiffMeta),
     ("@@ -1,2", 0, Token::DiffHunk),
     ("+added line", 0, Token::DiffAdd),
     ("-removed line", 0, Token::DiffDel),
@@ -3879,7 +3879,7 @@ fn the_fixture_survives_the_smallest_terminal_under_both_themes() {
         // prompt that has scrolled off), the diff beside it, the todos, the
         // rail, the composer, the status line.
         for needle in [
-            "error: something broke",
+            "✗ something broke",
             "✗ explode",
             "git diff",
             "todos",
@@ -4847,7 +4847,7 @@ fn every_welcome_screen_says_who_it_is_and_nothing_it_is_not() {
         let rows = skinned_welcome(skin, 92, 30);
         let screen = rows.join("\n");
         assert!(
-            screen.contains("Wizard") || screen.contains("w i z a r d"),
+            screen.contains("Wizard") || screen.contains(" wizard "),
             "{} must say which agent this is:\n{screen}",
             skin.key()
         );

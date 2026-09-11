@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **The house TUI is quieter.** `docs/design.md` is the new standard. The empty state is three left-aligned lines (name and version, working directory, how to start) instead of the braille mark, tagline and command tips. The status line reads `model · branch · context · cost`; `genie`, the working directory and the idle key hints are gone from it, `sovereign` and the other modes show only while they are on, and the git branch and the session cost (when the provider carries a rate) are new. The chat-area spinner shows elapsed time (`⠋ 3s`) instead of a conjured verb; a custom `[ui] spinner_verbs` list still puts its word in front. The composer keeps its top rule and loses the bottom one.
+- **Tool cards carry their timing and exit status.** A finished card reads `✓ execute  ls -la  0.4s`; a failed command puts `exit 2` on the header, folded or not, instead of leaving it as the last line of the body. `edit_file` and `write_file` cards show the change as `-`/`+` lines under a `path:line` header rather than the confirmation sentence.
+- **Diffs name each file once.** The `/diff` sidebar folds `diff --git`, `index`, `---` and `+++` into one row with the file name and dims `@@` hunk headers. Error notices lead with `✗` in place of the word `error:`.
+
 ### Added
 
 - **Callable plugin services.** `Service::Callable` is a JSON→JSON function both
