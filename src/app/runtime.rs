@@ -26,7 +26,7 @@ use crate::cli::Cli;
 
 use std::io::IsTerminal;
 
-use crate::image_view::ImageCache;
+use crate::image_view::{Detection, ImageCache};
 
 use super::command::CommandContext;
 use super::recover::{
@@ -252,21 +252,40 @@ pub async fn run_tui(mut config: Config, cli: Cli) -> Result<i32> {
         }
     }
 
-    // Ask the terminal how it can draw an image, while stdio is still the plain
-    // terminal: the query writes escape sequences and reads the reply, which the
-    // alternate screen and our own raw mode would both get in the way of. A
-    // terminal that says nothing gets half-blocks, which every terminal can draw.
-    *app.images.borrow_mut() = ImageCache::detect();
-    tracing::debug!("terminal images: {:?}", app.images.borrow());
-
     // Terminal setup (raw mode, alternate screen, keyboard-enhancement probe)
     // must finish *before* EventLoop starts. EventLoop spawns a task that
     // immediately owns crossterm's EventStream; if that stream is already
     // draining stdin, `supports_keyboard_enhancement` can miss its CSI reply
     // and loop forever on poll errors — blank alternate screen, only Ctrl-C
     // gets you out. First paint also wants the terminal fully configured.
+    //
+    // Raw mode goes on before the image query and the alternate screen after
+    // it: the reply must not be echoed or held for a newline, and whatever a
+    // terminal prints for a query it does not understand has to land on the
+    // screen the alternate screen is about to cover. The first frame is
+    // painted while the reply is in flight and the reply is read before the
+    // EventLoop takes stdin, so the frame is never held for a terminal that
+    // does not answer: `app.images` starts as half-blocks, which every
+    // terminal can draw.
+    crossterm::terminal::enable_raw_mode().context("enabling raw mode")?;
+    let asked = match ImageCache::detect() {
+        Detection::Done(images) => {
+            *app.images.borrow_mut() = images;
+            None
+        }
+        Detection::Asked(query) => Some(query),
+    };
     let mut terminal = setup_terminal()?;
     let _guard = TerminalGuard;
+    if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
+        tracing::warn!("first frame not drawn: {err}");
+    }
+    tracing::debug!("first frame painted");
+    if let Some(query) = asked {
+        *app.images.borrow_mut() = query.answer();
+    }
+    tracing::debug!("terminal images: {:?}", app.images.borrow());
+
     let mut events = EventLoop::new(Duration::from_millis(100));
 
     // Probe the cloud provider's health off the draw path so the network
