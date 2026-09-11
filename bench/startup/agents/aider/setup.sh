@@ -4,6 +4,7 @@ cat > ~/.aider.conf.yml <<'YAML'
 model: gpt-4o
 openai-api-base: http://127.0.0.1:9/v1
 check-update: false
+analytics: false
 show-model-warnings: false
 gitignore: false
 show-release-notes: false

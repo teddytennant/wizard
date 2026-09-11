@@ -25,16 +25,16 @@ Every other flavor (a preinstalled local model, the window, from source, Termux)
 <!-- BENCH:startup -->
 | agent | warm start | cold start | RSS at the prompt | install |
 |---|---:|---:|---:|---:|
-| wizard 3.0.1 | 30 ms | 327 ms | 20 MB | 25 MB |
-| Codex CLI 0.154.0 | 86 ms | 1036 ms | 206 MB | 553 MB |
-| Goose 1.50.0 | 164 ms | 1107 ms | 71 MB | 315 MB |
-| Crush 0.93.1 | 203 ms | 1077 ms | 84 MB | 96 MB |
-| Claude Code 2.1.268 | 1285 ms | 3394 ms | 259 MB | 219 MB |
-| Aider 0.86.2 | 2718 ms | 19991 ms | 158 MB | 698 MB |
-| OpenCode 1.18.30 | 8328 ms | 9535 ms | 916 MB | 185 MB |
+| wizard 3.1 | 6 ms | 135 ms | 20 MB | 26 MB |
+| Codex CLI 0.154.0 | 34 ms | 511 ms | 179 MB | 553 MB |
+| Goose 1.50.0 | 54 ms | 414 ms | 72 MB | 315 MB |
+| Crush 0.93.1 | 80 ms | 445 ms | 81 MB | 96 MB |
+| Claude Code 2.1.268 | 268 ms | 1035 ms | 241 MB | 219 MB |
+| Aider 0.86.2 | 822 ms | 6747 ms | 200 MB | 664 MB |
+| OpenCode 1.18.30 | 2847 ms | 6230 ms | 786 MB | 185 MB |
 <!-- /BENCH -->
 
-Measured 2026-09-10 with [`bench/startup/run.sh`](bench/startup/README.md): one ubuntu:24.04 container per agent, installed the way its README says, started ten times under a pty with the model endpoint on a dead local port; Claude Code, Codex and OpenCode still had their update and telemetry fetches on in this run. The full table, each agent's setup and what is not measured are in [`bench/startup/results.md`](bench/startup/results.md).
+Measured 2026-09-11 with [`bench/startup/run.sh`](bench/startup/README.md) on an idle 16-core box: one ubuntu:24.04 container per agent, installed the way its README says, phone-home switched off where the agent offers a switch, the model endpoint on a dead local port, ten pty starts each with the page cache dropped before the first. Warm is the median of starts two to ten. The full table, each agent's setup, the host record and what is not measured are in [`bench/startup/results.md`](bench/startup/results.md).
 
 ## First run
 
