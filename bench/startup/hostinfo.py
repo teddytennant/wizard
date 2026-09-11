@@ -47,5 +47,6 @@ info = {
     "mem_available_bytes": mem.get("MemAvailable"),
     "swap_used_bytes": (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)),
     "docker": sh("docker --version"),
+    "drop_caches": bool(os.environ.get("DROP_CACHES")),
 }
 print(json.dumps(info, indent=2))

@@ -16,6 +16,9 @@
 #   SKIP_BUILD=1      reuse images that are already built
 #   LOAD_OK=1         measure on a busy host anyway (the numbers are then
 #                     about the host, not the agents)
+#   DROP_CACHES=1     sync and drop the host page cache right before each
+#                     agent's container starts, so run 1 is a true cold
+#                     start (needs passwordless sudo)
 #   WIZARD_VERSION=v3.0.1   release tag install.sh downloads for the wizard image
 #   WIZARD_BINARY=/path     measure this binary instead of a release: it goes
 #                           into the same base image with the repo's loadout/
@@ -50,7 +53,13 @@ if [ -z "${LOAD_OK:-}" ]; then
         exit 2
     fi
 fi
-python3 "$here/hostinfo.py" > "$OUT/host.json"
+if [ -n "${DROP_CACHES:-}" ]; then
+    if ! sudo -n true 2>/dev/null; then
+        log "DROP_CACHES=1 needs passwordless sudo to write /proc/sys/vm/drop_caches"
+        exit 1
+    fi
+fi
+DROP_CACHES="${DROP_CACHES:-}" python3 "$here/hostinfo.py" > "$OUT/host.json"
 
 layer_bytes() {
     docker history --human=false --format '{{.Size}}' "$1" | awk '{s+=$1} END {print s+0}'
@@ -101,6 +110,11 @@ for a in "${agents[@]}"; do
     . "$here/agents/$a/bench.env"
     install_bytes=$(( $(layer_bytes "wizard-bench-$a") - base_bytes ))
     log "measuring $a ($RUNS runs, network=$NET, install $((install_bytes / 1048576)) MB)"
+    if [ -n "${DROP_CACHES:-}" ]; then
+        # Nothing of the agent is touched between here and run 1: the
+        # container's setup.sh only writes config files.
+        sync && sudo -n sh -c 'echo 3 > /proc/sys/vm/drop_caches' || { log "drop_caches failed"; exit 1; }
+    fi
     set +e
     # shellcheck disable=SC2086
     docker run --rm --network "$NET" \

@@ -17,7 +17,9 @@ would. The numbers in `results.md` come from `run.sh` and nothing else.
 Needs Docker, bash, python3 and a network. `run.sh` refuses to measure when the
 1-minute load average is above nproc/4 or less than 8 GB of memory is available
 (`LOAD_OK=1` overrides, and the host state is recorded in the results either
-way). `before.sh` records the other half: install.sh from main timed in a fresh
+way). `DROP_CACHES=1` syncs and drops the host page cache right before each
+agent's container starts, so run 1 is a true cold start; it needs passwordless
+sudo and is recorded in the results. `before.sh` records the other half: install.sh from main timed in a fresh
 container, then every onboarding screen wizard shows before a prompt can be
 typed, as text under `before/screens/`.
 

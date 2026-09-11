@@ -125,7 +125,9 @@ else:
                  f"{(host.get('mem_total_bytes') or 0) / 1e9:.1f} GB, swap in use {swap / 1e9:.1f} GB, "
                  f"governor {host.get('governor') or 'n/a'}, RAPL package cap "
                  f"{host.get('rapl_cap_w') if host.get('rapl_cap_w') is not None else 'n/a'} W. "
-                 "run.sh refuses to start above load nproc/4 or under 8 GB available unless LOAD_OK=1.")
+                 "run.sh refuses to start above load nproc/4 or under 8 GB available unless LOAD_OK=1. "
+                 + ("Page cache dropped before each agent's run 1 (DROP_CACHES=1)."
+                    if host.get("drop_caches") else "Page cache not dropped: run 1 is cold only if the image layer had left it."))
     lines.append("")
 
 open(md_path, "w").write("\n".join(lines) + "\n")
