@@ -2,7 +2,7 @@
 
 Wizard runs on whatever model you point it at. For hosted models, `/provider add` registers any OpenAI-compatible endpoint or Anthropic (see [getting started](getting-started.md#using-a-cloud-or-remote-provider)); this page covers bringing your own *local* model weights.
 
-The primary BYOM path is the full setup wizard: run `wizard --onboard` (the plain first run offers only the one-pick local path) and pick one of the two BYOM providers, llama.cpp for any GGUF or Ollama for any model tag. Onboarding records the choice; the first run materializes it: a missing known-tier GGUF is downloaded, and a missing Ollama tag is pulled through Ollama's API, both with visible progress. Custom weights are always your call, and Wizard's managed local option (onboarding's Local pick, or `WIZARD_LOCAL=1` at install) downloads only its own hardware-matched tier list, currently the [unsloth](https://huggingface.co/unsloth) GGUF requants of Qwen 3.5/3.6.
+The primary BYOM path is the full setup wizard: run `wizard --onboard` (the plain first run offers the managed local pick and, for hosted models, a key or an OpenAI-compatible endpoint) and pick one of the two BYOM providers, llama.cpp for any GGUF or Ollama for any model tag. Onboarding records the choice; the first run materializes it: a missing known-tier GGUF is downloaded, and a missing Ollama tag is pulled through Ollama's API, both with visible progress. Custom weights are always your call, and Wizard's managed local option (onboarding's Local pick, or `WIZARD_LOCAL=1` at install) downloads only its own hardware-matched tier list, currently the [unsloth](https://huggingface.co/unsloth) GGUF requants of Qwen 3.5/3.6.
 
 ## Any GGUF with llama.cpp (the default local backend)
 
