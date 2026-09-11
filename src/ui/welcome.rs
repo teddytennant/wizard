@@ -180,7 +180,10 @@ fn draw_welcome_banner(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_welcome_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![
         Line::from(Span::styled("Wizard", theme::style(Token::Text).bold())),
-        Line::from(Span::styled("the fastest agent in your terminal", dim().italic())),
+        Line::from(Span::styled(
+            "the fastest agent in your terminal",
+            dim().italic(),
+        )),
         Line::raw(""),
         welcome_status(app),
         Line::from(Span::styled(
