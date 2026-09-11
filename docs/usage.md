@@ -44,6 +44,7 @@ inline hints.
 | `/login <provider> [force]` | OAuth sign-in; the TUI command accepts `xai` only. A live session is left alone unless you pass `force`. ChatGPT OAuth is `wizard --login chatgpt` from the shell, or the GUI Settings flow |
 | `/publish [branch]` | Fork Wizard to your GitHub and get a one-line installer ([market.md](market.md)) |
 | `/settings` | Open the in-app settings menu |
+| `/setup` | The same menu under the name the first-run card prints (`/setup changes it`) |
 | `/ui [name]` | List the available interfaces, or wear one: `wizard`, `codex`, `grok` ([The interface](#the-interface)) |
 | `/vim` | Toggle modal (vim-style) editing of the input composer |
 | `/quit` | Exit Wizard |
@@ -136,7 +137,8 @@ under both. Wearing Codex's chrome does not give you Codex. The home
 screen says whose look it is for that reason.
 
 `/ui` **persists**: it writes `[ui] skin` to `~/.wizard/config.toml`, so the
-choice survives a restart. Onboarding asks the same question on a first run.
+choice survives a restart. The first run does not ask; it starts as `wizard`,
+and the interface row under `/setup` asks the same question later.
 Resolution order at startup is **`[ui] skin` in `config.toml`, then
 `WIZARD_SKIN`, then `wizard`**; a blank value at either level counts as unset.
 
