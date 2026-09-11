@@ -1,0 +1,35 @@
+# Maintainer: Teddy Tennant <teddytennant@icloud.com>
+pkgname=wizard
+pkgver=3.0.1
+pkgrel=1
+pkgdesc="One line. Your sovereign agent. Self-extending. Bring any model"
+arch=('x86_64' 'aarch64')
+url="https://github.com/teddytennant/wizard"
+license=('MIT AND Apache-2.0')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo')
+# LuaJIT (vendored by mlua) probes its unwinder with a symbol grep that LTO objects fail.
+options=('!lto')
+# No check(): the suite runs in CI on every tag, and compiling the crate a second
+# time for the test profile more than doubles the build.
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('afdcbc3d9e607b77d4eb5e590c4295825a136e9f174a63be636df3444c92c7e9')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/wizard "$pkgdir/usr/bin/wizard"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+}

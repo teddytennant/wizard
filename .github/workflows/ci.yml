@@ -883,7 +883,9 @@ jobs:
           shellcheck install.sh install-byom.sh \
             contrib/check-file-size.sh \
             contrib/check-coverage.sh \
-            contrib/install-in-container.sh
+            contrib/install-in-container.sh \
+            contrib/aur/bump.sh \
+            contrib/homebrew/formula.sh
 
   # shellcheck for the workflow files. The two failure modes it exists for are
   # the ones nobody reviews for: an expression like `github.event.*`
