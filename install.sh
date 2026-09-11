@@ -1123,6 +1123,7 @@ place_binary() {
     # Sets PLACED_PATH to where it landed.
     local src="$1" name="${2:-wizard}"
     chmod 755 "$src"
+    refuse_managed_link "${WIZARD_INSTALL_DIR}/${name}"
 
     if [ -d "$WIZARD_INSTALL_DIR" ] && [ -w "$WIZARD_INSTALL_DIR" ]; then
         install -m 755 "$src" "${WIZARD_INSTALL_DIR}/${name}"
@@ -1145,6 +1146,24 @@ place_binary() {
         return
     fi
     PLACED_PATH="${WIZARD_INSTALL_DIR}/${name}"
+}
+
+# A package manager's symlink at the install path (Homebrew's bin/wizard
+# into its Cellar, a Nix profile into /nix/store) is left alone: replacing
+# it with a file breaks the next `brew upgrade` link step, and that install
+# has its own updater. `wizard update` says the same thing.
+refuse_managed_link() {
+    local target="$1" resolved
+    [ -L "$target" ] || return 0
+    resolved="$(readlink -f "$target" 2>/dev/null || readlink "$target" 2>/dev/null || true)"
+    case "$resolved" in
+        *Cellar/*)
+            die "${target} is Homebrew's link into ${resolved}; update it with \`brew upgrade wizard\`, or set WIZARD_INSTALL_DIR to another directory"
+            ;;
+        /nix/store/*)
+            die "${target} points into the Nix store (${resolved}); update it with \`nix profile upgrade wizard\` or rebuild the configuration that installed it, or set WIZARD_INSTALL_DIR to another directory"
+            ;;
+    esac
 }
 
 # The newest published release tag for $REPO, or empty if it cannot be
@@ -2186,6 +2205,7 @@ loadout_file() {
     local dest="$1" label="$2"
     if [ -f "$dest" ]; then
         say "Existing ${dest} — leaving it untouched"
+        cat >/dev/null  # drain the pipe so the writer never takes SIGPIPE
         return
     fi
     cat >"$dest"

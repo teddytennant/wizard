@@ -35,7 +35,9 @@ pub struct Cli {
 
     /// Initial task. Pre-fills the first message in genie mode; the task to
     /// complete in sovereign / evolve mode. A pasted task can start with
-    /// `-` (a list item, a diff line), so the value is taken as written.
+    /// `-` (a list item, a diff line), so the value is taken as written:
+    /// put it last, or write `--prompt=TEXT`, since a flag right after
+    /// `--prompt` is read as the task.
     #[arg(short, long, allow_hyphen_values = true)]
     pub prompt: Option<String>,
 
