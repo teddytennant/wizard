@@ -467,10 +467,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // First-run onboarding: one screen on a fresh install in an interactive
     // terminal; the full wizard when `--onboard` (or `wizard setup`) asked
     // for it. A cancelled wizard exits gracefully without touching anything.
+    let mut first_run = false;
     let mut config = if should_onboard(&cli)? {
         let outcome = if cli.onboard {
             onboarding::run_full().await?
         } else {
+            first_run = true;
             onboarding::run().await?
         };
         match outcome {
@@ -481,20 +483,11 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             }
         }
     } else {
-        let config_path = config::Config::path()?;
-        if !config_path.exists() {
-            // Non-interactive first runs (piped stdout, CI, cron) must not
-            // silently fall back to a baked-in local provider — there is no
-            // config yet and onboarding needs a TTY.
-            let headless_with_prompt =
-                cli.prompt.is_some() && (cli.mode == Some(Mode::Sovereign) || cli.continuous);
-            if !headless_with_prompt {
-                anyhow::bail!(
-                    "no config at {} — run `wizard` in an interactive terminal \
-                     (or `wizard --onboard`) to pick a provider",
-                    config_path.display()
-                );
-            }
+        // No config and no wizard: a headless job still runs on the defaults
+        // (`WIZARD_LLAMACPP_HOST` and friends are how a cron or fleet child
+        // is configured); anything else is told to run `wizard` once.
+        if !config::Config::path()?.exists() && !headless_job(&cli) {
+            anyhow::bail!("no config yet: run `wizard` once to pick a provider");
         }
         config::Config::load()?
     };
@@ -556,14 +549,14 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // Sovereign is headless and skips both (handled in the match below).
         update::print_startup_notice(&config.update);
         update::maybe_check_on_startup(&config.update).await;
-        return app::run_tui(config, cli).await;
+        return app::run_tui(config, cli, first_run).await;
     }
 
     match config.mode {
         Mode::Genie => {
             update::print_startup_notice(&config.update);
             update::maybe_check_on_startup(&config.update).await;
-            app::run_tui(config, cli).await
+            app::run_tui(config, cli, first_run).await
         }
         Mode::Sovereign => headless::run(config, cli).await,
     }
@@ -583,6 +576,13 @@ fn doctor_request(cli: &cli::Cli) -> Option<bool> {
         Some(cli::Command::Doctor { bundle }) => Some(*bundle),
         _ => None,
     }
+}
+
+/// A prompt run with no human at it: sovereign or continuous with `-p`.
+/// The one case a missing config is not an error, because such a run is
+/// configured by its environment.
+fn headless_job(cli: &cli::Cli) -> bool {
+    cli.prompt.is_some() && (cli.mode == Some(Mode::Sovereign) || cli.continuous)
 }
 
 /// `wizard setup` is `wizard --onboard` spelled as a subcommand: the full
@@ -696,6 +696,20 @@ mod tests {
         assert!(!should_onboard_given(&sovereign, true).unwrap());
         let continuous = parse(&["wizard", "--continuous", "-p", "task"]);
         assert!(!should_onboard_given(&continuous, true).unwrap());
+    }
+
+    #[test]
+    fn only_a_sovereign_or_continuous_prompt_is_a_headless_job() {
+        assert!(headless_job(&parse(&[
+            "wizard",
+            "--mode",
+            "sovereign",
+            "-p",
+            "t"
+        ])));
+        assert!(headless_job(&parse(&["wizard", "--continuous", "-p", "t"])));
+        assert!(!headless_job(&parse(&["wizard", "-p", "t"])));
+        assert!(!headless_job(&parse(&["wizard", "--mode", "sovereign"])));
     }
 
     #[test]

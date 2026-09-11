@@ -1110,21 +1110,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "settings",
         args: "",
-        description: "open the settings menu (change config anytime)",
+        description: "open the settings menu (also /setup)",
         takes_args: false,
         tui: Execution::Ui,
         gui: Execution::Ui,
         // An in-app menu; every entry of it is a choice made at a picker.
-        gateway: Execution::Unavailable,
-        agent_arg: "",
-    },
-    CommandSpec {
-        name: "setup",
-        args: "",
-        description: "the setup menu: provider, mode, gateway, web search, Claude import",
-        takes_args: false,
-        tui: Execution::Ui,
-        gui: Execution::Ui,
         gateway: Execution::Unavailable,
         agent_arg: "",
     },

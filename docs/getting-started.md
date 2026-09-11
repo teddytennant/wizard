@@ -227,15 +227,17 @@ wizard
 With no config present (the default and minimal installs), the first launch asks one question, "How do you want to run Wizard?", with four answers:
 
 - **Sign in with xAI**: a browser sign-in, no API key; grok-4.6.
-- **Sign in with ChatGPT**: a browser sign-in on your ChatGPT plan; gpt-5.6.
-- **Paste an API key**: pick the provider from one list (xAI, Anthropic, OpenAI, OpenRouter, Cloudflare Workers AI, Gemini, DeepSeek, Groq, Mistral, and the rest), paste the key, done. If `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or another provider's variable is already exported, that provider is preselected and nothing is pasted.
-- **Run a model on this machine**: Wizard detects your hardware, downloads a GGUF sized to it, and installs and starts `llama-server` itself (or reuses an existing Ollama install).
+- **Sign in with ChatGPT**: a browser sign-in on your ChatGPT plan; gpt-5.6-sol.
+- **Paste an API key**: pick the provider from one list (Anthropic, OpenAI, xAI, OpenRouter, Cloudflare Workers AI, Gemini, DeepSeek, Groq, Mistral, and the rest) and paste the key. If `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or another provider's variable is already exported, that provider is preselected and Enter keeps the variable; a pasted key replaces it. The key is checked with one request before the TUI opens; a rejected one comes back to the list with the reason.
+- **Run a model locally**: the row names the model and the download size for this machine and asks before downloading; Wizard then installs and starts `llama-server` itself (or reuses an existing Ollama install). Ctrl-C during the download stops it and keeps nothing.
 
-The model is the provider's best coding model; mode is genie; there is no gateway, DuckDuckGo is the web search backend, and nothing is imported. The config is written to `~/.wizard/config.toml`, a sign-in prints its URL and waits for the browser, and Wizard opens the TUI with a one-line summary in the transcript. The empty transcript also offers up to three starter prompts read off the directory (a README, uncommitted changes, a CI config, a package manifest): a number key picks one, or ↓ then Enter.
+The model is the first in the provider's table (`/model` lists the rest); mode is genie; there is no gateway, DuckDuckGo is the web search backend, and nothing is imported. The config is written to `~/.wizard/config.toml`, a sign-in prints its URL and waits for the browser, and Wizard opens the TUI with `saved ~/.wizard/config.toml · /setup changes it` on the card. In a git repo the card also offers up to three starter prompts read off the directory (a README, uncommitted changes, a package manifest and its most-changed source file): ↓ then Enter runs one.
+
+Measured with `contrib/first-run-pty.py --bin target/release/wizard --out /tmp/screens` (a fresh HOME under a pty, release build, a 16-core box that was also compiling): 0.007 s from start to the first screen, 0.022 s from Enter on the paste screen to the TUI prompt, and with `--scenario oauth` 0.983 s from start to the xAI sign-in URL (most of that is the endpoint discovery request). Rerun the script for your own numbers.
 
 Everything the first run skipped is under `/setup` inside Wizard (the same menu as `/settings`): the provider list, model, mode, interface, web search backend, the Telegram gateway, importing from Claude Code, and a **Setup wizard** row that asks every question. `wizard --onboard` (or `wizard setup`) runs that full wizard from the shell: provider (including BYOM llama.cpp and Ollama, and any OpenAI-compatible endpoint), model, gateway, mode, interface, web search, Claude import, then a summary.
 
-A run given a prompt on the command line (`wizard -p …`), a piped run, `wizard acp` and `wizard mcp-serve` never open onboarding; with no config they say so and exit.
+A run given a prompt on the command line (`wizard -p …`), a piped run, `wizard acp` and `wizard mcp-serve` never open onboarding. With no config they say `no config yet: run wizard once to pick a provider` and exit, except a sovereign or continuous `-p` job, which runs on the defaults and the `WIZARD_*` environment.
 
 With a config present (after onboarding, or a `WIZARD_LOCAL=1` install), launching Wizard with a local llama.cpp provider:
 
