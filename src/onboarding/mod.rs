@@ -19,15 +19,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::config::{
-    Config, Credentials, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind,
-};
+use crate::config::{Config, GatewayConfig, GatewayKind, Mode, ProviderConfig, ProviderKind};
 use crate::hardware::{self, GgufModel};
 use crate::import_claude::ImportSelection;
 use crate::skin::Skin;
 use crate::theme;
 
-use widgets::{Opt, Tui, notice, restore_terminal_best_effort, select, setup_terminal, text_input};
+use widgets::{
+    Opt, Tui, confirm, notice, restore_terminal_best_effort, secret_input, select, setup_terminal,
+    text_input,
+};
 
 /// The collected answers from the wizard. Converting this into a [`Config`]
 /// ([`Answers::into_config`]) is pure and unit-tested.
@@ -86,6 +87,28 @@ pub struct Answers {
 }
 
 impl Answers {
+    /// A first run: the provider answered, everything else at its default.
+    fn first_run(provider: ProviderAnswers) -> Self {
+        Self {
+            provider_name: provider.provider_name,
+            kind: provider.kind,
+            base_url: provider.base_url,
+            model: provider.model,
+            api_key_env: provider.api_key_env,
+            provider_api_key: provider.api_key,
+            gguf_path: provider.gguf_path,
+            gateway_kind: GatewayKind::None,
+            gateway_token_env: None,
+            gateway_allowed_chat_ids: Vec::new(),
+            mode: Mode::Genie,
+            skin: None,
+            web_search_backend: "duckduckgo".to_string(),
+            web_search_api_key: None,
+            gateway_bot_token: None,
+            claude_import: None,
+        }
+    }
+
     /// Build a [`Config`] from the answers: one configured provider (set
     /// active), the chosen mode, the `[gateway]` section, and — for an Ollama
     /// choice — the legacy `model` / `ollama_host` fields mirrored for
@@ -277,13 +300,31 @@ const CLOUDFLARE_MODEL: &str = crate::llm::registry::defaults::CLOUDFLARE_MODEL;
 /// The one-screen first run. Returns `Ok(Some(config))` with the config
 /// already saved, `Ok(None)` on Esc / Ctrl-C. A browser sign-in, when the
 /// answer needs one, runs after the screen is down and prints its URL to the
-/// plain terminal the way `wizard --login` does.
+/// plain terminal the way `wizard --login` does. A pasted key is checked
+/// with one request before the TUI opens; a rejected one comes back to the
+/// key screen with the reason.
 pub async fn run() -> Result<Option<Config>> {
-    let pick = tokio::task::spawn_blocking(first_run_screen)
-        .await
-        .context("onboarding task panicked")??;
-    let Some(pick) = pick else { return Ok(None) };
-    finish_first_run(pick).await.map(Some)
+    let mut retry: Option<String> = None;
+    loop {
+        let reason = retry.take();
+        let pick = tokio::task::spawn_blocking(move || first_run_screen(reason))
+            .await
+            .context("onboarding task panicked")??;
+        let Some(pick) = pick else { return Ok(None) };
+        match finish_first_run(pick).await? {
+            Finished::Config(config) => return Ok(Some(*config)),
+            Finished::Rejected(reason) => retry = Some(reason),
+        }
+    }
+}
+
+/// What a pass over the screens came to.
+enum Finished {
+    /// Saved, and signed in where that was the answer.
+    Config(Box<Config>),
+    /// A pasted key the provider refused; nothing saved. The text is the key
+    /// screen's subtitle.
+    Rejected(String),
 }
 
 /// What the first screen resolved to.
@@ -293,26 +334,19 @@ struct FirstRunPick {
 }
 
 /// A browser sign-in the first screen can ask for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Login {
     Xai,
+    #[cfg(feature = "provider-chatgpt")]
     ChatGpt,
 }
 
-/// The summary of a first run, read back by the TUI for its transcript.
-static FIRST_RUN_SUMMARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-/// The one-line summary of a first run that happened in this process, if
-/// one did.
-pub fn first_run_summary() -> Option<String> {
-    FIRST_RUN_SUMMARY.get().cloned()
-}
-
-fn first_run_screen() -> Result<Option<FirstRunPick>> {
+/// One pass over the screens. `retry` carries a rejected key's reason and
+/// starts at the key list; Esc there goes back to the first screen.
+fn first_run_screen(retry: Option<String>) -> Result<Option<FirstRunPick>> {
     let skin_warning = crate::skin::init(None);
     let theme_warning = theme::init(crate::skin::active().companion_theme());
     let mut terminal = setup_terminal()?;
-    let outcome = collect_first_run(&mut terminal);
+    let outcome = collect_first_run(&mut terminal, retry);
     restore_terminal_best_effort();
     for warning in [skin_warning, theme_warning].into_iter().flatten() {
         eprintln!("warning: {warning}");
@@ -320,46 +354,104 @@ fn first_run_screen() -> Result<Option<FirstRunPick>> {
     outcome
 }
 
-/// The first screen's rows, before `installed` narrows them. The key row is
-/// offered when any keyed provider is.
-fn first_run_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice<FirstRunPick>> {
-    let keyed: Vec<ProviderKind> = key_providers(installed)
-        .into_iter()
-        .map(|row| row.kind)
-        .collect();
-    let all = vec![
-        ProviderChoice {
-            label: "Sign in with xAI",
-            detail: "grok-4.6 · browser sign-in, no API key",
-            kinds: vec![ProviderKind::XAI_OAUTH],
-            collect: first_xai_oauth,
-        },
-        ProviderChoice {
-            label: "Sign in with ChatGPT",
-            detail: "gpt-5.6 · browser sign-in, uses your ChatGPT plan",
-            kinds: vec![ProviderKind::CHATGPT_OAUTH],
-            collect: first_chatgpt,
-        },
-        ProviderChoice {
-            label: "Paste an API key",
-            detail: "xAI, Anthropic, OpenAI, OpenRouter, Gemini, …",
-            kinds: keyed,
-            collect: first_api_key,
-        },
-        ProviderChoice {
-            label: "Run a model on this machine",
-            detail: "llama.cpp or Ollama, sized to this machine, private",
-            kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
-            collect: first_local,
-        },
-    ];
+/// The first screen's rows, before `installed` narrows them. `local` is what
+/// the local row would do on this machine, so its size is on the row.
+fn first_run_choices(
+    installed: &[ProviderKind],
+    local: Option<&LocalPlan>,
+) -> Vec<ProviderChoice<FirstRunPick>> {
+    let keyed = key_providers(installed);
+    let mut all = vec![ProviderChoice {
+        label: "Sign in with xAI",
+        detail: format!("{}, in the browser", XAI_MODELS[0]),
+        kinds: vec![ProviderKind::XAI_OAUTH],
+        collect: first_xai_oauth,
+    }];
+    #[cfg(feature = "provider-chatgpt")]
+    all.push(ProviderChoice {
+        label: "Sign in with ChatGPT",
+        detail: format!(
+            "{}, on your ChatGPT plan",
+            crate::plugins::chatgpt::oauth::DEFAULT_MODEL
+        ),
+        kinds: vec![ProviderKind::CHATGPT_OAUTH],
+        collect: first_chatgpt,
+    });
+    all.push(ProviderChoice {
+        label: "Paste an API key",
+        detail: key_row_detail(&keyed),
+        kinds: keyed.into_iter().map(|row| row.kind).collect(),
+        collect: first_api_key_row,
+    });
+    all.push(ProviderChoice {
+        label: "Run a model locally",
+        detail: local.map(local_row_detail).unwrap_or_default(),
+        kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
+        collect: first_local,
+    });
     all.into_iter()
         .filter(|choice| choice.kinds.iter().any(|kind| installed.contains(kind)))
         .collect()
 }
 
-fn collect_first_run(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
-    let choices = first_run_choices(&crate::llm::registry::kinds());
+/// `Anthropic, OpenAI, xAI, Gemini and 11 more`, from whatever is installed.
+fn key_row_detail(rows: &[KeyProvider]) -> String {
+    let lead: Vec<&str> = ["claude", "openai", "xai", "gemini"]
+        .iter()
+        .filter_map(|name| rows.iter().find(|row| row.name == *name))
+        .map(|row| row.short)
+        .collect();
+    let more = rows.len().saturating_sub(lead.len());
+    match (lead.is_empty(), more) {
+        (true, _) => format!("{} providers", rows.len()),
+        (false, 0) => lead.join(", "),
+        (false, more) => format!("{} and {more} more", lead.join(", ")),
+    }
+}
+
+/// What the local row will do: `Qwen3.6 35B, about 20 GB download,
+/// llama.cpp`, or the file or Ollama model already here.
+fn local_row_detail(plan: &LocalPlan) -> String {
+    match plan {
+        LocalPlan::LlamaCpp { gguf_path } => {
+            let tier = Path::new(gguf_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(hardware::gguf_tier_for_file);
+            match tier {
+                Some(tier) if Path::new(gguf_path).exists() => {
+                    format!("{}, already downloaded, llama.cpp", tier.name)
+                }
+                Some(tier) => format!(
+                    "{}, about {} GB download, llama.cpp",
+                    tier.name, tier.approx_gb
+                ),
+                None => format!("{}, llama.cpp", gguf_model_tag(gguf_path)),
+            }
+        }
+        LocalPlan::Ollama { model } => format!("{model} via Ollama"),
+    }
+}
+
+/// The local plan for this machine, or `None` when no local backend is in
+/// the build.
+fn local_plan() -> Option<LocalPlan> {
+    let (suggested, _) = hardware::suggest_gguf();
+    let (suggested_tag, _) = hardware::suggest_model();
+    let dir = models_dir();
+    plan_local_auto(
+        &crate::llm::registry::kinds(),
+        &existing_ggufs(&dir),
+        &dir,
+        &installed_ollama_models(),
+        suggested,
+        &suggested_tag,
+    )
+}
+
+fn collect_first_run(terminal: &mut Tui, retry: Option<String>) -> Result<Option<FirstRunPick>> {
+    let installed = crate::llm::registry::kinds();
+    let choices = first_run_choices(&installed, local_plan().as_ref());
     if choices.is_empty() {
         anyhow::bail!(
             "this build has no provider backends compiled in, so there is nothing to \
@@ -368,21 +460,33 @@ fn collect_first_run(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
              stock release binary. See docs/plugins.md."
         );
     }
+    if let Some(reason) = retry
+        && let Some(pick) = first_api_key(terminal, Some(&reason))?
+    {
+        return Ok(Some(pick));
+    }
     let options: Vec<Opt> = choices
         .iter()
-        .map(|choice| Opt::new(choice.label, choice.detail))
+        .map(|choice| Opt::new(choice.label, choice.detail.clone()))
         .collect();
-    let index = match select(
-        terminal,
-        "How do you want to run Wizard?",
-        "Everything else starts at a default; /setup changes it later.",
-        &options,
-        0,
-    )? {
-        Some(index) => index,
-        None => return Ok(None),
-    };
-    (choices[index].collect)(terminal)
+    let mut selected = 0;
+    loop {
+        let index = match select(
+            terminal,
+            "How do you want to run Wizard?",
+            "Change anything later with /setup.",
+            &options,
+            selected,
+        )? {
+            Some(index) => index,
+            None => return Ok(None),
+        };
+        selected = index;
+        // A row's own Esc comes back here, not out of the wizard.
+        if let Some(pick) = (choices[index].collect)(terminal)? {
+            return Ok(Some(pick));
+        }
+    }
 }
 
 fn first_xai_oauth(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
@@ -400,30 +504,45 @@ fn first_xai_oauth(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
     }))
 }
 
+#[cfg(feature = "provider-chatgpt")]
 fn first_chatgpt(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
-    #[cfg(feature = "provider-chatgpt")]
-    {
-        let provider = crate::plugins::chatgpt::oauth::provider_config();
-        Ok(Some(FirstRunPick {
-            answers: ProviderAnswers {
-                provider_name: provider.name,
-                kind: provider.kind,
-                base_url: provider.base_url,
-                model: provider.model,
-                api_key_env: None,
-                api_key: None,
-                gguf_path: None,
-            },
-            login: Some(Login::ChatGpt),
-        }))
-    }
-    #[cfg(not(feature = "provider-chatgpt"))]
-    {
-        anyhow::bail!("this build has no ChatGPT sign-in (the `provider-chatgpt` feature is off)")
-    }
+    let provider = crate::plugins::chatgpt::oauth::provider_config();
+    Ok(Some(FirstRunPick {
+        answers: ProviderAnswers {
+            provider_name: provider.name,
+            kind: provider.kind,
+            base_url: provider.base_url,
+            model: provider.model,
+            api_key_env: None,
+            api_key: None,
+            gguf_path: None,
+        },
+        login: Some(Login::ChatGpt),
+    }))
 }
 
+/// The local row: say what is about to be downloaded and ask, then resolve
+/// the plan. `Ok(None)` (Esc) goes back to the first screen.
 fn first_local(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    if let Some(LocalPlan::LlamaCpp { gguf_path }) = local_plan()
+        && !Path::new(&gguf_path).exists()
+    {
+        let tier = Path::new(&gguf_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(hardware::gguf_tier_for_file);
+        let size = tier.map_or(String::new(), |tier| {
+            format!(" (about {} GB)", tier.approx_gb)
+        });
+        let question = format!(
+            "Downloads {}{size} to {}. Enter to start, Esc to go back.",
+            gguf_model_tag(&gguf_path),
+            tilde(&models_dir())
+        );
+        if !confirm(terminal, &question)? {
+            return Ok(None);
+        }
+    }
     Ok(collect_local_auto(terminal)?.map(|answers| FirstRunPick {
         answers,
         login: None,
@@ -433,6 +552,8 @@ fn first_local(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
 /// One keyed cloud provider on the first run's compact list.
 struct KeyProvider {
     label: &'static str,
+    /// The word the first screen's row uses for it.
+    short: &'static str,
     name: &'static str,
     kind: ProviderKind,
     base_url: &'static str,
@@ -440,12 +561,17 @@ struct KeyProvider {
     key_env: &'static str,
 }
 
+/// OpenRouter's first-run default. Not the Auto Router: it can hand a
+/// tool-calling turn to a model without tool support.
+const OPENROUTER_FIRST_RUN_MODEL: &str = "anthropic/claude-sonnet-5";
+
 /// The compact list: the keyed clouds, then every OpenAI-compatible preset.
 /// Cloudflare's base URL is a template; `first_api_key` fills the account in.
 fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
     let mut rows = vec![
         KeyProvider {
             label: "xAI (Grok)",
+            short: "xAI",
             name: "xai",
             kind: ProviderKind::XAI,
             base_url: XAI_BASE_URL,
@@ -454,6 +580,7 @@ fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
         },
         KeyProvider {
             label: "Anthropic (Claude)",
+            short: "Anthropic",
             name: "claude",
             kind: ProviderKind::ANTHROPIC,
             base_url: ANTHROPIC_BASE_URL,
@@ -462,6 +589,7 @@ fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
         },
         KeyProvider {
             label: "OpenAI",
+            short: "OpenAI",
             name: "openai",
             kind: ProviderKind::OPENAI,
             base_url: OPENAI_BASE_URL,
@@ -470,14 +598,16 @@ fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
         },
         KeyProvider {
             label: "OpenRouter",
+            short: "OpenRouter",
             name: "openrouter",
             kind: ProviderKind::OPENROUTER,
             base_url: OPENROUTER_BASE_URL,
-            model: OPENROUTER_MODEL,
+            model: OPENROUTER_FIRST_RUN_MODEL,
             key_env: OPENROUTER_KEY_ENV,
         },
         KeyProvider {
             label: "Cloudflare Workers AI",
+            short: "Cloudflare",
             name: "cloudflare",
             kind: ProviderKind::CLOUDFLARE,
             base_url: "",
@@ -488,6 +618,10 @@ fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
     for preset in crate::llm::compat::PRESETS {
         rows.push(KeyProvider {
             label: preset.label,
+            short: match preset.name {
+                "gemini" => "Gemini",
+                _ => preset.label.split(' ').next().unwrap_or(preset.label),
+            },
             name: preset.name,
             kind: ProviderKind::OPENAI,
             base_url: preset.base_url,
@@ -499,28 +633,71 @@ fn key_providers(installed: &[ProviderKind]) -> Vec<KeyProvider> {
     rows
 }
 
-/// True when `name` is exported with a non-blank value.
-fn env_exported(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+/// The exported value of `name`, when it has one that is not blank.
+fn exported(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// The first row whose key variable is already exported: that provider is
-/// preselected and its key is never asked for.
-fn preselected_key_provider(
-    rows: &[KeyProvider],
-    exported: impl Fn(&str) -> bool,
-) -> Option<usize> {
-    rows.iter().position(|row| exported(row.key_env))
+/// preselected, and its paste screen offers to keep the variable.
+fn preselected_key_provider(exported: &[Option<String>]) -> Option<usize> {
+    exported.iter().position(Option::is_some)
 }
 
-fn first_api_key(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+/// `sk-…ab12`: enough of a key to recognise it, never enough to use it.
+fn key_glimpse(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 8 {
+        return "…".to_string();
+    }
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
+}
+
+/// The answers for one keyed provider. A pasted key wins over an exported
+/// variable: the variable is dropped from the config so the stale value in
+/// the shell cannot shadow the key just typed.
+fn key_answers(
+    row: &KeyProvider,
+    base_url: String,
+    pasted: Option<String>,
+    env_set: bool,
+) -> ProviderAnswers {
+    let api_key_env = if pasted.is_some() && env_set {
+        None
+    } else {
+        Some(row.key_env.to_string())
+    };
+    ProviderAnswers {
+        provider_name: row.name.to_string(),
+        kind: row.kind.clone(),
+        base_url,
+        model: row.model.to_string(),
+        api_key_env,
+        api_key: pasted,
+        gguf_path: None,
+    }
+}
+
+fn first_api_key_row(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    first_api_key(terminal, None)
+}
+
+/// The key list, then the paste. `reason` is a rejected key's verdict, shown
+/// over the list. `Ok(None)` (Esc) goes back to the first screen.
+fn first_api_key(terminal: &mut Tui, reason: Option<&str>) -> Result<Option<FirstRunPick>> {
     let rows = key_providers(&crate::llm::registry::kinds());
-    let preselected = preselected_key_provider(&rows, env_exported);
+    let env: Vec<Option<String>> = rows.iter().map(|row| exported(row.key_env)).collect();
+    let preselected = preselected_key_provider(&env);
     let options: Vec<Opt> = rows
         .iter()
-        .map(|row| {
-            let detail = if env_exported(row.key_env) {
-                format!("use ${}", row.key_env)
+        .zip(&env)
+        .map(|(row, value)| {
+            let detail = if value.is_some() {
+                format!("{} · ${} is set", row.model, row.key_env)
             } else {
                 format!("{} · ${}", row.model, row.key_env)
             };
@@ -529,8 +706,8 @@ fn first_api_key(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
         .collect();
     let index = match select(
         terminal,
-        "API key",
-        "Which provider is the key for?",
+        "Which provider?",
+        reason.unwrap_or(""),
         &options,
         preselected.unwrap_or(0),
     )? {
@@ -538,6 +715,7 @@ fn first_api_key(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
         None => return Ok(None),
     };
     let row = &rows[index];
+    let env_value = env[index].as_deref();
 
     let base_url = if row.kind == ProviderKind::CLOUDFLARE {
         let account_id = match text_input(
@@ -554,70 +732,45 @@ fn first_api_key(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
         row.base_url.to_string()
     };
 
-    let api_key = if env_exported(row.key_env) {
-        None
-    } else {
-        match text_input(
-            terminal,
-            &format!("{} API key", row.label),
-            &format!(
-                "Paste the key. Stored in ~/.wizard/credentials.toml (0600), never in \
-                 config.toml. Leave empty to export {} instead.",
-                row.key_env
-            ),
-            "",
-        )? {
-            Some(value) => Some(value.trim().to_string()).filter(|key| !key.is_empty()),
-            None => return Ok(None),
-        }
+    let subtitle = match env_value {
+        Some(value) => format!(
+            "${} is set ({}). Enter keeps it, or paste another key.",
+            row.key_env,
+            key_glimpse(value)
+        ),
+        None => format!(
+            "Stored in ~/.wizard/credentials.toml (0600). Empty: use ${}.",
+            row.key_env
+        ),
+    };
+    let pasted = match secret_input(terminal, &format!("{} API key", row.label), &subtitle)? {
+        Some(value) => Some(value.trim().to_string()).filter(|key| !key.is_empty()),
+        None => return Ok(None),
     };
 
     Ok(Some(FirstRunPick {
-        answers: ProviderAnswers {
-            provider_name: row.name.to_string(),
-            kind: row.kind.clone(),
-            base_url,
-            model: row.model.to_string(),
-            api_key_env: Some(row.key_env.to_string()),
-            api_key,
-            gguf_path: None,
-        },
+        answers: key_answers(row, base_url, pasted, env_value.is_some()),
         login: None,
     }))
 }
 
-impl Answers {
-    /// A first run: the provider answered, everything else at its default.
-    fn first_run(provider: ProviderAnswers) -> Self {
-        Self {
-            provider_name: provider.provider_name,
-            kind: provider.kind,
-            base_url: provider.base_url,
-            model: provider.model,
-            api_key_env: provider.api_key_env,
-            provider_api_key: provider.api_key,
-            gguf_path: provider.gguf_path,
-            gateway_kind: GatewayKind::None,
-            gateway_token_env: None,
-            gateway_allowed_chat_ids: Vec::new(),
-            mode: Mode::Genie,
-            skin: None,
-            web_search_backend: "duckduckgo".to_string(),
-            web_search_api_key: None,
-            gateway_bot_token: None,
-            claude_import: None,
-        }
-    }
-}
-
-/// Save the config, run the sign-in if one was picked, and record the
-/// summary line for the TUI. The config is saved first, so a sign-in that is
-/// abandoned leaves `wizard --login` as the only step left.
-async fn finish_first_run(pick: FirstRunPick) -> Result<Config> {
+/// Check a pasted key, save the config, run the sign-in if one was picked.
+/// A rejected key saves nothing, so the next `wizard` asks again; the config
+/// is saved before a sign-in, so an abandoned one leaves `wizard --login`
+/// as the only step left.
+async fn finish_first_run(pick: FirstRunPick) -> Result<Finished> {
     let FirstRunPick { answers, login } = pick;
+    let keyed = login.is_none() && answers.api_key_env.is_some();
     let answers = Answers::first_run(answers);
     store_pasted_secrets(&answers, crate::credentials::store);
     let config = answers.into_config();
+    if keyed {
+        match check_credential(&config).await {
+            Check::Ok => {}
+            Check::Rejected(reason) => return Ok(Finished::Rejected(reason)),
+            Check::Unreachable(reason) => eprintln!("warning: {reason}"),
+        }
+    }
     config.save().context("saving config from onboarding")?;
 
     if let Some(login) = login {
@@ -632,7 +785,11 @@ async fn finish_first_run(pick: FirstRunPick) -> Result<Config> {
                 "xai",
                 crate::llm::xai_oauth::login(report, paste, false).await,
             ),
-            Login::ChatGpt => ("chatgpt", chatgpt_login(report, paste).await),
+            #[cfg(feature = "provider-chatgpt")]
+            Login::ChatGpt => (
+                "chatgpt",
+                crate::plugins::chatgpt::oauth::login(report, paste).await,
+            ),
         };
         outcome.with_context(|| {
             format!(
@@ -641,49 +798,67 @@ async fn finish_first_run(pick: FirstRunPick) -> Result<Config> {
             )
         })?;
     }
-
-    let _ = FIRST_RUN_SUMMARY.set(first_run_summary_line(&config));
-    Ok(config)
+    Ok(Finished::Config(Box::new(config)))
 }
 
-#[cfg(feature = "provider-chatgpt")]
-async fn chatgpt_login(
-    report: impl Fn(&str) + Send + Sync,
-    paste: crate::llm::oauth_callback::PasteChannel,
-) -> Result<()> {
-    crate::plugins::chatgpt::oauth::login(report, paste).await
+/// The verdict of one request against the provider just configured.
+enum Check {
+    Ok,
+    /// The provider answered and refused the credential; the text is the
+    /// key screen's subtitle.
+    Rejected(String),
+    /// No verdict: a transport failure or no answer in time. Not worth
+    /// holding the user at the key screen for.
+    Unreachable(String),
 }
 
-#[cfg(not(feature = "provider-chatgpt"))]
-async fn chatgpt_login(
-    _report: impl Fn(&str) + Send + Sync,
-    _paste: crate::llm::oauth_callback::PasteChannel,
-) -> Result<()> {
-    anyhow::bail!("this build has no ChatGPT sign-in (the `provider-chatgpt` feature is off)")
-}
+/// How long the first-run credential check waits for an answer.
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// The one dim line the TUI shows in place of the old summary screen.
-fn first_run_summary_line(config: &Config) -> String {
+/// One request to the active provider, so a bad paste or a stale shell
+/// variable is caught here and not by the first turn.
+async fn check_credential(config: &Config) -> Check {
     let provider = config.active();
-    let path = Config::path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "~/.wizard/config.toml".to_string());
-    let mut line = format!(
-        "set up: {} · {} · saved to {path} · /setup changes it",
-        provider.name, provider.model
-    );
-    if let Credentials::ApiKey { .. } = provider.credentials() {
-        let stored =
-            crate::credentials::get(&provider.name).is_some_and(|key| !key.trim().is_empty());
-        let env = provider.api_key_env.as_deref();
-        if !stored && !env.is_some_and(env_exported) {
-            line.push_str(&format!(
-                " · no API key yet: export {}=… or /provider",
-                env.unwrap_or("the key")
-            ));
-        }
+    let host = url_host(&provider.base_url);
+    let client = match provider.build() {
+        Ok(client) => client,
+        Err(err) => return Check::Unreachable(format!("could not build the provider: {err:#}")),
+    };
+    match tokio::time::timeout(CHECK_TIMEOUT, client.health()).await {
+        Ok(Ok(())) => Check::Ok,
+        Ok(Err(err)) => rejection(&host, &err),
+        Err(_) => Check::Unreachable(format!(
+            "{host} did not answer in {} seconds; the key is saved unchecked",
+            CHECK_TIMEOUT.as_secs()
+        )),
     }
-    line
+}
+
+/// Plain words for a failed check: the status, never the response body.
+fn rejection(host: &str, err: &anyhow::Error) -> Check {
+    let status = err
+        .downcast_ref::<crate::llm::ProviderError>()
+        .and_then(|provider| provider.status);
+    match status {
+        Some(code @ (401 | 403)) => Check::Rejected(format!(
+            "{host} rejected that key ({code}). Paste another, or Esc."
+        )),
+        Some(code) => Check::Unreachable(format!(
+            "{host} answered HTTP {code}; the key is saved unchecked"
+        )),
+        None => Check::Unreachable(format!("cannot reach {host}; the key is saved unchecked")),
+    }
+}
+
+/// `api.anthropic.com` out of `https://api.anthropic.com/v1`.
+fn url_host(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
 }
 
 /// One row of the provider menu.
@@ -696,7 +871,7 @@ fn first_run_summary_line(config: &Config) -> String {
 /// at `build()` — an entry that should never have been on the screen.
 struct ProviderChoice<T = ProviderAnswers> {
     label: &'static str,
-    detail: &'static str,
+    detail: String,
     /// The kinds this row can produce. Offered when *any* of them is
     /// registered, because "Local" resolves to llama.cpp or to Ollama
     /// depending on what is already on the machine and either one alone is
@@ -720,6 +895,15 @@ struct ProviderAnswers {
     /// [`run_blocking`], never written to config.toml.
     api_key: Option<String>,
     gguf_path: Option<String>,
+}
+
+/// `path` with the home directory written as `~`.
+fn tilde(path: &Path) -> String {
+    let shown = path.display().to_string();
+    match dirs::home_dir().map(|home| home.display().to_string()) {
+        Some(home) if shown.starts_with(&home) => format!("~{}", &shown[home.len()..]),
+        _ => shown,
+    }
 }
 
 /// `~/.wizard/models/` — where `install.sh` downloads GGUF files.
@@ -1527,31 +1711,88 @@ mod tests {
 
     #[test]
     fn the_first_screen_offers_only_what_this_build_installed() {
-        assert!(first_run_choices(&[]).is_empty());
+        assert!(first_run_choices(&[], None).is_empty());
         let labels = |kinds: &[ProviderKind]| -> Vec<&str> {
-            first_run_choices(kinds)
+            first_run_choices(kinds, None)
                 .iter()
                 .map(|choice| choice.label)
                 .collect()
         };
         assert_eq!(labels(&[ProviderKind::XAI_OAUTH]), ["Sign in with xAI"]);
-        assert_eq!(
-            labels(&[ProviderKind::CHATGPT_OAUTH]),
-            ["Sign in with ChatGPT"]
-        );
         assert_eq!(labels(&[ProviderKind::ANTHROPIC]), ["Paste an API key"]);
+        assert_eq!(labels(&[ProviderKind::OLLAMA]), ["Run a model locally"]);
+        let mut expected = vec!["Sign in with xAI"];
+        if cfg!(feature = "provider-chatgpt") {
+            expected.push("Sign in with ChatGPT");
+        }
+        expected.extend(["Paste an API key", "Run a model locally"]);
+        assert_eq!(labels(&all_shipped_kinds()), expected);
+    }
+
+    /// The label on a sign-in row names the model that lands in config.toml.
+    #[test]
+    fn sign_in_rows_name_the_model_they_configure() {
+        let choices = first_run_choices(&all_shipped_kinds(), None);
+        let xai = choices
+            .iter()
+            .find(|choice| choice.label == "Sign in with xAI")
+            .expect("xai row");
+        assert!(xai.detail.starts_with(XAI_MODELS[0]), "{}", xai.detail);
+        #[cfg(feature = "provider-chatgpt")]
+        {
+            let chatgpt = choices
+                .iter()
+                .find(|choice| choice.label == "Sign in with ChatGPT")
+                .expect("chatgpt row");
+            let model = crate::plugins::chatgpt::oauth::provider_config().model;
+            assert!(chatgpt.detail.starts_with(&model), "{}", chatgpt.detail);
+        }
+    }
+
+    #[test]
+    fn the_key_row_counts_what_it_does_not_name() {
+        let rows = key_providers(&all_shipped_kinds());
+        let detail = key_row_detail(&rows);
+        assert!(
+            detail.starts_with("Anthropic, OpenAI, xAI, Gemini and "),
+            "{detail}"
+        );
+        assert!(
+            detail.ends_with(&format!("{} more", rows.len() - 4)),
+            "{detail}"
+        );
+        let only_openai = key_providers(&[ProviderKind::OPENAI]);
+        let detail = key_row_detail(&only_openai);
+        assert!(detail.starts_with("OpenAI, Gemini and "), "{detail}");
         assert_eq!(
-            labels(&[ProviderKind::OLLAMA]),
-            ["Run a model on this machine"]
+            key_row_detail(&key_providers(&[ProviderKind::ANTHROPIC])),
+            "Anthropic"
+        );
+    }
+
+    #[test]
+    fn the_local_row_says_what_it_will_download() {
+        let missing = LocalPlan::LlamaCpp {
+            gguf_path: "/nowhere/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf".to_string(),
+        };
+        assert_eq!(
+            local_row_detail(&missing),
+            "Qwen3.6 35B, about 20 GB download, llama.cpp"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let present = dir.path().join("Qwen3.5-9B-Q4_K_M.gguf");
+        std::fs::write(&present, b"gguf").unwrap();
+        assert_eq!(
+            local_row_detail(&LocalPlan::LlamaCpp {
+                gguf_path: present.display().to_string()
+            }),
+            "Qwen3.5 9B, already downloaded, llama.cpp"
         );
         assert_eq!(
-            labels(&all_shipped_kinds()),
-            [
-                "Sign in with xAI",
-                "Sign in with ChatGPT",
-                "Paste an API key",
-                "Run a model on this machine",
-            ]
+            local_row_detail(&LocalPlan::Ollama {
+                model: "qwen3.5:9b".to_string()
+            }),
+            "qwen3.5:9b via Ollama"
         );
     }
 
@@ -1576,27 +1817,98 @@ mod tests {
         );
         assert!(openai_only.iter().any(|row| row.name == "gemini"));
         assert!(openai_only.iter().all(|row| row.name != "xai"));
+        // OpenRouter is not left on the Auto Router, which may pick a model
+        // that cannot call tools.
+        let openrouter = rows.iter().find(|row| row.name == "openrouter").unwrap();
+        assert_eq!(openrouter.model, OPENROUTER_FIRST_RUN_MODEL);
+        assert_ne!(openrouter.model, "openrouter/auto");
     }
 
     #[test]
     fn an_exported_key_variable_preselects_its_provider() {
         let rows = key_providers(&all_shipped_kinds());
-        let anthropic = rows
-            .iter()
-            .position(|row| row.name == "claude")
-            .expect("anthropic row");
+        let env = |set: &[&str]| -> Vec<Option<String>> {
+            rows.iter()
+                .map(|row| set.contains(&row.key_env).then(|| "sk-x".to_string()))
+                .collect()
+        };
+        let anthropic = rows.iter().position(|row| row.name == "claude").unwrap();
         assert_eq!(
-            preselected_key_provider(&rows, |env| env == "ANTHROPIC_API_KEY"),
+            preselected_key_provider(&env(&["ANTHROPIC_API_KEY"])),
             Some(anthropic)
         );
-        // Blank counts as unset, and the caller decides that.
-        assert_eq!(preselected_key_provider(&rows, |_| false), None);
+        assert_eq!(preselected_key_provider(&env(&[])), None);
         // The first exported one wins, in list order.
         assert_eq!(
-            preselected_key_provider(&rows, |env| {
-                env == "XAI_API_KEY" || env == "OPENAI_API_KEY"
-            }),
+            preselected_key_provider(&env(&["XAI_API_KEY", "OPENAI_API_KEY"])),
             Some(0)
         );
+    }
+
+    /// A pasted key must be the key that is sent. `resolved_key` reads the
+    /// env var first, so a stale export would shadow the paste unless the
+    /// variable is dropped from the config.
+    #[test]
+    fn a_pasted_key_beats_an_exported_variable() {
+        let rows = key_providers(&all_shipped_kinds());
+        let openai = rows.iter().find(|row| row.name == "openai").unwrap();
+        let kept = key_answers(openai, OPENAI_BASE_URL.to_string(), None, true);
+        assert_eq!(kept.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(kept.api_key, None);
+
+        let pasted = key_answers(
+            openai,
+            OPENAI_BASE_URL.to_string(),
+            Some("sk-new".to_string()),
+            true,
+        );
+        assert_eq!(pasted.api_key_env, None);
+        assert_eq!(pasted.api_key.as_deref(), Some("sk-new"));
+
+        // With nothing exported, the variable stays as the documented override.
+        let fresh = key_answers(
+            openai,
+            OPENAI_BASE_URL.to_string(),
+            Some("sk-new".to_string()),
+            false,
+        );
+        assert_eq!(fresh.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn a_rejected_key_is_reported_in_plain_words_never_the_body() {
+        let body = r#"{"type":"error","error":{"message":"API key is invalid."}}"#;
+        let err = anyhow::Error::new(crate::llm::ProviderError::http(
+            401,
+            format!("https://api.anthropic.com returned HTTP 401: {body}"),
+        ));
+        match rejection("api.anthropic.com", &err) {
+            Check::Rejected(reason) => {
+                assert_eq!(
+                    reason,
+                    "api.anthropic.com rejected that key (401). Paste another, or Esc."
+                );
+            }
+            _ => panic!("a 401 is a rejection"),
+        }
+        let transport = anyhow::anyhow!("connection refused");
+        assert!(matches!(
+            rejection("api.openai.com", &transport),
+            Check::Unreachable(_)
+        ));
+        let server = anyhow::Error::new(crate::llm::ProviderError::http(500, "boom"));
+        assert!(matches!(
+            rejection("api.openai.com", &server),
+            Check::Unreachable(_)
+        ));
+    }
+
+    #[test]
+    fn hosts_and_glimpses_are_cut_the_same_way_every_time() {
+        assert_eq!(url_host("https://api.anthropic.com"), "api.anthropic.com");
+        assert_eq!(url_host("https://api.openai.com/v1"), "api.openai.com");
+        assert_eq!(url_host("localhost:8000/v1"), "localhost:8000");
+        assert_eq!(key_glimpse("sk-abcdefgh1234"), "sk-…1234");
+        assert_eq!(key_glimpse("short"), "…");
     }
 }

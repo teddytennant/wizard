@@ -140,44 +140,45 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
     let all = vec![
         ProviderChoice {
             label: "xAI account sign-in",
-            detail: "grok-4.6 via OAuth, no API key",
+            detail: "grok-4.6 via OAuth, no API key".to_string(),
             kinds: vec![ProviderKind::XAI_OAUTH],
             collect: collect_xai_oauth,
         },
         ProviderChoice {
             label: "xAI (Grok), API key",
-            detail: "grok-4.6 via XAI_API_KEY",
+            detail: "grok-4.6 via XAI_API_KEY".to_string(),
             kinds: vec![ProviderKind::XAI],
             collect: collect_xai,
         },
         ProviderChoice {
             label: "Local",
             detail: "one pick — llama.cpp & Ollama set up for you, model sized to this \
-                     machine; private, no API key",
+                     machine; private, no API key"
+                .to_string(),
             kinds: vec![ProviderKind::LLAMACPP, ProviderKind::OLLAMA],
             collect: collect_local_auto,
         },
         ProviderChoice {
             label: "OpenRouter",
-            detail: "hundreds of models via OPENROUTER_API_KEY",
+            detail: "hundreds of models via OPENROUTER_API_KEY".to_string(),
             kinds: vec![ProviderKind::OPENROUTER],
             collect: collect_openrouter,
         },
         ProviderChoice {
             label: "Cloudflare Workers AI",
-            detail: "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)",
+            detail: "GLM 5.2 via CLOUDFLARE_API_TOKEN (+ account id)".to_string(),
             kinds: vec![ProviderKind::CLOUDFLARE],
             collect: collect_cloudflare,
         },
         ProviderChoice {
             label: "OpenAI / OpenAI-compatible",
-            detail: "gpt-5.6 family and friends",
+            detail: "gpt-5.6 family and friends".to_string(),
             kinds: vec![ProviderKind::OPENAI],
             collect: collect_openai,
         },
         ProviderChoice {
             label: "Anthropic (Claude)",
-            detail: "claude-fable-5",
+            detail: "claude-fable-5".to_string(),
             kinds: vec![ProviderKind::ANTHROPIC],
             collect: collect_anthropic,
         },
@@ -186,25 +187,25 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
         // and nothing else.
         ProviderChoice {
             label: "More cloud providers",
-            detail: "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …",
+            detail: "Gemini, DeepSeek, Groq, Mistral, Kimi, GLM, …".to_string(),
             kinds: vec![ProviderKind::OPENAI],
             collect: collect_compat_menu,
         },
         ProviderChoice {
             label: "Custom OpenAI-compatible endpoint",
-            detail: "any base URL",
+            detail: "any base URL".to_string(),
             kinds: vec![ProviderKind::OPENAI],
             collect: collect_custom,
         },
         ProviderChoice {
             label: "BYOM — llama.cpp",
-            detail: "bring your own model: any GGUF, your server URL",
+            detail: "bring your own model: any GGUF, your server URL".to_string(),
             kinds: vec![ProviderKind::LLAMACPP],
             collect: collect_llamacpp,
         },
         ProviderChoice {
             label: "BYOM — Ollama",
-            detail: "bring your own model: any Ollama tag, pulled on first run",
+            detail: "bring your own model: any Ollama tag, pulled on first run".to_string(),
             kinds: vec![ProviderKind::OLLAMA],
             collect: collect_ollama,
         },
@@ -232,7 +233,7 @@ fn collect_full_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     }
     let options: Vec<Opt> = choices
         .iter()
-        .map(|choice| Opt::new(choice.label, choice.detail))
+        .map(|choice| Opt::new(choice.label, choice.detail.clone()))
         .collect();
     let provider = match select(
         terminal,
@@ -347,7 +348,7 @@ struct GatewayAnswers {
 /// allow-list. `Ok(None)` on cancel.
 fn collect_gateway(terminal: &mut Tui) -> Result<Option<GatewayAnswers>> {
     let gateway_options = [
-        Opt::new("None — terminal only", "recommended"),
+        Opt::new("None, terminal only", "recommended"),
         Opt::new("Telegram", "chat with Wizard from a bot"),
     ];
     let gateway = match select(
@@ -415,7 +416,7 @@ fn collect_gateway(terminal: &mut Tui) -> Result<Option<GatewayAnswers>> {
                     notice(
                         terminal,
                         "No chat IDs entered: the gateway will refuse every message. \
-                         Run `wizard gateway setup` afterwards — it has you message the \
+                         Run `wizard gateway setup` afterwards: it has you message the \
                          bot, reports your chat id, and adds it for you.",
                     )?;
                 }

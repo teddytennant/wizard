@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::theme::{self, Token};
 
@@ -168,9 +168,29 @@ pub(super) fn text_input(
     subtitle: &str,
     default: &str,
 ) -> Result<Option<String>> {
+    input(terminal, title, subtitle, default, false)
+}
+
+/// [`text_input`] for a secret: the screen shows the first characters and
+/// dots for the rest. No default.
+pub(super) fn secret_input(
+    terminal: &mut Tui,
+    title: &str,
+    subtitle: &str,
+) -> Result<Option<String>> {
+    input(terminal, title, subtitle, "", true)
+}
+
+fn input(
+    terminal: &mut Tui,
+    title: &str,
+    subtitle: &str,
+    default: &str,
+    secret: bool,
+) -> Result<Option<String>> {
     let mut buffer = String::new();
     loop {
-        terminal.draw(|frame| draw_input(frame, title, subtitle, &buffer, default))?;
+        terminal.draw(|frame| draw_input(frame, title, subtitle, &buffer, default, secret))?;
         let Some(key) = next_key()? else { continue };
         if is_cancel(&key) {
             return Ok(None);
@@ -203,11 +223,26 @@ pub(super) fn text_input(
 /// errors). Always returns once a key is read.
 pub(super) fn notice(terminal: &mut Tui, message: &str) -> Result<()> {
     loop {
-        terminal.draw(|frame| draw_notice(frame, message))?;
+        terminal.draw(|frame| draw_notice(frame, message, "press any key to continue"))?;
         if let Some(key) = next_key()?
             && (is_cancel(&key) || matches!(key.code, KeyCode::Enter | KeyCode::Char(_)))
         {
             return Ok(());
+        }
+    }
+}
+
+/// A yes-or-back question: Enter is `true`, Esc / Ctrl-C is `false`.
+pub(super) fn confirm(terminal: &mut Tui, message: &str) -> Result<bool> {
+    loop {
+        terminal.draw(|frame| draw_notice(frame, message, "enter continue · esc back"))?;
+        if let Some(key) = next_key()? {
+            if is_cancel(&key) {
+                return Ok(false);
+            }
+            if key.code == KeyCode::Enter {
+                return Ok(true);
+            }
         }
     }
 }
@@ -225,12 +260,21 @@ fn next_key() -> Result<Option<KeyEvent>> {
 }
 
 /// Compose the outer frame (header + bordered body + footer) and return the
-/// inner content area for the step to fill.
-fn frame_body(frame: &mut ratatui::Frame, title: &str, subtitle: &str, footer: &str) -> Rect {
+/// inner content area for the step to fill. The box is `rows` tall inside,
+/// as far as the screen allows, so four options are not a page of border.
+fn frame_body(
+    frame: &mut ratatui::Frame,
+    title: &str,
+    subtitle: &str,
+    footer: &str,
+    rows: usize,
+) -> Rect {
     let area = frame.area();
-    let [header, body, foot] = Layout::vertical([
+    let box_height = u16::try_from(rows.max(1) + 2).unwrap_or(u16::MAX);
+    let [header, body, _, foot] = Layout::vertical([
         Constraint::Length(3),
-        Constraint::Min(3),
+        Constraint::Length(box_height),
+        Constraint::Min(0),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -271,6 +315,7 @@ fn draw_select(
         title,
         subtitle,
         "↑/↓ move · enter select · esc cancel",
+        options.len(),
     );
     let mut lines = Vec::with_capacity(options.len());
     for (index, option) in options.iter().enumerate() {
@@ -306,6 +351,7 @@ fn draw_multi_select(
         title,
         subtitle,
         "↑/↓ move · space toggle · enter confirm · esc skip",
+        options.len(),
     );
     let mut lines = Vec::with_capacity(options.len());
     for (index, option) in options.iter().enumerate() {
@@ -340,8 +386,9 @@ fn draw_input(
     subtitle: &str,
     buffer: &str,
     default: &str,
+    secret: bool,
 ) {
-    let inner = frame_body(frame, title, subtitle, "enter accept · esc cancel");
+    let inner = frame_body(frame, title, subtitle, "enter accept · esc cancel", 2);
     let shown = if buffer.is_empty() {
         Span::styled(
             if default.is_empty() {
@@ -351,6 +398,8 @@ fn draw_input(
             },
             dim(),
         )
+    } else if secret {
+        Span::styled(format!("  {}", masked(buffer)), accent())
     } else {
         Span::styled(format!("  {buffer}"), accent())
     };
@@ -368,7 +417,16 @@ fn draw_input(
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-fn draw_notice(frame: &mut ratatui::Frame, message: &str) {
+/// The first four characters, then a dot per character typed.
+fn masked(secret: &str) -> String {
+    let mut out = String::new();
+    for (index, c) in secret.chars().enumerate() {
+        out.push(if index < 4 { c } else { '•' });
+    }
+    out
+}
+
+fn draw_notice(frame: &mut ratatui::Frame, message: &str, footer: &str) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let block = Block::default()
@@ -385,9 +443,10 @@ fn draw_notice(frame: &mut ratatui::Frame, message: &str) {
         Paragraph::new(vec![
             Line::from(Span::styled(format!("  {message}"), text_dim())),
             Line::from(""),
-            Line::from(Span::styled("  press any key to continue", dim())),
+            Line::from(Span::styled(format!("  {footer}"), dim())),
         ])
-        .alignment(Alignment::Left),
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false }),
         inner,
     );
 }
