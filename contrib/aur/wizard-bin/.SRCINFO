@@ -1,0 +1,22 @@
+pkgbase = wizard-bin
+	pkgdesc = One line. Your sovereign agent. Self-extending. Bring any model
+	pkgver = 3.0.1
+	pkgrel = 1
+	url = https://github.com/teddytennant/wizard
+	arch = x86_64
+	arch = aarch64
+	license = MIT AND Apache-2.0
+	depends = gcc-libs
+	depends = glibc
+	provides = wizard
+	conflicts = wizard
+	options = !debug
+	options = !strip
+	source = LICENSE-MIT-3.0.1::https://github.com/teddytennant/wizard/raw/v3.0.1/LICENSE-MIT
+	sha256sums = 74b073d5ef3b24eb791fccbded9fceffb34bc4dabc37fb0a0e2613fc6b705477
+	source_x86_64 = wizard-bin-3.0.1-x86_64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v3.0.1/wizard-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = 22d9bc43683528b8cff48cb557f5ba12f13a220df47ba255b4152bdb32ca0329
+	source_aarch64 = wizard-bin-3.0.1-aarch64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v3.0.1/wizard-aarch64-unknown-linux-gnu.tar.gz
+	sha256sums_aarch64 = 0266812cdc5b408c895167632a3f215288618d44d1787520a130047db7a1c803
+
+pkgname = wizard-bin
