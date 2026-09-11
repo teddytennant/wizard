@@ -10,7 +10,15 @@ The one-liner is:
 curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
 ```
 
-The installer:
+Homebrew installs the same release tarball, pinned by sha256, on macOS and Linux:
+
+```bash
+brew install teddytennant/tap/wizard
+```
+
+On Arch, `contrib/aur/wizard-bin` packages that tarball and `contrib/aur/wizard` builds the tag with cargo (`makepkg -si` in either directory); they aren't on the AUR yet. Both put down the binary only, the same as `WIZARD_MINIMAL=1` below.
+
+The curl installer:
 
 1. Detects your OS and CPU architecture
 2. Downloads the `wizard` binary from GitHub releases (or from a [mirror](#the-download-mirror), if you set one, falling back to GitHub), verifies the release's `checksums.txt` against its minisign signature (`checksums.txt.minisig`) under the public key inlined in the script, and verifies the tarball's SHA-256 against that file. Every failure aborts the install: no signature, a bad one, one from another key, no `checksums.txt`, no entry in it for that asset, a digest mismatch, or a host with neither `sha256sum` nor `shasum`. Checking a signature needs `minisign`, an OpenSSL that does ed25519 and blake2b, or `python3`, and the installer refuses rather than skip the check when it finds none of them. It looks past PATH for the first two (Homebrew's `openssl@3` is keg-only and never linked onto PATH), and the `python3` path is what carries macOS, where `openssl` is LibreSSL and does neither half of the check. `wizard update` applies the same rules with the key compiled in, so it needs no external tool. See [SECURITY.md](../SECURITY.md#release-signing)
