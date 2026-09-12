@@ -4,6 +4,24 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **Reasoning tokens are counted.** Wizard never read `reasoning_tokens` off a
+  response, so `/cost`, `wizard usage`, the status line and the headless
+  summary counted visible output only. xAI reports the number *beside*
+  `completion_tokens` rather than inside it, so on Grok a turn that thought for
+  five thousand tokens and wrote fifty was billed for fifty. The adapters now
+  reconcile both conventions against the provider's own `total_tokens`, `/cost`
+  names the reasoning share, `wizard usage` grows a `reasoning` column when a
+  row has one, and `usage.jsonl` carries `reasoning_tokens`. Records written
+  before this have no such field and are undercounts on any provider that
+  reported it separately; nothing can recover the number after the fact.
+- **`/effort` no longer puts `reasoning_effort` in Ollama's sampler options.**
+  Ollama ignored the key, so nothing broke, but the request asked for something
+  it could not get.
+
 ## [3.1.0] - 2026-09-11
 
 The fast start, made real: a first frame in single-digit milliseconds on every
