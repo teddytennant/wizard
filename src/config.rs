@@ -736,6 +736,15 @@ pub struct ProviderConfig {
     /// Optional output-token price in USD per million tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usd_per_mtok_out: Option<f64>,
+    /// Set `vision = false` when the model behind this provider is text-only.
+    /// Wizard then stops sending it images: `read_file` on a screenshot
+    /// reports the file's size and format instead of its bytes, which is the
+    /// difference between a useless answer and a clear one. Unset means yes,
+    /// because every endpoint Wizard speaks to carries images and most models
+    /// on them see. It is a per-provider entry rather than a probe because no
+    /// API here answers "can this model see" without being sent an image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
 }
 
 impl ProviderConfig {
@@ -1321,6 +1330,7 @@ impl Config {
             gguf_path: self.gguf_path.clone(),
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }
     }
 

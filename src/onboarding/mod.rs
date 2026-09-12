@@ -127,6 +127,7 @@ impl Answers {
             gguf_path: self.gguf_path.clone(),
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
 
         // Mirror an Ollama choice into the legacy fields so config files remain

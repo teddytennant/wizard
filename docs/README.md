@@ -53,7 +53,7 @@ to do.
 | [Scheduler](scheduler.md) | Recurring runs |
 | [Tasks](tasks.md) | The todo surface the agent keeps |
 | [Sync](sync.md) | Moving state between machines |
-| [Images](image.md) | Attaching and viewing images |
+| [Images](image.md) | Showing the model an image, and generating one |
 
 ## Keeping it healthy
 

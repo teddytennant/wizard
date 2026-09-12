@@ -542,6 +542,7 @@ pub async fn save_provider(
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     };
     let config = store
         .update({
@@ -620,6 +621,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }
     }
 

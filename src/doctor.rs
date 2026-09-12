@@ -2430,6 +2430,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
         let check = check_provider(&provider).await;
         assert_eq!(check.status, Status::Skip);
@@ -2448,6 +2449,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
 
         let config = Config {
