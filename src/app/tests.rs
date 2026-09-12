@@ -525,6 +525,33 @@ fn pasting_the_same_image_twice_stages_it_once() {
     assert!(!app.input.contains("[Image #2]"), "input: {}", app.input);
 }
 
+/// The whole point of staging a paste: the image leaves the composer on the
+/// submitted prompt, which is what the turn turns into an `Image` block on the
+/// user message. Without this the paste is a label in the input and nothing
+/// else.
+#[test]
+fn submitting_sends_the_pasted_image_with_the_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let png = tmp.path().join("a.png");
+    std::fs::write(&png, MINI_PNG).unwrap();
+    let mut app = app();
+    app.project_root = tmp.path().to_path_buf();
+
+    app.handle_paste(&png.display().to_string());
+    type_str(&mut app, " what is this");
+    let action = press(&mut app, KeyCode::Enter);
+
+    let Some(AppAction::Submit(prepared)) = action else {
+        panic!("expected a submit, got {action:?}");
+    };
+    assert_eq!(prepared.images, vec![png.canonicalize().unwrap()]);
+    assert!(prepared.text.ends_with("what is this"), "{}", prepared.text);
+    assert!(
+        app.pending_images.is_empty(),
+        "the staging list was not drained"
+    );
+}
+
 #[test]
 fn clearing_the_composer_drops_staged_images() {
     let tmp = tempfile::tempdir().unwrap();
