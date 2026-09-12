@@ -1667,6 +1667,7 @@ impl Agent {
             completion: completion_tokens,
             cache_read: cache_read_tokens,
             cache_write: cache_write_tokens,
+            reasoning: self.usage.turn_reasoning_tokens(),
         });
     }
 
@@ -1690,12 +1691,14 @@ impl Agent {
             usage.completion,
             usage.cache_read,
             usage.cache_write,
+            usage.reasoning,
         );
         self.append_usage_record(crate::usage::TurnTokens {
             prompt: usage.prompt,
             completion: usage.completion,
             cache_read: usage.cache_read,
             cache_write: usage.cache_write,
+            reasoning: usage.reasoning,
         });
     }
 
@@ -1714,6 +1717,7 @@ impl Agent {
             completion: completion_tokens,
             cache_read: cache_read_tokens,
             cache_write: cache_write_tokens,
+            reasoning: reasoning_tokens,
         } = tokens;
         let provider = self.config.active();
         // Cost is settled here, at write time, because this is the only place
@@ -1727,6 +1731,7 @@ impl Agent {
                 completion: completion_tokens,
                 cache_read: cache_read_tokens,
                 cache_write: cache_write_tokens,
+                reasoning: reasoning_tokens,
             },
             &crate::usage::PriceInputs {
                 model: &self.model,
@@ -1749,6 +1754,7 @@ impl Agent {
             completion_tokens,
             cache_read_tokens,
             cache_write_tokens,
+            reasoning_tokens,
             cost_usd: Some(priced.usd),
             price_source: priced.source,
             mode: self.mode.to_string(),

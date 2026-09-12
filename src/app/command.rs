@@ -1675,6 +1675,7 @@ impl CommandSurface for CommandContext<'_> {
             // two flat totals and nothing else, so mid-turn there is no cache
             // split to report and `/cost` says so by pricing as all-fresh.
             cache_tokens: agent.map(|agent| agent.usage().session_cache_totals()),
+            reasoning_tokens: agent.map(|agent| agent.usage().session_reasoning_tokens()),
             context_tokens: None,
             background_tasks: agent.map(|agent| agent.running_tasks()),
             todos: crate::tools::todo::progress(&self.app.todos),

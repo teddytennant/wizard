@@ -491,7 +491,7 @@ on its final stream chunk.
 - **Log**: every turn appends one JSON line to `~/.wizard/usage.jsonl`:
 
   ```json
-  {"ts":1760000000,"project":"/home/u/proj","model":"claude-fable-5","provider":"claude","prompt_tokens":100000,"completion_tokens":1000,"cache_read_tokens":90000,"cache_write_tokens":0,"cost_usd":0.1263,"price_source":"table","mode":"genie"}
+  {"ts":1760000000,"project":"/home/u/proj","model":"claude-fable-5","provider":"claude","prompt_tokens":100000,"completion_tokens":1000,"cache_read_tokens":90000,"cache_write_tokens":0,"reasoning_tokens":700,"cost_usd":0.1263,"price_source":"table","mode":"genie"}
   ```
 
   `cache_read_tokens` and `cache_write_tokens` are **subsets** of
@@ -500,9 +500,29 @@ on its final stream chunk.
   OpenAI reports them *inside* `prompt_tokens` — and each adapter reconciles
   to the subset form before the numbers reach the log.
 
+  `reasoning_tokens` is a subset of `completion_tokens` the same way, and the
+  providers disagree here too. OpenAI counts reasoning inside
+  `completion_tokens`; xAI counts it beside, and its own `total_tokens` is how
+  you can tell (a Grok reply with 212 prompt, 1 completion and 20 reasoning
+  tokens reports a total of 233). Each adapter checks that arithmetic, and a
+  reasoning count larger than the completion count settles it too, since a
+  subset cannot be. `completion_tokens` in the log is then always every token
+  the reply was billed for. Anthropic publishes no reasoning counter at all,
+  because thinking is already inside `output_tokens`, so its records carry
+  `0`.
+
+  **Records written before Wizard read the field are undercounts.** They have
+  no `reasoning_tokens` and read as `0`, which is right for a local model and
+  wrong for anything that reasoned on a provider that reported the count
+  separately; on xAI that is most of what the turn generated, and nothing can
+  recover the number after the fact. Old lines still parse, and rows whose
+  reasoning is 0 are simply reported as 0.
+
 - **Rollup**: `wizard usage` prints per-project and per-provider totals from
   that log (turns, prompt/completion/cached tokens, and cost); `--since 7d`
-  limits the window. A cost followed by `*` was priced at the unknown-model
+  limits the window. A `reasoning` column appears when some row has one, and
+  is left out entirely when none does, so a local-model report stays the width
+  it was. A cost followed by `*` was priced at the unknown-model
   fallback rather than a real rate — see below. The `cached` column is
   `cache_read_tokens` only: cache *writes* are billed and are in the cost
   figure, but no column shows them, so a cache-heavy turn's `cached` reads
@@ -511,10 +531,24 @@ on its final stream chunk.
 `/cost` inside a session is a different, simpler path: it multiplies the
 session's prompt and completion totals by the `usd_per_mtok_in` /
 `usd_per_mtok_out` you configured on the active provider, and prints how to set
-them when you have not. It does not consult the price table below and does not
-know about cached tokens, so it says nothing at all on a provider with no
-configured rates, and over-states a cached session on one that has them. The
-log and `wizard usage` are where the priced numbers live.
+them when you have not. It does not consult the price table below, so it says
+nothing at all on a provider with no configured rates. The log and
+`wizard usage` are where the priced numbers live. When the session generated
+reasoning tokens, `/cost` names them: `2100 completion tokens (2000 of them
+reasoning)`. The second number is what a turn that looks cheap was actually
+spent on.
+
+### Reasoning effort
+
+Reasoning tokens are billed at the output rate and they are most of the wall
+clock, so the cheapest way to move both numbers is to ask for less of it. Set
+`reasoning_effort = "low"` (or `"medium"` / `"high"`) at the top level of
+`~/.wizard/config.toml`, or `/effort low` mid-session, which writes the same
+key back. Unset means the provider's own default, which on Grok 4.x is the
+highest setting. The parameter is sent only to models that accept one (xAI
+Grok 4.x, OpenAI o-series and gpt-5, and Anthropic's thinking models, which
+take it as `effort` instead) and is dropped for everything else rather than
+risking a 400. `/status` prints the current level.
 
 ### Where the cost figure comes from
 

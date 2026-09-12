@@ -483,6 +483,13 @@ fn build_request_body(request: &ChatRequest) -> Result<serde_json::Value> {
     use serde_json::{Value, json};
 
     let mut body = serde_json::to_value(request).context("serializing chat request")?;
+    // `options` is Ollama's sampler bag and `reasoning_effort` is not one of
+    // its keys. Ollama ignores what it does not know, so this is tidiness
+    // rather than a fix, but a request that carries a parameter the server has
+    // no use for is a lie about what was asked for.
+    if let Some(options) = body.get_mut("options").and_then(Value::as_object_mut) {
+        options.remove("reasoning_effort");
+    }
     let mut messages: Vec<Value> = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
         let role = match message.role {
@@ -1012,6 +1019,25 @@ mod tests {
             stream: true,
             options: None,
         }
+    }
+
+    /// `/effort` is a no-op here and the request says so. Ollama's `options`
+    /// is its sampler bag; `reasoning_effort` is not one of its keys, and the
+    /// sampler settings that *are* keys still go out.
+    #[test]
+    fn reasoning_effort_is_not_sent_to_ollamas_native_endpoint() {
+        let mut request = request(vec![crate::llm::ChatMessage::user("hi")]);
+        request.options = Some(ChatOptions {
+            temperature: Some(0.6),
+            num_ctx: Some(16_384),
+            reasoning_effort: Some("low".to_string()),
+        });
+        let body = build_request_body(&request).expect("body");
+        assert!(
+            body["options"].get("reasoning_effort").is_none(),
+            "got: {body}"
+        );
+        assert_eq!(body["options"]["num_ctx"], 16_384);
     }
 
     /// Ollama's native `/api/chat` is the one backend that is not

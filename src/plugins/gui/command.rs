@@ -129,6 +129,7 @@ impl CommandSurface for GuiSurface<'_, '_> {
             prompt_tokens,
             completion_tokens,
             cache_tokens: Some(cache_tokens),
+            reasoning_tokens: Some(self.agent.usage().session_reasoning_tokens()),
             context_tokens: Some(self.agent.context_tokens()),
             background_tasks: Some(self.agent.running_tasks()),
             todos: crate::tools::todo::progress(&self.agent.todos()),

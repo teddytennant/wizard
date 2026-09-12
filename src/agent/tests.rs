@@ -267,6 +267,7 @@ fn final_chunk(content: &str) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -289,6 +290,7 @@ fn image_chunk(images: Vec<Image>) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -344,6 +346,7 @@ fn calls_image_tool() -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -603,6 +606,20 @@ fn cached_usage_chunk(
     }
 }
 
+/// [`usage_chunk`] whose completion count includes reasoning tokens, the way
+/// every adapter reports one after reconciling its provider's wire shape.
+fn reasoning_usage_chunk(
+    content: &str,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    reasoning_tokens: u64,
+) -> ChatChunk {
+    ChatChunk {
+        reasoning_eval_count: Some(reasoning_tokens),
+        ..usage_chunk(content, prompt_tokens, completion_tokens)
+    }
+}
+
 /// A turn's event channel closes when the turn ends.
 ///
 /// The one property every "collect a turn's output" caller depends on, and it
@@ -752,6 +769,7 @@ fn tool_call_chunk(name: &str, arguments: Value) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -1811,6 +1829,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
             completion: 1_000,
             cache_read: 0,
             cache_write: 0,
+            reasoning: 0,
         },
         &crate::usage::PriceInputs {
             model: "claude-opus-5",
@@ -1825,6 +1844,97 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
         "a turn that was mostly a cache hit must not be billed like a cold \
          one: billed {billed}, all-fresh {}",
         all_fresh.usd
+    );
+}
+
+/// The same seam for reasoning tokens, which xAI reports *beside* its
+/// completion count rather than inside it. The adapter sums them before the
+/// chunk leaves it, so what has to survive from here is the split: the tracker
+/// keeps it, the record carries it, and the totals it is a subset of are the
+/// summed ones.
+///
+/// The numbers are a real `grok-4.5` reply scaled up: 212 prompt, one visible
+/// token, 20 reasoning. Counting the visible token alone bills 1/21 of what
+/// the call generated.
+#[tokio::test]
+async fn reasoning_tokens_reach_the_usage_record() {
+    let tmp = TempDir::new();
+    let mut config = Config::default();
+    config.providers = vec![crate::config::ProviderConfig {
+        name: "xai".to_string(),
+        kind: crate::config::ProviderKind::XAI,
+        base_url: "https://api.x.ai/v1".to_string(),
+        model: "grok-4.5".to_string(),
+        api_key_env: None,
+        gguf_path: None,
+        usd_per_mtok_in: None,
+        usd_per_mtok_out: None,
+    }];
+    config.active_provider = Some("xai".to_string());
+
+    let provider = ScriptedProvider::new(vec![vec![reasoning_usage_chunk(
+        "pong", 21_200, 2_100, 2_000,
+    )]]);
+    let session = Session::create(&tmp.0).expect("create session");
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+    let mut agent = Agent::new(
+        provider,
+        ToolRegistry::new(),
+        config,
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        true,
+        hooks,
+    )
+    .expect("build agent");
+    agent.set_usage_log(Some(tmp.0.join("usage.jsonl")));
+
+    let (tx, _rx) = mpsc::channel(64);
+    agent.run_turn("go", tx).await.expect("turn ok");
+
+    assert_eq!(
+        agent.usage().turn_totals(),
+        (21_200, 2_100),
+        "reasoning is a subset of the completion count, never an addition"
+    );
+    assert_eq!(agent.usage().turn_reasoning_tokens(), 2_000);
+    assert_eq!(agent.usage().session_reasoning_tokens(), 2_000);
+
+    let raw = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("log written");
+    let record: crate::usage::UsageRecord =
+        serde_json::from_str(raw.lines().next().expect("one record")).expect("valid json");
+    assert_eq!(record.completion_tokens, 2_100);
+    assert_eq!(record.reasoning_tokens, 2_000);
+
+    // grok-4.5 is $3/Mtok in and $15/Mtok out. The 100 visible tokens alone
+    // would have billed $0.0015 of output; the 2,100 the call really
+    // generated bill $0.0315, which is the whole point.
+    let billed = record.cost_usd.expect("a priced record");
+    let visible_only = crate::usage::estimate_cost(
+        crate::usage::TurnTokens {
+            prompt: 21_200,
+            completion: 100,
+            cache_read: 0,
+            cache_write: 0,
+            reasoning: 0,
+        },
+        &crate::usage::PriceInputs {
+            model: "grok-4.5",
+            endpoint: "https://api.x.ai/v1",
+            usd_per_mtok_in: None,
+            usd_per_mtok_out: None,
+            self_hosted: false,
+        },
+    );
+    assert!(
+        billed > visible_only.usd,
+        "counting only the visible tokens under-bills the turn: {billed} vs {}",
+        visible_only.usd
     );
 }
 
@@ -2742,6 +2852,7 @@ fn multi_tool_chunk(names: &[&str]) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -3033,6 +3144,7 @@ fn delta_chunk(content: &str, thinking: bool) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 

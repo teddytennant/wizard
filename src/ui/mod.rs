@@ -3275,6 +3275,7 @@ fn session_cost(app: &App) -> Option<String> {
             completion: app.status.completion_tokens,
             cache_read: 0,
             cache_write: 0,
+            reasoning: 0,
         },
         provider.usd_per_mtok_in,
         provider.usd_per_mtok_out,

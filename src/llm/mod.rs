@@ -1578,6 +1578,57 @@ pub struct ChatChunk {
     /// fresh input (final chunk only). See [`CacheTokens`].
     #[serde(default)]
     pub cache: CacheTokens,
+    /// Reasoning ("thinking") tokens the model generated, when the backend
+    /// reports a count (final chunk only). A **subset** of `eval_count`, the
+    /// way [`CacheTokens`] is a subset of `prompt_eval_count`: providers bill
+    /// these at the output rate, so they are already in the total and must
+    /// never be added to it. `None` means the backend reports no split, which
+    /// is what Anthropic and every local backend do.
+    #[serde(default)]
+    pub reasoning_eval_count: Option<u64>,
+}
+
+/// Reconcile a provider's completion count with its reasoning count, so what
+/// leaves an adapter is always the summed form [`ChatChunk::eval_count`]
+/// promises.
+///
+/// Providers disagree about whether `completion_tokens` already contains the
+/// reasoning tokens. OpenAI's does. xAI's does not, and its own `total_tokens`
+/// is the proof: a `grok-4.5` reply with `prompt_tokens: 212`,
+/// `completion_tokens: 1` and `reasoning_tokens: 20` reports
+/// `total_tokens: 233`, which only adds up if all three are siblings. Counting
+/// the visible token alone there under-states the call by 21x.
+///
+/// So the arithmetic decides, not the vendor name. Two things prove the
+/// exclusive convention: prompt + completion + reasoning being exactly the
+/// total the provider reported, or a reasoning count larger than the
+/// completion count, which a subset can never be. Failing both, the count is
+/// left as it came, because inventing tokens is the worse of the two errors.
+pub fn completion_with_reasoning(
+    prompt: Option<u64>,
+    completion: Option<u64>,
+    reasoning: Option<u64>,
+    total: Option<u64>,
+) -> Option<u64> {
+    let completion = completion?;
+    let reasoning = reasoning.unwrap_or(0);
+    if reasoning == 0 {
+        return Some(completion);
+    }
+    let adds_up = match (prompt, total) {
+        (Some(prompt), Some(total)) => {
+            prompt.saturating_add(completion).saturating_add(reasoning) == total
+        }
+        // No total to check against: a usage object that reports neither is
+        // rare (Wizard asks for usage on every stream and gets the whole
+        // object), and the one thing still knowable is the inequality.
+        _ => false,
+    };
+    if adds_up || reasoning > completion {
+        Some(completion.saturating_add(reasoning))
+    } else {
+        Some(completion)
+    }
 }
 
 /// The prompt-cache split of one model call's prompt tokens.

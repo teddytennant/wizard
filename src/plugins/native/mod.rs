@@ -554,6 +554,7 @@ impl App {
             // `None` rather than as `(0, 0)`, which would be the same
             // arithmetic asserted as a fact.
             cache_tokens: None,
+            reasoning_tokens: None,
             context_tokens: self.rail.meter.context,
             background_tasks: None,
             todos: (

@@ -295,6 +295,14 @@ gguf_path = "/home/you/.wizard/models/Qwen3.6-27B-Q4_K_M.gguf"
 
 `gguf_path` is what lets Wizard start `llama-server` for you; without it (e.g. a server you run yourself, or on another machine) Wizard just connects to `base_url`. `gguf_path` only applies to `kind = "llamacpp"` providers, which never use an API key.
 
+`reasoning_effort` is the one other knob worth knowing about here. Set it at the top level of `config.toml` to `"low"`, `"medium"` or `"high"` and every call that goes to a model with a reasoning dial carries it:
+
+```toml
+reasoning_effort = "low"
+```
+
+Leave it out and each provider's own default applies, which on Grok 4.x is the highest setting. `low` is usually the right choice for a session of small edits and greps: the answer arrives sooner and costs less, because reasoning tokens are billed as output. Change it mid-session with `/effort low` (or `/effort` for a picker); that writes the same key back to `config.toml`, so it sticks. The parameter only goes to models that take one: xAI's Grok 4.x, OpenAI's o-series and gpt-5 family, and Anthropic's thinking models, which get their own `effort` field. Everything else ignores the setting rather than erroring on it.
+
 `max_steps` bounds one turn (a step is one model → tool → model round trip). `0`, the default, means no limit: the turn ends when the model stops calling tools. An interrupt (Esc), the `--max-hours` limit, and the circuit breaker still end a turn. Set a positive number to cap it instead; the turn then stops when the budget runs out and Wizard says so.
 
 The installer also lays down `~/.wizard/mcp.toml` (Playwright browser MCP) and `~/.wizard/subagents/` (a four-subagent roster), each file only if absent; see [the default loadout](loadout.md). To move this state (config, skills, commands, subagents, scripted tools) to another machine, see [Sync](sync.md).

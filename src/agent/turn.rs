@@ -476,6 +476,9 @@ pub(super) struct StepUsage {
     /// How the prompt split between the provider's cache and fresh input. A
     /// subset of `prompt`, so it is carried beside it rather than added to it.
     pub cache: CacheTokens,
+    /// How much of `completion` the model spent reasoning. Also a subset, for
+    /// the same reason.
+    pub reasoning: Option<u64>,
 }
 
 impl StepUsage {
@@ -1227,6 +1230,9 @@ async fn stream(
         if chunk.eval_count.is_some() {
             streamed.usage.completion = chunk.eval_count;
         }
+        if chunk.reasoning_eval_count.is_some() {
+            streamed.usage.reasoning = chunk.reasoning_eval_count;
+        }
         if !chunk.cache.is_empty() {
             streamed.usage.cache = chunk.cache;
         }
@@ -1389,6 +1395,9 @@ impl Host for TurnHost<'_> {
         self.agent
             .usage
             .record_cache(usage.cache.read, usage.cache.write);
+        self.agent
+            .usage
+            .record_reasoning(usage.reasoning.unwrap_or(0));
         sink.usage(usage.prompt.unwrap_or(0), usage.completion.unwrap_or(0))
             .await;
     }
@@ -1868,6 +1877,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }
     }
 
@@ -1939,6 +1949,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }]
     }
 
@@ -1959,6 +1970,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }]
     }
 
@@ -2156,6 +2168,7 @@ mod tests {
                 eval_count: None,
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
+                reasoning_eval_count: None,
             }],
             // The compaction pass's own summary call.
             vec![final_chunk(ChatMessage::assistant("everything so far"))],
