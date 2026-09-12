@@ -4,6 +4,26 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **`read_file` on an image returns the image.** It read every path as text, so
+  the agent's only way to look at a screenshot was to reconstruct it from pixel
+  values in a script, which the bundled prompt taught and which gets the wrong
+  answer on anything with anti-aliasing. png, jpeg, gif, webp, bmp and pnm now
+  come back as the image plus a line naming the file, its pixel size and its
+  format. BMP and PNM are re-encoded as PNG (no vision API takes either; `qemu
+  screendump` writes a `.ppm`), and an image over the 10 MB transport cap is
+  halved until it fits, with the size it was shown at in the text. The format
+  comes from the first bytes, not the extension. Text files are unchanged.
+
+### Added
+
+- **`vision = false`** on a provider, for a text-only model. `read_file` then
+  describes an image instead of attaching it, rather than spending the window
+  on something the model will discard.
+
 ## [3.1.0] - 2026-09-11
 
 The fast start, made real: a first frame in single-digit milliseconds on every

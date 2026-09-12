@@ -1,4 +1,45 @@
-# Image generation
+# Images
+
+## Showing the model an image
+
+Three ways in, all of them landing on the same `Image` block on a user message:
+
+- **Paste** into the TUI. A `data:image/...` URL, one or more image paths, or an
+  image sitting on the OS clipboard (terminals cannot deliver image bytes through
+  bracketed paste, so Wizard reads the clipboard itself). The composer shows
+  `[Image #1]` and the file goes with your next message.
+- **`@path/to/shot.png`** in a message, on any surface, headless included. The text
+  keeps a short `[image: shot.png]` placeholder and the file rides alongside.
+- **`read_file`**, which is how the agent looks at something by itself. A path whose
+  first bytes are png, jpeg, gif, webp, bmp or pnm comes back as the image plus a
+  line naming the file, its pixel size and its format:
+
+  ```text
+  screen.ppm: 1024x768 PNM, 2359349 bytes
+  ```
+
+  BMP and PNM are re-encoded as PNG on the way out, because no vision API takes
+  either; `qemu screendump` writes a `.ppm`, which is the reason both are here.
+  Anything over the 10 MB transport cap is halved until it fits, and the line then
+  says what size the model is actually looking at. Detection is on the bytes, not
+  the extension. Non-image files read as text exactly as before.
+
+If the model behind your provider is text-only, say so and Wizard stops spending
+context on pictures it cannot use:
+
+```toml
+[[providers]]
+name = "local"
+kind = "llamacpp"
+vision = false
+```
+
+`read_file` on an image then returns the description line and an explanation
+instead of the bytes. Unset means yes: every endpoint Wizard speaks to carries
+images, and there is no API call that answers "can this model see" without
+sending it one.
+
+## Image generation
 
 The native `generate_image` tool creates images from a text prompt via an OpenAI-compatible `POST {base}/images/generations` endpoint. On xAI that is the Imagine API (`https://api.x.ai/v1/images/generations`). The result is always written to a local file so the agent (and you) can open it.
 

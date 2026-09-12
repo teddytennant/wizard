@@ -400,10 +400,14 @@ unicodeit = "0.2"
 # pins ratatui 0.29 and would link a second copy, making its widgets untypeable
 # against our `Frame`. Default features are off because they pull `chafa` in
 # over pkg-config (a C library we will not require to build wizard) and the
-# whole of `image`'s codec set; we take exactly the four formats `llm::Image`
-# can carry.
+# whole of `image`'s codec set.
+#
+# Six codecs, not the four `llm::Image` carries. The extra two are read-only:
+# `read_file` on a `.bmp` or a `.ppm` (what `qemu screendump` writes) decodes
+# it and re-encodes PNG, because no vision API takes either format. Both
+# decoders are small and pure Rust.
 ratatui-image = { version = "10", default-features = false, features = ["crossterm"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "pnm"] }
 
 # Plain-terminal progress (headless turns, fleet, llama-server waits).
 # Defaults are minimal (just unicode-width, which the braille frames need).

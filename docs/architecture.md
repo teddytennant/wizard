@@ -164,11 +164,13 @@ Images move through the loop in both directions. A tool returns them on `ToolOut
 
 Base64 stays on the `ChatMessage` in history for vision models. A tool's images ride back to the model on a following user message, not on the tool result (OpenAI's tool role takes no image blocks).
 
+`read_file` is the agent's way in: a path whose first bytes are png, jpeg, gif, webp, bmp or pnm comes back as the image plus a line naming the file, its pixel size and its format. BMP and PNM are re-encoded as PNG, since no vision API takes either; an image over the 10 MB transport cap is halved until it fits and the line says at what size. Detection is on the bytes, not the extension, because `qemu screendump` writes an ASCII-headed `.ppm` that would otherwise read back as valid, useless text.
+
 ### Tools (`tools/`)
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents with optional line range |
+| `read_file` | Read file contents with optional line range; an image file comes back as the image |
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Search-and-replace edit |
 | `list_files` | Directory listing with glob filter |
