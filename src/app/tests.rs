@@ -2591,6 +2591,38 @@ fn goal_kickoff_queues_a_working_turn() {
 }
 
 #[test]
+fn goal_kickoff_arms_the_critic_loop() {
+    let mut app = app();
+    app.queue_goal_kickoff("rewrite spore in assembly");
+    assert_eq!(
+        app.active_goal.as_deref(),
+        Some("rewrite spore in assembly")
+    );
+    assert_eq!(app.goal_plateaus, 0);
+    // The exact queued prompt is armed so the turn that runs it is recognized
+    // as a goal turn (and a user message queued ahead is not).
+    assert_eq!(
+        app.expected_goal_prompt.as_deref(),
+        Some(app.message_queue[0].text.as_str())
+    );
+    assert!(!app.goal_turn_running);
+}
+
+#[test]
+fn a_queued_goal_rework_re_arms() {
+    let mut app = app();
+    app.active_goal = Some("ship it".to_string());
+    app.queue_goal_turn("close the one gap the critic named".to_string());
+    assert_eq!(app.message_queue.len(), 1);
+    assert_eq!(
+        app.expected_goal_prompt.as_deref(),
+        Some("close the one gap the critic named")
+    );
+    // A rework does not disturb the standing goal.
+    assert_eq!(app.active_goal.as_deref(), Some("ship it"));
+}
+
+#[test]
 fn goal_kickoff_respects_the_queue_cap() {
     let mut app = app();
     app.status.busy = true;

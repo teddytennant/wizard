@@ -575,6 +575,34 @@ pub async fn run_tui(
             continue;
         }
 
+        // The independent goal critic returned its verdict. Act on it: `OURS`
+        // ends the loop, `BAR`/first `PLATEAU` queues one more rework turn
+        // (drained below), a second `PLATEAU` stops and reports. The verdict
+        // summary was already shown as a notice by the critic task.
+        if let Event::GoalCritiqued(verdict) = event {
+            app.goal_inflight = false;
+            app.goal_plateaus = match &verdict {
+                crate::agent::goal_critic::GoalVerdict::Plateau => app.goal_plateaus + 1,
+                _ => 0,
+            };
+            match crate::agent::goal_critic::plan_after_verdict(&verdict, app.goal_plateaus) {
+                crate::agent::goal_critic::CriticAction::Accept => {
+                    app.notice("goal met: the independent critic signed off.");
+                    app.active_goal = None;
+                }
+                crate::agent::goal_critic::CriticAction::Rework(prompt) => {
+                    if app.active_goal.is_some() {
+                        app.queue_goal_turn(prompt);
+                    }
+                }
+                crate::agent::goal_critic::CriticAction::Stop(why) => {
+                    app.notice(format!("goal loop stopped: {why}"));
+                    app.active_goal = None;
+                }
+            }
+            continue;
+        }
+
         // The background MCP connect finished: merge the servers' tools into the
         // live agent's registry. If a turn is running the agent is out of its
         // slot, so defer the merge until the turn returns it.
@@ -987,6 +1015,39 @@ pub async fn run_tui(
                     // mid-turn snapshots so a follow-up `/btw` or `/fork` sees it.
                     side_question_snapshot = Some(agent.side_question_context());
                     fork_snapshot = Some(agent.fork_context());
+                    // A goal turn just finished: judge it with an independent
+                    // critic before the loop trusts it. Runs off the event loop
+                    // (a model call must not freeze the TUI), reporting back via
+                    // `Event::GoalCritiqued`. The verdict, not the builder's own
+                    // say-so, decides whether the goal is met.
+                    if app.goal_turn_running && !app.goal_inflight {
+                        app.goal_turn_running = false;
+                        if let Some(goal) = app.active_goal.clone() {
+                            app.goal_inflight = true;
+                            let ctx = agent.critique_context(None);
+                            let notify = events.sender();
+                            spawn_answering(
+                                notify.clone(),
+                                Event::GoalCritiqued(crate::agent::goal_critic::GoalVerdict::Bar(
+                                    "the goal critic crashed; judge the goal again".to_string(),
+                                )),
+                                async move {
+                                    let verdict = ctx.critique(&goal).await.unwrap_or_else(|err| {
+                                        crate::agent::goal_critic::GoalVerdict::Bar(format!(
+                                            "the goal critic could not run ({err:#}); judge again"
+                                        ))
+                                    });
+                                    let _ = notify
+                                        .send(Event::Notice(format!(
+                                            "goal critic: {}",
+                                            verdict.summary()
+                                        )))
+                                        .await;
+                                    Some(Event::GoalCritiqued(verdict))
+                                },
+                            );
+                        }
+                    }
                     agent_slot = Some(agent);
                     // The provider just served a turn, so any earlier health
                     // warning was transient — drop it so it self-heals.
@@ -1055,6 +1116,11 @@ pub async fn run_tui(
             // drop them so the rebuild doesn't auto-start a turn the user may
             // no longer want.
             app.message_queue.clear();
+            // Interrupting a goal turn stops the whole critic-gated loop; the
+            // dropped rework and the arm go with the queue.
+            app.active_goal = None;
+            app.expected_goal_prompt = None;
+            app.goal_turn_running = false;
             app.notice("interrupted");
             spawn_session_rebuild(
                 &mut app,
@@ -1184,6 +1250,14 @@ fn start_agent_turn(
 
     let prompt = prepared.text;
     let images = prepared.images;
+    // A goal loop arms `expected_goal_prompt` with the exact text of its next
+    // turn (kickoff or rework). When that turn is the one starting, flag it so
+    // its completion triggers the independent critic — and clear the arm, so a
+    // user's own message queued behind it is never mistaken for a goal turn.
+    if app.expected_goal_prompt.as_deref() == Some(prompt.as_str()) {
+        app.goal_turn_running = true;
+        app.expected_goal_prompt = None;
+    }
     *agent_task = Some(tokio::spawn(async move {
         let fallback = agent_tx.clone();
         // The turn runs inside `catch_unwind` because the alternative is the

@@ -1100,7 +1100,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "goal",
         args: "[text]",
-        description: "show the standing goal, or set one and start working on it",
+        description: "show the standing goal, or set one and work on it under an independent critic",
         takes_args: false,
         tui: Execution::Agent,
         gui: Execution::Agent,

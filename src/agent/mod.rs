@@ -8,6 +8,7 @@
 pub mod breaker;
 pub mod context;
 mod event;
+pub mod goal_critic;
 pub mod mission;
 pub mod prompts;
 mod retry;
@@ -80,6 +81,59 @@ pub struct ForkContext {
     pub ctx: ToolContext,
     /// Restrict the fork to read-only tools (parent was in plan mode).
     pub read_only: bool,
+}
+
+/// Everything [`Agent::critique_goal`] needs to run an independent critic
+/// without borrowing the agent, so a surface can spawn one off the main loop
+/// (the same mid-turn pattern as [`ForkContext`] and [`SideQuestionContext`]).
+/// Cloned from the live agent before it leaves its slot; the critic runs read-
+/// only and never registers on the parent, so it leaves no trace but its
+/// verdict.
+#[derive(Clone)]
+pub struct CritiqueContext {
+    client: Arc<dyn LlmProvider>,
+    model: String,
+    registry: ToolRegistry,
+    hooks: Arc<HookEngine>,
+    ctx: ToolContext,
+    breaker: breaker::LlmBreaker,
+    cancel: Option<CancelHandle>,
+}
+
+impl CritiqueContext {
+    /// Run a fresh critic over the current artifact and return its verdict on
+    /// `goal`. See [`Agent::critique_goal`] for the semantics; this is the
+    /// snapshot form for callers that are out of the agent's slot.
+    pub async fn critique(&self, goal: &str) -> Result<goal_critic::GoalVerdict> {
+        let config = goal_critic::critic_config();
+        let task = goal_critic::critic_task(goal, &self.ctx.cwd);
+        let options = subagent::SpawnOptions {
+            model: Some(self.model.clone()),
+            read_only: true,
+            cancel: self.cancel.clone(),
+            breaker: self.breaker.clone(),
+            ..Default::default()
+        };
+        let result = subagent::spawn(
+            subagent::next_run_id(),
+            &config,
+            &task,
+            &options,
+            &self.client,
+            &self.registry,
+            &self.hooks,
+            &self.ctx,
+        )
+        .await?;
+        Ok(
+            goal_critic::parse_verdict(&result.output).unwrap_or_else(|| {
+                goal_critic::GoalVerdict::Bar(
+                "the critic did not return a clear OURS/BAR/PLATEAU verdict; judge the goal again"
+                    .to_string(),
+            )
+            }),
+        )
+    }
 }
 
 /// System reminder prepended to a `/btw` user message. Mirrors Claude Code's
@@ -1336,6 +1390,37 @@ impl Agent {
         events: Option<mpsc::Sender<AgentEvent>>,
     ) -> Result<u32> {
         self.fork_context().spawn(task, events).await
+    }
+
+    /// Run a fresh, independent critic over the current artifact and return its
+    /// binary verdict on the standing `goal`.
+    ///
+    /// The critic is spawned with no inherited history, so it cannot see the
+    /// builder's turn: the independence the verdict rests on is structural, not
+    /// a promise in a prompt. It is read-only — it inspects and rules, it does
+    /// not touch the tree. An unclear reply is read as "judge again"
+    /// ([`goal_critic::GoalVerdict::Bar`]), never as a pass, so a critic that
+    /// mumbles cannot wave work through.
+    pub async fn critique_goal(&self, goal: &str) -> Result<goal_critic::GoalVerdict> {
+        self.critique_context(None).critique(goal).await
+    }
+
+    /// Snapshot for running the goal critic without borrowing the agent. Pass
+    /// `events` to stream the critic's panes to a surface, or `None` for a
+    /// silent run whose only output is the returned verdict. Same mid-turn
+    /// pattern as [`Self::fork_context`].
+    pub fn critique_context(&self, events: Option<mpsc::Sender<AgentEvent>>) -> CritiqueContext {
+        let mut ctx = self.ctx.clone();
+        ctx.events = events;
+        CritiqueContext {
+            client: Arc::clone(&self.client),
+            model: self.model.clone(),
+            registry: self.dispatcher.registry().snapshot(),
+            hooks: Arc::clone(&self.hooks),
+            ctx,
+            breaker: self.llm_breaker.clone(),
+            cancel: Some(self.cancel.clone()),
+        }
     }
 
     /// Swap the model client mid-session (`/fusion`: the panel answers every

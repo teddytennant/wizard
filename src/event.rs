@@ -75,6 +75,12 @@ pub enum Event {
     /// already sent as [`Event::Notice`]; this only clears the in-flight flag
     /// so another `/btw` can run.
     BtwFinished,
+    /// The independent goal critic finished judging the artifact after a
+    /// goal-driven turn. The main loop clears the in-flight flag, then acts on
+    /// the verdict: `OURS` ends the goal loop, `BAR`/first `PLATEAU` queues a
+    /// rework turn, a second `PLATEAU` stops and reports. See
+    /// [`crate::agent::goal_critic`].
+    GoalCritiqued(crate::agent::goal_critic::GoalVerdict),
     /// Terminal input has ended and will never resume: stdin closed, the pty
     /// was detached, or the reader gave up on a stream that only produces
     /// errors. Carries a short reason for the farewell notice.

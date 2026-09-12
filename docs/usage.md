@@ -30,7 +30,7 @@ inline hints.
 | `/agents` | Browse the subagent roster; Enter pre-fills a delegation request |
 | `/dashboard` | Toggle the machine-wide session manager, same view as `wizard agents` (below) |
 | `/bashes` | List background tasks (`execute` with `run_in_background`), running and finished ([tasks.md](tasks.md)) |
-| `/goal [text]` | Show or set the standing mission goal (drives sovereign/continuous mode; persists to `.wizard/mission.toml`) |
+| `/goal [text]` | Show or set the standing mission goal, then work toward it under an independent critic: after each turn a fresh critic (never shown the builder's work) returns OURS/BAR/PLATEAU, and the loop reworks the one named gap until OURS or a second PLATEAU. Persists to `.wizard/mission.toml`; also drives sovereign/continuous mode |
 | `/diff` | Toggle the git diff sidebar |
 | `/todos` | Toggle the todo list above the input |
 | `/cost` | Session token usage, with cost estimates when per-provider rates are configured |

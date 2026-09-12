@@ -420,6 +420,23 @@ pub struct App {
     /// True while a background `/btw` is in flight, so a second one is refused
     /// rather than stacked.
     pub btw_inflight: bool,
+    /// The standing goal a critic-gated `/goal` loop is pursuing, or `None`
+    /// when no loop is active. Set by `/goal`, cleared when the critic returns
+    /// `OURS` or a second `PLATEAU`, or when the user interrupts.
+    pub active_goal: Option<String>,
+    /// The exact next prompt that counts as a goal turn (the kickoff or a
+    /// rework). When [`start_agent_turn`](crate::app::runtime) starts a turn on
+    /// this prompt it flags the turn as a goal turn and clears this. Matching on
+    /// the text keeps a user's own message, queued ahead, from being mistaken
+    /// for a goal turn.
+    pub expected_goal_prompt: Option<String>,
+    /// The in-flight turn is a goal turn, so an independent critic judges the
+    /// result when it completes.
+    pub goal_turn_running: bool,
+    /// True while that critic is judging, so nothing else starts a second one.
+    pub goal_inflight: bool,
+    /// Consecutive `PLATEAU` verdicts in this loop; two in a row stop it.
+    pub goal_plateaus: u32,
     /// Set by `/fork <task>`; the main loop detaches a side quest that inherits
     /// the full conversation (so it works mid-turn too). Cleared once spawned.
     pub pending_fork: Option<String>,
@@ -566,6 +583,11 @@ impl App {
             compacting: false,
             pending_btw: None,
             btw_inflight: false,
+            active_goal: None,
+            expected_goal_prompt: None,
+            goal_turn_running: false,
+            goal_inflight: false,
+            goal_plateaus: 0,
             pending_fork: None,
             mcp_merge_pending: false,
             pending_agent_commands: Vec::new(),
@@ -2724,7 +2746,8 @@ impl App {
             | Event::McpConnected { .. }
             | Event::ProviderHealthFailed(_)
             | Event::StarterPrompts(_)
-            | Event::BtwFinished => Ok(None),
+            | Event::BtwFinished
+            | Event::GoalCritiqued(_) => Ok(None),
         }
     }
 
@@ -3825,11 +3848,30 @@ impl App {
         self.message_queue.pop_front()
     }
 
-    /// Queue the first working turn for a freshly set `/goal`. The prompt
-    /// lands in the transcript and the message queue, so the main loop's
-    /// post-command drain starts it immediately when the agent is idle, or
-    /// right after the current turn otherwise.
+    /// Queue the first working turn for a freshly set `/goal`, and arm the
+    /// critic-gated loop: the goal becomes the standing one, and when this
+    /// turn finishes an independent critic judges it (see
+    /// [`crate::agent::goal_critic`]). The prompt lands in the transcript and
+    /// the message queue, so the main loop's post-command drain starts it when
+    /// the agent is idle, or right after the current turn otherwise.
     pub fn queue_goal_kickoff(&mut self, goal: &str) {
+        let kickoff = format!(
+            "A standing goal was just set for this project:\n\n{goal}\n\n\
+             Start working toward it now: break it into concrete steps and \
+             begin executing them. Keep going until you reach a natural \
+             checkpoint, then stop and summarize the progress made and what \
+             remains. Do not declare the goal complete yourself — an independent \
+             critic decides that."
+        );
+        self.active_goal = Some(goal.to_string());
+        self.goal_plateaus = 0;
+        self.queue_goal_turn(kickoff);
+    }
+
+    /// Queue the next turn of an active `/goal` loop (a rework the critic
+    /// asked for), arming the same post-turn critique. No-op with a warning if
+    /// the queue is full, so a rework is never silently lost.
+    pub fn queue_goal_turn(&mut self, prompt: String) {
         if self.message_queue.len() >= MESSAGE_QUEUE_CAP {
             self.notice(format!(
                 "goal saved, but the message queue is full ({MESSAGE_QUEUE_CAP}): \
@@ -3837,15 +3879,10 @@ impl App {
             ));
             return;
         }
-        let kickoff = format!(
-            "A standing goal was just set for this project:\n\n{goal}\n\n\
-             Start working toward it now: break it into concrete steps and \
-             begin executing them. Keep going until you reach a natural \
-             checkpoint, then summarize the progress made and what remains."
-        );
-        self.record_prompt(kickoff.clone());
+        self.expected_goal_prompt = Some(prompt.clone());
+        self.record_prompt(prompt.clone());
         self.message_queue
-            .push_back(crate::commands::Preprocessed::text_only(kickoff));
+            .push_back(crate::commands::Preprocessed::text_only(prompt));
     }
 
     /// Handle a bracketed paste: stage image file paths / data-URL images as

@@ -168,6 +168,15 @@ below keep it safe.
 
 ### What makes it run forever
 
+- **A cycle's "done" is verified, not trusted.** When the builder reports the goal
+  complete and any [quality gates](#quality-gates) pass, a *fresh* critic subagent —
+  one that never saw the builder's turn, so it cannot inherit its blind spots — judges
+  the real artifact and returns a binary verdict: `OURS` (met), `BAR` (not met, plus
+  the single biggest gap), or `PLATEAU` (no gap another round would close). `OURS`
+  lets the cycle land; `BAR` sends that one gap back to the builder and does not count
+  the cycle as done; two `PLATEAU`s in a row stop the run and report. A critic that
+  cannot run is treated as a failed cycle, never as a pass, so unverified work never
+  lands. See `src/agent/goal_critic.rs`.
 - **Durable mission.** The goal is persisted to `<project>/.wizard/mission.toml` along
   with a cycle count, a rolling progress log, and a liveness stamp (see
   [Watching a run](#watching-a-run)). It survives restarts and binary self-replacement:

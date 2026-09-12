@@ -19,8 +19,8 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 
 use crate::agent::{
-    Agent, AgentEvent, DoneReason, LoopControl, build_headless_agent, clear_loop_control, mission,
-    read_loop_control,
+    Agent, AgentEvent, DoneReason, LoopControl, build_headless_agent, clear_loop_control,
+    goal_critic, mission, read_loop_control,
 };
 use crate::cli::Cli;
 use crate::config::Config;
@@ -787,6 +787,11 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // one that landed. Mirrored into the mission so it is visible from outside
     // the process; the local copy is what the bound is checked against.
     let mut failure_streak: u32 = 0;
+    // Consecutive `PLATEAU` verdicts from the goal critic. Two in a row end a
+    // continuous run: the critic can name no gap another round would close, so
+    // there is nothing left for the loop to do but report it (see
+    // `crate::agent::goal_critic`).
+    let mut plateau_streak: u32 = 0;
     // Raised by SIGTERM/SIGHUP/SIGINT. The handler also cancels the turn in
     // flight, so this is read at the boundary to stop the *next* cycle from
     // starting — a signal that lands between cycles has no turn to cancel, and
@@ -952,28 +957,126 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
                             }
                             crate::gates::GateDecision::Finish => {
                                 if config.continuous {
-                                    // Never idle: record the cycle and
-                                    // self-direct the next most valuable
-                                    // action toward the mission.
-                                    failure_streak = 0;
-                                    let cycles = match mission_state.as_mut() {
-                                        Some(mission) => {
-                                            mission.record_cycle(Some(format!(
-                                                "cycle done: {reason:?}"
-                                            )));
-                                            mission.stamp(format!("cycle {iteration}: completed"));
-                                            persist(mission, &project_root);
-                                            mission.cycles
+                                    // "Done" survived the gates; now it must
+                                    // survive an INDEPENDENT critic before the
+                                    // cycle is allowed to land. A goal loop that
+                                    // trusts the builder's own verdict is
+                                    // grading its own homework — the critic is
+                                    // a fresh subagent that never saw this turn.
+                                    stamp(
+                                        mission_state.as_mut(),
+                                        &project_root,
+                                        format!(
+                                            "cycle {iteration}: verifying with an independent critic"
+                                        ),
+                                    );
+                                    match agent.critique_goal(&goal).await {
+                                        Ok(verdict) => {
+                                            if text_mode {
+                                                spinner.println(&format!(
+                                                    "[critic: {}]",
+                                                    verdict.summary()
+                                                ));
+                                            }
+                                            plateau_streak = match &verdict {
+                                                goal_critic::GoalVerdict::Plateau => {
+                                                    plateau_streak + 1
+                                                }
+                                                _ => 0,
+                                            };
+                                            match goal_critic::plan_after_verdict(
+                                                &verdict,
+                                                plateau_streak,
+                                            ) {
+                                                goal_critic::CriticAction::Accept => {
+                                                    // Verified done: record the
+                                                    // cycle and self-direct the
+                                                    // next action. Never idle.
+                                                    failure_streak = 0;
+                                                    let cycles = match mission_state.as_mut() {
+                                                        Some(mission) => {
+                                                            mission.record_cycle(Some(
+                                                                "cycle done: critic returned OURS"
+                                                                    .to_string(),
+                                                            ));
+                                                            mission.stamp(format!(
+                                                                "cycle {iteration}: completed \
+                                                                 (critic OURS)"
+                                                            ));
+                                                            persist(mission, &project_root);
+                                                            mission.cycles
+                                                        }
+                                                        // Unreachable while
+                                                        // `continuous` implies a
+                                                        // mission, but a missing
+                                                        // one must not leave
+                                                        // `input` unchanged and
+                                                        // re-issue the goal
+                                                        // verbatim forever.
+                                                        None => u64::from(iteration),
+                                                    };
+                                                    input = continuation_prompt(&goal, cycles);
+                                                }
+                                                goal_critic::CriticAction::Rework(prompt) => {
+                                                    // Not done. The cycle does
+                                                    // not land; the builder gets
+                                                    // the one gap and tries
+                                                    // again. Not a failure
+                                                    // either — the streak that
+                                                    // trips the breaker is for
+                                                    // errors, not honest rework.
+                                                    stamp(
+                                                        mission_state.as_mut(),
+                                                        &project_root,
+                                                        format!(
+                                                            "cycle {iteration}: critic sent it \
+                                                             back — {}",
+                                                            verdict.summary()
+                                                        ),
+                                                    );
+                                                    input = prompt;
+                                                }
+                                                goal_critic::CriticAction::Stop(why) => {
+                                                    if text_mode {
+                                                        spinner.println(&format!(
+                                                            "[goal loop stopping: {why}]"
+                                                        ));
+                                                    }
+                                                    stamp(
+                                                        mission_state.as_mut(),
+                                                        &project_root,
+                                                        format!("cycle {iteration}: {why}"),
+                                                    );
+                                                    final_reason = DoneReason::Completed;
+                                                    break;
+                                                }
+                                            }
                                         }
-                                        // Unreachable while `continuous`
-                                        // implies a mission, but the count is
-                                        // cosmetic and a missing mission must
-                                        // not leave `input` unchanged — that
-                                        // would re-issue the original goal
-                                        // verbatim, forever.
-                                        None => u64::from(iteration),
-                                    };
-                                    input = continuation_prompt(&goal, cycles);
+                                        Err(err) => {
+                                            // A critic that could not run is not
+                                            // a pass. Fail the cycle so the
+                                            // backoff and breaker apply, rather
+                                            // than landing unverified work.
+                                            failure_streak += 1;
+                                            recovery = record_failed_cycle(
+                                                &config,
+                                                mission_state.as_mut(),
+                                                &project_root,
+                                                &goal,
+                                                failure_streak,
+                                                "the goal critic could not run",
+                                                &format!("{err:#}"),
+                                                0,
+                                            );
+                                            if recovery.is_none() {
+                                                run_error = Some(err.context(format!(
+                                                    "continuous run gave up after \
+                                                     {failure_streak} consecutive failed cycles"
+                                                )));
+                                                break;
+                                            }
+                                        }
+                                    }
                                 } else {
                                     break;
                                 }

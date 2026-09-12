@@ -4,6 +4,24 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
+## [Unreleased]
+
+### Added
+
+- **The goal loop verifies its own work with an independent critic.** A loop
+  that trusts the builder's "done" is grading its own homework. Now, after a
+  goal-driven turn, a fresh critic subagent — spawned with no history, so it
+  physically cannot see the builder's turn — judges the real artifact and
+  returns a binary verdict: `OURS`, `BAR` plus the one biggest gap, or
+  `PLATEAU`. `BAR` sends that gap back for another round; a second `PLATEAU`
+  stops and reports; `OURS` is the only way the goal is called met. The verdict
+  is binary on purpose: a score out of ten drifts up until everything is a nine.
+  This runs in both surfaces — the headless `--continuous` loop (a cycle no
+  longer lands on the builder's say-so; a critic that cannot run is a failed
+  cycle, not a pass) and the interactive `/goal` (the critic runs off the event
+  loop so the TUI never blocks, and Ctrl-C stops the loop). See
+  `src/agent/goal_critic.rs` and [Continuous mode](docs/modes.md#what-makes-it-run-forever).
+
 ## [3.1.0] - 2026-09-11
 
 The fast start, made real: a first frame in single-digit milliseconds on every
