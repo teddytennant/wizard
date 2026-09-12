@@ -169,8 +169,8 @@ impl OllamaClient {
         // with nothing to classify and no retry to make.
         //
         // `client_read_timeout_for` is what keeps the local case unchanged: a
-        // loopback or LAN host still gets `None`, because a local model that is
-        // simply thinking slowly must not be killed for it.
+        // loopback host still gets `None`, because a local model that is simply
+        // thinking slowly must not be killed for it.
         let http = crate::llm::chat_http_builder(crate::llm::client_read_timeout_for(&host))
             .build()
             // Builder construction only fails when the TLS backend cannot

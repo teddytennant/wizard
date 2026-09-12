@@ -107,11 +107,13 @@ pub(crate) fn client_read_timeout() -> Option<Duration> {
 /// `http://127.0.0.1:1234/v1` and would otherwise inherit the cloud read
 /// timeout that [`Locality::Local`] exists to remove.
 ///
-/// What actually decides it is the address: loopback, a private or
-/// link-local range, and the name forms that cannot resolve past the LAN.
+/// What decides it is loopback, and only loopback. Anything further than
+/// this machine has a network in it that can go quiet, which is the thing the
+/// detector is for; an inference server Wizard started somewhere else is
+/// covered by [`with_local_inference_timeouts`] instead of by its address.
 pub(crate) fn endpoint_locality(base_url: &str) -> Locality {
     match url_host(base_url) {
-        Some(host) if host_is_local(&host) => Locality::Local,
+        Some(host) if host_is_loopback(&host) => Locality::Local,
         _ => Locality::Cloud,
     }
 }
@@ -138,36 +140,31 @@ fn url_host(base_url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-/// Whether `host` (already lowercased) names something that cannot be reached
-/// past this machine or its LAN.
-fn host_is_local(host: &str) -> bool {
+/// Whether `host` (already lowercased) names this machine's own loopback.
+///
+/// A private range used to count, and that is the bug: `10.0.0.5` is as often
+/// a reverse proxy, a gateway or a corporate egress in front of a hosted API
+/// as it is somebody's llama-server, and a proxy is exactly where a silent
+/// hang happens. One benchmark trial sat 604 s on one with no detector to cut
+/// it. `.local`, `.lan` and single-label names went the same way, for the same
+/// reason.
+///
+/// A model server on another box on the LAN now gets the 300 s detector. That
+/// costs it nothing unless it goes five minutes without a byte, and if Wizard
+/// started it, [`with_local_inference_timeouts`] exempts it wherever it runs.
+fn host_is_loopback(host: &str) -> bool {
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
     }
     if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
         // `0.0.0.0` is how a good many people write down the address of a
         // server they started on this machine.
-        return ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified();
+        return ip.is_loopback() || ip.is_unspecified();
     }
     if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
-        // `is_unique_local` and `is_unicast_link_local` are still unstable, so
-        // fc00::/7 and fe80::/10 are matched on the prefix directly.
-        let first = ip.segments()[0];
-        return ip.is_loopback()
-            || ip.is_unspecified()
-            || (first & 0xfe00) == 0xfc00
-            || (first & 0xffc0) == 0xfe80;
+        return ip.is_loopback() || ip.is_unspecified();
     }
-    if [".local", ".lan", ".internal", ".home.arpa"]
-        .iter()
-        .any(|suffix| host.ends_with(suffix))
-    {
-        return true;
-    }
-    // A single-label name (`gpu-box`) has no public TLD to be reached
-    // through, so it resolves only via /etc/hosts, mDNS, or a LAN search
-    // domain.
-    !host.contains('.')
+    false
 }
 
 /// The read timeout a chat client for `base_url` should carry.
@@ -2407,21 +2404,11 @@ mod tests {
         // 300s cloud read timeout and have a long local prefill killed.
         for local in [
             "http://127.0.0.1:1234/v1",
+            "http://127.9.9.9:1234/v1",
             "http://localhost:11435/v1",
             "http://[::1]:8080/v1",
-            "http://10.0.0.5:8080/v1",
-            "http://172.16.4.4:8080",
-            "http://192.168.1.50:11434/v1",
-            "http://169.254.7.7:8080",
             "http://0.0.0.0:8080/v1",
             "http://[::]:8080/v1",
-            "http://[fd00::1]:8080/v1",
-            "http://[fe80::1]:8080/v1",
-            "http://gpu-box:8080/v1",
-            "http://workstation.local:8080/v1",
-            "http://inference.lan/v1",
-            "http://llm.internal/v1",
-            "http://box.home.arpa/v1",
             "http://user:pass@127.0.0.1:1234/v1",
         ] {
             assert_eq!(endpoint_locality(local), Locality::Local, "{local}");
@@ -2453,6 +2440,43 @@ mod tests {
         // are independent and either one is enough.
         assert_eq!(
             with_local_inference_timeouts(|| client_read_timeout_for("https://gpu.example.com")),
+            None
+        );
+    }
+
+    /// A private address is not a local model. It is at least as often a
+    /// reverse proxy, a gateway or a corporate egress standing in front of a
+    /// hosted API, and that is where a connection goes quiet: one
+    /// Terminal-Bench trial sat 604 s on a silent hang through a proxy on
+    /// `172.17.0.1` while the detector was switched off for being RFC1918.
+    #[test]
+    fn a_provider_reached_over_the_network_keeps_the_stall_detector() {
+        for reachable in [
+            "http://172.17.0.1:8791/v1",
+            "http://10.0.0.5:8080/v1",
+            "http://172.16.4.4:8080",
+            "http://192.168.1.50:11434/v1",
+            "http://169.254.7.7:8080",
+            "http://[fd00::1]:8080/v1",
+            "http://[fe80::1]:8080/v1",
+            "http://gpu-box:8080/v1",
+            "http://workstation.local:8080/v1",
+            "http://inference.lan/v1",
+            "http://llm.internal/v1",
+            "http://box.home.arpa/v1",
+        ] {
+            assert_eq!(endpoint_locality(reachable), Locality::Cloud, "{reachable}");
+            assert_eq!(
+                client_read_timeout_for(reachable),
+                Some(CLOUD_READ_TIMEOUT),
+                "{reachable}"
+            );
+        }
+
+        // An inference server Wizard started is exempt wherever it listens:
+        // the scope knows what the address cannot say.
+        assert_eq!(
+            with_local_inference_timeouts(|| client_read_timeout_for("http://192.168.1.50:8080")),
             None
         );
     }

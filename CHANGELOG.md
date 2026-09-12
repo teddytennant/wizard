@@ -17,6 +17,13 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   to a stage. A stage that fails inside `||`, `if` or `!` is still handled by
   the command, as before, and a producer killed by SIGPIPE when `head` stops
   reading is still a success.
+- **A hung request through a proxy is cut off.** The 300 s stall detector was
+  switched off for any private address, so a provider reached through a proxy
+  on the LAN, a gateway or a corporate egress had none: one benchmark trial
+  sat 604 s on a silent hang. Only loopback is exempt now, plus any inference
+  server Wizard started itself, wherever it listens. A model server on another
+  box on the LAN gets the detector, and needs 5 minutes of complete silence to
+  trip it.
 
 ## [3.1.0] - 2026-09-11
 
