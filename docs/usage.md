@@ -613,6 +613,22 @@ walking back to the user prompt and summarizing one earlier note. The
 summary is instructed to carry over the todo list state and the plan file
 path (`.wizard/plan.md`).
 
+### Old tool results stop being re-sent
+
+Compaction is not the first thing that shrinks a long prompt. Once the next
+call's prompt passes `prune_after_tokens` (default 32k), old tool results are
+cut down between steps, with no model call and no summary:
+
+- the last ten messages are untouched;
+- behind those, the last twelve results keep a head/tail excerpt (8 kB);
+- everything older becomes one line naming the tool, what it was called on,
+  whether it succeeded, and how many lines were elided.
+
+A pass rewrites nothing unless it reclaims at least 16k characters, since
+rewriting the middle of a history costs the provider's cached prefix from
+that point on. Nothing is lost: the session JSONL is append-only and still
+holds every result in full, which is what the elided line points at.
+
 ## Agent-managed context
 
 Wizard already persists every turn to `~/.wizard/sessions/<id>.jsonl` and

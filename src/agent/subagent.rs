@@ -876,6 +876,7 @@ async fn run_loop(
         loaded.retry_max_secs,
         loaded.compact_threshold_bytes,
         loaded.max_context_tokens,
+        loaded.prune_after_tokens,
     );
     let mut host = SubRun {
         client,

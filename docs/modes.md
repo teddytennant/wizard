@@ -203,7 +203,9 @@ below keep it safe.
   notice says so.
 - **Context compaction.** When the conversation grows past `compact_threshold_bytes`,
   older history is summarized into a compact progress note so a run can continue
-  indefinitely without overflowing the model's context window. The agent is also
+  indefinitely without overflowing the model's context window. Well before that,
+  past `prune_after_tokens`, old tool results stop being re-sent whole; that pass
+  costs no model call. The agent is also
   taught to compact deliberately (and to save durable facts with `memory` when the
   task changes); every turn is already on disk as session JSONL under
   `~/.wizard/sessions/`. See [Agent-managed context](usage.md#agent-managed-context).
@@ -257,6 +259,7 @@ to `~/.wizard/evolution.jsonl`.
 | `max_consecutive_failures` | `5` | Failed cycles in a row before a continuous run gives up; `0` disables the bound |
 | `compact_threshold_bytes` | `48000` | History size that triggers compaction |
 | `max_context_tokens` | `150000` | Cap on the window compaction measures against; `0` uses the whole window |
+| `prune_after_tokens` | `32000` | Prompt size past which old tool results are cut down between compactions; `0` disables |
 | `rollback_failed_cycles` | `false` | Restore a failed cycle's file checkpoints (see [checkpoints.md](checkpoints.md)) |
 
 > **Run it in a container or VM.** Continuous mode executes every tool call with no
