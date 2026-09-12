@@ -34,6 +34,89 @@ pub fn tokio_command(command_line: &str) -> tokio::process::Command {
     command
 }
 
+/// [`tokio_command`], with a pipeline's failure reported as the command's own
+/// failure.
+///
+/// A pipeline's exit status is its *last* command's, so
+/// `apt-get install -y python3 | tail -20` exits 0 when apt fails. The
+/// `execute` tool ran that way, the model was told the install had worked, and
+/// it built on a package that was never there. `pipefail` makes the status the
+/// last failing stage's instead.
+///
+/// Which shell provides it is [`pipefail`]'s problem. When nothing here does,
+/// the line runs exactly as it used to: a wrong exit code beats no command.
+pub fn tokio_command_pipefail(command_line: &str) -> tokio::process::Command {
+    match pipefail() {
+        // Same shell, same language, one option set first. The prelude is on
+        // the same line so a syntax error still reports the line the model
+        // wrote as line 1.
+        Pipefail::Prelude => tokio_command(&format!("set -o pipefail; {command_line}")),
+        Pipefail::Bash => {
+            let mut command = tokio::process::Command::new("bash");
+            command
+                .arg("-o")
+                .arg("pipefail")
+                .arg("-c")
+                .arg(command_line);
+            command
+        }
+        Pipefail::Unsupported => tokio_command(command_line),
+    }
+}
+
+/// Whether [`tokio_command_pipefail`] actually gets `pipefail` here. The
+/// `execute` tool asks so it only explains a pipeline's exit code when the
+/// explanation is true.
+pub fn pipefail_supported() -> bool {
+    pipefail() != Pipefail::Unsupported
+}
+
+/// How `pipefail` is reachable on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pipefail {
+    /// The platform shell takes `set -o pipefail`.
+    Prelude,
+    /// It does not (dash is the common case), but `bash` is installed.
+    Bash,
+    /// Neither. Windows `cmd` has no such concept either.
+    Unsupported,
+}
+
+/// [`Pipefail`] for this host, probed once.
+///
+/// Probed rather than assumed because `set -o pipefail` is not POSIX and dash
+/// treats it as a fatal error in a non-interactive shell: guessing wrong kills
+/// every command instead of one. The probe costs two process spawns at most,
+/// on the first command the agent runs, not at startup.
+fn pipefail() -> Pipefail {
+    static RESOLVED: std::sync::OnceLock<Pipefail> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        #[cfg(unix)]
+        {
+            if probe(command("set -o pipefail")) {
+                return Pipefail::Prelude;
+            }
+            let mut bash = std::process::Command::new("bash");
+            bash.arg("-o").arg("pipefail").arg("-c").arg("exit 0");
+            if probe(bash) {
+                return Pipefail::Bash;
+            }
+        }
+        Pipefail::Unsupported
+    })
+}
+
+/// Run `probe` with its stdio discarded and report whether it exited 0.
+#[cfg(unix)]
+fn probe(mut probe: std::process::Command) -> bool {
+    probe
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// The active shell's name, as a user (or a model) would say it.
 ///
 /// Deliberately the shell Wizard *runs commands with*, not `$SHELL`: the
@@ -116,6 +199,38 @@ mod tests {
         assert_eq!(program, name());
         assert_eq!(args.len(), 2, "expected <flag> <line>, got {args:?}");
         assert_eq!(args[1], line);
+    }
+
+    #[test]
+    fn the_pipefail_line_still_reaches_the_shell_whole() {
+        // Whichever arm resolves, the model's line is one argument and the
+        // last one: a prelude may be prepended to it, nothing may split it.
+        let line = "grep 'a|b' f | sort -u > out";
+        let command = tokio_command_pipefail(line);
+        let (_, args) = parts(command.as_std());
+        assert!(
+            args.last().is_some_and(|last| last.ends_with(line)),
+            "{args:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_stage_makes_the_pipeline_fail() {
+        assert!(
+            pipefail_supported(),
+            "no shell here takes `set -o pipefail` and there is no bash to fall back to"
+        );
+        let failed = tokio_command_pipefail("exit 9 | cat")
+            .status()
+            .await
+            .expect("the shell ran");
+        assert_eq!(failed.code(), Some(9), "the stage's code, not cat's 0");
+        let worked = tokio_command_pipefail("echo hi | cat")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .await
+            .expect("the shell ran");
+        assert!(worked.success(), "a working pipeline is untouched");
     }
 
     #[test]
