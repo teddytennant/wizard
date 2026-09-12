@@ -607,10 +607,7 @@ async fn js_callable_is_invokable_from_rust_and_js() {
 
     let service = kernel.services().inject("double").expect("provided");
     assert!(service.is_callable());
-    let out = service
-        .call(json!({"n": 21}))
-        .await
-        .expect("rust call");
+    let out = service.call(json!({"n": 21})).await.expect("rust call");
     assert_eq!(out, json!({"n": 42}));
 
     load(
@@ -655,7 +652,13 @@ async fn unloading_withdraws_a_js_callable() {
     .await
     .expect("provider");
 
-    assert!(kernel.services().inject("ping").expect("live").is_callable());
+    assert!(
+        kernel
+            .services()
+            .inject("ping")
+            .expect("live")
+            .is_callable()
+    );
     kernel.unload(&id).await.expect("unload");
     assert!(kernel.services().inject("ping").is_none());
 }
