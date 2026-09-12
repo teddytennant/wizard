@@ -4,7 +4,7 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
-## [Unreleased]
+## [3.1.1] - 2026-09-12
 
 ### Added
 
@@ -22,6 +22,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   loop so the TUI never blocks, and Ctrl-C stops the loop). See
   `src/agent/goal_critic.rs` and [Continuous mode](docs/modes.md#what-makes-it-run-forever).
 
+- **`vision = false`** on a provider, for a text-only model. `read_file` then
+  describes an image instead of attaching it, rather than spending the window
+  on something the model will discard.
+
 ### Fixed
 
 - **`execute` reports a pipeline's failure instead of its last command's.**
@@ -33,6 +37,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   to a stage. A stage that fails inside `||`, `if` or `!` is still handled by
   the command, as before, and a producer killed by SIGPIPE when `head` stops
   reading is still a success.
+
 - **A hung request through a proxy is cut off.** The 300 s stall detector was
   switched off for any private address, so a provider reached through a proxy
   on the LAN, a gateway or a corporate egress had none: one benchmark trial
@@ -40,8 +45,6 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   server Wizard started itself, wherever it listens. A model server on another
   box on the LAN gets the detector, and needs 5 minutes of complete silence to
   trip it.
-
-### Fixed
 
 - **`read_file` on an image returns the image.** It read every path as text, so
   the agent's only way to look at a screenshot was to reconstruct it from pixel
@@ -53,14 +56,6 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   halved until it fits, with the size it was shown at in the text. The format
   comes from the first bytes, not the extension. Text files are unchanged.
 
-### Added
-
-- **`vision = false`** on a provider, for a text-only model. `read_file` then
-  describes an image instead of attaching it, rather than spending the window
-  on something the model will discard.
-
-### Fixed
-
 - **Reasoning tokens are counted.** Wizard never read `reasoning_tokens` off a
   response, so `/cost`, `wizard usage`, the status line and the headless
   summary counted visible output only. xAI reports the number *beside*
@@ -71,6 +66,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   row has one, and `usage.jsonl` carries `reasoning_tokens`. Records written
   before this have no such field and are undercounts on any provider that
   reported it separately; nothing can recover the number after the fact.
+
 - **`/effort` no longer puts `reasoning_effort` in Ollama's sampler options.**
   Ollama ignored the key, so nothing broke, but the request asked for something
   it could not get.
