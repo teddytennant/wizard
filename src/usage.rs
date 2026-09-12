@@ -46,6 +46,8 @@ pub struct UsageTracker {
     session_cache_write: AtomicU64,
     turn_cache_read: AtomicU64,
     turn_cache_write: AtomicU64,
+    session_reasoning: AtomicU64,
+    turn_reasoning: AtomicU64,
 }
 
 impl UsageTracker {
@@ -89,6 +91,21 @@ impl UsageTracker {
             .fetch_add(cache_write_tokens, Ordering::Relaxed);
         self.turn_cache_write
             .fetch_add(cache_write_tokens, Ordering::Relaxed);
+    }
+
+    /// Record how many of one call's completion tokens were reasoning.
+    ///
+    /// A *subset* of the completion count passed to [`record`](Self::record),
+    /// exactly as [`record_cache`](Self::record_cache) is a subset of the
+    /// prompt count: providers bill reasoning at the output rate and the
+    /// adapter has already summed it in, so this only says how that total
+    /// splits. A backend that reports no split never calls this and reads as
+    /// all-visible, which is what a model with no reasoning mode is.
+    pub fn record_reasoning(&self, reasoning_tokens: u64) {
+        self.session_reasoning
+            .fetch_add(reasoning_tokens, Ordering::Relaxed);
+        self.turn_reasoning
+            .fetch_add(reasoning_tokens, Ordering::Relaxed);
     }
 
     /// Record the usage of one *delegated* model call — a subagent run the
@@ -141,6 +158,7 @@ impl UsageTracker {
         completion_tokens: u64,
         cache_read_tokens: u64,
         cache_write_tokens: u64,
+        reasoning_tokens: u64,
     ) {
         self.session_prompt
             .fetch_add(prompt_tokens, Ordering::Relaxed);
@@ -150,6 +168,8 @@ impl UsageTracker {
             .fetch_add(cache_read_tokens, Ordering::Relaxed);
         self.session_cache_write
             .fetch_add(cache_write_tokens, Ordering::Relaxed);
+        self.session_reasoning
+            .fetch_add(reasoning_tokens, Ordering::Relaxed);
     }
 
     /// Reset the per-turn counters (called at the top of every turn).
@@ -158,6 +178,7 @@ impl UsageTracker {
         self.turn_completion.store(0, Ordering::Relaxed);
         self.turn_cache_read.store(0, Ordering::Relaxed);
         self.turn_cache_write.store(0, Ordering::Relaxed);
+        self.turn_reasoning.store(0, Ordering::Relaxed);
     }
 
     /// `(prompt, completion)` tokens of the current turn.
@@ -175,6 +196,18 @@ impl UsageTracker {
             self.turn_cache_read.load(Ordering::Relaxed),
             self.turn_cache_write.load(Ordering::Relaxed),
         )
+    }
+
+    /// Reasoning tokens of the current turn, a subset of
+    /// [`turn_totals`](Self::turn_totals)'s completion count.
+    pub fn turn_reasoning_tokens(&self) -> u64 {
+        self.turn_reasoning.load(Ordering::Relaxed)
+    }
+
+    /// Reasoning tokens of the whole session, a subset of
+    /// [`session_totals`](Self::session_totals)'s completion count.
+    pub fn session_reasoning_tokens(&self) -> u64 {
+        self.session_reasoning.load(Ordering::Relaxed)
     }
 
     /// `(prompt, completion)` tokens of the whole session.
@@ -221,6 +254,8 @@ impl UsageTracker {
         self.session_cache_write.store(0, Ordering::Relaxed);
         self.turn_cache_read.store(0, Ordering::Relaxed);
         self.turn_cache_write.store(0, Ordering::Relaxed);
+        self.session_reasoning.store(0, Ordering::Relaxed);
+        self.turn_reasoning.store(0, Ordering::Relaxed);
     }
 }
 
@@ -249,6 +284,14 @@ pub struct UsageRecord {
     /// providers that do not bill a separate cache write report 0.
     #[serde(default)]
     pub cache_write_tokens: u64,
+    /// Completion tokens the model spent on reasoning ("thinking"). A
+    /// *subset* of `completion_tokens`, never an addition to it: providers
+    /// bill them at the output rate and the adapters sum them in before the
+    /// count reaches here. Absent on records written before Wizard read the
+    /// field, and those records under-state any turn that reasoned on a
+    /// provider whose completion count left reasoning out; see docs/usage.md.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
     /// Estimated cost of the turn in USD, from [`estimate_cost`]. `None`
     /// only on records written before cost accounting existed.
     #[serde(default)]
@@ -754,6 +797,10 @@ pub struct TurnTokens {
     pub completion: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// The reasoning part of `completion`. Carried for the record and the
+    /// report only: it is already inside `completion`, so [`price_tokens`]
+    /// never looks at it.
+    pub reasoning: u64,
 }
 
 /// Everything [`estimate_cost`] needs besides the token counts: which model
@@ -912,6 +959,8 @@ struct LoggedTurn {
     #[serde(default)]
     cache_read_tokens: u64,
     #[serde(default)]
+    reasoning_tokens: u64,
+    #[serde(default)]
     cost_usd: Option<f64>,
     /// Read as a plain string, not as [`PriceSource`]: an unknown variant
     /// written by a future version must not take the whole line down with a
@@ -928,6 +977,8 @@ struct Rollup {
     completion: u64,
     /// Prompt tokens that were served from a cache, a subset of `prompt`.
     cache_read: u64,
+    /// Completion tokens spent on reasoning, a subset of `completion`.
+    reasoning: u64,
     /// Sum of the records that carried a cost; `None` when none did.
     cost_usd: Option<f64>,
     /// Any turn in the group was priced at the unknown-model fallback, so the
@@ -941,6 +992,7 @@ impl Rollup {
         self.prompt += turn.prompt_tokens;
         self.completion += turn.completion_tokens;
         self.cache_read += turn.cache_read_tokens;
+        self.reasoning += turn.reasoning_tokens;
         if let Some(cost) = turn.cost_usd {
             *self.cost_usd.get_or_insert(0.0) += cost;
         }
@@ -1009,7 +1061,8 @@ fn format_usd(usd: f64) -> String {
 /// last two components. 40 puts the worst case at 97, which fits the terminal
 /// most people run and keeps a path recognisable. The column is still sized to
 /// the longest name present, so this only binds when something pathological is
-/// in the log.
+/// in the log. A sixth column (`reasoning`) appears only when a row has one,
+/// and takes the worst case to 109.
 const MAX_NAME_WIDTH: usize = 40;
 
 /// Clip a label to `max` characters, keeping the **end**.
@@ -1033,7 +1086,10 @@ fn clip_end(text: &str, max: usize) -> String {
         .collect()
 }
 
-fn write_rollup(out: &mut String, title: &str, groups: &BTreeMap<String, Rollup>) {
+/// `reasoning` is a column only when some row has one. A model with no
+/// reasoning mode would otherwise get a column of zeros, and the table is
+/// already close to the width of a terminal.
+fn write_rollup(out: &mut String, title: &str, groups: &BTreeMap<String, Rollup>, reasoning: bool) {
     let names: Vec<String> = groups
         .keys()
         .map(|key| clip_end(key, MAX_NAME_WIDTH))
@@ -1044,9 +1100,14 @@ fn write_rollup(out: &mut String, title: &str, groups: &BTreeMap<String, Rollup>
         .max()
         .unwrap_or(0)
         .max(title.len());
+    let reasoning_header = if reasoning {
+        format!("  {:>10}", "reasoning")
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         out,
-        "{title:<name_width$}  {:>6}  {:>10}  {:>10}  {:>10}  {:>11}",
+        "{title:<name_width$}  {:>6}  {:>10}  {:>10}{reasoning_header}  {:>10}  {:>11}",
         "turns", "prompt", "completion", "cached", "cost"
     );
     for (name, rollup) in names.iter().zip(groups.values()) {
@@ -1060,9 +1121,14 @@ fn write_rollup(out: &mut String, title: &str, groups: &BTreeMap<String, Rollup>
                 )
             },
         );
+        let reasoning_cell = if reasoning {
+            format!("  {:>10}", format_tokens(rollup.reasoning))
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "{name:<name_width$}  {:>6}  {:>10}  {:>10}  {:>10}  {cost:>11}",
+            "{name:<name_width$}  {:>6}  {:>10}  {:>10}{reasoning_cell}  {:>10}  {cost:>11}",
             rollup.turns,
             format_tokens(rollup.prompt),
             format_tokens(rollup.completion),
@@ -1102,9 +1168,10 @@ fn render_report(raw: &str, days: Option<u64>, now: u64) -> String {
 
     let mut out = String::new();
     let _ = writeln!(out, "usage ({window}): {} turn(s)\n", turns.len());
-    write_rollup(&mut out, "project", &by_project);
+    let reasoning = turns.iter().any(|turn| turn.reasoning_tokens > 0);
+    write_rollup(&mut out, "project", &by_project, reasoning);
     out.push('\n');
-    write_rollup(&mut out, "provider", &by_provider);
+    write_rollup(&mut out, "provider", &by_provider, reasoning);
     if by_project.values().any(|rollup| rollup.estimated) {
         let _ = writeln!(
             out,
@@ -1191,6 +1258,29 @@ mod tests {
         assert_eq!(tracker.last_prompt_tokens(), None);
     }
 
+    /// Reasoning rides beside the totals, never inside them a second time:
+    /// the adapter already summed it into the completion count.
+    #[test]
+    fn tracker_accumulates_reasoning_alongside_the_totals() {
+        let tracker = UsageTracker::new();
+        tracker.record(Some(100), Some(210));
+        tracker.record_reasoning(200);
+        assert_eq!(tracker.session_totals(), (100, 210));
+        assert_eq!(tracker.turn_reasoning_tokens(), 200);
+        assert_eq!(tracker.session_reasoning_tokens(), 200);
+
+        tracker.begin_turn();
+        assert_eq!(tracker.turn_reasoning_tokens(), 0);
+        assert_eq!(
+            tracker.session_reasoning_tokens(),
+            200,
+            "a new turn does not forget what the session spent"
+        );
+
+        tracker.clear_session();
+        assert_eq!(tracker.session_reasoning_tokens(), 0);
+    }
+
     #[test]
     fn append_writes_one_json_line_per_record() {
         let dir = std::env::temp_dir().join(format!("wizard-usage-{}", uuid::Uuid::new_v4()));
@@ -1204,6 +1294,7 @@ mod tests {
             completion_tokens: 45,
             cache_read_tokens: 100,
             cache_write_tokens: 20,
+            reasoning_tokens: 30,
             cost_usd: Some(0.5),
             price_source: PriceSource::Table,
             mode: "genie".to_string(),
@@ -1222,6 +1313,7 @@ mod tests {
         assert_eq!(parsed.mode, "genie");
         assert_eq!(parsed.cache_read_tokens, 100);
         assert_eq!(parsed.cache_write_tokens, 20);
+        assert_eq!(parsed.reasoning_tokens, 30);
         assert_eq!(parsed.cost_usd, Some(0.5));
         assert_eq!(parsed.price_source, PriceSource::Table);
         assert!(
@@ -1234,6 +1326,10 @@ mod tests {
         let legacy = r#"{"ts":1,"project":"/p","model":"m","provider":"local","prompt_tokens":5,"completion_tokens":2,"mode":"genie"}"#;
         let parsed: UsageRecord = serde_json::from_str(legacy).expect("legacy line parses");
         assert_eq!(parsed.cache_read_tokens, 0);
+        // Every line written before Wizard read the field. They are readable,
+        // and on a provider that reported reasoning separately they under-state
+        // the turn; nothing can recover the number after the fact.
+        assert_eq!(parsed.reasoning_tokens, 0);
         assert_eq!(parsed.cost_usd, None);
         assert_eq!(parsed.price_source, PriceSource::Unpriced);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1246,6 +1342,7 @@ mod tests {
             completion,
             cache_read: 0,
             cache_write: 0,
+            reasoning: 0,
         }
     }
 
@@ -1279,6 +1376,7 @@ mod tests {
             completion: 0,
             cache_read: 900_000,
             cache_write: 0,
+            reasoning: 0,
         };
 
         let session = cost_usd(tokens, Some(3.0), Some(15.0)).expect("rates are configured");
@@ -1337,6 +1435,7 @@ mod tests {
             prompt_tokens: 100,
             completion_tokens: 10,
             cache_read_tokens: 40,
+            reasoning_tokens: 0,
             cost_usd: cost,
             price_source: cost.map(|_| "table".to_string()),
         };
@@ -1422,6 +1521,7 @@ mod tests {
                 completion: 1_000,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
         );
         let warm = priced(
@@ -1431,6 +1531,7 @@ mod tests {
                 completion: 1_000,
                 cache_read: 90_000,
                 cache_write: 0,
+                reasoning: 0,
             },
         );
         assert_eq!(cold.source, PriceSource::Table);
@@ -1456,6 +1557,7 @@ mod tests {
                 completion: 1_000,
                 cache_read: 0,
                 cache_write: 90_000,
+                reasoning: 0,
             },
         );
         assert!(
@@ -1516,6 +1618,7 @@ mod tests {
                 completion,
                 cache_read,
                 cache_write,
+                reasoning: 0,
             },
         );
         let parent_only = priced(
@@ -1525,6 +1628,7 @@ mod tests {
                 completion,
                 cache_read: 8_000,
                 cache_write,
+                reasoning: 0,
             },
         );
         assert!(
@@ -1541,6 +1645,7 @@ mod tests {
             completion: 1_000_000,
             cache_read: 0,
             cache_write: 0,
+            reasoning: 0,
         };
         let unknown = priced("some-model-nobody-has-heard-of", tokens);
         assert_eq!(unknown.source, PriceSource::Fallback);
@@ -1600,6 +1705,7 @@ mod tests {
                 completion: 1_000_000,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
         )
     }
@@ -1621,6 +1727,7 @@ mod tests {
                 completion: 0,
                 cache_read: 900_000,
                 cache_write: 0,
+                reasoning: 0,
             },
         )
     }
@@ -1669,6 +1776,7 @@ mod tests {
                 completion: 0,
                 cache_read: 0,
                 cache_write: 900_000,
+                reasoning: 0,
             },
         );
         assert!(
@@ -2079,6 +2187,7 @@ mod tests {
             completion: 1_000_000,
             cache_read: 0,
             cache_write: 0,
+            reasoning: 0,
         };
         let configured = estimate_cost(
             tokens,
@@ -2116,6 +2225,7 @@ mod tests {
                 completion: 1_000_000,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
             &PriceInputs {
                 model: "qwen3-8b",
@@ -2182,6 +2292,7 @@ mod tests {
                 completion: 0,
                 cache_read: 800,
                 cache_write: 0,
+                reasoning: 0,
             },
         );
         let exclusive = priced(
@@ -2191,6 +2302,7 @@ mod tests {
                 completion: 0,
                 cache_read: 800,
                 cache_write: 0,
+                reasoning: 0,
             },
         );
         assert!(
@@ -2201,6 +2313,44 @@ mod tests {
         assert!(
             (inclusive.usd - (0.001 + 0.000_4)).abs() < 1e-12,
             "{inclusive:?}"
+        );
+    }
+
+    /// The reasoning column is there when a row has one and gone when no row
+    /// does, so a local model's report is exactly as wide as it was.
+    #[test]
+    fn the_reasoning_column_appears_only_when_there_is_reasoning() {
+        let quiet = format!(
+            "{}\n",
+            serde_json::json!({
+                "ts": 1, "project": "/p", "provider": "local", "model": "qwen3-8b",
+                "prompt_tokens": 10, "completion_tokens": 4, "mode": "genie"
+            }),
+        );
+        let report = render_report(&quiet, None, 3);
+        assert!(
+            !report.contains("reasoning"),
+            "no row has reasoning, so the column is not printed:\n{report}"
+        );
+
+        let loud = format!(
+            "{}\n",
+            serde_json::json!({
+                "ts": 1, "project": "/p", "provider": "xai", "model": "grok-4.5",
+                "prompt_tokens": 212, "completion_tokens": 21, "reasoning_tokens": 20,
+                "mode": "genie"
+            }),
+        );
+        let report = render_report(&loud, None, 3);
+        assert!(
+            report.contains("reasoning"),
+            "the column is printed when a row has one:\n{report}"
+        );
+        assert!(
+            report
+                .lines()
+                .any(|line| line.contains("xai") && line.contains("20")),
+            "and the count reaches the provider row:\n{report}"
         );
     }
 
@@ -2351,6 +2501,7 @@ mod tests {
                     cost_usd: Some(priced.usd),
                     price_source: priced.source,
                     mode: "genie".to_string(),
+                    reasoning_tokens: 0,
                 };
                 append(&path, &record).expect("appending the fixture");
             };
@@ -2364,6 +2515,7 @@ mod tests {
                 completion: 1_000,
                 cache_read: 90_000,
                 cache_write: 0,
+                reasoning: 0,
             },
             false,
         );
@@ -2376,6 +2528,7 @@ mod tests {
                 completion: 0,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
             false,
         );
@@ -2388,6 +2541,7 @@ mod tests {
                 completion: 100,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
             true,
         );

@@ -1021,6 +1021,9 @@ pub(crate) async fn collect_text_billed(
             if chunk.cache.read > 0 || chunk.cache.write > 0 {
                 tracker.record_cache(chunk.cache.read, chunk.cache.write);
             }
+            if let Some(reasoning) = chunk.reasoning_eval_count {
+                tracker.record_reasoning(reasoning);
+            }
         }
         if chunk.thinking {
             continue;
@@ -2027,6 +2030,7 @@ mod tests {
                 eval_count: None,
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
+                reasoning_eval_count: None,
             };
             Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
         }

@@ -683,6 +683,7 @@ impl Host for SubRun<'_> {
         if let Some(tracker) = &self.ctx.usage {
             tracker.record_delegated(prompt, completion);
             tracker.record_cache(usage.cache.read, usage.cache.write);
+            tracker.record_reasoning(usage.reasoning.unwrap_or(0));
         }
         if usage.prompt.is_some() {
             *self.reading() = usage.prompt;
@@ -723,6 +724,7 @@ impl Host for SubRun<'_> {
             if let Some(tracker) = &self.ctx.usage {
                 tracker.record_delegated(compacted.usage.prompt, compacted.usage.completion);
                 tracker.record_cache(compacted.usage.cache_read, compacted.usage.cache_write);
+                tracker.record_reasoning(compacted.usage.reasoning);
             }
             sink.usage(compacted.usage.prompt, compacted.usage.completion)
                 .await;
@@ -1402,6 +1404,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }
     }
 
@@ -1619,6 +1622,7 @@ mod tests {
                 eval_count: None,
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
+                reasoning_eval_count: None,
             }],
             vec![chunk("done", false, true)],
         ]);
@@ -1785,6 +1789,7 @@ mod tests {
                 completion,
                 cache_read,
                 cache_write,
+                reasoning: 0,
             },
             &inputs,
         );
@@ -1794,6 +1799,7 @@ mod tests {
                 completion,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning: 0,
             },
             &inputs,
         );
@@ -2013,6 +2019,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }]]);
         let client: Arc<dyn LlmProvider> = provider.clone();
 
@@ -2121,6 +2128,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }
     }
 

@@ -494,6 +494,7 @@ mod tests {
                 eval_count: None,
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
+                reasoning_eval_count: None,
             };
             Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
         }
@@ -569,6 +570,7 @@ mod tests {
             eval_count: None,
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
+            reasoning_eval_count: None,
         }
     }
 

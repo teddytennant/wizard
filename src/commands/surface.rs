@@ -29,6 +29,7 @@
 //! `dispatch_reaches_every_command_on_every_surface` fails if the table and the
 //! dispatcher disagree about any of them.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -240,6 +241,10 @@ pub struct SessionSnapshot {
     /// which overstates; it is the answer that was given unconditionally
     /// before this field existed.
     pub cache_tokens: Option<(u64, u64)>,
+    /// Completion tokens the model spent reasoning, a subset of
+    /// `completion_tokens`. `None` on the surfaces that cannot see it, for the
+    /// same reason `cache_tokens` is; 0 on a backend that reports no split.
+    pub reasoning_tokens: Option<u64>,
     /// Tokens the next turn would send, when the surface knows.
     pub context_tokens: Option<u64>,
     /// Background `execute` tasks still running, when the surface knows.
@@ -881,6 +886,11 @@ fn cost_report(session: &SessionSnapshot) -> String {
         "session usage: {} prompt + {} completion tokens",
         session.prompt_tokens, session.completion_tokens
     );
+    // Only when there is one. Every provider without a reasoning mode would
+    // otherwise get a "0 reasoning" that says nothing.
+    if let Some(reasoning) = session.reasoning_tokens.filter(|count| *count > 0) {
+        let _ = write!(text, " ({reasoning} of them reasoning)");
+    }
     let (cache_read, cache_write) = session.cache_tokens.unwrap_or((0, 0));
     match crate::usage::cost_usd(
         crate::usage::TurnTokens {
@@ -888,6 +898,7 @@ fn cost_report(session: &SessionSnapshot) -> String {
             completion: session.completion_tokens,
             cache_read,
             cache_write,
+            reasoning: 0,
         },
         session.usd_per_mtok_in,
         session.usd_per_mtok_out,
@@ -1098,6 +1109,7 @@ mod tests {
                 session: None,
                 prompt_tokens: 0,
                 cache_tokens: None,
+                reasoning_tokens: None,
                 completion_tokens: 0,
                 context_tokens: None,
                 background_tasks: None,
@@ -1550,6 +1562,30 @@ mod tests {
         let cost = cost_report(&snapshot);
         assert!(cost.contains("0 prompt + 0 completion tokens"));
         assert!(cost.contains("usd_per_mtok_in"), "how to price it: {cost}");
+        assert!(
+            !cost.contains("reasoning"),
+            "a backend that reports no reasoning gets no reasoning line: {cost}"
+        );
+    }
+
+    /// `/cost` names the reasoning share when there is one. It is inside the
+    /// completion total already, so the line says which part of that total it
+    /// is rather than adding a number that would not sum.
+    #[test]
+    fn cost_names_the_reasoning_share_when_there_is_one() {
+        let snapshot = SessionSnapshot {
+            prompt_tokens: 21_200,
+            completion_tokens: 2_100,
+            reasoning_tokens: Some(2_000),
+            usd_per_mtok_in: Some(3.0),
+            usd_per_mtok_out: Some(15.0),
+            ..Recorder::default().snapshot()
+        };
+        let cost = cost_report(&snapshot);
+        assert!(
+            cost.contains("21200 prompt + 2100 completion tokens (2000 of them reasoning)"),
+            "got: {cost}"
+        );
     }
 
     #[test]

@@ -439,6 +439,9 @@ pub struct CompactUsage {
     pub cache_read: u64,
     /// Prompt tokens written into the provider's cache, also a subset.
     pub cache_write: u64,
+    /// Completion tokens the summarizer spent reasoning, a subset of
+    /// [`Self::completion`].
+    pub reasoning: u64,
 }
 
 impl CompactUsage {
@@ -448,11 +451,18 @@ impl CompactUsage {
     }
 
     /// Fold in one model call's final chunk.
-    fn add(&mut self, prompt: Option<u64>, completion: Option<u64>, cache: CacheTokens) {
+    fn add(
+        &mut self,
+        prompt: Option<u64>,
+        completion: Option<u64>,
+        cache: CacheTokens,
+        reasoning: Option<u64>,
+    ) {
         self.prompt = self.prompt.saturating_add(prompt.unwrap_or(0));
         self.completion = self.completion.saturating_add(completion.unwrap_or(0));
         self.cache_read = self.cache_read.saturating_add(cache.read);
         self.cache_write = self.cache_write.saturating_add(cache.write);
+        self.reasoning = self.reasoning.saturating_add(reasoning.unwrap_or(0));
     }
 }
 
@@ -956,7 +966,12 @@ async fn summarize_transcript(
         let chunk = chunk.context("reading compaction stream")?;
         // Billed before the reply is judged: an empty summary still cost
         // whatever the backend charged for reading the span.
-        usage.add(chunk.prompt_eval_count, chunk.eval_count, chunk.cache);
+        usage.add(
+            chunk.prompt_eval_count,
+            chunk.eval_count,
+            chunk.cache,
+            chunk.reasoning_eval_count,
+        );
         if let Some(message) = chunk.message
             && !chunk.thinking
         {
@@ -1020,6 +1035,7 @@ mod tests {
                 eval_count: Some(STUB_COMPLETION),
                 prompt_eval_count: Some(STUB_PROMPT),
                 cache: STUB_CACHE,
+                reasoning_eval_count: None,
             };
             Ok(Box::pin(futures_util::stream::once(
                 async move { Ok(chunk) },

@@ -1165,6 +1165,7 @@ fn build_final<S>(state: &SseState<S>) -> ChatChunk {
         eval_count: state.eval_count,
         prompt_eval_count: state.prompt_tokens.total(),
         cache: state.prompt_tokens.split(),
+        reasoning_eval_count: None,
     }
 }
 
@@ -1179,6 +1180,7 @@ fn text_chunk(content: String, thinking: bool) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -2463,6 +2465,41 @@ mod tests {
                 write: 900
             }
         );
+    }
+
+    /// Anthropic publishes no reasoning-token counter: thinking blocks are
+    /// billed as output and are already inside `output_tokens`. So the chunk
+    /// carries no split, and that is the honest answer rather than a zero
+    /// that would read as "this model did not think".
+    #[tokio::test]
+    async fn thinking_tokens_are_already_inside_the_output_count() {
+        let parts: Vec<Result<Vec<u8>>> = vec![
+            Ok(
+                b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n"
+                    .to_vec(),
+            ),
+            Ok(
+                b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n"
+                    .to_vec(),
+            ),
+            Ok(
+                b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"weighing it up\"}}\n\n"
+                    .to_vec(),
+            ),
+            Ok(
+                b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":31}}\n\n"
+                    .to_vec(),
+            ),
+            Ok(b"data: {\"type\":\"message_stop\"}\n\n".to_vec()),
+        ];
+        let mut chunks = decode_sse(stream::iter(parts));
+        let mut last = None;
+        while let Some(chunk) = chunks.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert_eq!(last.eval_count, Some(31));
+        assert_eq!(last.reasoning_eval_count, None);
     }
 
     /// A stream that reports no cache fields at all (a proxy, an older API

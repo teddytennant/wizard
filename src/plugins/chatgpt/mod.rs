@@ -639,6 +639,15 @@ struct Usage {
     /// The Responses API's nesting for the cached-prefix counter.
     #[serde(default)]
     input_tokens_details: Option<InputTokensDetails>,
+    /// The Responses API's nesting for the reasoning-token counter.
+    #[serde(default)]
+    output_tokens_details: Option<OutputTokensDetails>,
+    /// Only read to settle whether `output_tokens` already contains the
+    /// reasoning tokens; see [`crate::llm::completion_with_reasoning`]. On
+    /// this endpoint it always does, and the check says so rather than
+    /// assuming it.
+    #[serde(default)]
+    total_tokens: Option<u64>,
 }
 
 /// `usage.input_tokens_details` (subset): the breakdown of `input_tokens`.
@@ -646,6 +655,13 @@ struct Usage {
 struct InputTokensDetails {
     #[serde(default)]
     cached_tokens: Option<u64>,
+}
+
+/// `usage.output_tokens_details` (subset): the breakdown of `output_tokens`.
+#[derive(Debug, Deserialize)]
+struct OutputTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u64>,
 }
 
 impl Usage {
@@ -662,6 +678,26 @@ impl Usage {
             .as_ref()
             .and_then(|details| details.cached_tokens)
             .unwrap_or(0)
+    }
+
+    /// Reasoning tokens the model generated, when the endpoint reports them.
+    /// A **subset** of [`Self::output_tokens_total`].
+    fn reasoning_tokens(&self) -> Option<u64> {
+        self.output_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens)
+    }
+
+    /// Every token the reply was billed for at the output rate. The Responses
+    /// API counts reasoning inside `output_tokens` already, so this normally
+    /// returns it untouched.
+    fn output_tokens_total(&self) -> Option<u64> {
+        crate::llm::completion_with_reasoning(
+            self.input_tokens,
+            self.output_tokens,
+            self.reasoning_tokens(),
+            self.total_tokens,
+        )
     }
 }
 
@@ -688,6 +724,9 @@ struct SseState<S> {
     reasoning: Vec<ThinkingBlock>,
     prompt_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    /// Reasoning tokens the model generated (a subset of `output_tokens`),
+    /// when the endpoint reports them. See [`Usage::reasoning_tokens`].
+    reasoning_tokens: Option<u64>,
     /// Prompt tokens the endpoint served from its cache (a subset of
     /// `prompt_tokens`). See [`Usage::cached_tokens`].
     cached_prompt_tokens: u64,
@@ -719,6 +758,7 @@ where
         reasoning: Vec::new(),
         prompt_tokens: None,
         output_tokens: None,
+        reasoning_tokens: None,
         cached_prompt_tokens: 0,
         done: false,
         terminated: false,
@@ -791,7 +831,8 @@ where
                     Event::Completed { response } | Event::Incomplete { response } => {
                         if let Some(usage) = response.usage {
                             state.prompt_tokens = usage.input_tokens;
-                            state.output_tokens = usage.output_tokens;
+                            state.output_tokens = usage.output_tokens_total();
+                            state.reasoning_tokens = usage.reasoning_tokens();
                             state.cached_prompt_tokens = usage.cached_tokens();
                         }
                         // A reply the endpoint cut short has to reach the agent
@@ -859,6 +900,7 @@ fn text_chunk(text: String, thinking: bool) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -895,6 +937,7 @@ fn build_final<S>(state: &mut SseState<S>) -> ChatChunk {
             read: state.cached_prompt_tokens,
             write: 0,
         },
+        reasoning_eval_count: state.reasoning_tokens,
     }
 }
 
@@ -1335,6 +1378,43 @@ mod tests {
                 write: 0
             }
         );
+    }
+
+    /// Reasoning is most of what a gpt-5 turn generates and all of it is
+    /// billed at the output rate, so the split has to leave the adapter or
+    /// `/cost` cannot say where the money went. The Responses API counts it
+    /// inside `output_tokens` already, and `total_tokens` says so.
+    #[tokio::test]
+    async fn the_reasoning_share_of_the_output_leaves_the_adapter() {
+        let parts: Vec<Result<Vec<u8>>> = vec![Ok(
+            b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":32,\"output_tokens\":180,\"total_tokens\":212,\"output_tokens_details\":{\"reasoning_tokens\":160}}}}\n\n".to_vec(),
+        )];
+        let mut out = decode_sse(stream::iter(parts).boxed());
+        let mut last = None;
+        while let Some(chunk) = out.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert_eq!(last.eval_count, Some(180), "reasoning is already inside it");
+        assert_eq!(last.reasoning_eval_count, Some(160));
+    }
+
+    /// No `output_tokens_details` (a proxy, an older version, a model with no
+    /// reasoning mode) reports no split instead of a zero one.
+    #[tokio::test]
+    async fn a_response_without_a_reasoning_breakdown_reports_none() {
+        let parts: Vec<Result<Vec<u8>>> = vec![Ok(
+            b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":3}}}\n\n"
+                .to_vec(),
+        )];
+        let mut out = decode_sse(stream::iter(parts).boxed());
+        let mut last = None;
+        while let Some(chunk) = out.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert_eq!(last.eval_count, Some(3));
+        assert_eq!(last.reasoning_eval_count, None);
     }
 
     /// A stream that reports no `input_tokens_details` — an older API

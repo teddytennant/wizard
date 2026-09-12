@@ -810,6 +810,28 @@ struct Usage {
     /// Checked 2026-08-07 against api-docs.deepseek.com/guides/kv_cache.
     #[serde(default)]
     prompt_cache_hit_tokens: Option<u64>,
+    /// OpenAI's nesting for the reasoning-token counter. xAI uses the same
+    /// nesting and means something different by it; see
+    /// [`crate::llm::completion_with_reasoning`].
+    #[serde(default)]
+    completion_tokens_details: Option<CompletionTokensDetails>,
+    /// The same number flattened onto `usage`, which is where several
+    /// OpenAI-compatible gateways put it.
+    #[serde(default)]
+    reasoning_tokens: Option<u64>,
+    /// Only read to settle whether `completion_tokens` already contains the
+    /// reasoning tokens. Nothing else needs it: prompt and completion are
+    /// counted separately everywhere downstream.
+    #[serde(default)]
+    total_tokens: Option<u64>,
+}
+
+/// `usage.completion_tokens_details` (subset): the breakdown of
+/// `completion_tokens`.
+#[derive(Debug, Deserialize)]
+struct CompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u64>,
 }
 
 /// `usage.prompt_tokens_details` (subset): the breakdown of `prompt_tokens`.
@@ -855,6 +877,27 @@ impl Usage {
         self.prompt_tokens_details
             .as_ref()
             .and_then(|details| details.cache_write_tokens)
+    }
+
+    /// Reasoning tokens the model generated, from whichever of the two
+    /// spellings the endpoint used.
+    fn reasoning_tokens(&self) -> Option<u64> {
+        self.completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens)
+            .or(self.reasoning_tokens)
+    }
+
+    /// Every token the reply was billed for at the output rate, reasoning
+    /// included. See [`crate::llm::completion_with_reasoning`] for why this is
+    /// not always what the endpoint put in `completion_tokens`.
+    fn completion_tokens(&self) -> Option<u64> {
+        crate::llm::completion_with_reasoning(
+            self.prompt_tokens,
+            self.completion_tokens,
+            self.reasoning_tokens(),
+            self.total_tokens,
+        )
     }
 }
 
@@ -906,6 +949,9 @@ struct SseState<S> {
     /// (OpenRouter does; nothing else on this wire shape does). Also a subset
     /// of `prompt_eval_count`. See [`Usage::cache_write_tokens`].
     cache_write_tokens: Option<u64>,
+    /// Reasoning tokens the model generated (a subset of `eval_count`), when
+    /// the endpoint reports them. See [`Usage::reasoning_tokens`].
+    reasoning_tokens: Option<u64>,
     /// Last `finish_reason` seen ("stop", "length", "tool_calls", ...).
     done_reason: Option<String>,
     /// Saw `data: [DONE]` or EOF — drain the buffer, then emit the final chunk.
@@ -990,6 +1036,7 @@ fn build_final<S>(state: &SseState<S>) -> ChatChunk {
             read: state.cached_prompt_tokens.unwrap_or(0),
             write: state.cache_write_tokens.unwrap_or(0),
         },
+        reasoning_eval_count: state.reasoning_tokens,
     }
 }
 
@@ -1004,6 +1051,7 @@ fn text_chunk(content: String, thinking: bool) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -1020,6 +1068,7 @@ fn image_chunk(images: Vec<Image>) -> ChatChunk {
         eval_count: None,
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
+        reasoning_eval_count: None,
     }
 }
 
@@ -1040,6 +1089,7 @@ where
         eval_count: None,
         cached_prompt_tokens: None,
         cache_write_tokens: None,
+        reasoning_tokens: None,
         done_reason: None,
         saw_done: false,
         terminated: false,
@@ -1092,7 +1142,10 @@ where
                     if let Some(prompt) = usage.prompt_tokens {
                         state.prompt_eval_count = Some(prompt);
                     }
-                    if let Some(completion) = usage.completion_tokens {
+                    if let Some(reasoning) = usage.reasoning_tokens() {
+                        state.reasoning_tokens = Some(reasoning);
+                    }
+                    if let Some(completion) = usage.completion_tokens() {
                         state.eval_count = Some(completion);
                     }
                 }
@@ -1516,6 +1569,116 @@ mod tests {
         let bare = parse(r#"{"prompt_tokens":11,"completion_tokens":4}"#);
         assert_eq!(bare.cached_tokens(), None);
         assert_eq!(bare.cache_write_tokens(), None);
+    }
+
+    /// The response body a real `grok-4.5` call returned through this wire
+    /// shape, trimmed to its usage object. It is the whole argument for
+    /// `completion_with_reasoning`: 212 + 1 + 20 = 233, so the one visible
+    /// token is *not* the bill, and a `/cost` that reported it would be off by
+    /// 21x on this call.
+    #[test]
+    fn xai_reports_reasoning_beside_completion_not_inside_it() {
+        let usage: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":212,"completion_tokens":1,"total_tokens":233,"prompt_tokens_details":{"text_tokens":212,"audio_tokens":0,"image_tokens":0,"cached_tokens":128},"completion_tokens_details":{"reasoning_tokens":20,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(usage.reasoning_tokens(), Some(20));
+        assert_eq!(usage.completion_tokens(), Some(21));
+        assert_eq!(usage.cached_tokens(), Some(128));
+    }
+
+    /// OpenAI counts the other way: `total_tokens` is prompt + completion, so
+    /// the reasoning tokens are already inside the completion count and adding
+    /// them would bill them twice.
+    #[test]
+    fn openai_reports_reasoning_inside_completion() {
+        let usage: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":32,"completion_tokens":180,"total_tokens":212,"completion_tokens_details":{"reasoning_tokens":160}}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(usage.reasoning_tokens(), Some(160));
+        assert_eq!(usage.completion_tokens(), Some(180));
+    }
+
+    /// A gateway that flattens the counter onto `usage`, and one that reports
+    /// no reasoning at all. Neither may change what the completion count says.
+    #[test]
+    fn reasoning_tokens_are_read_from_every_usage_shape() {
+        let flat: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":10,"completion_tokens":4,"total_tokens":20,"reasoning_tokens":6}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(flat.reasoning_tokens(), Some(6));
+        assert_eq!(flat.completion_tokens(), Some(10));
+
+        let bare: Usage =
+            serde_json::from_str(r#"{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}"#)
+                .expect("usage parses");
+        assert_eq!(bare.reasoning_tokens(), None);
+        assert_eq!(bare.completion_tokens(), Some(4));
+
+        // No total to check against, and a reasoning count bigger than the
+        // completion count. A subset cannot be, so these are siblings and the
+        // inequality settles it without the total.
+        let no_total: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":11,"completion_tokens":4,"completion_tokens_details":{"reasoning_tokens":9}}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(no_total.reasoning_tokens(), Some(9));
+        assert_eq!(no_total.completion_tokens(), Some(13));
+
+        // No total and reasoning that *could* be a subset: left exactly as it
+        // came, because guessing would invent tokens nobody was billed for.
+        let ambiguous: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":11,"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":9}}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(ambiguous.completion_tokens(), Some(40));
+
+        // A reply that did no thinking reports zero, not absence.
+        let cold: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15,"completion_tokens_details":{"reasoning_tokens":0}}"#,
+        )
+        .expect("usage parses");
+        assert_eq!(cold.reasoning_tokens(), Some(0));
+        assert_eq!(cold.completion_tokens(), Some(4));
+    }
+
+    /// The same xAI numbers over SSE, which is the path every real call takes.
+    #[tokio::test]
+    async fn reasoning_tokens_reach_the_chunk_over_sse() {
+        let parts: Vec<Result<Vec<u8>>> = vec![Ok(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":212,\"completion_tokens\":1,\"total_tokens\":233,\"completion_tokens_details\":{\"reasoning_tokens\":20}}}\n\ndata: [DONE]\n\n"
+                .to_vec(),
+        )];
+        let mut chunks = decode_sse(stream::iter(parts));
+        let mut last = None;
+        while let Some(chunk) = chunks.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert_eq!(last.prompt_eval_count, Some(212));
+        assert_eq!(last.eval_count, Some(21));
+        assert_eq!(last.reasoning_eval_count, Some(20));
+    }
+
+    /// A backend with no reasoning mode still decodes, and reports nothing
+    /// rather than zero: "no split" and "a split that was zero" are different
+    /// facts and only the second is worth printing.
+    #[tokio::test]
+    async fn a_stream_without_reasoning_counts_reports_none() {
+        let parts: Vec<Result<Vec<u8>>> = vec![Ok(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n"
+                .to_vec(),
+        )];
+        let mut chunks = decode_sse(stream::iter(parts));
+        let mut last = None;
+        while let Some(chunk) = chunks.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert_eq!(last.eval_count, Some(4));
+        assert_eq!(last.reasoning_eval_count, None);
     }
 
     /// DeepSeek is the reason this adapter reads three spellings rather than

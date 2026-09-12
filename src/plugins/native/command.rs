@@ -576,6 +576,7 @@ mod tests {
             session: None,
             prompt_tokens: 0,
             cache_tokens: None,
+            reasoning_tokens: None,
             completion_tokens: 0,
             context_tokens: None,
             background_tasks: None,
