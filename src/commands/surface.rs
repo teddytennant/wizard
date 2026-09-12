@@ -1396,7 +1396,9 @@ mod tests {
     fn help_names_the_commands_the_window_does_not_run() {
         let text = help_text(Surface::Gui);
         assert!(
-            text.contains("/goal [text] — show the standing goal, or set one and start working")
+            text.contains(
+                "/goal [text] — show the standing goal, or set one and work on it under an independent critic"
+            )
         );
         assert!(text.contains("/diff"));
         assert!(
