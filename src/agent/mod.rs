@@ -1031,7 +1031,10 @@ impl Agent {
     pub async fn context_pressure(&self) -> ContextPressure {
         context::pressure(context::Measured {
             tokens: self.context_tokens(),
-            window: self.client.context_window(&self.model).await,
+            window: context::effective_window(
+                self.client.context_window(&self.model).await,
+                self.config.max_context_tokens,
+            ),
             bytes: self.history.iter().map(|msg| msg.text().len()).sum(),
             byte_threshold: self.config.compact_threshold_bytes,
             last_prompt: self.usage.last_prompt_tokens(),
@@ -1684,7 +1687,10 @@ impl Agent {
     /// pre-compact transcript remains earlier in the JSONL).
     pub async fn compact_now(&mut self) -> CompactOutcome {
         let budget = context::Budget {
-            window: self.client.context_window(&self.model).await,
+            window: context::effective_window(
+                self.client.context_window(&self.model).await,
+                self.config.max_context_tokens,
+            ),
             byte_threshold: self.config.compact_threshold_bytes,
         };
         let compacted = context::compact(

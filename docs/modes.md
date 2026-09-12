@@ -256,6 +256,7 @@ to `~/.wizard/evolution.jsonl`.
 | `cycle_pause_secs` | `0` | Pause between continuous cycles |
 | `max_consecutive_failures` | `5` | Failed cycles in a row before a continuous run gives up; `0` disables the bound |
 | `compact_threshold_bytes` | `48000` | History size that triggers compaction |
+| `max_context_tokens` | `150000` | Cap on the window compaction measures against; `0` uses the whole window |
 | `rollback_failed_cycles` | `false` | Restore a failed cycle's file checkpoints (see [checkpoints.md](checkpoints.md)) |
 
 > **Run it in a container or VM.** Continuous mode executes every tool call with no

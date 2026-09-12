@@ -591,7 +591,12 @@ the whole fan-out, not just the main loop.
 
 History compaction triggers on **either** the byte threshold
 (`compact_threshold_bytes`, default 48 kB) **or** the last prompt exceeding
-~80% of the model's context window, when the window is known:
+~80% of the model's context window, when the window is known. The window is
+first capped at `max_context_tokens` (default 150k), so the trigger lands at
+120k tokens on a model that claims more: 80% of a 500k window is 400k tokens,
+which a real session never reaches, and a 100k-token prompt costs prefill on
+every step long before it is a correctness problem. Where the window is
+known:
 
 - anthropic / openai / xai: static tables per model family
 - llama.cpp: live `GET /props` probe for the loaded model's `n_ctx` (cached)

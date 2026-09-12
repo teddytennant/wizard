@@ -315,6 +315,9 @@ pub(super) struct Policy {
     /// Serialized-history ceiling the pressure reading falls back to when the
     /// provider names no context window.
     pub byte_threshold: usize,
+    /// Cap on the context window this run manages itself against
+    /// ([`context::effective_window`]).
+    pub max_context_tokens: u32,
     /// Whether background tasks and subagents that finished are drained into
     /// history at the top of each step.
     pub background_drain: bool,
@@ -360,6 +363,7 @@ impl Policy {
             retry_base_secs: agent.config.retry_base_secs,
             retry_max_secs: agent.config.retry_max_secs,
             byte_threshold: agent.config.compact_threshold_bytes,
+            max_context_tokens: agent.config.max_context_tokens,
             background_drain: true,
             operator_control: agent.mode == crate::config::Mode::Sovereign,
             pressure_signal: true,
@@ -384,6 +388,7 @@ impl Policy {
         retry_base_secs: u64,
         retry_max_secs: u64,
         byte_threshold: usize,
+        max_context_tokens: u32,
     ) -> Self {
         Self {
             max_steps,
@@ -416,6 +421,7 @@ impl Policy {
             retry_base_secs,
             retry_max_secs,
             byte_threshold,
+            max_context_tokens,
             // Declined: the task and subagent registries in a sub-run's
             // context are the *parent's*. Draining them here would consume
             // notifications the parent has to inject into its own history and
@@ -898,7 +904,10 @@ async fn measure(host: &impl Host, policy: &Policy) -> super::ContextPressure {
     let last_prompt = host.last_prompt();
     context::pressure(context::Measured {
         tokens: last_prompt.unwrap_or_else(|| crate::llm::estimate_history_tokens(host.history())),
-        window: host.client().context_window(&policy.model).await,
+        window: context::effective_window(
+            host.client().context_window(&policy.model).await,
+            policy.max_context_tokens,
+        ),
         bytes: host
             .history()
             .iter()
@@ -2631,6 +2640,7 @@ mod tests {
             1,
             30,
             48_000,
+            150_000,
         );
         let Policy {
             max_steps,
@@ -2647,6 +2657,7 @@ mod tests {
             retry_base_secs,
             retry_max_secs,
             byte_threshold,
+            max_context_tokens,
             background_drain,
             operator_control,
             pressure_signal,
@@ -2660,6 +2671,7 @@ mod tests {
         assert_eq!(retry_budget, Some(RETRY_ATTEMPTS));
         assert_eq!((retry_base_secs, retry_max_secs), (1, 30));
         assert_eq!(byte_threshold, 48_000);
+        assert_eq!(max_context_tokens, 150_000);
         assert_eq!(temperature, crate::config::Mode::Sovereign.temperature());
 
         // What it declines, and why. The deadline and the interrupt are not

@@ -987,6 +987,16 @@ pub struct Config {
     /// history exceeds this many bytes, compact older messages into a summary.
     /// With a known window, the reported prompt size governs instead.
     pub compact_threshold_bytes: usize,
+    /// Treat the provider's context window as no larger than this many
+    /// tokens (`0` uses the whole window). Compaction triggers at 80% of it,
+    /// so the default compacts at 120k tokens whatever the model claims to
+    /// hold.
+    ///
+    /// A fraction of the window is the right rule at 32k and the wrong one at
+    /// 500k, where 80% is 400k tokens and nothing ever reaches it. The cap is
+    /// what keeps the fraction meaningful on a large window without making it
+    /// useless on a small one.
+    pub max_context_tokens: u32,
     /// Configured LLM providers. Empty means "use the legacy `model` /
     /// `ollama_host` fields as a single local Ollama provider".
     #[serde(default)]
@@ -1081,6 +1091,7 @@ impl Default for Config {
             gate_max_attempts: 3,
             gate_timeout_secs: 1_800,
             compact_threshold_bytes: 48_000,
+            max_context_tokens: 150_000,
             providers: Vec::new(),
             active_provider: None,
             gateway: GatewayConfig::default(),

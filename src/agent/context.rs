@@ -216,6 +216,26 @@ pub struct Measured {
     pub last_prompt: Option<u64>,
 }
 
+/// The window a run manages itself against: the provider's, capped by
+/// `max_tokens` (`0` means no cap).
+///
+/// Both [`pressure`] and [`Budget`] measure against a *fraction* of the
+/// window, which is the right shape for a 32k local model and the wrong one
+/// for grok-4.6, where 80% of 500k is 400k tokens and the trigger simply never
+/// arrives: over 89 benchmark trials no run ever compacted, and the biggest
+/// per-call prompt was 105k. A prompt that large costs real prefill on every
+/// step and is where long-context answers start coming back garbled, so the
+/// cap is what makes the fraction mean something again. 150k caps the default
+/// trigger at 120k tokens: under every window Wizard is pointed at often
+/// enough to matter (128k on GPT-class models, 200k on Claude) the fraction
+/// still binds, and above that this does.
+pub fn effective_window(window: Option<u32>, max_tokens: u32) -> Option<u32> {
+    match window {
+        Some(window) if max_tokens > 0 => Some(window.min(max_tokens)),
+        other => other,
+    }
+}
+
 /// Live fill of the next model call against the provider window (or a
 /// byte-threshold proxy when the window is unknown). Powers the per-step
 /// pressure signal and the `compact` tool's reply.
@@ -1579,6 +1599,52 @@ mod tests {
             compacted.outcome
         );
         assert!(compacted.usage.reported());
+    }
+
+    /// The trigger is a fraction of the window, which is the right rule at 32k
+    /// and useless at 500k: 80% of a grok-4.6 window is 400k tokens, and over
+    /// 89 benchmark trials nothing ever got near it. Capping the window is
+    /// what puts the trigger back where a long session reaches it.
+    #[test]
+    fn a_large_window_is_capped_so_the_trigger_arrives() {
+        const CAP: u32 = 150_000;
+        let huge = Some(500_000);
+        assert_eq!(effective_window(huge, CAP), Some(CAP));
+        assert_eq!(
+            effective_window(Some(128_000), CAP),
+            Some(128_000),
+            "a window under the cap is its own budget"
+        );
+        assert_eq!(effective_window(huge, 0), huge, "0 means no cap");
+        assert_eq!(effective_window(None, CAP), None);
+
+        let measured = |window| Measured {
+            tokens: 121_000,
+            window,
+            bytes: 500_000,
+            byte_threshold: 48_000,
+            last_prompt: Some(121_000),
+        };
+        assert_eq!(
+            pressure(measured(effective_window(huge, CAP))).level,
+            PressureLevel::Critical,
+            "121k of a 150k budget compacts"
+        );
+        assert_eq!(
+            pressure(measured(huge)).level,
+            PressureLevel::Ok,
+            "and the uncapped window is what let it sail past"
+        );
+
+        let budget = Budget {
+            window: effective_window(huge, CAP),
+            byte_threshold: 48_000,
+        };
+        assert_eq!(
+            budget.low_water_tokens(),
+            60_000,
+            "a pass still cuts to half the trigger"
+        );
     }
 
     /// The reported prompt size is what trips auto-compaction, and only

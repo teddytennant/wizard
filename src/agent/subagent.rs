@@ -615,6 +615,9 @@ struct SubRun<'a> {
     /// names no context window, carried from the same config key the parent
     /// reads ([`crate::config::Config::compact_threshold_bytes`]).
     byte_threshold: usize,
+    /// Cap on the window this run compacts against, from the same config key
+    /// the parent reads ([`crate::config::Config::max_context_tokens`]).
+    max_context_tokens: u32,
     /// The sub-loop's own last reported prompt size, which is what decides
     /// when it compacts.
     ///
@@ -703,7 +706,10 @@ impl Host for SubRun<'_> {
     /// with a notice on this arm.
     async fn compact(&mut self, sink: &Sink) {
         let budget = context::Budget {
-            window: self.client.context_window(&self.model).await,
+            window: context::effective_window(
+                self.client.context_window(&self.model).await,
+                self.max_context_tokens,
+            ),
             byte_threshold: self.byte_threshold,
         };
         let compacted = context::compact(
@@ -869,6 +875,7 @@ async fn run_loop(
         loaded.retry_base_secs,
         loaded.retry_max_secs,
         loaded.compact_threshold_bytes,
+        loaded.max_context_tokens,
     );
     let mut host = SubRun {
         client,
@@ -877,6 +884,7 @@ async fn run_loop(
         history,
         model,
         byte_threshold: loaded.compact_threshold_bytes,
+        max_context_tokens: loaded.max_context_tokens,
         last_prompt: std::sync::Mutex::new(None),
     };
 
