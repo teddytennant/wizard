@@ -865,6 +865,7 @@ impl Agent {
         let mut ctx = ToolContext::new(project_root)
             .with_web(web)
             .with_shell(shell)
+            .with_vision(config.active().vision.unwrap_or(true))
             .with_checkpoints(Arc::clone(&checkpoints))
             .with_usage(Arc::clone(&usage))
             .with_cancel(cancel.clone());

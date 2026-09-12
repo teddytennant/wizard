@@ -215,6 +215,7 @@ async fn a_live_turn_reaches_the_window_as_transcript_items() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }];
     config.active_provider = Some("scripted".to_string());
     // One model round trip: the scripted endpoint replays the same stream
@@ -389,6 +390,7 @@ async fn a_branched_claude_session_opens_from_the_picker_and_continues() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }];
     config.active_provider = Some("scripted".to_string());
     config.max_steps = crate::config::StepBudget::new(1);
@@ -1360,6 +1362,7 @@ async fn a_prompting_command_is_answered_from_this_window() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }];
     config.active_provider = Some("scripted".to_string());
     config.max_steps = crate::config::StepBudget::new(1);
@@ -1485,6 +1488,7 @@ async fn an_unattended_manager_announces_no_console() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }];
     config.active_provider = Some("scripted".to_string());
     config.max_steps = crate::config::StepBudget::new(1);

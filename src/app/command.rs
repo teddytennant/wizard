@@ -1386,6 +1386,7 @@ impl CommandContext<'_> {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
         let reminder = api_key_env
             .map(|env| format!(" — remember to `export {env}=<key>` for this provider"))
@@ -1440,6 +1441,7 @@ impl CommandContext<'_> {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
         self.add_provider_config(provider, format!("added and switched to provider '{name}'"))
             .await;
@@ -1575,6 +1577,7 @@ impl CommandContext<'_> {
                         gguf_path: None,
                         usd_per_mtok_in: None,
                         usd_per_mtok_out: None,
+                        vision: None,
                     };
                     let _ = notify
                         .send(Event::ProviderActivated(Box::new(provider)))

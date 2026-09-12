@@ -628,6 +628,7 @@ async fn a_plugin_registered_provider_is_selectable_from_config() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     };
 
     // Nothing has registered it yet, so the config names a backend that is not

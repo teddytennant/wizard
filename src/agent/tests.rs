@@ -1737,6 +1737,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }];
     config.active_provider = Some("anthropic".to_string());
 

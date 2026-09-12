@@ -909,6 +909,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }
     }
 

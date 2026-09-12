@@ -238,6 +238,7 @@ fn full_file_round_trips() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("openai".to_string()),
         gateway: GatewayConfig {
@@ -489,6 +490,7 @@ fn the_env_var_wins_over_a_stored_provider_key() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     };
     // Stand-ins for the process environment and for credentials.toml:
     // this test neither depends on nor disturbs either.
@@ -645,6 +647,7 @@ fn llamacpp_provider_round_trips_through_toml() {
             gguf_path: Some("/home/u/.wizard/models/qwen3-8b-q4_k_m.gguf".to_string()),
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("local".to_string()),
         ..Config::default()
@@ -675,6 +678,7 @@ fn xai_kinds_round_trip_through_toml() {
                 gguf_path: None,
                 usd_per_mtok_in: None,
                 usd_per_mtok_out: None,
+                vision: None,
             },
             ProviderConfig {
                 name: "xai-account".to_string(),
@@ -685,6 +689,7 @@ fn xai_kinds_round_trip_through_toml() {
                 gguf_path: None,
                 usd_per_mtok_in: None,
                 usd_per_mtok_out: None,
+                vision: None,
             },
         ],
         active_provider: Some("xai-account".to_string()),
@@ -717,6 +722,7 @@ fn openrouter_kind_round_trips_through_toml() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("openrouter".to_string()),
         ..Config::default()
@@ -749,6 +755,7 @@ fn cloudflare_kind_round_trips_through_toml() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("cloudflare".to_string()),
         ..Config::default()
@@ -1015,6 +1022,7 @@ async fn preparing_an_unknown_kind_is_not_an_error() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     };
     assert!(provider.prepare("m").await.is_ok());
     assert!(provider.build().is_err());
@@ -1095,6 +1103,7 @@ fn active_selects_by_name_and_falls_back_to_first() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         },
         ProviderConfig {
             name: "claude".to_string(),
@@ -1105,6 +1114,7 @@ fn active_selects_by_name_and_falls_back_to_first() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         },
     ];
 
@@ -1145,6 +1155,7 @@ fn active_provider_mismatch_flags_unknown_names_only() {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     };
 
     // Resolving name / unset name: no mismatch.
@@ -1190,6 +1201,7 @@ fn env_model_overrides_active_provider_when_configured() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("openai".to_string()),
         ..Config::default()
@@ -1276,6 +1288,7 @@ fn env_gguf_path_feeds_synthesized_and_active_llamacpp_provider() {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }],
         active_provider: Some("local".to_string()),
         ..Config::default()

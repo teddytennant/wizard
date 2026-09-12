@@ -429,6 +429,7 @@ pub fn provider_config() -> crate::config::ProviderConfig {
         gguf_path: None,
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
+        vision: None,
     }
 }
 

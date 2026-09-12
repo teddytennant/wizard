@@ -1276,6 +1276,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
         let mut config = Config::default();
         config.providers = vec![provider("alice", "m-alice"), provider("bob", "m-bob")];
@@ -1583,6 +1584,7 @@ mod tests {
                     gguf_path: None,
                     usd_per_mtok_in: None,
                     usd_per_mtok_out: None,
+                    vision: None,
                 },
                 crate::config::ProviderConfig {
                     name: "claude".to_string(),
@@ -1593,6 +1595,7 @@ mod tests {
                     gguf_path: None,
                     usd_per_mtok_in: None,
                     usd_per_mtok_out: None,
+                    vision: None,
                 },
             ],
             ..Default::default()
@@ -2190,6 +2193,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         });
 
         command_in(&mut agent, &shared, &config, "server", "status").await;

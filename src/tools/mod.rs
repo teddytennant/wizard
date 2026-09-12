@@ -168,6 +168,12 @@ pub struct ToolContext {
     /// agent queues one via `run_command`. Set by the surface's agent builder;
     /// [`CommandDispatch::None`] everywhere else.
     pub command_dispatch: CommandDispatch,
+    /// Whether the model behind this run can see an image. True unless the
+    /// active provider is configured `vision = false`, which is how someone
+    /// running a text-only local model says so. `read_file` reads it: an
+    /// image it cannot show is described instead of base64'd into a window
+    /// that will only throw it away.
+    pub vision: bool,
     /// The agent's token counters, set by the agent at construction. Shared
     /// (not owned) because the spend a tool delegates to a model is the
     /// parent's spend: [`crate::agent::subagent::spawn`] records every
@@ -192,6 +198,7 @@ impl ToolContext {
             checkpoints: None,
             images: None,
             command_dispatch: CommandDispatch::None,
+            vision: true,
             usage: None,
         }
     }
@@ -232,6 +239,13 @@ impl ToolContext {
     /// construction).
     pub fn with_images(mut self, store: Arc<crate::images::ImageStore>) -> Self {
         self.images = Some(store);
+        self
+    }
+
+    /// This context told whether the active model can see an image (agent
+    /// construction).
+    pub fn with_vision(mut self, vision: bool) -> Self {
+        self.vision = vision;
         self
     }
 

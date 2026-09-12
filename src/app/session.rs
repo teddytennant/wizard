@@ -338,6 +338,7 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         };
         match try_provider(&provider).await {
             Ok(client) => {
@@ -465,6 +466,7 @@ mod tests {
             gguf_path: None,
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
+            vision: None,
         }
     }
 
