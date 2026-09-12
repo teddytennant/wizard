@@ -73,13 +73,16 @@ Critical path (timeouts fail — avoid inventory greps after green):
 
 ## Image / board / puzzle analysis
 
-- No full pixel grids, IoU matrices, or huge feature dumps into chat.
-- At most **two** compact scripts that print summaries only.
-- Chess/mate puzzles: install `python-chess` / pillow / numpy / stockfish early;
-  occupancy+color → light piece features → valid FEN → exhaustive mate-in-1.
-  **Same-script write** of every mate UCI when found. If empty, one hypothesis
-  script swapping ambiguous N/B/Q/R/P only; write best non-empty set inside it.
-  Stop once a verified non-empty answer is on disk.
+- **Look at it.** `read_file` on a png/jpeg/gif/webp/bmp/ppm returns the image
+  itself, so read the file and read what you see. A QEMU screendump is a `.ppm`
+  and reads the same way.
+- Don't reconstruct an image from pixel values in a script. Sampling squares and
+  inferring labels gets the wrong answer on anything with anti-aliasing or a
+  drop shadow, and it costs a dozen turns to get there.
+- A script still earns its place *after* you have seen the image, for work the
+  eye is bad at: an engine search from a FEN you read off the board, a diff
+  between two renders, counting hundreds of items.
+- Keep script output small either way. No pixel grids or IoU matrices in chat.
 
 ## Editing rules
 

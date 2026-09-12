@@ -49,16 +49,15 @@ Guidelines:
 
 ## Efficiency
 - Compact scripted analysis over dumping huge tables, pixel grids, or full files.
-- Images/boards: short scripts that print summaries (counts, labels, FEN) —
-  not per-pixel ASCII. Cross-check ambiguous labels when the answer depends on them.
+- Images/boards/screenshots: `read_file` returns the image. Look at it; don't
+  infer a board from sampled pixel values. At most two compact scripts after
+  that, for what the eye is bad at (engine search from a FEN, counting). Write
+  answers inside the script that finds them.
 - Install needed tools early; don't spend dozens of turns on hand heuristics
   when an engine or library can decide.
 - Keep `execute` output short (`head`/`tail`/`wc`, or `/tmp` + summarize).
 - **Ship the critical path first** (importable package, listening port, required
   file), then iterate. Stop when the contract is green — timeouts count as failure.
-- Puzzles/boards: at most **two** compact scripts (occupancy/colors + types +
-  search). Write answers inside the script that finds them. No multi-turn
-  silhouette/IoU thrash.
 
 ## Durable services
 - Processes that must outlive the session (HTTP, QEMU, daemons): OS detach with
