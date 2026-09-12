@@ -2003,12 +2003,12 @@ implementation appearing between them.
 
 ### Host-bridge and kernel gaps these two found
 
-- **A Lua plugin can expose a callable.** `ctx:provide(name, function)` holds
-  the function in that plugin's VM and publishes `Service::Callable`; injectors
-  in Rust or Lua can invoke it with JSON in and JSON out. That closes the
-  `memory` / `image` host-bridge gap named above. It would still not have been
-  enough on its own for `hardware` / `schedule`, because those callers also
-  cannot await.
+- **A Lua or JavaScript plugin can expose a callable.** `ctx:provide(name, function)`
+  (JS: `ctx.provide`) holds the function in that plugin's VM and publishes
+  `Service::Callable`; injectors in Rust, Lua, or JavaScript can invoke it with
+  JSON in and JSON out. That closes the `memory` / `image` host-bridge gap named
+  above. It would still not have been enough on its own for `hardware` /
+  `schedule`, because those callers also cannot await.
 - **There is no synchronous door into a plugin VM**, and there should not be
   one: `load_source` is async because the VM is a task, and a `block_on` from a
   tokio worker is a panic. What is missing is not a door but a rule, which is

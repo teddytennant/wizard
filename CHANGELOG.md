@@ -4,6 +4,15 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
+## [Unreleased]
+
+### Added
+
+- **JavaScript callable services.** `ctx.provide(name, fn)` from QuickJS holds
+  the function in that plugin's VM and publishes `Service::Callable`; `ctx.inject`
+  returns a callable as a JS function. Matches the Lua host so all three
+  languages share one callable namespace.
+
 ## [3.1.1] - 2026-09-12
 
 ### Added

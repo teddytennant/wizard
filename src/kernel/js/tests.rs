@@ -546,6 +546,124 @@ async fn all_three_backends_share_one_service_namespace() {
 }
 
 #[tokio::test]
+async fn rust_callable_is_invokable_from_js() {
+    let dir = TempDir::new("js-callable-rust");
+    let kernel = kernel_in(&dir.path);
+
+    kernel
+        .load(TestPlugin::boxed("echo", |ctx| {
+            ctx.provide(
+                "echo",
+                Service::callable(|v| async move { Ok(json!({"got": v})) }),
+            );
+            Ok(())
+        }))
+        .expect("rust plugin");
+
+    load(
+        &kernel,
+        "caller",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        export default {
+          async apply(ctx) {
+            const echo = ctx.inject("echo");
+            if (typeof echo !== "function") {
+              throw new Error("callable injects as a function");
+            }
+            ctx.provide("report", await echo({ n: 3 }));
+          },
+        };
+        "#,
+    )
+    .await
+    .expect("js plugin");
+
+    let report = kernel.services().inject("report").expect("provided");
+    assert_eq!(report.as_data(), Some(&json!({"got": {"n": 3}})));
+}
+
+#[tokio::test]
+async fn js_callable_is_invokable_from_rust_and_js() {
+    let dir = TempDir::new("js-callable-js");
+    let kernel = kernel_in(&dir.path);
+
+    load(
+        &kernel,
+        "provider",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        export default {
+          apply(ctx) {
+            ctx.provide("double", (args) => ({ n: args.n * 2 }));
+          },
+        };
+        "#,
+    )
+    .await
+    .expect("provider");
+
+    let service = kernel.services().inject("double").expect("provided");
+    assert!(service.is_callable());
+    let out = service.call(json!({"n": 21})).await.expect("rust call");
+    assert_eq!(out, json!({"n": 42}));
+
+    load(
+        &kernel,
+        "peer",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        export default {
+          async apply(ctx) {
+            const double = ctx.inject("double");
+            ctx.provide("report", await double({ n: 11 }));
+          },
+        };
+        "#,
+    )
+    .await
+    .expect("peer");
+
+    let report = kernel.services().inject("report").expect("provided");
+    assert_eq!(report.as_data(), Some(&json!({"n": 22})));
+}
+
+#[tokio::test]
+async fn unloading_withdraws_a_js_callable() {
+    let dir = TempDir::new("js-callable-unload");
+    let kernel = kernel_in(&dir.path);
+
+    let id = load(
+        &kernel,
+        "provider",
+        &[],
+        PluginSource::FirstParty,
+        r#"
+        export default {
+          apply(ctx) {
+            ctx.provide("ping", (args) => args);
+          },
+        };
+        "#,
+    )
+    .await
+    .expect("provider");
+
+    assert!(
+        kernel
+            .services()
+            .inject("ping")
+            .expect("live")
+            .is_callable()
+    );
+    kernel.unload(&id).await.expect("unload");
+    assert!(kernel.services().inject("ping").is_none());
+}
+
+#[tokio::test]
 async fn a_tool_can_emit_to_a_handler_in_its_own_vm() {
     // The re-entrancy the Lua module's `FuturesUnordered` loop exists for,
     // asked of the other engine, where the answer was not obvious: an

@@ -790,7 +790,7 @@ fn install_ctx<'js>(
     object.set("provider", provider_fn(js, ctx)?)?;
     object.set("on", on_fn(js, ctx, handle, registry)?)?;
     object.set("emit", emit_fn(js, ctx)?)?;
-    object.set("provide", provide_fn(js, ctx)?)?;
+    object.set("provide", provide_fn(js, ctx, handle, registry)?)?;
     object.set("inject", inject_fn(js, ctx)?)?;
     object.set("plugin", plugin_fn(js, ctx)?)?;
     object.set("effect", effect_fn(js, registry)?)?;
@@ -1006,25 +1006,68 @@ fn emit_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     )
 }
 
-fn provide_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
+fn provide_fn<'js>(
+    js: &JsCtx<'js>,
+    ctx: &Ctx,
+    handle: &VmHandle,
+    registry: &Registry,
+) -> rquickjs::Result<Function<'js>> {
     let ctx = ctx.clone();
-    Function::new(js.clone(), move |name: String, value: JsValue<'_>| {
-        ctx.provide(name, Service::data(js_to_json(&value)?));
-        Ok::<(), rquickjs::Error>(())
-    })
+    let handle = handle.clone();
+    let registry = registry.clone();
+    Function::new(
+        js.clone(),
+        move |cx: JsCtx<'js>, name: String, value: JsValue<'js>| {
+            // A function becomes a callable the other side can invoke. Anything
+            // else stays a JSON snapshot, which is what JS could always provide.
+            let service = if let Some(func) = value.as_function() {
+                let func = registry.hold(&cx, func.clone())?;
+                let handle = handle.clone();
+                Service::callable(move |args| {
+                    let handle = handle.clone();
+                    async move { handle.call(func, vec![args]).await }
+                })
+            } else {
+                Service::data(js_to_json(&value)?)
+            };
+            ctx.provide(name, service);
+            Ok::<(), rquickjs::Error>(())
+        },
+    )
 }
 
 fn inject_fn<'js>(js: &JsCtx<'js>, ctx: &Ctx) -> rquickjs::Result<Function<'js>> {
     let ctx = ctx.clone();
     Function::new(js.clone(), move |cx: JsCtx<'js>, name: String| {
-        // A native service is `undefined` here, which is the same `undefined`
-        // an absent one gives — see the `Ctx` module docs. JavaScript cannot
-        // call a Rust trait object, and pretending otherwise would only move
-        // the failure later.
-        match ctx.inject(&name).as_ref().and_then(Service::as_data) {
-            Some(value) => json_to_js(&cx, value),
-            None => Ok(JsValue::new_undefined(cx.clone())),
+        // Native stays `undefined` — JS cannot call a Rust trait object. Data
+        // is a value. A callable is a JS function that round-trips JSON.
+        let Some(service) = ctx.inject(&name) else {
+            return Ok(JsValue::new_undefined(cx.clone()));
+        };
+        if let Some(value) = service.as_data() {
+            return json_to_js(&cx, value);
         }
+        let Some(call) = service.as_callable() else {
+            return Ok(JsValue::new_undefined(cx.clone()));
+        };
+        let call = Arc::clone(call);
+        let func = Function::new(
+            cx.clone(),
+            Async(move |cx: JsCtx<'js>, args: Opt<JsValue<'js>>| {
+                let call = Arc::clone(&call);
+                let args = args
+                    .0
+                    .filter(|value| !value.is_undefined() && !value.is_null())
+                    .map(|value| js_to_json(&value))
+                    .unwrap_or(Ok(Value::Null));
+                async move {
+                    let args = args?;
+                    let out = call(args).await.map_err(|err| external(&cx, err))?;
+                    json_to_js(&cx, &out)
+                }
+            }),
+        )?;
+        Ok(func.into_value())
     })
 }
 
