@@ -629,6 +629,16 @@ rewriting the middle of a history costs the provider's cached prefix from
 that point on. Nothing is lost: the session JSONL is append-only and still
 holds every result in full, which is what the elided line points at.
 
+### Drafts from reasoning
+
+Reasoning is not sent back to the model on the next step, so a program it
+wrote out while thinking is gone and it writes it again. When a step's
+reasoning or reply carries a fenced block of 30 or more lines that no tool
+call in that same step wrote to disk, the block is saved to
+`~/.wizard/drafts/<session>/` and the next step is told the path in one line,
+so the model can move the file instead of retyping it. A step with no long
+block in it writes nothing and says nothing.
+
 ## Agent-managed context
 
 Wizard already persists every turn to `~/.wizard/sessions/<id>.jsonl` and

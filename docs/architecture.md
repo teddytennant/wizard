@@ -263,6 +263,7 @@ Evolution events go to `~/.wizard/evolution.jsonl`. `/publish` pushes `~/.wizard
 | `~/.wizard/sessions/*.jsonl` | Chat history |
 | `~/.wizard/memory/<project>/` | Durable project memory |
 | `~/.wizard/images/<session>/` | Session images |
+| `~/.wizard/drafts/<session>/` | Long code blocks the model wrote in its reasoning but never saved |
 | `~/.wizard/evolution.jsonl` | Self-extension / publish log |
 | `~/.wizard/usage.jsonl` | Token usage log |
 | `~/.wizard/running/` | Live session heartbeats for `wizard agents` |

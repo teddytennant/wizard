@@ -50,7 +50,7 @@ use crate::tools::{ToolContext, ToolOutput};
 use super::{
     Agent, AgentEvent, CONTEXT_PRESSURE_HEADING, DoneReason, EMPTY_COMPLETION_NUDGE, ImageSource,
     LoopControl, PressureLevel, absorb_images, breaker, clear_loop_control, completion_is_empty,
-    context, emit, parse_json_tool_call, read_loop_control, retry, ultra,
+    context, drafts, emit, parse_json_tool_call, read_loop_control, retry, ultra,
 };
 
 /// Where a running loop reports what it is doing.
@@ -689,6 +689,22 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             return Ok(Ran::ended(DoneReason::Completed, steps_used, last_text));
         }
 
+        // Long code blocks the model wrote out while thinking, scanned before
+        // the reasoning is folded into the assistant message below. Which of
+        // them are worth saving is not known until the step's calls are (see
+        // `save_drafts`); this is only the scan, and on a step with no fenced
+        // block in it that is one pass over text already in hand.
+        let drafted = if host.ctx().drafts.is_some() {
+            drafts::blocks(
+                reasoning
+                    .iter()
+                    .map(|block| block.thinking.as_str())
+                    .chain(std::iter::once(content.as_str())),
+            )
+        } else {
+            Vec::new()
+        };
+
         // Images the model generated: persisted and announced before the
         // assistant message lands, so what history carries is exactly what the
         // surfaces were told about.
@@ -740,7 +756,9 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         // Images tools returned, paired with the tool that produced them, in
         // call order.
         let mut tool_images: Vec<(String, Vec<Image>)> = Vec::new();
-        let mut nudges: Vec<String> = Vec::new();
+        let mut nudges: Vec<String> = save_drafts(host, drafted, &tool_calls)
+            .into_iter()
+            .collect();
         let mut ended: Option<DoneReason> = None;
 
         for (index, call) in tool_calls.iter().enumerate() {
@@ -1324,6 +1342,30 @@ pub(super) fn result_body(output: &ToolOutput) -> String {
     } else {
         output.content.clone()
     }
+}
+
+/// Save the code this step drafted but did not write, and return the one-line
+/// note naming it.
+///
+/// `None` whenever there is nothing to say, which is nearly every step: no
+/// fenced block long enough, or the block went straight into `write_file`, or
+/// the model drafted the same thing again and was already told where it is. A
+/// store that cannot be written to is logged and dropped. A draft is a
+/// convenience, and losing one must not cost a step.
+fn save_drafts(
+    host: &impl Host,
+    drafted: Vec<drafts::Draft>,
+    calls: &[ToolCall],
+) -> Option<String> {
+    let store = host.ctx().drafts.as_ref()?;
+    let mut saved = Vec::new();
+    for draft in drafts::unwritten(drafted, calls) {
+        match store.save(&draft) {
+            Ok(save) => saved.push((save, draft)),
+            Err(err) => tracing::warn!("could not save a reasoning draft: {err:#}"),
+        }
+    }
+    drafts::note(&saved)
 }
 
 /// Answer tool calls that will never run (turn ended early, user interrupt)
@@ -2391,7 +2433,7 @@ mod tests {
     /// The everyday cost this fixes: a working session's old tool output was
     /// re-sent whole on every step until a compaction that, on a 500k window,
     /// never came. Now it stops being sent long before that, and the pass is
-    /// free — no summarization call, no compaction note.
+    /// free: no summarization call, no compaction note.
     #[tokio::test]
     async fn old_tool_results_shrink_between_steps_without_a_compaction() {
         const STEPS: usize = 20;
@@ -2465,6 +2507,71 @@ mod tests {
             "every result is on disk in full"
         );
     }
+
+    /// A program the model wrote out while thinking is gone at the next step,
+    /// because reasoning is not sent back. One trial drafted the same 1,400
+    /// line file eleven times and never called `write_file`. Saving it costs
+    /// nothing and turns the next step into a `cp`.
+    #[tokio::test]
+    async fn a_program_drafted_in_reasoning_is_saved_and_its_path_handed_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let program: String = (0..40).map(|n| format!("let x{n} = {n};\n")).collect();
+
+        let mut reply = ChatMessage::new(
+            Role::Assistant,
+            vec![ContentBlock::Thinking(ThinkingBlock {
+                thinking: format!("Here is the interpreter:\n\n```javascript\n{program}```\n"),
+                signature: None,
+                data: None,
+            })],
+        );
+        reply.push_tool_call(ToolCall::new("execute", json!({ "command": "ls" })));
+
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            vec![final_chunk(reply)],
+            vec![final_chunk(ChatMessage::assistant("done"))],
+        ]));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(CountingTool(Arc::new(AtomicUsize::new(0)))));
+        let mut agent = test_agent(&root, Arc::clone(&provider), registry);
+        let drafts_dir = Config::drafts_dir()
+            .expect("drafts dir")
+            .join(&agent.session().id);
+
+        let (tx, _rx) = mpsc::channel(256);
+        agent
+            .run_turn("write an interpreter", tx)
+            .await
+            .expect("turn ok");
+
+        let saved: Vec<std::path::PathBuf> = std::fs::read_dir(&drafts_dir)
+            .expect("the draft directory exists")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        assert_eq!(saved.len(), 1, "one draft, {saved:?}");
+        assert_eq!(
+            saved[0].extension().and_then(|e| e.to_str()),
+            Some("js"),
+            "named for the fence: {:?}",
+            saved[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&saved[0]).expect("read the draft"),
+            program
+        );
+
+        let requests = provider.requests();
+        let note = requests[1]
+            .messages
+            .iter()
+            .map(ChatMessage::text)
+            .find(|text| text.contains("Saved from your reasoning"))
+            .expect("the next step is told where the file is");
+        assert!(note.contains(&saved[0].display().to_string()), "{note}");
+        assert!(note.contains("40-line javascript block"), "{note}");
+    }
+
     /// Reasoning has to survive the step boundary, or a provider that keeps no
     /// server-side state (the Responses API with `store: false`) hands the
     /// model its own tool results with none of the thinking that asked for

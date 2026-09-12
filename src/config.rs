@@ -1195,6 +1195,13 @@ impl Config {
         Ok(Self::wizard_dir()?.join("attachments"))
     }
 
+    /// `~/.wizard/drafts/` — long code blocks the model wrote in its
+    /// reasoning, one directory per session
+    /// (`crate::agent::drafts::DraftStore`).
+    pub fn drafts_dir() -> Result<PathBuf> {
+        Ok(Self::wizard_dir()?.join("drafts"))
+    }
+
     /// `~/.wizard/tools/` — agent-authored scripted tools.
     pub fn scripted_tools_dir() -> Result<PathBuf> {
         Ok(Self::wizard_dir()?.join("tools"))
