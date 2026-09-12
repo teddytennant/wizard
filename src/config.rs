@@ -996,6 +996,25 @@ pub struct Config {
     /// history exceeds this many bytes, compact older messages into a summary.
     /// With a known window, the reported prompt size governs instead.
     pub compact_threshold_bytes: usize,
+    /// Treat the provider's context window as no larger than this many
+    /// tokens (`0` uses the whole window). Compaction triggers at 80% of it,
+    /// so the default compacts at 120k tokens whatever the model claims to
+    /// hold.
+    ///
+    /// A fraction of the window is the right rule at 32k and the wrong one at
+    /// 500k, where 80% is 400k tokens and nothing ever reaches it. The cap is
+    /// what keeps the fraction meaningful on a large window without making it
+    /// useless on a small one.
+    pub max_context_tokens: u32,
+    /// Prompt size, in tokens, past which old tool results are shrunk between
+    /// compactions (`0` turns it off).
+    ///
+    /// Tool output is most of a long session's prompt and almost none of what
+    /// the model still needs: the last few results carry the work in hand, and
+    /// everything behind them is being re-sent whole on every step. Below this
+    /// nothing is touched, because rewriting history costs the provider's
+    /// cached prefix and a small prompt has nothing to gain.
+    pub prune_after_tokens: u64,
     /// Configured LLM providers. Empty means "use the legacy `model` /
     /// `ollama_host` fields as a single local Ollama provider".
     #[serde(default)]
@@ -1090,6 +1109,8 @@ impl Default for Config {
             gate_max_attempts: 3,
             gate_timeout_secs: 1_800,
             compact_threshold_bytes: 48_000,
+            max_context_tokens: 150_000,
+            prune_after_tokens: 32_000,
             providers: Vec::new(),
             active_provider: None,
             gateway: GatewayConfig::default(),
@@ -1181,6 +1202,13 @@ impl Config {
     /// directory the GUI will serve an image back out of.
     pub fn attachments_dir() -> Result<PathBuf> {
         Ok(Self::wizard_dir()?.join("attachments"))
+    }
+
+    /// `~/.wizard/drafts/` — long code blocks the model wrote in its
+    /// reasoning, one directory per session
+    /// (`crate::agent::drafts::DraftStore`).
+    pub fn drafts_dir() -> Result<PathBuf> {
+        Ok(Self::wizard_dir()?.join("drafts"))
     }
 
     /// `~/.wizard/tools/` — agent-authored scripted tools.

@@ -164,6 +164,10 @@ pub struct ToolContext {
     /// surfaces. `None` outside an agent (direct registry execution in tests),
     /// in which case images still reach the model but land nowhere on disk.
     pub images: Option<Arc<crate::images::ImageStore>>,
+    /// Where code the model drafts in its reasoning is saved
+    /// (`~/.wizard/drafts/<session>/`), set by the agent at construction. The
+    /// turn loop writes through it; no tool reads it. `None` outside an agent.
+    pub drafts: Option<Arc<crate::agent::drafts::DraftStore>>,
     /// The slash commands the surface behind this run will dispatch when the
     /// agent queues one via `run_command`. Set by the surface's agent builder;
     /// [`CommandDispatch::None`] everywhere else.
@@ -197,6 +201,7 @@ impl ToolContext {
             shell: Arc::new(crate::config::ShellConfig::default()),
             checkpoints: None,
             images: None,
+            drafts: None,
             command_dispatch: CommandDispatch::None,
             vision: true,
             usage: None,
@@ -226,6 +231,12 @@ impl ToolContext {
     /// This context with `execute` settings applied (agent construction).
     pub fn with_shell(mut self, shell: crate::config::ShellConfig) -> Self {
         self.shell = Arc::new(shell);
+        self
+    }
+
+    /// This context with the draft store attached (agent construction).
+    pub fn with_drafts(mut self, store: Arc<crate::agent::drafts::DraftStore>) -> Self {
+        self.drafts = Some(store);
         self
     }
 

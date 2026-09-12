@@ -29,7 +29,9 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use crate::llm::provider::LlmProvider;
-use crate::llm::{CacheTokens, ChatMessage, ChatOptions, ChatRequest, Role, ToolCall};
+use crate::llm::{
+    CacheTokens, ChatMessage, ChatOptions, ChatRequest, Role, ToolCall, ToolResultBlock,
+};
 
 /// Most-recent messages a compaction pass keeps at the outside.
 ///
@@ -40,6 +42,39 @@ use crate::llm::{CacheTokens, ChatMessage, ChatOptions, ChatRequest, Role, ToolC
 /// window folds away: under the low-water mark there is nothing the budget
 /// wants cut, and the request is still to cut something.
 pub(crate) const KEEP_RECENT: usize = 10;
+
+/// Tool results kept in something like full, counted in results rather than in
+/// messages: everything older collapses to [`digest_line`].
+///
+/// [`KEEP_RECENT`] is the reserve nothing touches at all, and it is a message
+/// count, so a batch of five calls uses it up in one step. This is the second
+/// band, and it is counted in results because that is the thing being kept:
+/// twelve is a couple of dozen steps of ordinary work, far enough back that a
+/// result the model has not referred to since is one it is not coming back to,
+/// and near enough that the file it read four calls ago is still there whole.
+pub(crate) const KEEP_WHOLE_RESULTS: usize = 12;
+
+/// Bytes a tool result outside [`KEEP_WHOLE_RESULTS`] has to be carrying
+/// before it is worth replacing with a [`digest_line`].
+///
+/// The digest is itself about 150 characters, so collapsing a 300-character
+/// result would save nothing and lose what it said. Most `execute` results in
+/// a real session are under this: a short command and a short answer, which
+/// stay verbatim however far back they are.
+const DIGEST_MIN_CHARS: usize = 500;
+
+/// Characters one pass has to reclaim before it rewrites anything.
+///
+/// Every rewrite mid-history throws away the provider's cached prefix from
+/// that point on, so a pass that runs between compactions has to be worth that
+/// much. Without a floor the newest result crossing the [`KEEP_RECENT`]
+/// boundary would trigger a rewrite on every single step, paying a full
+/// re-prefill of the tail to reclaim a few hundred characters. 16k characters
+/// is about 4k tokens, comfortably more than the tail a rewrite costs.
+///
+/// A compaction pass passes `0`: it was going to invalidate that prefix
+/// anyway.
+pub(crate) const MIN_RECLAIM_CHARS: usize = 16_384;
 
 /// Heading of the note [`compact`] leaves in place of the span it summarized.
 /// Public because it is the only handle anything downstream has on that note:
@@ -76,7 +111,7 @@ const COMPACT_LOW_WATER_FRACTION: f64 = 0.4;
 const STALE_RESULT_MIN_BYTES: usize = 500;
 
 /// Characters one tool result outside the recent window may carry before
-/// [`prune_tool_results`] cuts it down to a head/tail excerpt.
+/// [`shrink_old_results`] cuts it down to a head/tail excerpt.
 ///
 /// This is the number that makes a compaction pass cheap, or unnecessary. The
 /// summarizer is billed for every character of the span it reads, and on a
@@ -99,7 +134,7 @@ const PRUNE_RESULT_MAX_CHARS: usize = 8_192;
 /// Left in place of the middle of a pruned tool result.
 ///
 /// A fixed string rather than a formatted one, and that is what makes pruning
-/// idempotent. [`prune_tool_results`] budgets the head and the tail against
+/// idempotent. [`prune_excerpt`] budgets the head and the tail against
 /// this marker's length to land the excerpt on exactly
 /// [`PRUNE_RESULT_MAX_CHARS`]; a marker whose length depended on how much it
 /// elided would make that accounting circular, and an excerpt that came out a
@@ -216,6 +251,26 @@ pub struct Measured {
     pub last_prompt: Option<u64>,
 }
 
+/// The window a run manages itself against: the provider's, capped by
+/// `max_tokens` (`0` means no cap).
+///
+/// Both [`pressure`] and [`Budget`] measure against a *fraction* of the
+/// window, which is the right shape for a 32k local model and the wrong one
+/// for grok-4.6, where 80% of 500k is 400k tokens and the trigger simply never
+/// arrives: over 89 benchmark trials no run ever compacted, and the biggest
+/// per-call prompt was 105k. A prompt that large costs real prefill on every
+/// step and is where long-context answers start coming back garbled, so the
+/// cap is what makes the fraction mean something again. 150k caps the default
+/// trigger at 120k tokens: under every window Wizard is pointed at often
+/// enough to matter (128k on GPT-class models, 200k on Claude) the fraction
+/// still binds, and above that this does.
+pub fn effective_window(window: Option<u32>, max_tokens: u32) -> Option<u32> {
+    match window {
+        Some(window) if max_tokens > 0 => Some(window.min(max_tokens)),
+        other => other,
+    }
+}
+
 /// Live fill of the next model call against the provider window (or a
 /// byte-threshold proxy when the window is unknown). Powers the per-step
 /// pressure signal and the `compact` tool's reply.
@@ -325,7 +380,7 @@ pub enum CompactOutcome {
     /// No summarization call was made, but `count` tool results were cut down
     /// mechanically on the way: results a later edit had superseded, replaced
     /// with stubs ([`evict_superseded_reads`]), and oversized results outside
-    /// the recent window, cut to a head/tail excerpt ([`prune_tool_results`]).
+    /// the recent window, cut to a head/tail excerpt ([`shrink_old_results`]).
     ///
     /// One variant for both because both are the same event from every
     /// caller's side: the context shrank, it is worth a notice and not an
@@ -518,7 +573,7 @@ impl Compacted {
 ///
 /// # The free passes run first
 ///
-/// [`evict_superseded_reads`] and [`prune_tool_results`] both reclaim context
+/// [`evict_superseded_reads`] and [`shrink_old_results`] both reclaim context
 /// with no model call at all, so both run before the boundary is chosen. That
 /// ordering is worth two things. The span the summarizer reads is smaller, so
 /// the call it is billed for is cheaper; and when the two of them alone bring
@@ -538,7 +593,7 @@ pub async fn compact(
     let evicted = evict_superseded_reads(history);
     // Then, still for free: the middles of tool results too large to be worth
     // carrying whole.
-    let pruned = prune_tool_results(history);
+    let pruned = shrink_old_results(history, KEEP_WHOLE_RESULTS, 0);
 
     // The payoff. Pruning is gated on a per-result size and knows nothing
     // about the window, so it is perfectly capable of reclaiming more than
@@ -749,29 +804,30 @@ fn evict_superseded_reads(history: &mut [ChatMessage]) -> usize {
     evicted
 }
 
-/// Cut every oversized tool result outside the recent window down to a
-/// head/tail excerpt, and report how many were cut.
+/// Shrink the tool results this history no longer needs whole, and report how
+/// many it rewrote.
 ///
-/// The mechanical half of compaction, and the half that costs nothing. A
-/// summarization call is billed for the whole span it reads, and most of that
-/// span is tool output whose middle nobody is going to look at again; deleting
-/// the middle first means the model is either asked to read much less or, when
-/// this alone gets the history under the mark, never asked at all. See
-/// [`PRUNE_RESULT_MAX_CHARS`] for why the budget is what it is.
+/// The mechanical half of compaction, and the half that costs nothing. Three
+/// bands, newest to oldest:
 ///
-/// Bounded to the messages before the last [`KEEP_RECENT`], which is the same
-/// reserve [`cut_boundary`] refuses to summarize past, on purpose: those are
-/// the results of the calls the model just made, so they are the ones it is
-/// most likely still working from, and there is exactly one notion of "recent"
-/// in this module. Everything older has already been read once and is being
-/// re-sent on every step until something shrinks it.
+/// * the last [`KEEP_RECENT`] messages: untouched. Those are the results of
+///   the calls the model just made, so they are the ones it is most likely
+///   still working from, and [`cut_boundary`] refuses to summarize past them
+///   for the same reason.
+/// * older than that, but inside the last `keep_whole` results: cut to a
+///   head/tail excerpt ([`prune_excerpt`]). The model can still read what was
+///   asked and how it ended.
+/// * older than `keep_whole` results: one [`digest_line`] naming the tool, its
+///   subject, and whether it succeeded.
 ///
-/// Like [`evict_superseded_reads`] this rewrites messages mid-history and so
-/// throws away the provider's cached prefix from that point on, so it only
-/// ever runs inside a compaction pass, which was going to invalidate that
-/// prefix anyway. And like eviction it replaces the result's
-/// *content*, never the block: a `tool_result` separated from the `tool_use`
-/// that asked for it is a hard 400 from every provider.
+/// Nothing is rewritten at all unless the whole pass reclaims `min_reclaim`
+/// characters, because each rewrite costs the provider's cached prefix from
+/// that point on (see [`MIN_RECLAIM_CHARS`]). A compaction pass passes `0`:
+/// that prefix was going already.
+///
+/// Like [`evict_superseded_reads`] this replaces the result's *content*, never
+/// the block: a `tool_result` separated from the `tool_use` that asked for it
+/// is a hard 400 from every provider.
 ///
 /// None of it reaches the transcript on disk. A session file is append-only
 /// ([`session::Session::append`](super::session)): each result was written
@@ -779,22 +835,124 @@ fn evict_superseded_reads(history: &mut [ChatMessage]) -> usize {
 /// here is cut from what the model is sent and from nothing else. The full
 /// result is still in `~/.wizard/sessions/`, which is what makes this safe to
 /// do without asking anyone.
-fn prune_tool_results(history: &mut [ChatMessage]) -> usize {
+pub(crate) fn shrink_old_results(
+    history: &mut [ChatMessage],
+    keep_whole: usize,
+    min_reclaim: usize,
+) -> usize {
     let recent = history.len().saturating_sub(KEEP_RECENT);
-    let mut pruned = 0;
-    for message in &mut history[..recent] {
-        for block in &mut message.content {
-            let crate::llm::ContentBlock::ToolResult(result) = block else {
-                continue;
-            };
-            let Some(excerpt) = prune_excerpt(&result.content) else {
-                continue;
-            };
-            result.content = excerpt;
-            pruned += 1;
+    let results: usize = history
+        .iter()
+        .map(|message| message.tool_results().len())
+        .sum();
+    let digest_before = results.saturating_sub(keep_whole);
+
+    // Planned first, applied second, and not only to keep the borrow checker
+    // happy about reading the calls while writing the results: a pass that
+    // reclaims too little must not rewrite anything at all, and that is not
+    // known until every candidate has been costed.
+    let mut planned: Vec<(usize, usize, String)> = Vec::new();
+    let mut reclaimed = 0usize;
+    {
+        let calls = calls_by_id(history);
+        let mut seen = 0usize;
+        for (index, message) in history.iter().enumerate() {
+            for (block_index, block) in message.content.iter().enumerate() {
+                let crate::llm::ContentBlock::ToolResult(result) = block else {
+                    continue;
+                };
+                let ordinal = seen;
+                seen += 1;
+                if index >= recent {
+                    continue;
+                }
+                let before = result.content.chars().count();
+                let shrunk = if ordinal < digest_before {
+                    if before < DIGEST_MIN_CHARS {
+                        continue;
+                    }
+                    digest_line(result, calls.get(result.tool_use_id.as_str()).copied())
+                } else {
+                    match prune_excerpt(&result.content) {
+                        Some(excerpt) => excerpt,
+                        None => continue,
+                    }
+                };
+                let after = shrunk.chars().count();
+                if after >= before {
+                    continue;
+                }
+                reclaimed += before - after;
+                planned.push((index, block_index, shrunk));
+            }
         }
     }
-    pruned
+
+    if reclaimed < min_reclaim {
+        return 0;
+    }
+    let shrunk = planned.len();
+    for (index, block_index, content) in planned {
+        if let crate::llm::ContentBlock::ToolResult(result) =
+            &mut history[index].content[block_index]
+        {
+            result.content = content;
+        }
+    }
+    shrunk
+}
+
+/// Every tool call in `history`, by the id its result carries.
+fn calls_by_id(history: &[ChatMessage]) -> HashMap<&str, &ToolCall> {
+    history
+        .iter()
+        .flat_map(ChatMessage::tool_calls)
+        .map(|call| (call.id.as_str(), call))
+        .collect()
+}
+
+/// The one line left in place of a tool result too far back to carry.
+///
+/// Says what ran, what it was about, and how it ended, because the two things
+/// a model comes back to an old result for are "did that work" and "what did I
+/// call it on". Whether it worked is read off the result itself: a failure
+/// arrives prefixed `Error:` (turn.rs `result_body`), and
+/// the digest has to keep saying so: a result that succeeded and then got
+/// elided must not read like one that failed, and a result that failed must
+/// not read like one that succeeded.
+fn digest_line(result: &ToolResultBlock, call: Option<&ToolCall>) -> String {
+    let status = if result.content.starts_with("Error: ") {
+        "error"
+    } else {
+        "ok"
+    };
+    let lines = result.content.lines().count();
+    let subject = call.and_then(call_subject).unwrap_or_default();
+    format!(
+        "[{}{subject}: {status}, {lines} lines elided to reclaim context. The full output is \
+         in this session's transcript; run it again if you need it.]",
+        result.name
+    )
+}
+
+/// The argument of `call` worth naming in a digest (` `cargo test` `), or
+/// `None` when it has no obvious one.
+fn call_subject(call: &ToolCall) -> Option<String> {
+    const NAMED: [&str; 5] = ["command", "path", "pattern", "query", "url"];
+    const MAX_CHARS: usize = 60;
+    let subject = NAMED.iter().find_map(|key| {
+        call.function
+            .arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })?;
+    let mut short: String = subject.chars().take(MAX_CHARS).collect();
+    if subject.chars().nth(MAX_CHARS).is_some() {
+        short.push_str("...");
+    }
+    Some(format!(" `{}`", short.replace('\n', " ")))
 }
 
 /// `content` cut to a bounded head, [`PRUNE_OMISSION_MARKER`], and a bounded
@@ -1423,7 +1581,7 @@ mod tests {
     fn pruning_a_second_time_changes_nothing() {
         let body = oversized();
         let mut history = tool_loop_history(&body, &body);
-        assert_eq!(prune_tool_results(&mut history), 5);
+        assert_eq!(shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0), 5);
 
         let reserve = history.len() - KEEP_RECENT;
         for result in history[..reserve]
@@ -1444,7 +1602,7 @@ mod tests {
 
         let settled: Vec<_> = history.iter().map(|m| m.content.clone()).collect();
         assert_eq!(
-            prune_tool_results(&mut history),
+            shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0),
             0,
             "a second pass finds nothing over the threshold"
         );
@@ -1463,7 +1621,7 @@ mod tests {
         let mut history = tool_loop_history(&body, &body);
         let reserve = history.len() - KEEP_RECENT;
 
-        prune_tool_results(&mut history);
+        shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0);
 
         for result in history[reserve..]
             .iter()
@@ -1576,7 +1734,7 @@ mod tests {
         let mut history = tool_loop_history("ok", "ok");
         let before: Vec<_> = history.iter().map(|m| m.content.clone()).collect();
 
-        assert_eq!(prune_tool_results(&mut history), 0);
+        assert_eq!(shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0), 0);
         for (message, original) in history.iter().zip(&before) {
             assert_eq!(&message.content, original, "nothing was rewritten");
         }
@@ -1595,6 +1753,238 @@ mod tests {
             compacted.outcome
         );
         assert!(compacted.usage.reported());
+    }
+
+    /// A history in the shape a long working session leaves behind: one
+    /// `execute` per step, each with its own command and its own output.
+    fn worked_history(steps: usize, output: &dyn Fn(usize) -> String) -> Vec<ChatMessage> {
+        let mut history = vec![ChatMessage::system("you are wizard")];
+        for step in 0..steps {
+            let call = ToolCall::new(
+                "execute",
+                json!({ "command": format!("cargo test --lib step{step}") }),
+            );
+            let id = call.id.clone();
+            let mut assistant = ChatMessage::assistant("");
+            assistant.push_tool_call(call);
+            history.push(assistant);
+            history.push(ChatMessage::tool_result(&id, "execute", output(step)));
+        }
+        history
+    }
+
+    /// The oldest results stop being carried at all: one line naming the
+    /// command and saying how it ended. What that line must never do is read
+    /// like the command failed, because a model that thinks its build broke
+    /// goes and fixes a build that is fine.
+    #[test]
+    fn the_oldest_results_collapse_to_a_line_that_keeps_the_verdict() {
+        const STEPS: usize = 20;
+        let failed = 3;
+        let mut history = worked_history(STEPS, &|step| {
+            if step == failed {
+                format!("Error: exit 1\n{}", "assertion failed\n".repeat(200))
+            } else {
+                "ok\n".repeat(600)
+            }
+        });
+
+        let shrunk = shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0);
+        assert_eq!(
+            shrunk,
+            STEPS - KEEP_WHOLE_RESULTS,
+            "everything past the last {KEEP_WHOLE_RESULTS} results"
+        );
+
+        let digests: Vec<&str> = history
+            .iter()
+            .flat_map(ChatMessage::tool_results)
+            .map(|result| result.content.as_str())
+            .filter(|content| content.contains("lines elided"))
+            .collect();
+        assert_eq!(digests.len(), shrunk);
+        assert!(
+            digests[0].contains("execute `cargo test --lib step0`"),
+            "the digest names what ran: {}",
+            digests[0]
+        );
+        assert!(
+            digests[0].contains("session's transcript"),
+            "and where the full output went: {}",
+            digests[0]
+        );
+
+        let (errors, oks): (Vec<&&str>, Vec<&&str>) =
+            digests.iter().partition(|line| line.contains(": error,"));
+        assert_eq!(errors.len(), 1, "one command failed, and its line says so");
+        assert!(errors[0].contains("step3"), "{}", errors[0]);
+        for line in &oks {
+            assert!(line.contains(": ok,"), "{line}");
+            assert!(
+                !line.starts_with("Error:") && !line.contains("error"),
+                "a result that succeeded cannot come back reading like one that failed: {line}"
+            );
+        }
+
+        // The newest results are untouched, and a second pass changes nothing.
+        let kept: Vec<String> = history
+            .iter()
+            .flat_map(ChatMessage::tool_results)
+            .skip(shrunk)
+            .map(|result| result.content.clone())
+            .collect();
+        assert_eq!(kept.len(), KEEP_WHOLE_RESULTS);
+        assert!(kept.iter().all(|content| content.len() > DIGEST_MIN_CHARS));
+        assert_eq!(
+            shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0),
+            0,
+            "a settled history is a fixed point"
+        );
+    }
+
+    /// Between compactions a pass has to pay for itself. Rewriting one message
+    /// in the middle of the history throws away the provider's cached prefix
+    /// from there on, so a step that would reclaim a few hundred characters
+    /// leaves the history exactly as it is and waits for one that reclaims
+    /// something.
+    #[test]
+    fn a_pass_that_would_reclaim_too_little_rewrites_nothing() {
+        let mut history = worked_history(20, &|step| {
+            if step == 0 {
+                "y".repeat(DIGEST_MIN_CHARS + 200)
+            } else {
+                "ok".to_string()
+            }
+        });
+        let before: Vec<_> = history
+            .iter()
+            .map(|message| message.content.clone())
+            .collect();
+
+        assert_eq!(
+            shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, MIN_RECLAIM_CHARS),
+            0
+        );
+        for (message, original) in history.iter().zip(&before) {
+            assert_eq!(&message.content, original, "nothing was rewritten");
+        }
+
+        assert_eq!(
+            shrink_old_results(&mut history, KEEP_WHOLE_RESULTS, 0),
+            1,
+            "the same pass inside a compaction, which pays that cost anyway, still cuts"
+        );
+    }
+
+    /// The trigger is a fraction of the window, which is the right rule at 32k
+    /// and useless at 500k: 80% of a grok-4.6 window is 400k tokens, and over
+    /// 89 benchmark trials nothing ever got near it. Capping the window is
+    /// what puts the trigger back where a long session reaches it.
+    #[test]
+    fn a_large_window_is_capped_so_the_trigger_arrives() {
+        const CAP: u32 = 150_000;
+        let huge = Some(500_000);
+        assert_eq!(effective_window(huge, CAP), Some(CAP));
+        assert_eq!(
+            effective_window(Some(128_000), CAP),
+            Some(128_000),
+            "a window under the cap is its own budget"
+        );
+        assert_eq!(effective_window(huge, 0), huge, "0 means no cap");
+        assert_eq!(effective_window(None, CAP), None);
+
+        let measured = |window| Measured {
+            tokens: 121_000,
+            window,
+            bytes: 500_000,
+            byte_threshold: 48_000,
+            last_prompt: Some(121_000),
+        };
+        assert_eq!(
+            pressure(measured(effective_window(huge, CAP))).level,
+            PressureLevel::Critical,
+            "121k of a 150k budget compacts"
+        );
+        assert_eq!(
+            pressure(measured(huge)).level,
+            PressureLevel::Ok,
+            "and the uncapped window is what let it sail past"
+        );
+
+        let budget = Budget {
+            window: effective_window(huge, CAP),
+            byte_threshold: 48_000,
+        };
+        assert_eq!(
+            budget.low_water_tokens(),
+            60_000,
+            "a pass still cuts to half the trigger"
+        );
+    }
+
+    /// What the whole thing is for, on a session shaped like the ones the
+    /// benchmark ran: 60 steps of shell work, a third of them producing real
+    /// output. Prints the prompt sizes so the numbers in the notes are
+    /// reproducible with `cargo test -- --nocapture`.
+    #[test]
+    fn a_long_session_sends_a_fraction_of_the_prompt_it_used_to() {
+        const STEPS: usize = 60;
+        const TRIGGER: u64 = 32_000;
+        let output = |step: usize| {
+            if step.is_multiple_of(3) {
+                format!(
+                    "running step {step}\n{}",
+                    "warning: unused variable\n".repeat(500)
+                )
+            } else {
+                format!("step {step} ok\n")
+            }
+        };
+
+        // Two runs of the same session: one that never shrinks anything (what
+        // 3.1 does, since compaction needs 400k on this model), one that runs
+        // the pass the loop now runs.
+        let mut before = vec![ChatMessage::system("you are wizard")];
+        let mut after = vec![ChatMessage::system("you are wizard")];
+        let (mut before_total, mut after_total) = (0u64, 0u64);
+        for step in 0..STEPS {
+            for history in [&mut before, &mut after] {
+                let call = ToolCall::new(
+                    "execute",
+                    json!({ "command": format!("cargo test --lib step{step}") }),
+                );
+                let id = call.id.clone();
+                let mut assistant = ChatMessage::assistant("");
+                assistant.push_tool_call(call);
+                history.push(assistant);
+                history.push(ChatMessage::tool_result(&id, "execute", output(step)));
+            }
+            if crate::llm::estimate_history_tokens(&after) >= TRIGGER {
+                shrink_old_results(&mut after, KEEP_WHOLE_RESULTS, MIN_RECLAIM_CHARS);
+            }
+            before_total += crate::llm::estimate_history_tokens(&before);
+            after_total += crate::llm::estimate_history_tokens(&after);
+        }
+
+        let before_last = crate::llm::estimate_history_tokens(&before);
+        let after_last = crate::llm::estimate_history_tokens(&after);
+        println!(
+            "{STEPS} steps: prompt per call {} -> {} tokens on average, \
+             {before_last} -> {after_last} at the last step",
+            before_total / STEPS as u64,
+            after_total / STEPS as u64
+        );
+        assert!(
+            after_total * 3 < before_total * 2,
+            "the average prompt is down by a third, over a run whose first half \
+             never reaches the trigger: {} -> {}",
+            before_total / STEPS as u64,
+            after_total / STEPS as u64
+        );
+        assert!(
+            after_last < before_last / 3,
+            "and the prompt stops growing: {before_last} -> {after_last} at the last step"
+        );
     }
 
     /// The reported prompt size is what trips auto-compaction, and only

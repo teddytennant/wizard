@@ -51,6 +51,8 @@ fn defaults_match_docs() {
     assert_eq!(config.gate_max_attempts, 3);
     assert_eq!(config.gate_timeout_secs, 1_800);
     assert_eq!(config.compact_threshold_bytes, 48_000);
+    assert_eq!(config.max_context_tokens, 150_000);
+    assert_eq!(config.prune_after_tokens, 32_000);
     assert!(!config.rollback_failed_cycles);
     assert_eq!(config.max_consecutive_failures, 5);
     assert_eq!(config.checkpoints.keep_turns, 50);
@@ -229,6 +231,8 @@ fn full_file_round_trips() {
         gate_max_attempts: 4,
         gate_timeout_secs: 600,
         compact_threshold_bytes: 96_000,
+        max_context_tokens: 200_000,
+        prune_after_tokens: 64_000,
         providers: vec![ProviderConfig {
             name: "openai".to_string(),
             kind: ProviderKind::OPENAI,
@@ -319,6 +323,8 @@ fn full_file_round_trips() {
         parsed.compact_threshold_bytes,
         original.compact_threshold_bytes
     );
+    assert_eq!(parsed.max_context_tokens, original.max_context_tokens);
+    assert_eq!(parsed.prune_after_tokens, original.prune_after_tokens);
     assert_eq!(parsed.code_mode, original.code_mode);
     assert_eq!(parsed.providers.len(), 1);
     assert_eq!(parsed.providers[0].name, "openai");

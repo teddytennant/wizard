@@ -625,7 +625,12 @@ the whole fan-out, not just the main loop.
 
 History compaction triggers on **either** the byte threshold
 (`compact_threshold_bytes`, default 48 kB) **or** the last prompt exceeding
-~80% of the model's context window, when the window is known:
+~80% of the model's context window, when the window is known. The window is
+first capped at `max_context_tokens` (default 150k), so the trigger lands at
+120k tokens on a model that claims more: 80% of a 500k window is 400k tokens,
+which a real session never reaches, and a 100k-token prompt costs prefill on
+every step long before it is a correctness problem. Where the window is
+known:
 
 - anthropic / openai / xai: static tables per model family
 - llama.cpp: live `GET /props` probe for the loaded model's `n_ctx` (cached)
@@ -641,6 +646,32 @@ assistant turn so an in-flight tool loop is actually folded instead of
 walking back to the user prompt and summarizing one earlier note. The
 summary is instructed to carry over the todo list state and the plan file
 path (`.wizard/plan.md`).
+
+### Old tool results stop being re-sent
+
+Compaction is not the first thing that shrinks a long prompt. Once the next
+call's prompt passes `prune_after_tokens` (default 32k), old tool results are
+cut down between steps, with no model call and no summary:
+
+- the last ten messages are untouched;
+- behind those, the last twelve results keep a head/tail excerpt (8 kB);
+- everything older becomes one line naming the tool, what it was called on,
+  whether it succeeded, and how many lines were elided.
+
+A pass rewrites nothing unless it reclaims at least 16k characters, since
+rewriting the middle of a history costs the provider's cached prefix from
+that point on. Nothing is lost: the session JSONL is append-only and still
+holds every result in full, which is what the elided line points at.
+
+### Drafts from reasoning
+
+Reasoning is not sent back to the model on the next step, so a program it
+wrote out while thinking is gone and it writes it again. When a step's
+reasoning or reply carries a fenced block of 30 or more lines that no tool
+call in that same step wrote to disk, the block is saved to
+`~/.wizard/drafts/<session>/` and the next step is told the path in one line,
+so the model can move the file instead of retyping it. A step with no long
+block in it writes nothing and says nothing.
 
 ## Agent-managed context
 

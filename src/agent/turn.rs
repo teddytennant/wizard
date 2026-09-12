@@ -50,7 +50,7 @@ use crate::tools::{ToolContext, ToolOutput};
 use super::{
     Agent, AgentEvent, CONTEXT_PRESSURE_HEADING, DoneReason, EMPTY_COMPLETION_NUDGE, ImageSource,
     LoopControl, PressureLevel, absorb_images, breaker, clear_loop_control, completion_is_empty,
-    context, emit, parse_json_tool_call, read_loop_control, retry, ultra,
+    context, drafts, emit, parse_json_tool_call, read_loop_control, retry, ultra,
 };
 
 /// Where a running loop reports what it is doing.
@@ -315,6 +315,12 @@ pub(super) struct Policy {
     /// Serialized-history ceiling the pressure reading falls back to when the
     /// provider names no context window.
     pub byte_threshold: usize,
+    /// Cap on the context window this run manages itself against
+    /// ([`context::effective_window`]).
+    pub max_context_tokens: u32,
+    /// Prompt size past which old tool results are shrunk between compactions
+    /// (`0` turns it off).
+    pub prune_after_tokens: u64,
     /// Whether background tasks and subagents that finished are drained into
     /// history at the top of each step.
     pub background_drain: bool,
@@ -360,6 +366,8 @@ impl Policy {
             retry_base_secs: agent.config.retry_base_secs,
             retry_max_secs: agent.config.retry_max_secs,
             byte_threshold: agent.config.compact_threshold_bytes,
+            max_context_tokens: agent.config.max_context_tokens,
+            prune_after_tokens: agent.config.prune_after_tokens,
             background_drain: true,
             operator_control: agent.mode == crate::config::Mode::Sovereign,
             pressure_signal: true,
@@ -384,6 +392,8 @@ impl Policy {
         retry_base_secs: u64,
         retry_max_secs: u64,
         byte_threshold: usize,
+        max_context_tokens: u32,
+        prune_after_tokens: u64,
     ) -> Self {
         Self {
             max_steps,
@@ -416,6 +426,8 @@ impl Policy {
             retry_base_secs,
             retry_max_secs,
             byte_threshold,
+            max_context_tokens,
+            prune_after_tokens,
             // Declined: the task and subagent registries in a sub-run's
             // context are the *parent's*. Draining them here would consume
             // notifications the parent has to inject into its own history and
@@ -513,7 +525,9 @@ pub(super) trait Host: Send {
 
     /// The history for in-memory edits that must never be persisted: the
     /// pressure note and the empty-completion nudge, both pushed and popped
-    /// within one step.
+    /// within one step, and the shrinking of old tool results, which changes
+    /// what is sent and never what was recorded (the session file is
+    /// append-only and still holds every result whole).
     fn history_mut(&mut self) -> &mut Vec<ChatMessage>;
 
     /// Append a message that is part of the record.
@@ -600,6 +614,20 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         if reading.level == PressureLevel::Critical {
             host.compact(sink).await;
             reading = measure(host, policy).await;
+        } else if policy.prune_after_tokens > 0 && reading.tokens >= policy.prune_after_tokens {
+            // Long before the window is full, and for free: the oldest tool
+            // results stop being sent whole. A compaction pass does this too,
+            // but it waits for a trigger a working session mostly never
+            // reaches, so until now every `cargo test` run and every file read
+            // whole rode along in the prompt for the rest of the session. This
+            // rewrites nothing unless it reclaims enough to pay for the cached
+            // prefix it costs, so a step with nothing worth cutting is a scan
+            // and no change at all.
+            context::shrink_old_results(
+                host.history_mut(),
+                context::KEEP_WHOLE_RESULTS,
+                context::MIN_RECLAIM_CHARS,
+            );
         }
         let signal = attach_pressure(host, policy, &reading);
 
@@ -664,6 +692,22 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             return Ok(Ran::ended(DoneReason::Completed, steps_used, last_text));
         }
 
+        // Long code blocks the model wrote out while thinking, scanned before
+        // the reasoning is folded into the assistant message below. Which of
+        // them are worth saving is not known until the step's calls are (see
+        // `save_drafts`); this is only the scan, and on a step with no fenced
+        // block in it that is one pass over text already in hand.
+        let drafted = if host.ctx().drafts.is_some() {
+            drafts::blocks(
+                reasoning
+                    .iter()
+                    .map(|block| block.thinking.as_str())
+                    .chain(std::iter::once(content.as_str())),
+            )
+        } else {
+            Vec::new()
+        };
+
         // Images the model generated: persisted and announced before the
         // assistant message lands, so what history carries is exactly what the
         // surfaces were told about.
@@ -715,7 +759,9 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         // Images tools returned, paired with the tool that produced them, in
         // call order.
         let mut tool_images: Vec<(String, Vec<Image>)> = Vec::new();
-        let mut nudges: Vec<String> = Vec::new();
+        let mut nudges: Vec<String> = save_drafts(host, drafted, &tool_calls)
+            .into_iter()
+            .collect();
         let mut ended: Option<DoneReason> = None;
 
         for (index, call) in tool_calls.iter().enumerate() {
@@ -901,7 +947,10 @@ async fn measure(host: &impl Host, policy: &Policy) -> super::ContextPressure {
     let last_prompt = host.last_prompt();
     context::pressure(context::Measured {
         tokens: last_prompt.unwrap_or_else(|| crate::llm::estimate_history_tokens(host.history())),
-        window: host.client().context_window(&policy.model).await,
+        window: context::effective_window(
+            host.client().context_window(&policy.model).await,
+            policy.max_context_tokens,
+        ),
         bytes: host
             .history()
             .iter()
@@ -1299,6 +1348,30 @@ pub(super) fn result_body(output: &ToolOutput) -> String {
     } else {
         output.content.clone()
     }
+}
+
+/// Save the code this step drafted but did not write, and return the one-line
+/// note naming it.
+///
+/// `None` whenever there is nothing to say, which is nearly every step: no
+/// fenced block long enough, or the block went straight into `write_file`, or
+/// the model drafted the same thing again and was already told where it is. A
+/// store that cannot be written to is logged and dropped. A draft is a
+/// convenience, and losing one must not cost a step.
+fn save_drafts(
+    host: &impl Host,
+    drafted: Vec<drafts::Draft>,
+    calls: &[ToolCall],
+) -> Option<String> {
+    let store = host.ctx().drafts.as_ref()?;
+    let mut saved = Vec::new();
+    for draft in drafts::unwritten(drafted, calls) {
+        match store.save(&draft) {
+            Ok(save) => saved.push((save, draft)),
+            Err(err) => tracing::warn!("could not save a reasoning draft: {err:#}"),
+        }
+    }
+    drafts::note(&saved)
 }
 
 /// Answer tool calls that will never run (turn ended early, user interrupt)
@@ -2351,6 +2424,167 @@ mod tests {
         );
     }
 
+    /// Test tool returning a fixed blob of `0` characters.
+    struct BlobTool(usize);
+
+    #[async_trait::async_trait]
+    impl Tool for BlobTool {
+        fn name(&self) -> &str {
+            "execute"
+        }
+        fn description(&self) -> &str {
+            "Run a shell command."
+        }
+        fn parameters(&self) -> Value {
+            json!({ "type": "object", "properties": { "command": { "type": "string" } } })
+        }
+        async fn execute(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::ok("B".repeat(self.0)))
+        }
+    }
+
+    /// The everyday cost this fixes: a working session's old tool output was
+    /// re-sent whole on every step until a compaction that, on a 500k window,
+    /// never came. Now it stops being sent long before that, and the pass is
+    /// free: no summarization call, no compaction note.
+    #[tokio::test]
+    async fn old_tool_results_shrink_between_steps_without_a_compaction() {
+        const STEPS: usize = 20;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+
+        let mut script: Vec<Vec<ChatChunk>> = (0..STEPS)
+            .map(|step| {
+                let mut reply = ChatMessage::assistant("");
+                reply.push_tool_call(ToolCall::new(
+                    "execute",
+                    json!({ "command": format!("cargo test step{step}") }),
+                ));
+                vec![final_chunk(reply)]
+            })
+            .collect();
+        script.push(vec![final_chunk(ChatMessage::assistant("done"))]);
+
+        let provider = Arc::new(ScriptedProvider::with_window(script, 500_000));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(BlobTool(20_000)));
+        let mut agent = test_agent(&root, Arc::clone(&provider), registry);
+        agent.config.prune_after_tokens = 4_000;
+
+        let (tx, _rx) = mpsc::channel(256);
+        agent.run_turn("go", tx).await.expect("turn ok");
+
+        let requests = provider.requests();
+        assert_eq!(requests.len(), STEPS + 1);
+        let last = &requests[STEPS];
+        assert!(
+            last.messages
+                .iter()
+                .all(|message| !message.text().contains(context::COMPACT_SUMMARY_HEADING)),
+            "nothing was summarized: the pass costs no model call"
+        );
+        let elided = last
+            .messages
+            .iter()
+            .flat_map(ChatMessage::tool_results)
+            .filter(|result| result.content.contains("elided"))
+            .count();
+        assert!(elided >= 10, "old results were cut down: {elided}");
+
+        // The newest results are still there whole, and the prompt is a
+        // fraction of the one the same session used to send.
+        let whole = last
+            .messages
+            .iter()
+            .flat_map(ChatMessage::tool_results)
+            .filter(|result| result.content.len() == 20_000)
+            .count();
+        assert!(whole >= 4, "recent results are carried verbatim: {whole}");
+        let sent = crate::llm::estimate_history_tokens(&last.messages);
+        let unpruned = STEPS as u64 * 20_000 / 4;
+        assert!(
+            sent < unpruned / 2,
+            "the prompt is under half of what {STEPS} whole results would be: {sent}"
+        );
+
+        // And the record kept every byte: the session file is what a pruned
+        // result points at.
+        let session = agent.session().load_history().expect("session");
+        assert_eq!(
+            session
+                .iter()
+                .flat_map(ChatMessage::tool_results)
+                .filter(|result| result.content.len() == 20_000)
+                .count(),
+            STEPS,
+            "every result is on disk in full"
+        );
+    }
+
+    /// A program the model wrote out while thinking is gone at the next step,
+    /// because reasoning is not sent back. One trial drafted the same 1,400
+    /// line file eleven times and never called `write_file`. Saving it costs
+    /// nothing and turns the next step into a `cp`.
+    #[tokio::test]
+    async fn a_program_drafted_in_reasoning_is_saved_and_its_path_handed_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let program: String = (0..40).map(|n| format!("let x{n} = {n};\n")).collect();
+
+        let mut reply = ChatMessage::new(
+            Role::Assistant,
+            vec![ContentBlock::Thinking(ThinkingBlock {
+                thinking: format!("Here is the interpreter:\n\n```javascript\n{program}```\n"),
+                signature: None,
+                data: None,
+            })],
+        );
+        reply.push_tool_call(ToolCall::new("execute", json!({ "command": "ls" })));
+
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            vec![final_chunk(reply)],
+            vec![final_chunk(ChatMessage::assistant("done"))],
+        ]));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(CountingTool(Arc::new(AtomicUsize::new(0)))));
+        let mut agent = test_agent(&root, Arc::clone(&provider), registry);
+        let drafts_dir = Config::drafts_dir()
+            .expect("drafts dir")
+            .join(&agent.session().id);
+
+        let (tx, _rx) = mpsc::channel(256);
+        agent
+            .run_turn("write an interpreter", tx)
+            .await
+            .expect("turn ok");
+
+        let saved: Vec<std::path::PathBuf> = std::fs::read_dir(&drafts_dir)
+            .expect("the draft directory exists")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        assert_eq!(saved.len(), 1, "one draft, {saved:?}");
+        assert_eq!(
+            saved[0].extension().and_then(|e| e.to_str()),
+            Some("js"),
+            "named for the fence: {:?}",
+            saved[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&saved[0]).expect("read the draft"),
+            program
+        );
+
+        let requests = provider.requests();
+        let note = requests[1]
+            .messages
+            .iter()
+            .map(ChatMessage::text)
+            .find(|text| text.contains("Saved from your reasoning"))
+            .expect("the next step is told where the file is");
+        assert!(note.contains(&saved[0].display().to_string()), "{note}");
+        assert!(note.contains("40-line javascript block"), "{note}");
+    }
+
     /// Reasoning has to survive the step boundary, or a provider that keeps no
     /// server-side state (the Responses API with `store: false`) hands the
     /// model its own tool results with none of the thinking that asked for
@@ -2644,6 +2878,8 @@ mod tests {
             1,
             30,
             48_000,
+            150_000,
+            32_000,
         );
         let Policy {
             max_steps,
@@ -2660,6 +2896,8 @@ mod tests {
             retry_base_secs,
             retry_max_secs,
             byte_threshold,
+            max_context_tokens,
+            prune_after_tokens,
             background_drain,
             operator_control,
             pressure_signal,
@@ -2673,6 +2911,8 @@ mod tests {
         assert_eq!(retry_budget, Some(RETRY_ATTEMPTS));
         assert_eq!((retry_base_secs, retry_max_secs), (1, 30));
         assert_eq!(byte_threshold, 48_000);
+        assert_eq!(max_context_tokens, 150_000);
+        assert_eq!(prune_after_tokens, 32_000);
         assert_eq!(temperature, crate::config::Mode::Sovereign.temperature());
 
         // What it declines, and why. The deadline and the interrupt are not

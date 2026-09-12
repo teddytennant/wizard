@@ -7,6 +7,7 @@
 
 pub mod breaker;
 pub mod context;
+pub mod drafts;
 mod event;
 pub mod goal_critic;
 pub mod mission;
@@ -926,6 +927,9 @@ impl Agent {
         if let Some(images) = open_image_store(&session.id) {
             ctx = ctx.with_images(images);
         }
+        if let Some(drafts) = open_draft_store(&session.id) {
+            ctx = ctx.with_drafts(drafts);
+        }
         // Oversized tool output spills to a file this session owns, so the model
         // can `read` or `grep` the part that did not fit instead of rerunning the
         // command that produced it. Installed here, beside the image store, for
@@ -1086,7 +1090,10 @@ impl Agent {
     pub async fn context_pressure(&self) -> ContextPressure {
         context::pressure(context::Measured {
             tokens: self.context_tokens(),
-            window: self.client.context_window(&self.model).await,
+            window: context::effective_window(
+                self.client.context_window(&self.model).await,
+                self.config.max_context_tokens,
+            ),
             bytes: self.history.iter().map(|msg| msg.text().len()).sum(),
             byte_threshold: self.config.compact_threshold_bytes,
             last_prompt: self.usage.last_prompt_tokens(),
@@ -1183,6 +1190,7 @@ impl Agent {
         // Images follow the session: the fresh conversation writes into its own
         // directory, and the old one's files stay where its transcript points.
         self.ctx.images = open_image_store(&self.session.id);
+        self.ctx.drafts = open_draft_store(&self.session.id);
         crate::tools::spill::install(crate::tools::spill::SpillSink::for_session(
             &self.session.id,
         ));
@@ -1776,7 +1784,10 @@ impl Agent {
     /// pre-compact transcript remains earlier in the JSONL).
     pub async fn compact_now(&mut self) -> CompactOutcome {
         let budget = context::Budget {
-            window: self.client.context_window(&self.model).await,
+            window: context::effective_window(
+                self.client.context_window(&self.model).await,
+                self.config.max_context_tokens,
+            ),
             byte_threshold: self.config.compact_threshold_bytes,
         };
         let compacted = context::compact(
@@ -1868,6 +1879,19 @@ fn open_image_store(id: &str) -> Option<Arc<ImageStore>> {
         Ok(store) => Some(Arc::new(store)),
         Err(err) => {
             tracing::warn!("could not open the session image store: {err:#}");
+            None
+        }
+    }
+}
+
+/// The draft store for session `id` (`~/.wizard/drafts/<id>/`). A store that
+/// cannot be opened costs the model a file it can copy, never the turn, so the
+/// failure is logged and the step carries on.
+fn open_draft_store(id: &str) -> Option<Arc<drafts::DraftStore>> {
+    match drafts::DraftStore::open(id) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(err) => {
+            tracing::warn!("could not open the session draft store: {err:#}");
             None
         }
     }
