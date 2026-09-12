@@ -78,6 +78,13 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Hard upper bound a model-supplied timeout is clamped to.
 pub const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// What a shell reports for a command killed by SIGPIPE.
+///
+/// Normal at the head of a pipeline: `find . | head -20` kills `find` as soon
+/// as `head` has its 20 lines and stops reading. Under `pipefail` that 141
+/// becomes the pipeline's status, so it has to be told apart from a failure.
+const SIGPIPE_STATUS: i32 = 128 + 13;
+
 /// How long to keep draining the output pipes after the child exited (or was
 /// killed). Bounds a stray descendant holding a pipe open.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
@@ -949,6 +956,57 @@ pub(crate) fn render_command_result(result: &CommandResult) -> ToolOutput {
     }
 }
 
+/// Say where a failed pipeline's exit code came from.
+///
+/// Under `pipefail` (see [`shell::tokio_command_pipefail`])
+/// `apt-get install ... | tail -20` reports apt's 100 rather than tail's 0. The
+/// bare code reads as if the last command failed, which is the one thing that
+/// did not happen. The note goes *above* `exit code: N` so that line stays the
+/// last one, which is what the TUI splits on.
+fn note_pipeline_failure(output: &mut ToolOutput, command: &str, result: &CommandResult) {
+    if result.code.is_none_or(|code| code == 0) || result.detached.is_some() {
+        return;
+    }
+    if !shell::pipefail_supported() || !has_pipeline(command) {
+        return;
+    }
+    let Some((head, code)) = output.content.rsplit_once("exit code: ") else {
+        return;
+    };
+    if code.trim().parse::<i32>().is_err() {
+        return;
+    }
+    output.content = format!(
+        "{head}a stage of the pipeline failed; the code below is that stage's, \
+         not the last command's\nexit code: {code}"
+    );
+}
+
+/// Whether `command` runs a pipeline at the top level. `||` is not a pipe, and
+/// a `|` inside quotes is text.
+fn has_pipeline(command: &str) -> bool {
+    let mut chars = command.chars().peekable();
+    let (mut single, mut double) = (false, false);
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !single => {
+                chars.next();
+            }
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '|' if !single && !double => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                } else {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Arguments for [`ExecuteTool`].
 #[derive(Debug, Deserialize)]
 pub struct ExecuteArgs {
@@ -984,6 +1042,7 @@ impl Tool for ExecuteTool {
 Tips:
 - Prefer compact output: summaries, `head`/`tail`/`wc`; put bulky intermediates in `/tmp`.
 - Non-zero exit is diagnostic signal — read stderr and adapt.
+- Pipelines run under `pipefail`: `apt-get install ... | tail` fails when apt fails. A probe you expect to come up empty needs `|| true`.
 - A command that prompts on stdin is answered by the **user**, not by you, and only in an interactive session; elsewhere stdin is /dev/null and the prompt reads EOF. Prefer non-interactive flags (`-y`, `--yes`, `--non-interactive`) when the run may be unattended.
 - The foreground wait is short (30s by default). Past it the command keeps running as a background task and you get its id — carry on with something else and read the notification, or `task_output(id, wait_secs=N)` when you need the result before your next move. Pass `timeout_secs` up front when you would rather wait inline.
 - Durable services (HTTP, QEMU, anything a later verifier must reach): `nohup <cmd> > log 2>&1 &`, then `curl`/`ss`/`pgrep`. Do **not** use `run_in_background=true` for those — that mode does not outlive the agent.
@@ -996,7 +1055,7 @@ Tips:
         json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "Shell command line (run via sh -c)" },
+                "command": { "type": "string", "description": "Shell command line (run via sh -c, pipefail on)" },
                 "timeout_secs": { "type": "integer", "description": "Foreground budget in seconds (default 30, max 600). Past it the command moves to a background task instead of being killed; raise it when you would rather wait inline. Ignored for background tasks" },
                 "run_in_background": { "type": "boolean", "description": "Detach as a background task and return immediately (default false)" }
             },
@@ -1024,7 +1083,7 @@ Tips:
             None => Duration::from_secs(ctx.shell.timeout_secs.max(1)).min(MAX_TIMEOUT),
         };
 
-        let mut command = shell::tokio_command(&args.command);
+        let mut command = shell::tokio_command_pipefail(&args.command);
         command.current_dir(&ctx.cwd);
 
         if args.run_in_background {
@@ -1072,7 +1131,7 @@ Tips:
             tasks: &ctx.tasks,
             label: &args.command,
         };
-        let result = match (ctx.console, &ctx.events) {
+        let mut result = match (ctx.console, &ctx.events) {
             (ConsoleAccess::Interactive, Some(events)) => {
                 run_command_interactive(
                     self.name(),
@@ -1087,6 +1146,16 @@ Tips:
             }
             _ => run_command_with(self.name(), command, timeout, on_timeout).await?,
         };
+        // The last stage read all it wanted and exited 0; the stage feeding
+        // it was killed for still writing. That is how `| head` ends, and it
+        // was a success before `pipefail` made the producer's death the
+        // pipeline's status.
+        if result.code == Some(SIGPIPE_STATUS)
+            && shell::pipefail_supported()
+            && has_pipeline(&args.command)
+        {
+            result.code = Some(0);
+        }
         // A handover creates a task the same way `run_in_background` does, so
         // the rail hears about it the same way. Without this the bash pane
         // would only learn of the task when it finished.
@@ -1098,7 +1167,9 @@ Tips:
                 })
                 .await;
         }
-        Ok(render_command_result(&result))
+        let mut output = render_command_result(&result);
+        note_pipeline_failure(&mut output, &args.command, &result);
+        Ok(output)
     }
 }
 
@@ -1184,6 +1255,101 @@ mod tests {
             .unwrap();
         assert!(!out.is_error);
         assert_eq!(out.content, "spellbook");
+    }
+
+    /// The bug this fixes, in the shape it was found in: an `apt-get install`
+    /// piped into `tail` failed, the pipeline's status was `tail`'s, and the
+    /// model went on building against a package that was never installed.
+    #[tokio::test]
+    async fn a_pipeline_whose_first_stage_fails_reports_failure() {
+        let tmp = TempDir::new();
+        let out = ExecuteTool
+            .execute(
+                json!({ "command": "sh -c 'echo boom >&2; exit 100' | tail -1" }),
+                &tmp.ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error, "{}", out.content);
+        assert!(out.content.ends_with("exit code: 100"), "{}", out.content);
+        assert!(
+            out.content.contains("a stage of the pipeline failed"),
+            "the code is the stage's, and the result says so: {}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn a_successful_pipeline_still_succeeds() {
+        let tmp = TempDir::new();
+        let out = ExecuteTool
+            .execute(
+                json!({ "command": "printf 'a\\nb\\n' | grep b | tr b B" }),
+                &tmp.ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(out.content, "B");
+    }
+
+    /// `pipefail` changes what a pipeline's status is, not what the shell does
+    /// with it. A stage that is *meant* to fail inside `||`, `if` or `!` is
+    /// still handled by the command itself, and the tool still reports the
+    /// success the command reached.
+    #[tokio::test]
+    async fn a_handled_non_zero_stage_is_not_turned_into_a_failure() {
+        let tmp = TempDir::new();
+        for command in [
+            "false | cat || echo handled",
+            "if echo x | grep -q y; then echo found; else echo handled; fi",
+            "! (false | cat) && echo handled",
+            "echo handled | grep handled",
+        ] {
+            let out = ExecuteTool
+                .execute(json!({ "command": command }), &tmp.ctx())
+                .await
+                .unwrap();
+            assert!(!out.is_error, "{command}: {}", out.content);
+            assert_eq!(out.content, "handled", "{command}");
+        }
+    }
+
+    /// `head` closing the pipe under its producer is how the pattern the tool
+    /// description recommends ends, not a failure to report.
+    #[tokio::test]
+    async fn a_producer_killed_by_sigpipe_is_not_a_failure() {
+        let tmp = TempDir::new();
+        let out = ExecuteTool
+            .execute(json!({ "command": "yes | head -2" }), &tmp.ctx())
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(out.content, "y\ny");
+    }
+
+    /// A command with no pipeline keeps its plain exit-code line: the note
+    /// would be false, and the TUI splits the last line on it.
+    #[tokio::test]
+    async fn a_plain_command_failure_is_not_annotated() {
+        let tmp = TempDir::new();
+        let out = ExecuteTool
+            .execute(json!({ "command": "exit 3" }), &tmp.ctx())
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert_eq!(out.content, "exit code: 3");
+    }
+
+    #[test]
+    fn pipelines_are_told_from_or_lists_and_quoted_bars() {
+        assert!(has_pipeline("apt-get install -y python3 | tail -20"));
+        assert!(has_pipeline("a && b | c"));
+        assert!(has_pipeline("x || y | z"));
+        assert!(!has_pipeline("test -f a || echo no"));
+        assert!(!has_pipeline("grep 'a|b' file"));
+        assert!(!has_pipeline("echo \"a | b\""));
+        assert!(!has_pipeline("echo a \\| b"));
     }
 
     #[tokio::test]

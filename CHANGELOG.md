@@ -4,6 +4,20 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **`execute` reports a pipeline's failure instead of its last command's.**
+  `apt-get install -y python3 | tail -20` exits 0 when apt fails, because a
+  pipeline's status is the last stage's, and the agent went on building
+  against a package that was never installed. Commands now run under
+  `pipefail` (the platform shell when it takes `set -o pipefail`, `bash -o
+  pipefail` otherwise), and a failed pipeline's result says the code belongs
+  to a stage. A stage that fails inside `||`, `if` or `!` is still handled by
+  the command, as before, and a producer killed by SIGPIPE when `head` stops
+  reading is still a success.
+
 ## [3.1.0] - 2026-09-11
 
 The fast start, made real: a first frame in single-digit milliseconds on every
