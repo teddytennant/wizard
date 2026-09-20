@@ -6,6 +6,24 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-09-20
+
+### Fixed
+
+- **Copy over SSH+tmux died when passthrough was off.** A bare OSC 52
+  written to the pane never reached the laptop: tmux's default
+  `set-clipboard=external` ignores it, `allow-passthrough` has been off
+  since 3.3a, and `$SSH_TTY` is the login pty, which goes stale across
+  detach/reattach. The same escape now also writes to the mux client's
+  tty (`#{client_tty}`, or Zellij's client stdin), which is the
+  emulator you are sitting at.
+
+- **Grok drag-select was invisible, and a click without a drag copied
+  nothing.** Grok paints a page background, so reverse-video selection
+  vanished over SSH. Painted cells swap fg/bg instead (Muted on a Reset
+  foreground). Double-click copies the word under the cursor;
+  triple-click copies the line.
+
 ## [3.2.2] - 2026-09-16
 
 ### Fixed
