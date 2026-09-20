@@ -129,6 +129,7 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "git_diff",
     "memory",
     "todo",
+    "turing",
     "manual",
     "web_fetch",
     "web_search",

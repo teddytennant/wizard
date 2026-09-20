@@ -590,6 +590,10 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
             let text = crate::memory::report(&surface.project_root(), &action);
             surface.notice(text);
         }
+        SlashCommand::Turing(action) => {
+            let text = crate::turing::report(&action);
+            surface.notice(text);
+        }
         SlashCommand::Doctor => {
             let checks = crate::doctor::run_checks(&surface.project_root()).await;
             surface.notice(format!("doctor:\n{}", crate::doctor::render(&checks)));

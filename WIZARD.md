@@ -149,6 +149,12 @@ comments.
 Read it back once. If a line can be deleted without losing information, delete
 it.
 
+Preference for generated prose lives in the Turing log, not here and not in
+`memory`. Before writing user-facing text, compile a slice with the `turing`
+tool. On a reject, veto with a why. Read `manual` topic `turing` before first
+use. Do not paste the user's old writing in as a style guide, and do not dump
+the whole log.
+
 ## 8. Amending this charter
 
 Part of the source. A fork may edit `WIZARD.md` (deep evolve) so the next run

@@ -116,6 +116,8 @@ pub enum SlashCommand {
     /// `/memory [read|forget <name>]` — inspect and manage the saved project
     /// memories the agent writes with the `memory` tool.
     Memory(MemoryAction),
+    /// `/turing` — preference log of the user's judgments.
+    Turing(TuringAction),
     /// Run the environment diagnostics (same checks as `wizard doctor`).
     Doctor,
     /// Show the session status: model, provider, mode, session id, usage,
@@ -315,6 +317,88 @@ pub enum MemoryAction {
     Forget(String),
 }
 
+/// What a `/turing` subcommand does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuringAction {
+    /// `/turing` (no args) — counts and open questions.
+    Status,
+    /// `/turing compile [task]` — short slice ranked for the task.
+    Compile(String),
+    /// `/turing question` — existing open question, if any.
+    Question,
+    /// `/turing answer <id> <text>` — record the user's answer.
+    Answer { id: String, text: String },
+    /// `/turing veto <target> --why <reason>`.
+    Veto {
+        target: String,
+        why: String,
+        excerpt: Option<String>,
+    },
+    /// `/turing endorse <target>`.
+    Endorse { target: String },
+    /// Tool-only: record an A/B choice. Slash does not parse this.
+    Pair {
+        a: String,
+        b: String,
+        winner: String,
+        why: String,
+    },
+    /// Tool-only: record an attractor skeleton. Slash does not parse this.
+    Attractor {
+        skeleton: String,
+        note: Option<String>,
+    },
+}
+
+/// Parse the arguments to `/turing` (everything after the command word).
+fn parse_turing(args: &[&str]) -> Result<SlashCommand, String> {
+    let action = match args.first().copied() {
+        None | Some("status") => TuringAction::Status,
+        Some("compile") => TuringAction::Compile(args[1..].join(" ")),
+        Some("question") => TuringAction::Question,
+        Some("answer") => {
+            if args.len() < 3 {
+                return Err("usage: /turing answer <id> <text>".to_string());
+            }
+            TuringAction::Answer {
+                id: args[1].to_string(),
+                text: args[2..].join(" "),
+            }
+        }
+        Some("veto") => return parse_turing_veto(&args[1..]),
+        Some("endorse") => {
+            let target = args[1..].join(" ");
+            if target.is_empty() {
+                return Err("usage: /turing endorse <target>".to_string());
+            }
+            TuringAction::Endorse { target }
+        }
+        Some(other) => {
+            return Err(format!(
+                "unknown /turing subcommand '{other}' (compile|question|answer|veto|endorse|status)"
+            ));
+        }
+    };
+    Ok(SlashCommand::Turing(action))
+}
+
+fn parse_turing_veto(rest: &[&str]) -> Result<SlashCommand, String> {
+    let usage = "usage: /turing veto <target> --why <reason>";
+    let Some(why_at) = rest.iter().position(|token| *token == "--why") else {
+        return Err(usage.to_string());
+    };
+    let target = rest[..why_at].join(" ");
+    let why = rest[why_at + 1..].join(" ");
+    if target.is_empty() || why.is_empty() {
+        return Err(usage.to_string());
+    }
+    Ok(SlashCommand::Turing(TuringAction::Veto {
+        target,
+        why,
+        excerpt: None,
+    }))
+}
+
 /// Parse the arguments to `/memory` (everything after the command word).
 fn parse_memory(args: &[&str]) -> Result<SlashCommand, String> {
     let action = match args.first().copied() {
@@ -425,6 +509,7 @@ impl SlashCommand {
             "dashboard" => Ok(Self::Dashboard),
             "cost" => Ok(Self::Cost),
             "memory" => parse_memory(&args),
+            "turing" => parse_turing(&args),
             "doctor" => Ok(Self::Doctor),
             "status" => Ok(Self::Status),
             "bashes" => Ok(Self::Bashes),
@@ -549,6 +634,7 @@ impl SlashCommand {
             // Every `/memory` action — list, read, forget — is one the `memory`
             // tool already grants the agent, so a gate here would be theater.
             | Memory(_)
+            | Turing(_)
             | Doctor
             | Status
             | Bashes
@@ -663,6 +749,7 @@ impl SlashCommand {
             Dashboard => "dashboard",
             Cost => "cost",
             Memory(_) => "memory",
+            Turing(_) => "turing",
             Doctor => "doctor",
             Status => "status",
             Bashes => "bashes",
@@ -1072,6 +1159,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "memory",
         args: "[read|forget <name>]",
         description: "list, show, or forget saved project memories",
+        takes_args: false,
+        tui: Execution::Agent,
+        gui: Execution::Agent,
+        gateway: Execution::Agent,
+        agent_arg: "",
+    },
+    CommandSpec {
+        name: "turing",
+        args: "[compile|question|answer|veto|endorse]",
+        description: "preference log of the user's judgments",
         takes_args: false,
         tui: Execution::Agent,
         gui: Execution::Agent,
@@ -1740,6 +1837,7 @@ mod tests {
             SlashCommand::Dashboard,
             SlashCommand::Cost,
             SlashCommand::Memory(MemoryAction::List),
+            SlashCommand::Turing(TuringAction::Status),
             SlashCommand::Doctor,
             SlashCommand::Status,
             SlashCommand::Bashes,
@@ -1944,6 +2042,85 @@ mod tests {
         assert!(
             matches!(parse("/memory purge"), Err(message) if message.contains("unknown /memory subcommand"))
         );
+    }
+
+    #[test]
+    fn parse_turing_status() {
+        let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
+        assert_eq!(
+            parse("/turing"),
+            Ok(SlashCommand::Turing(TuringAction::Status))
+        );
+        assert_eq!(
+            parse("/turing status"),
+            Ok(SlashCommand::Turing(TuringAction::Status))
+        );
+    }
+
+    #[test]
+    fn parse_turing_compile() {
+        let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
+        assert_eq!(
+            parse("/turing compile"),
+            Ok(SlashCommand::Turing(TuringAction::Compile(String::new())))
+        );
+        assert_eq!(
+            parse("/turing compile write the README"),
+            Ok(SlashCommand::Turing(TuringAction::Compile(
+                "write the README".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn parse_turing_question_and_answer() {
+        let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
+        assert_eq!(
+            parse("/turing question"),
+            Ok(SlashCommand::Turing(TuringAction::Question))
+        );
+        assert_eq!(
+            parse("/turing answer"),
+            Err("usage: /turing answer <id> <text>".to_string())
+        );
+        assert_eq!(
+            parse("/turing answer abc-123 short commits"),
+            Ok(SlashCommand::Turing(TuringAction::Answer {
+                id: "abc-123".to_string(),
+                text: "short commits".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn parse_turing_veto_and_endorse() {
+        let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
+        assert_eq!(
+            parse("/turing veto src/jokes.rs --why the pun does not land"),
+            Ok(SlashCommand::Turing(TuringAction::Veto {
+                target: "src/jokes.rs".to_string(),
+                why: "the pun does not land".to_string(),
+                excerpt: None,
+            }))
+        );
+        assert!(
+            parse("/turing veto src/jokes.rs")
+                .unwrap_err()
+                .contains("--why")
+        );
+        assert_eq!(
+            parse("/turing endorse src/ok.rs"),
+            Ok(SlashCommand::Turing(TuringAction::Endorse {
+                target: "src/ok.rs".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn parse_turing_unknown_subcommand() {
+        let parse = |line: &str| SlashCommand::parse(line).expect("a slash command");
+        let err = parse("/turing pair").unwrap_err();
+        assert!(err.contains("unknown /turing subcommand"), "{err}");
     }
 
     /// `/btw` keeps the whole rest of the line (spaces and all) as the

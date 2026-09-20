@@ -38,6 +38,7 @@ pub mod onboarding;
 pub mod output;
 pub mod platform;
 pub mod starter;
+pub mod turing;
 // Compiled-in plugins and the process kernel they load into. The one module
 // core is allowed to name, because it is the table rather than a plugin.
 pub mod plugins;

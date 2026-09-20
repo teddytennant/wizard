@@ -27,6 +27,7 @@ pub mod spill;
 pub mod subagent_tasks;
 pub mod tasks;
 pub mod todo;
+pub mod turing;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

@@ -209,6 +209,24 @@ update it (save over its name) instead of creating a near-duplicate.
 - Delete a memory that turns out to be wrong. Names are kebab-case, \
 descriptions are one line.";
 
+/// Preference log of the user's judgments. Served by the `manual` tool, not
+/// the always-on prompt. Distinct from [`MEMORY_RULES`]: memory is operational
+/// facts, turing is judgments about generated artifacts.
+const TURING_RULES: &str = "\
+Turing is a preference log of the user's judgments, not a persona and not \
+Wizard memory.
+
+- compile a short slice before writing user-facing prose
+- on a real open question, stop and ask rather than guessing
+- on reject, veto with a why so the next compile can use it
+- never in-context-learn the user's old prose as a style guide
+- never dump the whole log into a prompt
+- never save a persona, \"write like this\", or secrets
+
+Memory holds operational facts (who they are, how you should work, project \
+goals). Turing holds judgments about generated artifacts (answers, A/B \
+choices, vetoes, endorsements, attractor sightings).";
+
 // ---------------------------------------------------------------------------
 // The charter: an always-on digest, and the manual behind it
 // ---------------------------------------------------------------------------
@@ -273,6 +291,11 @@ pub fn manual_pages() -> Vec<ManualPage> {
         id: unique_id(&pages, "memory"),
         title: "Memory: what earns a place".to_string(),
         body: MEMORY_RULES.to_string(),
+    });
+    pages.push(ManualPage {
+        id: unique_id(&pages, "turing"),
+        title: "Turing: preference log".to_string(),
+        body: TURING_RULES.to_string(),
     });
     pages
 }
@@ -1011,6 +1034,26 @@ mod tests {
                 .body
                 .contains("Never save what the repo already records")
         );
+
+        let turing = manual_page("turing").expect("turing rules are a manual page");
+        assert_eq!(turing.id, "turing");
+        assert!(
+            turing
+                .body
+                .contains("preference log of the user's judgments")
+        );
+        assert!(turing.body.contains("not a persona"));
+        assert!(turing.body.contains("never dump the whole log"));
+    }
+
+    #[test]
+    fn turing_rules_are_a_manual_page() {
+        let turing = manual_page("turing").expect("turing rules are a manual page");
+        assert_eq!(turing.id, "turing");
+        assert_eq!(turing.title, "Turing: preference log");
+        assert!(turing.body.contains("not Wizard memory"));
+        assert!(turing.body.contains("compile a short slice"));
+        assert!(turing.body.contains("veto with a why"));
     }
 
     /// A `manual` call has to work with whatever the model types: the id the

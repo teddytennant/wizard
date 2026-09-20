@@ -25,6 +25,7 @@ use super::shell::ExecuteTool;
 use super::subagent_tasks::{SubagentKillTool, SubagentStatusTool};
 use super::tasks::{TaskKillTool, TaskOutputTool};
 use super::todo::TodoTool;
+use super::turing::TuringTool;
 
 /// Registry of every callable tool, keyed by advertised name.
 /// Registration order is preserved for stable spec ordering in prompts.
@@ -81,6 +82,7 @@ impl ToolRegistry {
         registry.register(Arc::new(SearchFilesTool));
         registry.register(Arc::new(ExecuteTool));
         registry.register(Arc::new(MemoryTool));
+        registry.register(Arc::new(TuringTool));
         registry.register(Arc::new(TodoTool));
         // The on-demand half of the system prompt (see `crate::tools::manual`).
         // The always-on prompt tells the model to call this by name, so it is
@@ -404,6 +406,7 @@ mod tests {
                 "search_files",
                 "execute",
                 "memory",
+                "turing",
                 "todo",
                 "manual",
                 "generate_image",
@@ -416,7 +419,7 @@ mod tests {
                 "computer",
             ]
         );
-        assert_eq!(registry.len(), 17);
+        assert_eq!(registry.len(), 18);
         assert!(!registry.is_empty());
 
         for spec in registry.specs() {
@@ -456,6 +459,7 @@ mod tests {
         for side_effecting in [
             "execute",
             "memory",
+            "turing",
             "generate_image",
             "task_kill",
             "subagent_kill",
@@ -600,7 +604,7 @@ mod tests {
             registry.apply_description_overrides(&tmp.0.join("absent")),
             0
         );
-        assert_eq!(registry.len(), 17);
+        assert_eq!(registry.len(), 18);
     }
 
     /// A scripted tool cannot take a built-in's name.
