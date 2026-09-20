@@ -38,8 +38,8 @@ use super::session::{
     spawn_session_rebuild, startup_client,
 };
 use super::term::{
-    TerminalGuard, copy_to_clipboard, edit_config_file, edit_prompt_in_editor, is_terminal_armed,
-    restore_terminal_best_effort, run_setup_suspended, setup_terminal,
+    TerminalGuard, Tui, copy_to_clipboard, edit_config_file, edit_prompt_in_editor,
+    is_terminal_armed, restore_terminal_best_effort, run_setup_suspended, setup_terminal,
 };
 use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 
@@ -772,50 +772,16 @@ pub async fn run_tui(
                         }
                     }
                 }
-                AppAction::CopySelection => {
-                    // The drag finished: re-render and read the cells under the
-                    // selection from the fresh frame. (After a completed
-                    // `Terminal::draw` the swapped-in current buffer is reset,
-                    // so reading `current_buffer_mut` here would find only
-                    // blanks — clearing the selection the moment the button is
-                    // released.) The highlight stays on screen until the next
-                    // keystroke / click / scroll.
-                    if let Some(selection) = app.selection {
-                        let mut text = String::new();
-                        // A failed frame here costs one copy, not the session:
-                        // the next loop iteration redraws, and the user can
-                        // drag again. The main draw above is what decides
-                        // whether the terminal is actually gone.
-                        let drawn = terminal.draw(|frame| {
-                            crate::ui::draw(frame, &app);
-                            text = crate::ui::selection_text(
-                                frame.buffer_mut(),
-                                &selection,
-                                &app.text_origins.borrow(),
-                            );
-                        });
-                        if let Err(err) = drawn {
-                            app.notice(format!("could not read the selection: {err}"));
-                            app.selection = None;
-                        } else if text.is_empty() {
-                            app.selection = None;
-                        } else {
-                            match copy_to_clipboard(&text) {
-                                // A copy that could not take every route it
-                                // wanted still says so: the one thing worse
-                                // than a failed copy is a successful-looking
-                                // one that pastes nothing.
-                                Ok(Some(notice)) => app.notice(notice),
-                                Ok(None) => {}
-                                Err(err) => {
-                                    app.notice(format!("could not copy selection: {err:#}"));
-                                }
-                            }
-                        }
-                        // An ordinary copy is silent: the persistent highlight
-                        // is the feedback, and an unchanged transcript keeps
-                        // the highlight aligned with the selected rows.
-                    }
+                AppAction::CopySelection => copy_app_selection(&mut terminal, &mut app),
+                AppAction::SelectWord { x, y } => {
+                    pick_then_copy(&mut terminal, &mut app, |buf, _| {
+                        crate::ui::word_selection(buf, x, y)
+                    })
+                }
+                AppAction::SelectLine { y } => {
+                    pick_then_copy(&mut terminal, &mut app, |buf, app| {
+                        crate::ui::line_selection(buf, y, &app.text_origins.borrow())
+                    })
                 }
             }
         }
@@ -1536,6 +1502,59 @@ async fn drain_agent_commands(
         }
         .run(command)
         .await;
+    }
+}
+
+/// Re-render and copy the cells under `app.selection`. After a completed
+/// `Terminal::draw` the swapped-in current buffer is reset, so this has to
+/// read from the fresh frame, not `current_buffer_mut`. The highlight stays
+/// until the next keystroke / click / scroll.
+fn copy_app_selection(terminal: &mut Tui, app: &mut App) {
+    if let Some(selection) = app.selection {
+        let mut text = String::new();
+        let drawn = terminal.draw(|frame| {
+            crate::ui::draw(frame, app);
+            text = crate::ui::selection_text(
+                frame.buffer_mut(),
+                &selection,
+                &app.text_origins.borrow(),
+            );
+        });
+        if let Err(err) = drawn {
+            app.notice(format!("could not read the selection: {err}"));
+            app.selection = None;
+        } else if text.is_empty() {
+            app.selection = None;
+        } else {
+            match copy_to_clipboard(&text) {
+                Ok(Some(notice)) => app.notice(notice),
+                Ok(None) => {}
+                Err(err) => {
+                    app.notice(format!("could not copy selection: {err:#}"));
+                }
+            }
+        }
+    }
+}
+
+fn pick_then_copy(
+    terminal: &mut Tui,
+    app: &mut App,
+    pick: impl FnOnce(&ratatui::buffer::Buffer, &App) -> Option<super::picker::Selection>,
+) {
+    let mut sel = None;
+    match terminal.draw(|frame| {
+        crate::ui::draw(frame, app);
+        sel = pick(frame.buffer_mut(), app);
+    }) {
+        Err(err) => {
+            app.notice(format!("could not read the selection: {err}"));
+            app.selection = None;
+        }
+        Ok(_) => {
+            app.selection = sel;
+            copy_app_selection(terminal, app);
+        }
     }
 }
 

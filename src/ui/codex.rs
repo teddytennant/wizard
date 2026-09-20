@@ -506,18 +506,11 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
         app.card_hits.borrow_mut().clear();
     }
 
-    // The drag-selection highlight paints last so it reverses whatever ended
+    // The drag-selection highlight paints last so it covers whatever ended
     // up on screen.
     if let Some(selection) = app.selection {
         let area = frame.area();
-        let buf = frame.buffer_mut();
-        for (y, start, end) in super::selection_rows(&selection, area.width, area.height) {
-            for x in start..end {
-                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
-                    cell.modifier.insert(Modifier::REVERSED);
-                }
-            }
-        }
+        super::paint_selection(frame.buffer_mut(), &selection, area);
     }
 }
 

@@ -686,18 +686,23 @@ fn copy_via_tmux_buffer(text: &str) -> Result<()> {
 ///
 /// The pane (stdout, then `/dev/tty`) gets the sequence framed for the mux
 /// in the way: tmux's DCS passthrough, screen's chunked DCS, or the bare
-/// OSC 52 Zellij intercepts itself. `$SSH_TTY` is the sshd pty *outside*
-/// that mux, so a wrapped sequence there is bytes the laptop's emulator
-/// does not understand. Over SSH the bare OSC 52 is written there too.
-/// That is the route that reaches the clipboard of the machine the user
-/// is sitting at when tmux's `set-clipboard` is `external` and
-/// `allow-passthrough` is off, and when Zellij is between Wizard and sshd.
+/// OSC 52 Zellij intercepts itself.
+///
+/// The mux *client* tty is the outer terminal: tmux's `#{client_tty}`, or
+/// Zellij's client stdin. Over SSH that is the current sshd pty, which is
+/// what the laptop's emulator is reading. A bare OSC 52 there bypasses
+/// tmux's `allow-passthrough off` / `set-clipboard external` and Zellij's
+/// interceptor. `$SSH_TTY` is the login that started the session and goes
+/// stale across detach/reattach (it has been seen naming a pts that no
+/// longer exists while the client sat on another), so inside a mux it is
+/// not used.
 fn write_escape(text: &str, env: CopyEnv) -> Result<()> {
     use std::io::{IsTerminal, Write};
 
     let Some(framed) = clipboard_escape(text, env) else {
         anyhow::bail!("selection is past the clipboard-escape cap");
     };
+    let bare = osc52(text);
 
     let mut last: Option<anyhow::Error> = None;
     let mut wrote = false;
@@ -724,13 +729,19 @@ fn write_escape(text: &str, env: CopyEnv) -> Result<()> {
         Err(err) => last = Some(err),
     }
 
-    // `$SSH_TTY` is this session's pty as sshd sees it. Inside tmux or
-    // Zellij that is still the mux pane (same device as `/dev/tty`), so
-    // a second write of the same framed sequence is a no-op, and a bare
-    // OSC 52 would be the one tmux's default `set-clipboard external`
-    // discards. Only write it when there is no mux in the way, where it
-    // is the outer sshd pty and the framed sequence on stdout may have
-    // gone to a redirected handle the laptop never sees.
+    // Bare OSC 52 on the mux client tty: already outside the mux, so wrapping
+    // would send DCS bytes the outer terminal does not understand.
+    if let Some(client) = mux_client_tty(env) {
+        match emit_to_path(&client, &bare) {
+            Ok(()) => wrote = true,
+            Err(err) => last = Some(err),
+        }
+    }
+
+    // Over SSH with no mux, `$SSH_TTY` is the sshd pty and is worth a
+    // second write when it is not `/dev/tty`. Inside a mux we do not
+    // touch it: a stale value can be a dead pts or, worse, one another
+    // session reused.
     if env.ssh
         && !env.tmux
         && !env.zellij
@@ -738,6 +749,7 @@ fn write_escape(text: &str, env: CopyEnv) -> Result<()> {
         && let Some(ssh_tty) = std::env::var_os("SSH_TTY")
         && !ssh_tty.is_empty()
         && ssh_tty != "/dev/tty"
+        && live_tty(std::path::Path::new(&ssh_tty)).is_some()
     {
         match emit_to_path(&ssh_tty, &framed) {
             Ok(()) => wrote = true,
@@ -765,6 +777,114 @@ fn emit_to_path(path: impl AsRef<std::path::Path>, sequence: &str) -> Result<()>
         .with_context(|| format!("writing clipboard escape to {path:?}"))?;
     tty.flush()
         .with_context(|| format!("flushing clipboard escape to {path:?}"))
+}
+
+/// The tty the multiplexer is drawing on, outside the pane.
+///
+/// Inside tmux this is `#{client_tty}`: the tmux client's terminal, which
+/// over SSH is the current sshd pty. `$SSH_TTY` is the login that started
+/// the session and goes stale across detach/reattach.
+///
+/// Inside Zellij there is no equivalent query. On Linux we pick the zellij
+/// client process whose stdin is a pts that is not this pane.
+fn mux_client_tty(env: CopyEnv) -> Option<std::path::PathBuf> {
+    if env.tmux {
+        return tty_from_command("tmux", &["display-message", "-p", "#{client_tty}"]);
+    }
+    if env.zellij {
+        return zellij_client_tty();
+    }
+    None
+}
+
+fn tty_from_command(cmd: &str, args: &[&str]) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?;
+    live_tty(std::path::Path::new(path.trim()))
+}
+
+fn zellij_client_tty() -> Option<std::path::PathBuf> {
+    let pane = std::fs::read_link("/proc/self/fd/0").ok();
+    let mut candidates = zellij_client_ttys();
+    candidates.retain(|p| pane.as_ref() != Some(p));
+    if let Some(ssh) = std::env::var_os("SSH_TTY").and_then(|p| live_tty(std::path::Path::new(&p)))
+    {
+        if candidates.iter().any(|p| p == &ssh) {
+            return Some(ssh);
+        }
+        // /proc scan missed every client (no /proc, or a non-Linux host).
+        // `$SSH_TTY` is only used then, and only if it is still a live
+        // device: a stale value is skipped.
+        if candidates.is_empty() {
+            return Some(ssh);
+        }
+    }
+    candidates.into_iter().next()
+}
+
+#[cfg(target_os = "linux")]
+fn zellij_client_ttys() -> Vec<std::path::PathBuf> {
+    let Ok(proc) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ent in proc.flatten() {
+        let name = ent.file_name();
+        let Some(pid) = name.to_str() else { continue };
+        if !pid.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let path = ent.path();
+        let Ok(comm) = std::fs::read_to_string(path.join("comm")) else {
+            continue;
+        };
+        if comm.trim() != "zellij" {
+            continue;
+        }
+        let cmdline = std::fs::read_to_string(path.join("cmdline")).unwrap_or_default();
+        if cmdline
+            .split('\0')
+            .any(|a| a == "--server" || a == "server")
+        {
+            continue;
+        }
+        let Ok(tty) = std::fs::read_link(path.join("fd/0")) else {
+            continue;
+        };
+        if let Some(p) = live_tty(&tty) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+fn zellij_client_ttys() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+/// A path that is a writable character device right now. Missing, stale, or
+/// permission-denied pts names return `None` so we never write OSC 52 into
+/// a reused pty that belongs to someone else.
+fn live_tty(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if !meta.file_type().is_char_device() {
+            return None;
+        }
+    }
+    std::fs::OpenOptions::new().write(true).open(path).ok()?;
+    Some(path.to_path_buf())
 }
 
 /// Pipe `text` into the first available OS clipboard writer.
@@ -1250,5 +1370,38 @@ mod tests {
         };
         assert!(env.prefer_escape());
         assert!(!env.native_worth_trying());
+    }
+
+    #[test]
+    fn mux_client_tty_gets_the_bare_escape_not_the_passthrough() {
+        // The client tty is already outside tmux, so wrapping would send DCS
+        // bytes the outer terminal does not understand. write_escape writes
+        // `osc52` there and `clipboard_escape` on the pane.
+        let env = CopyEnv {
+            tmux: true,
+            ssh: true,
+            ..PLAIN
+        };
+        let framed = clipboard_escape("hi", env).expect("under cap");
+        let bare = osc52("hi");
+        assert_ne!(framed, bare, "tmux pane gets the DCS wrap");
+        assert_eq!(bare, "\x1b]52;c;aGk=\x07");
+        assert!(
+            framed.contains("\x1b]52;c;"),
+            "the wrap still carries OSC 52"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_tty_skips_missing_paths() {
+        assert!(live_tty(std::path::Path::new("/dev/wizard-no-such-pts")).is_none());
+        assert!(live_tty(std::path::Path::new("")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_tty_accepts_a_writable_char_device() {
+        assert!(live_tty(std::path::Path::new("/dev/null")).is_some());
     }
 }

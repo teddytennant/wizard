@@ -174,9 +174,11 @@ the commands, the model and every fact reported on it are Wizard's.
 Two ways to copy, one machinery behind both:
 
 - **Drag** across the transcript. The covered text is copied when you release.
-  Wizard captures the mouse so the wheel scrolls, which pre-empts your
-  terminal's own click-drag selection, so this is the replacement for it.
-  Holding **Shift** while you drag falls back to the terminal's selection.
+  Double-click copies the word under the cursor; triple-click copies the line
+  (gutter stripped). Wizard captures the mouse so the wheel scrolls, which
+  pre-empts your terminal's own click-drag selection, so this is the
+  replacement for it. Holding **Shift** while you drag falls back to the
+  terminal's selection.
 - **Ctrl-Y** copies the last reply, whole. This is the one to use for an
   answer: a drag only copies what is on screen, so anything scrolled off the
   top is not in it, and there is nothing to drag with over a serial console or
@@ -189,7 +191,7 @@ which one you will actually paste from is not knowable from inside Wizard:
 |---|---|---|
 | Native tool | The clipboard of the machine Wizard runs on, via `wl-copy` / `xclip` / `xsel` / `pbcopy` / `clip.exe` | Always locally. Over SSH only when there is a display; first in a local session, last in a remote one |
 | tmux paste buffer | What `prefix ]` pastes, via `tmux load-buffer -w` | Inside tmux |
-| OSC 52 | The clipboard of the terminal you are *sitting at*, wrapped in tmux's or screen's passthrough when one is in the way | Always, up to 74994 bytes of text. Written to stdout and, over SSH or inside a mux, also to `/dev/tty` / `$SSH_TTY` |
+| OSC 52 | The clipboard of the terminal you are *sitting at*, wrapped in tmux's or screen's passthrough when one is in the way | Always, up to 74994 bytes of text. Written to stdout, to `/dev/tty`, and as a bare sequence to the mux client tty (`tmux display-message -p '#{client_tty}'`, or Zellij's client) so it still reaches the laptop when passthrough is off |
 
 They are not fallbacks for each other. Over SSH the native tool is the wrong
 one: `xclip` on the server sets the server's clipboard, which nobody can see,
@@ -202,20 +204,23 @@ rows (the transcript gutter, the `· ` / `❯ ` marker, the grok rail) are
 stripped so the paste is the text, not the chrome. Relative indent inside the
 selection is kept.
 
-**Inside tmux**, the load-bearing route is `tmux load-buffer -w`, which fills
-the paste buffer and asks tmux to push the text out to the real terminal with
-its own escape. A bare OSC 52 from an application does not get through: tmux's
-default `set-clipboard external` ignores it, and the DCS passthrough Wizard
-also sends has been gated behind `set -g allow-passthrough on` since tmux
-3.3a. Turn that option on if you want the passthrough route too; nothing
-breaks without it.
+**Inside tmux**, `tmux load-buffer -w` fills the paste buffer (what `prefix ]`
+pastes) and asks tmux to push OSC 52 to the client. A bare OSC 52 written to
+the *pane* does not get through: tmux's default `set-clipboard external`
+ignores it, and the DCS passthrough Wizard also sends has been gated behind
+`set -g allow-passthrough on` since tmux 3.3a. Wizard therefore also writes
+the *bare* escape to `#{client_tty}` (the tmux client's terminal, which over
+SSH is the current sshd pty). That bypasses both knobs, so the laptop
+clipboard still fills when passthrough is off. `$SSH_TTY` is not used inside
+tmux: it is the login that started the session and goes stale across
+detach/reattach.
 
 **Inside Zellij**, there is no DCS wrapper and no paste-buffer command
 equivalent to `tmux load-buffer -w`. Zellij intercepts a bare OSC 52 from the
-pane and forwards the copy, which is the only method that works over SSH.
-Wizard therefore sends the unwrapped escape, and prefers it over native tools
-the same way it does under tmux. Nested tmux inside Zellij still uses tmux's
-wrapper: that pane's `$TMUX` is set.
+pane and forwards the copy. Wizard also writes the same bare escape to the
+Zellij client's tty (discovered on Linux from `/proc`), which is the route
+that reaches the laptop when the interceptor is off. Nested tmux inside
+Zellij still uses tmux's wrapper: that pane's `$TMUX` is set.
 
 **Over 74994 bytes** the escape is skipped rather than sent, because terminals
 drop an oversized OSC 52 in silence and a copy that reports success and pastes

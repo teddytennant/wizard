@@ -115,6 +115,68 @@ fn selection_clamps_to_buffer_bounds() {
 }
 
 #[test]
+fn word_selection_covers_the_identifier_under_the_cursor() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 16, 1));
+    buf.set_string(0, 0, "  copy_to_clip x", Style::default());
+    let sel = word_selection(&buf, 4, 0).expect("word");
+    assert_eq!(selection_text(&buf, &sel, &[]), "copy_to_clip");
+    let punct = word_selection(&buf, 0, 0).expect("space");
+    assert_eq!(punct.anchor, punct.head);
+}
+
+#[test]
+fn line_selection_skips_the_gutter_and_trailing_blanks() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+    buf.set_string(0, 0, "  hello   ", Style::default());
+    let sel = line_selection(&buf, 0, &[(0, 2)]).expect("line");
+    assert_eq!(selection_text(&buf, &sel, &[(0, 2)]), "hello");
+}
+
+#[test]
+fn selection_highlight_uses_reverse_on_house_cells() {
+    let _pinned = theme::pin(theme::minimal());
+    let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+    buf.set_string(0, 0, "abcd", Style::default());
+    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1));
+    assert!(
+        buf.cell(Position::new(1, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::REVERSED),
+        "house Reset-on-Reset still uses reverse video"
+    );
+    assert!(
+        !buf.cell(Position::new(3, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::REVERSED),
+        "cells outside the selection stay put"
+    );
+}
+
+#[test]
+fn selection_highlight_swaps_painted_backgrounds() {
+    // Grok paints BgBase on every cell and leaves fg Reset. Reverse of
+    // that is terminal-defined and often invisible over SSH.
+    let _pinned = theme::pin(theme::load("grok").expect("grok theme").into());
+    let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+    buf.set_string(
+        0,
+        0,
+        "abcd",
+        Style::default().bg(theme::color(Token::BgBase)),
+    );
+    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1));
+    let cell = buf.cell(Position::new(1, 0)).unwrap();
+    assert_eq!(cell.fg, theme::color(Token::BgBase));
+    assert_eq!(cell.bg, theme::color(Token::Muted));
+    assert!(
+        !cell.modifier.contains(Modifier::REVERSED),
+        "painted cells swap colors instead of reversing"
+    );
+}
+
+#[test]
 fn indeterminate_bar_fills_width_and_animates() {
     let a = flat(&indeterminate_bar(20, 0));
     let b = flat(&indeterminate_bar(20, 7));

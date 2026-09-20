@@ -1845,6 +1845,69 @@ fn click(app: &mut App, column: u16, row: u16) {
     }
 }
 
+fn mouse_down(app: &mut App, column: u16, row: u16) -> Option<AppAction> {
+    use crossterm::event::MouseEvent;
+    app.handle_event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }))
+    .expect("mouse handled")
+}
+
+#[test]
+fn double_click_asks_the_loop_to_copy_the_word() {
+    let mut app = app();
+    assert!(mouse_down(&mut app, 5, 3).is_none());
+    assert!(matches!(
+        mouse_down(&mut app, 5, 3),
+        Some(AppAction::SelectWord { x: 5, y: 3 })
+    ));
+}
+
+#[test]
+fn triple_click_asks_the_loop_to_copy_the_line() {
+    let mut app = app();
+    assert!(mouse_down(&mut app, 5, 3).is_none());
+    assert!(matches!(
+        mouse_down(&mut app, 5, 3),
+        Some(AppAction::SelectWord { .. })
+    ));
+    assert!(matches!(
+        mouse_down(&mut app, 5, 3),
+        Some(AppAction::SelectLine { y: 3 })
+    ));
+}
+
+#[test]
+fn mouse_up_after_a_word_copy_leaves_the_selection_alone() {
+    let mut app = app();
+    assert!(mouse_down(&mut app, 5, 3).is_none());
+    assert!(matches!(
+        mouse_down(&mut app, 5, 3),
+        Some(AppAction::SelectWord { .. })
+    ));
+    // The loop installs the word and copies; dragging is already false.
+    app.selection = Some(Selection {
+        anchor: (3, 3),
+        head: (8, 3),
+        dragging: false,
+    });
+    use crossterm::event::MouseEvent;
+    let action = app
+        .handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 5,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .expect("mouse handled");
+    assert!(action.is_none());
+    let sel = app.selection.expect("word selection kept");
+    assert_eq!(sel.head, (8, 3));
+}
+
 #[test]
 fn clicking_a_tool_card_header_toggles_its_output() {
     let mut app = app();

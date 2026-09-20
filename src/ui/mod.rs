@@ -226,13 +226,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
     if let Some(selection) = app.selection {
         let area = frame.area();
         let buf = frame.buffer_mut();
-        for (y, start, end) in selection_rows(&selection, area.width, area.height) {
-            for x in start..end {
-                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
-                    cell.modifier.insert(Modifier::REVERSED);
-                }
-            }
-        }
+        paint_selection(buf, &selection, area);
     }
 }
 
@@ -321,6 +315,119 @@ fn todo_height(app: &App, total_height: u16, input_rows: u16, rail_rows: u16) ->
         return 0;
     }
     desired.min(available).min(12)
+}
+
+/// Paint the drag-selection overlay onto a finished frame.
+///
+/// House cells are `Reset` on `Reset`: reverse video is the highlight, same
+/// as the terminal's own. Grok (and any other skin that paints a page
+/// background) leaves `Reset` fg on a concrete bg; reverse of that is
+/// terminal-defined and often invisible over SSH. Swap the concrete colors
+/// instead, filling a missing fg from `Token::Muted` so the selection is a
+/// dark-on-light slab the user can actually see.
+pub(super) fn paint_selection(buf: &mut Buffer, selection: &Selection, area: Rect) {
+    for (y, start, end) in selection_rows(selection, area.width, area.height) {
+        for x in start..end {
+            if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                highlight_cell(cell);
+            }
+        }
+    }
+}
+
+fn highlight_cell(cell: &mut ratatui::buffer::Cell) {
+    let fg = cell.fg;
+    let bg = cell.bg;
+    let fg_reset = matches!(fg, Color::Reset);
+    let bg_reset = matches!(bg, Color::Reset);
+    if fg_reset && bg_reset {
+        cell.modifier.insert(Modifier::REVERSED);
+        return;
+    }
+    let new_fg = if bg_reset {
+        theme::color(Token::BgBase)
+    } else {
+        bg
+    };
+    let new_bg = if fg_reset {
+        theme::color(Token::Muted)
+    } else {
+        fg
+    };
+    if matches!(new_fg, Color::Reset) && matches!(new_bg, Color::Reset) {
+        cell.modifier.insert(Modifier::REVERSED);
+        return;
+    }
+    cell.set_fg(new_fg);
+    cell.set_bg(new_bg);
+}
+
+/// Word under `(x, y)` on a finished frame. Double-click uses this so a copy
+/// over SSH does not depend on drag events surviving the mux.
+pub(super) fn word_selection(buf: &Buffer, x: u16, y: u16) -> Option<Selection> {
+    let area = buf.area;
+    if y >= area.height || x >= area.width {
+        return None;
+    }
+    let wordish = |col: u16| buf.cell(Position::new(col, y)).is_some_and(cell_is_word);
+    if !wordish(x) {
+        return Some(Selection {
+            anchor: (x, y),
+            head: (x, y),
+            dragging: false,
+        });
+    }
+    let mut start = x;
+    while start > 0 && wordish(start - 1) {
+        start -= 1;
+    }
+    let mut end = x;
+    while end + 1 < area.width && wordish(end + 1) {
+        end += 1;
+    }
+    Some(Selection {
+        anchor: (start, y),
+        head: (end, y),
+        dragging: false,
+    })
+}
+
+fn cell_is_word(cell: &ratatui::buffer::Cell) -> bool {
+    let s = cell.symbol();
+    if s.is_empty() {
+        return false;
+    }
+    s.chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Visible text of row `y`, gutter skipped via `origins`. Triple-click uses this.
+pub(super) fn line_selection(buf: &Buffer, y: u16, origins: &[(u16, u16)]) -> Option<Selection> {
+    let area = buf.area;
+    if y >= area.height {
+        return None;
+    }
+    let start = origins
+        .iter()
+        .find(|&&(row, _)| row == y)
+        .map_or(0, |&(_, col)| col)
+        .min(area.width.saturating_sub(1));
+    let mut end = area.width.saturating_sub(1);
+    while end > start {
+        let blank = buf
+            .cell(Position::new(end, y))
+            .is_none_or(|c| c.symbol().trim().is_empty());
+        if !blank {
+            break;
+        }
+        end -= 1;
+    }
+    Some(Selection {
+        anchor: (start, y),
+        head: (end, y),
+        dragging: false,
+    })
 }
 
 /// Per-row spans `(y, start_x, end_x_exclusive)` a selection covers over a grid

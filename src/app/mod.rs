@@ -270,6 +270,9 @@ pub struct App {
     /// Active or just-completed mouse text selection, if any. Drives the
     /// highlight overlay and clipboard copy.
     pub selection: Option<Selection>,
+    /// Consecutive left-clicks on one cell. 2 copies the word, 3 the line.
+    click_count: u8,
+    last_click: Option<(u16, u16, Instant)>,
     /// Screen rows of tool-card header lines visible in the last-drawn frame,
     /// as `(row, transcript index)` — the click-to-toggle hit map. Rebuilt by
     /// [`crate::ui::draw`] every frame (hence the interior mutability: draw
@@ -567,6 +570,8 @@ impl App {
             dashboard_input: String::new(),
             peek_lines: Vec::new(),
             selection: None,
+            click_count: 0,
+            last_click: None,
             card_hits: std::cell::RefCell::new(Vec::new()),
             text_origins: std::cell::RefCell::new(Vec::new()),
             images: std::cell::RefCell::new(ImageCache::fallback()),
@@ -2695,6 +2700,35 @@ impl App {
                         self.selection = None;
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
+                        const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+                        let now = Instant::now();
+                        let count = match self.last_click {
+                            Some((x, y, at))
+                                if (x, y) == cell
+                                    && now.saturating_duration_since(at) <= DOUBLE_CLICK =>
+                            {
+                                self.click_count.saturating_add(1).min(3)
+                            }
+                            _ => 1,
+                        };
+                        self.click_count = count;
+                        self.last_click = Some((cell.0, cell.1, now));
+                        // A tool-card header already owns the click (toggle).
+                        // Stealing the second one as a word-copy made a
+                        // quick expand-then-collapse miss.
+                        let on_card = self.card_hits.borrow().iter().any(|(y, _)| *y == cell.1);
+                        if !on_card {
+                            match count {
+                                2 => {
+                                    return Ok(Some(AppAction::SelectWord {
+                                        x: cell.0,
+                                        y: cell.1,
+                                    }));
+                                }
+                                3 => return Ok(Some(AppAction::SelectLine { y: cell.1 })),
+                                _ => {}
+                            }
+                        }
                         self.selection = Some(Selection {
                             anchor: cell,
                             head: cell,
@@ -2707,6 +2741,11 @@ impl App {
                         }
                     }
                     MouseEventKind::Up(MouseButton::Left) => {
+                        // Double/triple click already copied and left a
+                        // finished (non-dragging) selection. Leave it.
+                        if self.selection.as_ref().is_some_and(|s| !s.dragging) {
+                            return Ok(None);
+                        }
                         if let Some(sel) = self.selection.as_mut() {
                             sel.head = cell;
                             sel.dragging = false;
@@ -4657,4 +4696,11 @@ pub enum AppAction {
     /// Copy the current mouse selection to the clipboard. Handled in the main
     /// loop because it owns the terminal (and thus the rendered cell buffer).
     CopySelection,
+    SelectWord {
+        x: u16,
+        y: u16,
+    },
+    SelectLine {
+        y: u16,
+    },
 }
