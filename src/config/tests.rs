@@ -46,6 +46,8 @@ fn defaults_match_docs() {
     assert_eq!(config.retry_base_secs, 5);
     assert_eq!(config.retry_max_secs, 300);
     assert_eq!(config.cycle_pause_secs, 0);
+    assert_eq!(config.idle_backoff_secs, 60);
+    assert_eq!(config.idle_backoff_max_secs, 900);
     // No gate unless one is asked for: a gate runs commands unattended.
     assert!(config.gates.is_empty());
     assert_eq!(config.gate_max_attempts, 3);
@@ -237,6 +239,8 @@ fn full_file_round_trips() {
         retry_base_secs: 10,
         retry_max_secs: 600,
         cycle_pause_secs: 30,
+        idle_backoff_secs: 45,
+        idle_backoff_max_secs: 600,
         gates: vec!["cargo fmt --check".to_string(), "cargo test".to_string()],
         gate_max_attempts: 4,
         gate_timeout_secs: 600,
@@ -329,6 +333,8 @@ fn full_file_round_trips() {
     assert_eq!(parsed.retry_base_secs, original.retry_base_secs);
     assert_eq!(parsed.retry_max_secs, original.retry_max_secs);
     assert_eq!(parsed.cycle_pause_secs, original.cycle_pause_secs);
+    assert_eq!(parsed.idle_backoff_secs, original.idle_backoff_secs);
+    assert_eq!(parsed.idle_backoff_max_secs, original.idle_backoff_max_secs);
     assert_eq!(parsed.gates, original.gates);
     assert_eq!(parsed.gate_max_attempts, original.gate_max_attempts);
     assert_eq!(parsed.gate_timeout_secs, original.gate_timeout_secs);

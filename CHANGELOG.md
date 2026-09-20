@@ -6,6 +6,18 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **`--continuous` backs off when a cycle does not move git.** A blocked
+  mission used to spend a frontier turn every few seconds re-reading the same
+  queue, because the continuation prompt said "Never idle" and
+  `cycle_pause_secs` defaulted to 0. The loop now waits 60s, then 2, 4, 8
+  minutes, capped at 15, whenever HEAD and `status --porcelain` are unchanged;
+  a cycle that commits or dirties the tree resets the streak. Set
+  `idle_backoff_secs = 0` to get the old tight loop. The continuation prompt
+  now tells the agent to end the turn when the next useful action is waiting
+  on something outside the process, instead of polling inside the turn.
+
 ## [3.2.3] - 2026-09-20
 
 ### Fixed

@@ -986,6 +986,8 @@ const CONFIG_ALLOWLIST: &[&str] = &[
     "retry_base_secs",
     "retry_max_secs",
     "cycle_pause_secs",
+    "idle_backoff_secs",
+    "idle_backoff_max_secs",
     "compact_threshold_bytes",
     "providers",
     "active_provider",

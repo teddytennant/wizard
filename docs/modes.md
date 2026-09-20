@@ -80,7 +80,8 @@ During a long sovereign-mode run, write to `.wizard/loop-control` in the project
 All three are read between steps inside a turn *and* at the boundary between outer
 cycles, so a command written into the gap between one cycle finishing and the next
 starting is not lost. Every wait the loop performs — the `cycle_pause_secs` idle pause,
-the backoff after a failed cycle, and a `pause` hold itself — wakes twice a second to
+the git-idle backoff after a cycle that did not move the tree, the backoff after a
+failed cycle, and a `pause` hold itself — wakes twice a second to
 re-read this file, so `stop` takes effect within about a second however long the wait
 was configured to be. `--max-hours` is checked in the same places: a hold or a pause
 cannot outlive the run's deadline.
@@ -362,6 +363,8 @@ to `~/.wizard/evolution.jsonl`.
 | `retry_base_secs` | `5` | Base backoff when the model server is unavailable |
 | `retry_max_secs` | `300` | Cap on backoff between retries |
 | `cycle_pause_secs` | `0` | Pause between continuous cycles |
+| `idle_backoff_secs` | `60` | After a cycle that did not change git, wait this long before the next one (then double each idle cycle). `0` disables |
+| `idle_backoff_max_secs` | `900` | Cap on the idle backoff ladder |
 | `max_consecutive_failures` | `5` | Failed cycles in a row before a continuous run gives up; `0` disables the bound |
 | `compact_threshold_bytes` | `48000` | History size that triggers compaction |
 | `max_context_tokens` | `150000` | Cap on the window compaction measures against; `0` uses the whole window |

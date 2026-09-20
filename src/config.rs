@@ -982,8 +982,19 @@ pub struct Config {
     pub retry_base_secs: u64,
     /// Cap on backoff sleep in seconds.
     pub retry_max_secs: u64,
-    /// Pause between continuous cycles (0 = none).
+    /// Pause between continuous cycles (0 = none). Combined with idle backoff
+    /// via `max`: a cycle that moved git still waits this long; a cycle that
+    /// did not waits the idle ladder instead when that is longer.
     pub cycle_pause_secs: u64,
+    /// After a `--continuous` cycle that did not change git HEAD or
+    /// `status --porcelain`, wait this many seconds before the next cycle
+    /// (then double each consecutive idle cycle, capped at
+    /// `idle_backoff_max_secs`). `0` disables. Default 60. A cycle that
+    /// commits or dirties the tree resets the streak so real work is not
+    /// delayed.
+    pub idle_backoff_secs: u64,
+    /// Cap on the idle backoff ladder, in seconds. Default 900 (15 minutes).
+    pub idle_backoff_max_secs: u64,
     /// Quality gates: commands that must exit zero before a sovereign or
     /// continuous run is allowed to finish (see [`crate::gates`] and
     /// `docs/modes.md`). Merged with `--gate` flags and the project's own
@@ -1144,6 +1155,8 @@ impl Default for Config {
             retry_base_secs: 5,
             retry_max_secs: 300,
             cycle_pause_secs: 0,
+            idle_backoff_secs: 60,
+            idle_backoff_max_secs: 900,
             gates: Vec::new(),
             gate_max_attempts: 3,
             gate_timeout_secs: 1_800,

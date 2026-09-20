@@ -164,10 +164,13 @@ pub(crate) fn continuation_prompt(goal: &str, cycles: u64) -> String {
         "You are operating CONTINUOUSLY and autonomously toward this standing mission:\n\n\
          {goal}\n\nYou just reported the current sub-task complete (cycle {cycles}). \
          Re-examine the project state, then choose and carry out the single most valuable \
-         next action that advances the mission. If the mission itself is genuinely and \
-         fully complete, instead pick a high-value improvement to the project — better \
-         tests, docs, performance, robustness — or improve your OWN capabilities using the \
-         `evolve` tool. Never idle; always advance."
+         next action that advances the mission. When that action is done, or when the next \
+         useful action is waiting on something outside this process (a queue, CI, a GPU, \
+         a human), stop calling tools and end the turn. Do not poll, sleep-loop, or start \
+         another sub-task in this turn. The loop will start the next cycle after a wait. \
+         If the mission itself is genuinely and fully complete, instead pick a high-value \
+         improvement to the project (better tests, docs, performance, robustness) or \
+         improve your OWN capabilities using the `evolve` tool."
     )
 }
 
@@ -264,6 +267,67 @@ pub(crate) fn plan_recovery(
             floor_secs,
         ),
     ))
+}
+
+/// Git HEAD plus `status --porcelain`. `None` if this is not a git repo (or
+/// git is missing), so non-git projects do not get idle-backed-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeStamp {
+    head: String,
+    porcelain: String,
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn tree_stamp(root: &Path) -> Option<TreeStamp> {
+    // `status` failing is "not a git repo". `rev-parse HEAD` can fail in a
+    // repo with no commits; treat that as empty HEAD so a brand-new repo
+    // still participates in idle detection.
+    let porcelain = git_output(root, &["status", "--porcelain"])?;
+    let head = git_output(root, &["rev-parse", "HEAD"]).unwrap_or_default();
+    Some(TreeStamp { head, porcelain })
+}
+
+/// Seconds to wait after a continuous cycle, and the idle streak to carry.
+///
+/// A cycle that did not move git pays `idle_backoff_secs`, doubled each
+/// consecutive idle cycle, capped at `idle_backoff_max_secs`. Always at least
+/// `cycle_pause_secs`. `idle_backoff_secs == 0` disables the ladder.
+fn cycle_wait_secs(
+    before: Option<&TreeStamp>,
+    after: Option<&TreeStamp>,
+    idle_streak: u32,
+    cycle_pause_secs: u64,
+    idle_backoff_secs: u64,
+    idle_backoff_max_secs: u64,
+) -> (u64, u32) {
+    let mut wait = cycle_pause_secs;
+    let mut streak = idle_streak;
+    if idle_backoff_secs > 0 {
+        let unchanged = matches!((before, after), (Some(a), Some(b)) if a == b);
+        if unchanged {
+            streak = streak.saturating_add(1);
+            let idle =
+                failure_backoff(streak, idle_backoff_secs, idle_backoff_max_secs, 0).as_secs();
+            wait = wait.max(idle);
+        } else {
+            streak = 0;
+        }
+    }
+    (wait, streak)
 }
 
 /// Record a failed cycle in the mission and decide whether a perpetual run
@@ -877,6 +941,10 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // one that landed. Mirrored into the mission so it is visible from outside
     // the process; the local copy is what the bound is checked against.
     let mut failure_streak: u32 = 0;
+    // Consecutive cycles that landed without moving git. Drives idle backoff
+    // so a blocked mission does not spend a frontier turn every few seconds
+    // re-reading the same queue.
+    let mut idle_streak: u32 = 0;
     // Raised by SIGTERM/SIGHUP/SIGINT. The handler also cancels the turn in
     // flight, so this is read at the boundary to stop the *next* cycle from
     // starting — a signal that lands between cycles has no turn to cancel, and
@@ -985,6 +1053,7 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
         // First checkpoint turn of this cycle, for rollback_failed_cycles
         // (run_turn assigns the next id via begin_turn).
         let cycle_first_turn = agent.checkpoints().current_turn() + 1;
+        let cycle_stamp = tree_stamp(&project_root);
         // Images only ride on the first cycle's initial user prompt; later
         // continuation prompts are pure text.
         let turn_images = if iteration == 1 {
@@ -1125,7 +1194,8 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
                                                 critic::CriticAction::Accept => {
                                                     // Verified done: record the
                                                     // cycle and self-direct the
-                                                    // next action. Never idle.
+                                                    // next action. Idle backoff
+                                                    // waits if git did not move.
                                                     failure_streak = 0;
                                                     // This claim is settled, so
                                                     // the next cycle gets its
@@ -1357,18 +1427,25 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
             break;
         }
 
-        if config.cycle_pause_secs > 0 {
+        let after_stamp = tree_stamp(&project_root);
+        let (wait_secs, new_idle) = cycle_wait_secs(
+            cycle_stamp.as_ref(),
+            after_stamp.as_ref(),
+            idle_streak,
+            config.cycle_pause_secs,
+            config.idle_backoff_secs,
+            config.idle_backoff_max_secs,
+        );
+        idle_streak = new_idle;
+        if wait_secs > 0 {
             stamp(
                 mission_state.as_mut(),
                 &project_root,
-                format!(
-                    "cycle {iteration}: idle pause ({}s)",
-                    config.cycle_pause_secs
-                ),
+                format!("cycle {iteration}: idle pause ({wait_secs}s)"),
             );
             match wait_awake(
                 &project_root,
-                Duration::from_secs(config.cycle_pause_secs),
+                Duration::from_secs(wait_secs),
                 deadline,
                 WAIT_TICK,
                 &SHUTDOWN,
@@ -1802,7 +1879,75 @@ mod tests {
         let prompt = continuation_prompt("ship it", 42);
         assert!(prompt.contains("cycle 42"));
         assert!(prompt.contains("ship it"));
-        assert!(prompt.contains("Never idle"));
+        assert!(prompt.contains("stop calling tools"));
+        assert!(prompt.contains("Do not poll"));
+        assert!(
+            !prompt.contains("Never idle"),
+            "that line is what taught a blocked loop to spend a frontier turn every minute"
+        );
+    }
+
+    #[test]
+    fn cycle_wait_idles_when_git_did_not_move_and_resets_when_it_did() {
+        let a = TreeStamp {
+            head: "h".into(),
+            porcelain: String::new(),
+        };
+        let b = TreeStamp {
+            head: "h2".into(),
+            porcelain: String::new(),
+        };
+        assert_eq!(
+            cycle_wait_secs(Some(&a), Some(&a), 0, 0, 60, 900),
+            (60, 1),
+            "first idle cycle waits the base"
+        );
+        assert_eq!(
+            cycle_wait_secs(Some(&a), Some(&a), 1, 0, 60, 900),
+            (120, 2),
+            "second idle cycle doubles"
+        );
+        assert_eq!(
+            cycle_wait_secs(Some(&a), Some(&b), 4, 0, 60, 900),
+            (0, 0),
+            "a tree that moved resets the streak"
+        );
+        assert_eq!(
+            cycle_wait_secs(None, None, 0, 7, 60, 900),
+            (7, 0),
+            "no git: only cycle_pause_secs"
+        );
+        assert_eq!(
+            cycle_wait_secs(Some(&a), Some(&a), 0, 3, 0, 900),
+            (3, 0),
+            "idle_backoff_secs = 0 disables the ladder"
+        );
+        assert_eq!(
+            cycle_wait_secs(Some(&a), Some(&a), 0, 180, 60, 900),
+            (180, 1),
+            "cycle_pause_secs is a floor"
+        );
+    }
+
+    #[test]
+    fn tree_stamp_is_none_outside_a_repo_and_moves_when_dirty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            tree_stamp(dir.path()).is_none(),
+            "a random directory is not a git repo"
+        );
+        let status = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git init");
+        let first = tree_stamp(dir.path()).expect("git repo");
+        std::fs::write(dir.path().join("f"), "a").unwrap();
+        let dirty = tree_stamp(dir.path()).expect("still a git repo");
+        assert_ne!(first, dirty, "an untracked file must change the stamp");
     }
 
     #[test]
