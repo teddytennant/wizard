@@ -6,6 +6,14 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.2.5] - 2026-09-20
+
+### Added
+
+- **Turing, a local preference log.** `/turing` and the `turing` tool share
+  `~/.local/state/turing/log.jsonl` with the turing CLI. Compile is offline
+  keyword overlap plus recency. No persona store and no ICL of old prose.
+
 ## [3.2.4] - 2026-09-20
 
 ### Changed
