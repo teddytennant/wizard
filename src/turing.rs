@@ -317,6 +317,8 @@ impl Log {
             .with_context(|| format!("opening {}", self.path.display()))?;
         writeln!(file, "{line}")
             .with_context(|| format!("appending to {}", self.path.display()))?;
+        file.sync_data()
+            .with_context(|| format!("syncing {}", self.path.display()))?;
         Ok(())
     }
 
