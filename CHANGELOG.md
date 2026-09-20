@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.2.4] - 2026-09-20
+
 ### Changed
 
 - **`--continuous` backs off when a cycle does not move git.** A blocked
