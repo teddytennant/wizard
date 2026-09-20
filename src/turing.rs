@@ -30,10 +30,10 @@ fn override_slot() -> &'static Mutex<Option<PathBuf>> {
 /// JSONL preference log. Default: `$TURING_STATE_DIR/log.jsonl`, else
 /// `~/.local/state/turing/log.jsonl`.
 pub fn log_path() -> PathBuf {
-    if let Ok(guard) = override_slot().lock() {
-        if let Some(path) = guard.as_ref() {
-            return path.clone();
-        }
+    if let Ok(guard) = override_slot().lock()
+        && let Some(path) = guard.as_ref()
+    {
+        return path.clone();
     }
     if let Ok(dir) = std::env::var("TURING_STATE_DIR") {
         let dir = dir.trim();
@@ -288,11 +288,11 @@ pub struct Log {
 impl Log {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
         }
         Ok(Log { path })
     }
@@ -643,6 +643,13 @@ impl TestLogGuard {
             _lock: lock,
             _dir: dir,
         }
+    }
+}
+
+#[cfg(test)]
+impl Default for TestLogGuard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
