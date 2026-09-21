@@ -854,10 +854,10 @@ fn zellij_client_ttys() -> Vec<std::path::PathBuf> {
         let Ok(tty) = std::fs::read_link(path.join("fd/0")) else {
             continue;
         };
-        if let Some(p) = live_tty(&tty) {
-            if !out.contains(&p) {
-                out.push(p);
-            }
+        if let Some(p) = live_tty(&tty)
+            && !out.contains(&p)
+        {
+            out.push(p);
         }
     }
     out
