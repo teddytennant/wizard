@@ -31,6 +31,9 @@
 //!   within 120 s, and force-refreshes once after an API 401. Refresh is
 //!   locked across processes so a second Wizard cannot spend a grant the first
 //!   one just rotated and then delete the file.
+//! - [`subscription_usage_notice`] asks the Grok CLI proxy for the account's
+//!   weekly credit percent (`/usage`). An API key is a different credential and
+//!   does not unlock it.
 //!
 //! Tokens never go into `config.toml`; keys live in env vars or dedicated
 //! files only.
@@ -929,6 +932,262 @@ impl TokenSource for XaiTokenSource {
     }
 }
 
+/// Host of the Grok CLI proxy that reports subscription usage.
+///
+/// This is not `api.x.ai`. The weekly percent lives on the same proxy the
+/// upstream CLI uses, and it only answers an OAuth bearer plus
+/// `X-XAI-Token-Auth: xai-grok-cli`. An API key is a different credential and
+/// does not unlock it. The host is fixed so the bearer cannot be pointed at
+/// somewhere else.
+const USAGE_PROXY_HOST: &str = "cli-chat-proxy.grok.com";
+#[cfg(not(test))]
+const USAGE_PROXY_HEADER: &str = "xai-grok-cli";
+#[cfg(not(test))]
+const USAGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `/usage`: the xAI subscription, when this machine is signed in with OAuth.
+///
+/// The number is the account's weekly (or whatever period the proxy reports)
+/// credit percent, not the local token ledger `/cost` reads. Without an OAuth
+/// session there is nothing to ask, and the notice says so rather than
+/// inventing a percent from `usage.jsonl`.
+///
+/// Tests dispatch every slash command. A live call would spend the session of
+/// whoever is signed in on the machine running the suite, and fail offline.
+/// The formatter is tested with a captured body; this stub only keeps that
+/// dispatch from going silent.
+pub async fn subscription_usage_notice() -> String {
+    // `cfg!` rather than two function bodies: the notice is one function, and
+    // the live helpers below are `cfg(not(test))` so a test build does not
+    // warn that the unreachable call left them unused.
+    #[cfg(test)]
+    {
+        "xAI subscription usage is read from the OAuth session (not fetched in tests)".into()
+    }
+    #[cfg(not(test))]
+    {
+        subscription_usage_notice_live().await
+    }
+}
+
+#[cfg(not(test))]
+async fn subscription_usage_notice_live() -> String {
+    if !signed_in() {
+        return not_signed_in();
+    }
+    match try_subscription_usage().await {
+        Ok(text) => text,
+        Err(err) if err.to_string().contains("HTTP 403") => {
+            "xAI refused the usage request (HTTP 403). The session is signed in, but this plan may not report CLI usage".into()
+        }
+        Err(err) => format!("could not read xAI subscription usage: {err}"),
+    }
+}
+
+#[cfg(not(test))]
+fn not_signed_in() -> String {
+    "not signed in to xAI. /usage reads the subscription from the OAuth session; run /login xai"
+        .into()
+}
+
+#[cfg(not(test))]
+async fn try_subscription_usage() -> Result<String> {
+    let source = XaiTokenSource::new()?;
+    let token = source.bearer().await?.ok_or_else(not_signed_in_err)?;
+    let client = crate::llm::oauth_http_builder(USAGE_TIMEOUT)
+        .build()
+        .context("building the usage client")?;
+    let billing_url = cli_proxy_url("/v1/billing?format=credits")?;
+    let settings_url = cli_proxy_url("/v1/settings")?;
+    // Settings only contributes the plan name. A failure there still leaves
+    // the percent, which is the thing the command exists to show.
+    let (billing, settings) = tokio::join!(
+        get_cli_proxy(&client, &token, billing_url),
+        get_cli_proxy(&client, &token, settings_url),
+    );
+    let billing = billing?;
+    let tier = settings.ok().as_ref().and_then(settings_tier);
+    Ok(format_subscription_usage(&billing, tier.as_deref()))
+}
+
+#[cfg(not(test))]
+fn not_signed_in_err() -> anyhow::Error {
+    anyhow!(
+        "not signed in to xAI. /usage reads the subscription from the OAuth session; run /login xai"
+    )
+}
+
+fn cli_proxy_url(path: &str) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(&format!("https://{USAGE_PROXY_HOST}{path}"))
+        .with_context(|| format!("usage proxy path {path}"))?;
+    // A path of `@other.host/...` would move the host under URL parsing and
+    // send the bearer there. The check is the backstop; the paths we pass are
+    // constants.
+    let host = url.host_str().unwrap_or("");
+    ensure!(
+        url.scheme() == "https" && host == USAGE_PROXY_HOST,
+        "refusing to send the xAI token to {host}"
+    );
+    Ok(url)
+}
+
+#[cfg(not(test))]
+async fn get_cli_proxy(
+    client: &reqwest::Client,
+    token: &str,
+    url: reqwest::Url,
+) -> Result<serde_json::Value> {
+    let response = client
+        .get(url)
+        .bearer_auth(token)
+        .header("X-XAI-Token-Auth", USAGE_PROXY_HEADER)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .context("request to the xAI usage proxy failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        // The body is dropped on purpose. It can be large, and a token-echoing
+        // error page must not land in the chat.
+        bail!("HTTP {status}");
+    }
+    response
+        .json()
+        .await
+        .context("the usage response was not JSON")
+}
+
+/// Plan name only. `/v1/settings` also carries account identifiers; nothing
+/// else from that payload is allowed into the notice.
+#[cfg(not(test))]
+fn settings_tier(body: &serde_json::Value) -> Option<String> {
+    body.get("subscription_tier_display")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|tier| !tier.is_empty())
+        .map(str::to_string)
+}
+
+/// Render a billing payload. A missing or unusable percent is a miss, not a
+/// zero: the local ledger is a different number and must not fill the gap.
+pub(crate) fn format_subscription_usage(billing: &serde_json::Value, tier: Option<&str>) -> String {
+    let Some(config) = credits_config(billing) else {
+        return missing_percent(tier);
+    };
+    let Some(percent) = json_percent(config.get("creditUsagePercent")) else {
+        return missing_percent(tier);
+    };
+    let period = config.get("currentPeriod");
+    let period_word = period
+        .and_then(|value| value.get("type"))
+        .and_then(|value| value.as_str())
+        .and_then(period_word);
+    let reset = period
+        .and_then(|value| value.get("end"))
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            config
+                .get("billingPeriodEnd")
+                .and_then(|value| value.as_str())
+        })
+        .map(format_reset);
+    let mut bits = Vec::new();
+    if let Some(tier) = tier.map(str::trim).filter(|tier| !tier.is_empty()) {
+        bits.push(tier.to_string());
+    }
+    if let Some(reset) = reset {
+        bits.push(format!("resets {reset}"));
+    }
+    let tail = if bits.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", bits.join(", "))
+    };
+    let head = match period_word {
+        Some(word) => format!("xAI {word} usage: {}{tail}", fmt_percent(percent)),
+        None => format!("xAI usage: {}{tail}", fmt_percent(percent)),
+    };
+    let products = product_line(config.get("productUsage"));
+    if products.is_empty() {
+        head
+    } else {
+        format!("{head}\n{products}")
+    }
+}
+
+fn credits_config(body: &serde_json::Value) -> Option<&serde_json::Value> {
+    match body.get("config") {
+        Some(config) if config.is_object() => Some(config),
+        _ if body.get("creditUsagePercent").is_some() => Some(body),
+        _ => None,
+    }
+}
+
+fn missing_percent(tier: Option<&str>) -> String {
+    match tier.map(str::trim).filter(|tier| !tier.is_empty()) {
+        Some(tier) => {
+            format!("signed in to xAI ({tier}), but the account did not report a usage percent")
+        }
+        None => "signed in to xAI, but the account did not report a usage percent".into(),
+    }
+}
+
+fn period_word(kind: &str) -> Option<&'static str> {
+    match kind {
+        "USAGE_PERIOD_TYPE_WEEKLY" => Some("weekly"),
+        "USAGE_PERIOD_TYPE_MONTHLY" => Some("monthly"),
+        "USAGE_PERIOD_TYPE_DAILY" => Some("daily"),
+        _ => None,
+    }
+}
+
+fn json_percent(value: Option<&serde_json::Value>) -> Option<f64> {
+    let number = value?.as_f64()?;
+    (number.is_finite() && number >= 0.0).then_some(number)
+}
+
+fn fmt_percent(number: f64) -> String {
+    if number.fract().abs() < 0.05 {
+        format!("{}%", number.round() as i64)
+    } else {
+        format!("{number:.1}%")
+    }
+}
+
+fn format_reset(raw: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|when| {
+            when.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%d %H:%M UTC")
+                .to_string()
+        })
+        .unwrap_or_else(|_| raw.to_string())
+}
+
+fn product_line(value: Option<&serde_json::Value>) -> String {
+    let Some(items) = value.and_then(|value| value.as_array()) else {
+        return String::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = item.get("product").and_then(|value| value.as_str())?;
+            let percent = json_percent(item.get("usagePercent"))?;
+            Some(format!("{} {}", product_label(name), fmt_percent(percent)))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn product_label(raw: &str) -> String {
+    match raw {
+        "GrokBuild" => "build".to_string(),
+        "GrokChat" => "chat".to_string(),
+        "GrokVoice" => "voice".to_string(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1381,5 +1640,79 @@ mod tests {
             cache.tokens.as_ref().map(|t| t.access_token.as_str()),
             Some("new-at")
         );
+    }
+
+    fn captured_credits() -> serde_json::Value {
+        serde_json::json!({
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-09-17T21:06:39.232166+00:00",
+                    "end": "2026-09-24T21:06:39.232166+00:00"
+                },
+                "creditUsagePercent": 74.0,
+                "productUsage": [
+                    {"product": "GrokBuild", "usagePercent": 63.0},
+                    {"product": "GrokChat", "usagePercent": 10.0},
+                    {"product": "GrokVoice", "usagePercent": 1.0}
+                ],
+                "email": "person@example.com",
+                "userId": "user-123"
+            }
+        })
+    }
+
+    #[test]
+    fn weekly_usage_names_the_percent_the_reset_and_the_products() {
+        let text = format_subscription_usage(&captured_credits(), Some("SuperGrok Heavy"));
+        assert_eq!(
+            text,
+            "xAI weekly usage: 74% (SuperGrok Heavy, resets 2026-09-24 21:06 UTC)\n\
+             build 63%, chat 10%, voice 1%"
+        );
+        assert!(!text.contains("example.com"));
+        assert!(!text.contains("user-123"));
+    }
+
+    #[test]
+    fn a_missing_percent_is_not_filled_in() {
+        let body = serde_json::json!({"config": {"productUsage": [{"product": "GrokChat", "usagePercent": 10.0}]}});
+        let text = format_subscription_usage(&body, None);
+        assert_eq!(
+            text,
+            "signed in to xAI, but the account did not report a usage percent"
+        );
+        assert!(!text.contains('%'));
+    }
+
+    #[test]
+    fn an_unknown_period_is_not_called_weekly() {
+        let body = serde_json::json!({
+            "creditUsagePercent": 12.4,
+            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_SOMETHING_ELSE"}
+        });
+        let text = format_subscription_usage(&body, None);
+        assert_eq!(text, "xAI usage: 12.4%");
+        assert!(!text.contains("weekly"));
+    }
+
+    #[test]
+    fn a_nan_percent_is_a_miss() {
+        let body = serde_json::json!({"config": {"creditUsagePercent": -1.0}});
+        assert!(format_subscription_usage(&body, Some("Heavy")).contains("did not report"));
+    }
+
+    #[test]
+    fn usage_proxy_url_stays_on_the_grok_cli_host() {
+        let url = cli_proxy_url("/v1/billing?format=credits").expect("url");
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("cli-chat-proxy.grok.com"));
+        assert!(url.query().unwrap_or("").contains("format=credits"));
+    }
+
+    #[test]
+    fn usage_proxy_refuses_a_path_that_moves_the_host() {
+        let err = cli_proxy_url("@evil.example/v1").expect_err("host moved");
+        assert!(err.to_string().contains("refusing"), "{err}");
     }
 }

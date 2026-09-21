@@ -21,7 +21,7 @@ column rather than growing a duplicate of it (`Surface::Gui`, `src/commands/surf
 
 | | command | the window |
 |---|---|---|
-| **Against the agent** | `/model`, `/mode`, `/genie`, `/sovereign`, `/effort`, `/plan`, `/omakase`, `/compact`, `/btw`, `/fork`, `/goal`, `/status`, `/cost`, `/memory`, `/doctor`, `/bashes`, `/agents`, `/reload`, `/rewind`, `/fusion`, `/ultra`, `/server`, `/evolve`, `/publish`, `/help` | `agent` — queued on the chat's worker; the reply is a notice in the chat |
+| **Against the agent** | `/model`, `/mode`, `/genie`, `/sovereign`, `/effort`, `/plan`, `/omakase`, `/compact`, `/btw`, `/fork`, `/goal`, `/status`, `/cost`, `/usage`, `/memory`, `/doctor`, `/bashes`, `/agents`, `/reload`, `/rewind`, `/fusion`, `/ultra`, `/server`, `/evolve`, `/publish`, `/help` | `agent` — queued on the chat's worker; the reply is a notice in the chat |
 | **The window's own** | `/clear`, `/diff`, `/todos`, `/dashboard`, `/resume`, `/resume-claude`, `/settings` (`/setup` is the same menu), `/provider`, `/login` | `ui`: a pane, a sheet, a list |
 | **Terminal only** | `/vim`, `/ui`, `/quit`, `/exit` | `unavailable` — refused, with what the command is and why a window is not where it runs |
 

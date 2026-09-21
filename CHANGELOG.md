@@ -6,6 +6,14 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **`/usage` shows the xAI subscription when signed in with OAuth.** It asks
+  the Grok CLI proxy for the weekly percent, when it resets, and the split
+  across build, chat, and voice. An API key is not enough; without an OAuth
+  session it says so instead of guessing from the local token log. `/cost` is
+  still the session ledger.
+
 ## [3.2.5] - 2026-09-20
 
 ### Added

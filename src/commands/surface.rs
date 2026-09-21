@@ -575,6 +575,10 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
             let text = cost_report(&surface.snapshot());
             surface.notice(text);
         }
+        SlashCommand::Usage => {
+            let text = crate::llm::xai_oauth::subscription_usage_notice().await;
+            surface.notice(text);
+        }
         SlashCommand::Status => {
             let text = status_report(&surface.snapshot());
             surface.notice(text);

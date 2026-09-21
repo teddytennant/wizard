@@ -113,6 +113,8 @@ pub enum SlashCommand {
     Dashboard,
     /// Show session token usage (and cost when rates are configured).
     Cost,
+    /// `/usage`: xAI subscription usage when signed in with OAuth.
+    Usage,
     /// `/memory [read|forget <name>]` — inspect and manage the saved project
     /// memories the agent writes with the `memory` tool.
     Memory(MemoryAction),
@@ -508,6 +510,7 @@ impl SlashCommand {
             "todos" => Ok(Self::Todos),
             "dashboard" => Ok(Self::Dashboard),
             "cost" => Ok(Self::Cost),
+            "usage" => Ok(Self::Usage),
             "memory" => parse_memory(&args),
             "turing" => parse_turing(&args),
             "doctor" => Ok(Self::Doctor),
@@ -631,6 +634,7 @@ impl SlashCommand {
             | Todos
             | Dashboard
             | Cost
+            | Usage
             // Every `/memory` action — list, read, forget — is one the `memory`
             // tool already grants the agent, so a gate here would be theater.
             | Memory(_)
@@ -748,6 +752,7 @@ impl SlashCommand {
             Todos => "todos",
             Dashboard => "dashboard",
             Cost => "cost",
+            Usage => "usage",
             Memory(_) => "memory",
             Turing(_) => "turing",
             Doctor => "doctor",
@@ -1149,6 +1154,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "cost",
         args: "",
         description: "show session token usage and cost",
+        takes_args: false,
+        tui: Execution::Agent,
+        gui: Execution::Agent,
+        gateway: Execution::Agent,
+        agent_arg: "",
+    },
+    CommandSpec {
+        name: "usage",
+        args: "",
+        description: "xAI subscription usage when signed in with OAuth",
         takes_args: false,
         tui: Execution::Agent,
         gui: Execution::Agent,
@@ -1836,6 +1851,7 @@ mod tests {
             SlashCommand::Todos,
             SlashCommand::Dashboard,
             SlashCommand::Cost,
+            SlashCommand::Usage,
             SlashCommand::Memory(MemoryAction::List),
             SlashCommand::Turing(TuringAction::Status),
             SlashCommand::Doctor,
