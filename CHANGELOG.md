@@ -31,6 +31,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
   session it says so instead of guessing from the local token log. `/cost` is
   still the session ledger.
 
+### Changed
+
+- **Model lists come newest first.** OpenAI-compatible providers (xAI,
+  OpenAI, OpenRouter) now sort their `/models` answer by publish date, so
+  `/model` and ACP clients show the latest model at the top.
+
 ## [3.2.5] - 2026-09-20
 
 ### Added

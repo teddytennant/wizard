@@ -624,7 +624,7 @@ impl LlmProvider for OpenAiProvider {
             .json()
             .await
             .context("failed to parse /models response")?;
-        Ok(models.data.into_iter().map(|m| m.id).collect())
+        Ok(newest_first(models.data))
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream> {
@@ -720,6 +720,16 @@ struct ModelsResponse {
 #[derive(Debug, Deserialize)]
 struct ModelEntry {
     id: String,
+    /// Unix seconds the model was published, where the endpoint says.
+    #[serde(default)]
+    created: Option<i64>,
+}
+
+/// Newest first by `created`; entries without one keep the endpoint's order
+/// after those that have it.
+fn newest_first(mut models: Vec<ModelEntry>) -> Vec<String> {
+    models.sort_by_key(|m| std::cmp::Reverse(m.created.unwrap_or(i64::MIN)));
+    models.into_iter().map(|m| m.id).collect()
 }
 
 /// One streamed `data: {...}` chunk from Chat Completions (subset).
@@ -1362,6 +1372,31 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn listed_models_come_newest_first() {
+        let listed: ModelsResponse = serde_json::from_str(
+            r#"{"data": [
+                {"id": "grok-4.20-0309-reasoning", "created": 1773014400},
+                {"id": "grok-4.3", "created": 1776000000},
+                {"id": "grok-4.7", "created": 1789000000},
+                {"id": "custom"},
+                {"id": "grok-4.6", "created": 1786000000}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            newest_first(listed.data),
+            [
+                "grok-4.7",
+                "grok-4.6",
+                "grok-4.3",
+                "grok-4.20-0309-reasoning",
+                "custom"
+            ]
+        );
+    }
+
     use super::*;
     use crate::llm::test_support::{
         PARALLEL_TOOL_BATCH_SSE, Recorded, assert_batch_is_answerable, one_shot_http_server,
