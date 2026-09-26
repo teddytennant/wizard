@@ -277,3 +277,171 @@ fn acp_writes_nothing_to_stdout_that_is_not_json_rpc() {
         "the tool-protocol notice belongs on stderr, not stdout:\n{stderr}"
     );
 }
+
+/// Send one JSON-RPC request and wait for the reply with its id, skipping
+/// notifications and any other reply in between.
+fn request(
+    stdin: &mut impl Write,
+    lines: &mpsc::Receiver<String>,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let frame = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    writeln!(stdin, "{frame}").expect("write request");
+    stdin.flush().expect("flush request");
+    loop {
+        let line = lines
+            .recv_timeout(REPLY_TIMEOUT)
+            .unwrap_or_else(|err| panic!("no reply to {method} ({err})"));
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("id").and_then(serde_json::Value::as_u64) == Some(id) {
+            return value;
+        }
+    }
+}
+
+/// The option with `id` out of a `configOptions` array.
+fn option<'a>(options: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    options
+        .as_array()
+        .and_then(|options| options.iter().find(|option| option["id"] == id))
+        .unwrap_or_else(|| panic!("no {id} option in {options}"))
+}
+
+/// A client picks the model, effort, and mode per session through config
+/// options, and a session it only opened to read them leaves no file behind
+/// when the server is stopped the way Zeron stops it (SIGTERM).
+#[cfg(unix)]
+#[test]
+fn acp_sessions_offer_model_options_and_probes_leave_no_file() {
+    let home = TempDir::new();
+    let port = spawn_fake_ollama();
+    write_config(&home.0, port);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wizard"))
+        .arg("acp")
+        .env("HOME", &home.0)
+        .env_remove("WIZARD_HOME")
+        .env_remove("WIZARD_MODEL")
+        .env_remove("WIZARD_OLLAMA_HOST")
+        .env_remove("WIZARD_LLAMACPP_HOST")
+        .env_remove("WIZARD_GGUF_PATH")
+        .env_remove("WIZARD_SYSTEM_PROMPT")
+        .env_remove("WIZARD_HARNESS_DIR")
+        .current_dir(&home.0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("wizard acp starts");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let (lines_tx, lines) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            if lines_tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let mut server = Server(child);
+    let mut stdin = server.0.stdin.take().expect("piped stdin");
+    let cwd = home.0.display().to_string();
+
+    request(
+        &mut stdin,
+        &lines,
+        1,
+        "initialize",
+        serde_json::json!({"protocolVersion": 1, "clientCapabilities": {}}),
+    );
+    let session = request(
+        &mut stdin,
+        &lines,
+        2,
+        "session/new",
+        serde_json::json!({"cwd": cwd, "mcpServers": []}),
+    );
+    let result = &session["result"];
+    let session_id = result["sessionId"]
+        .as_str()
+        .expect("a session id")
+        .to_string();
+    let options = &result["configOptions"];
+    let model = option(options, "model");
+    assert_eq!(model["category"], "model");
+    assert_eq!(model["currentValue"], "fake/fake-model:test");
+    assert_eq!(model["options"][0]["value"], "fake/fake-model:test");
+    let effort = option(options, "thought_level");
+    assert_eq!(effort["category"], "thought_level");
+    assert_eq!(effort["currentValue"], "default");
+    assert_eq!(option(options, "wizard_mode")["currentValue"], "genie");
+
+    let sessions = home.0.join(".wizard").join("sessions");
+    let files = || {
+        std::fs::read_dir(&sessions)
+            .map(|dir| dir.flatten().count())
+            .unwrap_or(0)
+    };
+    assert_eq!(files(), 1, "session/new creates its file");
+
+    // Effort applies in place; the answer carries the new state.
+    let set = request(
+        &mut stdin,
+        &lines,
+        3,
+        "session/set_config_option",
+        serde_json::json!({"sessionId": session_id, "configId": "thought_level", "value": "high"}),
+    );
+    assert_eq!(
+        option(&set["result"]["configOptions"], "thought_level")["currentValue"],
+        "high"
+    );
+
+    // A model on a configured provider rebuilds the session's agent onto it,
+    // even one the provider never listed.
+    let set = request(
+        &mut stdin,
+        &lines,
+        4,
+        "session/set_config_option",
+        serde_json::json!({"sessionId": session_id, "configId": "model", "value": "fake/other-model:test"}),
+    );
+    let model = option(&set["result"]["configOptions"], "model");
+    assert_eq!(model["currentValue"], "fake/other-model:test");
+    assert_eq!(
+        option(&set["result"]["configOptions"], "thought_level")["currentValue"],
+        "high",
+        "a model switch keeps the effort"
+    );
+
+    // A provider that is not configured is refused.
+    let refused = request(
+        &mut stdin,
+        &lines,
+        5,
+        "session/set_config_option",
+        serde_json::json!({"sessionId": session_id, "configId": "model", "value": "nowhere/gpt-5"}),
+    );
+    assert!(refused.get("error").is_some(), "{refused}");
+
+    // Stopped the way process supervisors stop it: the session nothing was
+    // said in is removed on the way out.
+    // SAFETY: signalling our own child by pid.
+    unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if server.0.try_wait().expect("wait").is_some() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "wizard acp did not exit on SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(files(), 0, "an unprompted session leaves no file");
+}

@@ -8,6 +8,23 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Added
 
+- **ACP clients can reopen past sessions.** `wizard acp` implements
+  `session/list` (newest first, filtered to the client's working directory,
+  titled by each session's first prompt) and `session/load`, which rebuilds the
+  agent over the saved history and replays the transcript with
+  `_meta.isReplay` before answering. Zed's thread history now lists Wizard
+  conversations from the TUI and other clients, and reopening one keeps its
+  context.
+
+- **ACP clients can pick the model, effort, and mode per session.** `wizard
+  acp` advertises `model` (every configured provider's models, as
+  `<provider>/<model>`), `thought_level`, and `wizard_mode` config options, and
+  applies `session/set_config_option` to that session alone — your config is
+  never rewritten. The model list comes from each provider's `/models`,
+  cached in `~/.wizard/cache/acp-models.json`. A session that was never
+  prompted is removed when the server exits (stdin closed or SIGTERM), so a
+  client that opens one just to read the options leaves no file behind.
+
 - **`/usage` shows the xAI subscription when signed in with OAuth.** It asks
   the Grok CLI proxy for the weekly percent, when it resets, and the split
   across build, chat, and voice. An API key is not enough; without an OAuth

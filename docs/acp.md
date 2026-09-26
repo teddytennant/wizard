@@ -22,12 +22,18 @@ The command an editor needs is `wizard acp`. In **Zed** (`settings.json`):
 {
   "agent_servers": {
     "Wizard": {
+      "type": "custom",
       "command": "wizard",
       "args": ["acp"]
     }
   }
 }
 ```
+
+Then pick **Wizard** from the Agent Panel's new-thread menu. Past Wizard
+conversations for the open project show up in the panel's thread history —
+including ones started in the TUI or another client — and reopening one
+continues it with its full context.
 
 Neovim and Emacs ACP clients take the same command in their own config. Point
 the editor at a project directory; each conversation you open becomes a Wizard
@@ -56,13 +62,60 @@ the next stream or tool boundary. Wizard runs tools without a per-action
 approval prompt, so it does its own file and shell I/O and never has to ask the
 editor for permission.
 
+## Choosing the model, effort, and mode
+
+Every session advertises three config options in its `session/new` and
+`session/load` answers, and a client changes them with
+`session/set_config_option`:
+
+- **`model`** (category `model`): every provider in `~/.wizard/config.toml`
+  with the models it can run, as `<provider>/<model>` ids —
+  `xai-oauth/grok-4.6`, `chatgpt/gpt-5.6-sol`,
+  `openrouter/anthropic/claude-sonnet-5`. A provider's configured model is
+  always offered; the rest come from the provider's own model list, fetched in
+  the background and cached in `~/.wizard/cache/acp-models.json` (refreshed
+  after 12 hours, or when a provider is added or pointed somewhere else). Image,
+  video, speech, and embedding models are left out. With no providers
+  configured, the one choice is `local/<model>`.
+- **`thought_level`** (category `thought_level`): `default`, `low`, `medium`,
+  `high`, `xhigh` — the same levels as `/effort`, sent to models that take a
+  reasoning effort and ignored by the rest.
+- **`wizard_mode`**: `genie` or `sovereign`, as `/mode`.
+
+A choice applies to that session only and is never written to your config, so
+switching models in one editor thread does not change the TUI's model or any
+other session. Effort and mode apply in place; a model switch rebuilds the
+session's agent over its saved history, so the conversation continues on the
+new model. The answer carries the options' new state. Options can be set
+between turns, not while one is running. A session reopened with
+`session/load` starts from your config's defaults again, and the client sets
+its choices anew.
+
+A client that opens a session only to read these options (to fill a model
+picker) leaves nothing behind: sessions that were never prompted are removed
+when the server exits, whether stdin closes or it is stopped with SIGTERM.
+
 ## Protocol and scope
 
-`agent-client-protocol` 0.10.4. Implemented: `initialize`, `authenticate` (a
+`agent-client-protocol` 2.0. Implemented: `initialize`, `authenticate` (a
 no-op — Wizard authenticates to its own providers from `~/.wizard`, so the
-editor never signs it in), `session/new`, `session/prompt`, `session/cancel`.
-Everything else the crate declares — `session/load`, `session/set_mode`,
-`session/set_model`, session forking and listing — answers "method not found".
+editor never signs it in), `session/new`, `session/list`, `session/load`,
+`session/set_config_option`, `session/prompt`, `session/cancel`. Everything
+else the crate declares — `session/set_mode`, `session/set_model` (the model is
+a config option instead), session forking, resuming, and deleting — answers
+"method not found".
+
+`session/list` pages through `~/.wizard/sessions`, newest first, filtered to
+the client's working directory when it names one; each entry's title is the
+session's first prompt. Sessions nothing was said in are left out.
+
+A session's id is its file under `~/.wizard/sessions`, so `session/load` works
+across restarts of `wizard acp`: it rebuilds the agent over the saved history
+(the same replay `--resume` does), streams the transcript back as
+`session/update`s — user and assistant text, reasoning, and each tool call with
+its result, each marked `_meta.isReplay` — and then answers. `initialize`
+advertises this as `loadSession`.
+
 The protocol version is echoed back rather than asserted, so a V1 client
 negotiates V1. Because the crate's connection futures are `!Send`, the server
 runs on a single-threaded `LocalSet`; the agent's own turns still use the
