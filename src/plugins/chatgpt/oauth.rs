@@ -263,6 +263,7 @@ pub fn provider_config() -> crate::config::ProviderConfig {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+        model_pinned: None,
     }
 }
 

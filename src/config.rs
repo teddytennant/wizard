@@ -922,9 +922,51 @@ pub struct ProviderConfig {
     /// API here answers "can this model see" without being sent an image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    /// `Some(true)`: chosen in chat (or an explicit non-default pick) and kept
+    /// until the next explicit choice. `Some(false)`: this xAI provider follows
+    /// the newest flagship Grok. Absent: a pre-pin config. `grok-4.6` (the old
+    /// stamp) still follows the newest; any other model is treated as a hand
+    /// edit and left alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_pinned: Option<bool>,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            kind: ProviderKind::OLLAMA,
+            base_url: String::new(),
+            model: String::new(),
+            api_key_env: None,
+            gguf_path: None,
+            usd_per_mtok_in: None,
+            usd_per_mtok_out: None,
+            vision: None,
+            model_pinned: None,
+        }
+    }
 }
 
 impl ProviderConfig {
+    /// Follow the newest flagship Grok instead of the stored tag.
+    ///
+    /// An explicit pin wins. A missing pin follows only when the stored model
+    /// is empty or the old hardcoded stamp (`grok-4.6`): anything else was a
+    /// hand edit and must not be overwritten.
+    pub fn follows_newest_grok(&self) -> bool {
+        if self.kind != ProviderKind::XAI && self.kind != ProviderKind::XAI_OAUTH {
+            return false;
+        }
+        match self.model_pinned {
+            Some(true) => false,
+            Some(false) => true,
+            None => {
+                self.model.is_empty() || self.model == crate::llm::xai_oauth::LEGACY_STAMP
+            }
+        }
+    }
+
     /// Resolve the API key: the configured (or default) env var first, then
     /// the key stored under this provider's name in
     /// `~/.wizard/credentials.toml` (0600). Empty string when neither is set.
@@ -1589,7 +1631,51 @@ impl Config {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }
+    }
+
+    /// Index of the provider [`active`](Self::active) would return, if it is a
+    /// configured row rather than the synthesized local fallback.
+    fn active_index(&self) -> Option<usize> {
+        if self.providers.is_empty() {
+            return None;
+        }
+        let chosen = self
+            .active_provider
+            .as_ref()
+            .and_then(|name| self.providers.iter().position(|p| &p.name == name))
+            .or_else(|| Some(0));
+        chosen
+    }
+
+    /// Write `model` onto the active provider, pin it, and mirror the legacy
+    /// top-level field. The caller saves.
+    pub fn pin_active_model(&mut self, model: &str) {
+        if let Some(idx) = self.active_index() {
+            self.providers[idx].model = model.to_string();
+            self.providers[idx].model_pinned = Some(true);
+        }
+        self.model = model.to_string();
+    }
+
+    /// Point an unpinned xAI provider at a resolved flagship. Returns whether
+    /// the stored model or pin changed.
+    pub fn adopt_unpinned_flagship(&mut self, model: &str) -> bool {
+        let Some(idx) = self.active_index() else {
+            return false;
+        };
+        let provider = &mut self.providers[idx];
+        if !provider.follows_newest_grok() {
+            return false;
+        }
+        let changed = provider.model != model || provider.model_pinned != Some(false);
+        provider.model = model.to_string();
+        provider.model_pinned = Some(false);
+        if self.model != model {
+            self.model = model.to_string();
+        }
+        changed
     }
 
     /// `Some(name)` when [`active_provider`](Self::active_provider) names no
@@ -1705,20 +1791,6 @@ impl Config {
         ultra: &UltraConfig,
     ) -> Result<crate::agent::ultra::UltraEngine> {
         crate::agent::ultra::UltraEngine::build(ultra, &Self::subagents_dir()?)
-    }
-
-    /// Index of the effective active provider in [`providers`](Self::providers),
-    /// when any are configured.
-    fn active_index(&self) -> Option<usize> {
-        if self.providers.is_empty() {
-            return None;
-        }
-        Some(
-            self.active_provider
-                .as_ref()
-                .and_then(|name| self.providers.iter().position(|p| &p.name == name))
-                .unwrap_or(0),
-        )
     }
 
     /// Apply environment-variable overrides on top of file/default config.

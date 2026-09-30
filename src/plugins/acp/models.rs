@@ -520,6 +520,7 @@ mod tests {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }
     }
 

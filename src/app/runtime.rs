@@ -486,8 +486,17 @@ pub async fn run_tui(
             app.rebuilding = None;
             let was_compacting = app.compacting;
             app.compacting = false;
-            if let Some(model) = rebuild.model {
-                app.config.model = model.clone();
+            if let Some(model) = rebuild.model.clone() {
+                if rebuild.pin_model {
+                    // `/model` and the picker are a choice, so the provider
+                    // stops following the newest flagship until the next one.
+                    app.config.pin_active_model(&model);
+                    if let Err(err) = app.config.save() {
+                        app.notice(format!("could not save the model choice: {err:#}"));
+                    }
+                } else {
+                    app.config.model = model.clone();
+                }
                 app.status.model = model;
             }
             if let Some(mut agent) = rebuild.agent {
@@ -865,6 +874,7 @@ pub async fn run_tui(
                         Event::AgentRebuilt(Box::new(AgentRebuild {
                             agent: None,
                             model: None,
+                            pin_model: false,
                             notice: "compacting crashed: restarting the agent".to_string(),
                         })),
                         async move {
@@ -882,6 +892,7 @@ pub async fn run_tui(
                                 Ok(outcome) => AgentRebuild {
                                     agent: Some(agent),
                                     model: None,
+                                    pin_model: false,
                                     notice: outcome.describe(),
                                 },
                                 // The agent is dropped with the timed-out
@@ -891,6 +902,7 @@ pub async fn run_tui(
                                 Err(timed_out) => AgentRebuild {
                                     agent: None,
                                     model: None,
+                                    pin_model: false,
                                     notice: timed_out,
                                 },
                             };

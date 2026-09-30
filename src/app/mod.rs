@@ -87,6 +87,10 @@ pub struct AgentRebuild {
     pub agent: Option<Agent>,
     /// On a successful model switch, the tag to record in config/status.
     pub model: Option<String>,
+    /// Write `model` onto the active provider and pin it. Only a switch the
+    /// user asked for sets this. Compact and crash rebuilds leave it false, or
+    /// an unpinned provider would stop tracking the newest Grok.
+    pub pin_model: bool,
     /// Notice appended to the transcript.
     pub notice: String,
 }
@@ -96,6 +100,7 @@ impl std::fmt::Debug for AgentRebuild {
         f.debug_struct("AgentRebuild")
             .field("agent", &self.agent.is_some())
             .field("model", &self.model)
+            .field("pin_model", &self.pin_model)
             .field("notice", &self.notice)
             .finish()
     }

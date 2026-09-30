@@ -128,6 +128,7 @@ impl Answers {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
 
         // Mirror an Ollama choice into the legacy fields so config files remain
@@ -245,8 +246,12 @@ const ANTHROPIC_MODELS: &[&str] = &[
 ];
 
 /// xAI (Grok) model options offered in the picker (first is the default).
+///
+/// The first entry is the offline floor, `llm::xai_oauth::DEFAULT_MODEL`. An
+/// unpinned provider replaces it with the newest flagship the next time a
+/// launch can reach the model list, so this list is a fallback, not a pin.
 const XAI_MODELS: &[&str] = &[
-    "grok-4.6",
+    crate::llm::xai_oauth::DEFAULT_MODEL,
     "grok-4.5",
     "grok-4.3",
     "grok-4.20-0309-reasoning",
@@ -741,6 +746,7 @@ pub(crate) fn keyed_provider(name: &str) -> Option<ProviderConfig> {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         })
 }
 

@@ -866,7 +866,7 @@ mod tests {
         let config = dir.path().join(".wizard/config.toml");
         let edited = std::fs::read_to_string(&config)
             .unwrap()
-            .replace("grok-4.6", "grok-4.7");
+            .replace("grok-4.7", "grok-4.20");
         std::fs::write(&config, edited).unwrap();
         homes.set_active_provider("openai").unwrap();
         assert_eq!(
@@ -875,7 +875,7 @@ mod tests {
         );
         let listed = homes.list_providers();
         assert_eq!(listed.active.as_deref(), Some(XAI_PROVIDER));
-        assert!(listed.providers.iter().any(|p| p.model == "grok-4.7"));
+        assert!(listed.providers.iter().any(|p| p.model == "grok-4.20"));
     }
 
     #[test]

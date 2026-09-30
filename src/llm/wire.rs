@@ -663,15 +663,28 @@ impl LlmProvider for OpenAiProvider {
 /// model families; llama.cpp overrides this with a live `/props` probe).
 /// Unknown tags report `None` so compaction falls back to the byte
 /// threshold.
+/// Minor version of a `grok-4.<n>` id, ignoring any suffix after the digits.
+fn grok4_minor(model: &str) -> Option<u32> {
+    let rest = model.strip_prefix("grok-4.")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
+}
+
 pub(crate) fn context_window(model: &str) -> Option<u32> {
     let model = model.to_ascii_lowercase();
-    // xAI Grok (served through this provider with vendor "xai").
-    if model.starts_with("grok-4.6") || model.starts_with("grok-4.5") {
-        return Some(500_000);
-    }
-    // grok-4.3 and the grok-4.20 snapshots are 1M-context.
+    // grok-4.3 and the grok-4.20 snapshots are 1M-context. Checked before the
+    // minor parse so `grok-4.20` (prefix `grok-4.2`) stays on this row.
     if model.starts_with("grok-4.3") || model.starts_with("grok-4.2") {
         return Some(1_000_000);
+    }
+    // grok-4.5, grok-4.6, grok-4.7, and later flagships are 500k. A suffix
+    // (`grok-4.6-0901`) still parses as that minor.
+    if grok4_minor(&model).is_some_and(|minor| minor >= 5) {
+        return Some(500_000);
     }
     if model.starts_with("grok-4") || model.starts_with("grok-build") {
         return Some(256_000);
@@ -2735,7 +2748,10 @@ mod tests {
         assert_eq!(context_window("grok-4.3"), Some(1_000_000));
         assert_eq!(context_window("grok-4.20-0309-reasoning"), Some(1_000_000));
         assert_eq!(context_window("grok-4.6"), Some(500_000));
+        assert_eq!(context_window("grok-4.6-0901"), Some(500_000));
         assert_eq!(context_window("grok-4.5"), Some(500_000));
+        assert_eq!(context_window("grok-4.7"), Some(500_000));
+        assert_eq!(context_window("grok-4.8"), Some(500_000));
         assert_eq!(context_window("grok-build-0.1"), Some(256_000));
         assert_eq!(context_window("gemini-3.5-flash"), Some(1_048_576));
         assert_eq!(context_window("deepseek-v4-pro"), Some(1_000_000));

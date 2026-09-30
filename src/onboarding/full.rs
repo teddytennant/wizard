@@ -144,13 +144,13 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
     let all = vec![
         ProviderChoice {
             label: "xAI account sign-in",
-            detail: "grok-4.6 via OAuth, no API key".to_string(),
+            detail: format!("{} via OAuth, no API key", crate::llm::xai_oauth::DEFAULT_MODEL),
             kinds: vec![ProviderKind::XAI_OAUTH],
             collect: collect_xai_oauth,
         },
         ProviderChoice {
             label: "xAI (Grok), API key",
-            detail: "grok-4.6 via XAI_API_KEY".to_string(),
+            detail: format!("{} via XAI_API_KEY", crate::llm::xai_oauth::DEFAULT_MODEL),
             kinds: vec![ProviderKind::XAI],
             collect: collect_xai,
         },

@@ -216,7 +216,7 @@ wizard
 
 With no config present (the default and minimal installs), the first launch asks one question, "How do you want to run Wizard?", with four answers:
 
-- **Sign in with xAI**: a browser sign-in, no API key; grok-4.6.
+- **Sign in with xAI**: a browser sign-in, no API key. An unpinned xAI provider follows the newest flagship Grok (grok-4.7 as of writing); `/model` pins whatever you pick and stops the tracking.
 - **Sign in with ChatGPT**: a browser sign-in on your ChatGPT plan; gpt-6-astra, or gpt-5.6-sol on an account the Astra rollout has not reached.
 - **Paste an API key**: pick the provider from one list (Anthropic, OpenAI, xAI, OpenRouter, Cloudflare Workers AI, Gemini, DeepSeek, Groq, Mistral, and the rest) and paste the key. If `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or another provider's variable is already exported, that provider is preselected and Enter keeps the variable; a pasted key replaces it, even for the backends that would otherwise read the variable by default. The key is checked with one request while the screen is still up (`checking with api.anthropic.com…`); a rejected one comes back to the list with the reason and nothing is written, and a provider that does not answer in 3 s is saved unchecked with a line on the card saying so. Pasting nothing with the variable unset saves the provider and the card says which variable to export. The last row, **Another OpenAI-compatible endpoint**, asks for the base URL (`http://127.0.0.1:8080/v1` by default), the model id and an optional key, and runs the same check against that URL: vLLM, LM Studio, llama-server and any other `/v1` server.
 - **Run a model locally**: the row names the model and the download size for this machine and asks before downloading; Wizard then installs and starts `llama-server` itself (or reuses an existing Ollama install). Ctrl-C during the download stops it and keeps nothing.
@@ -351,7 +351,7 @@ Any OpenAI-compatible endpoint, OpenRouter, Cloudflare Workers AI, Anthropic, or
 The same thing is scriptable with explicit arguments:
 
 ```
-/provider add xai xai https://api.x.ai/v1 grok-4.6 XAI_API_KEY
+/provider add xai xai https://api.x.ai/v1 grok-4.7 XAI_API_KEY
 /provider add openai openai https://api.openai.com/v1 gpt-5.6-sol OPENAI_API_KEY
 /provider add gemini openai https://generativelanguage.googleapis.com/v1beta/openai gemini-3.5-flash GEMINI_API_KEY
 /provider use xai

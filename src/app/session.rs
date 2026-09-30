@@ -152,6 +152,7 @@ pub(super) fn spawn_session_rebuild(
         Event::AgentRebuilt(Box::new(AgentRebuild {
             agent: None,
             model: None,
+            pin_model: false,
             notice: "the agent rebuild crashed".to_string(),
         })),
         async move {
@@ -172,16 +173,19 @@ pub(super) fn spawn_session_rebuild(
                 Ok(Ok(agent)) => AgentRebuild {
                     agent: Some(agent),
                     model: None,
+                    pin_model: false,
                     notice: success_notice,
                 },
                 Ok(Err(err)) => AgentRebuild {
                     agent: None,
                     model: None,
+                    pin_model: false,
                     notice: format!("could not restart the agent: {err:#}"),
                 },
                 Err(timed_out) => AgentRebuild {
                     agent: None,
                     model: None,
+                    pin_model: false,
                     notice: timed_out,
                 },
             };
@@ -259,7 +263,7 @@ const BYOP_ENV_FALLBACKS: &[(&str, ProviderKind, &str, &str, &str)] = &[
         "XAI_API_KEY",
         ProviderKind::XAI,
         "https://api.x.ai/v1",
-        "grok-4.6",
+        crate::llm::xai_oauth::DEFAULT_MODEL,
         "xai",
     ),
     (
@@ -339,6 +343,7 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
         match try_provider(&provider).await {
             Ok(client) => {
@@ -410,6 +415,7 @@ pub(super) async fn switch_model_task(
             return AgentRebuild {
                 agent,
                 model: None,
+                pin_model: false,
                 notice: format!("model '{tag}' is not installed (try `ollama pull {tag}`)"),
             };
         }
@@ -421,6 +427,7 @@ pub(super) async fn switch_model_task(
             AgentRebuild {
                 agent: Some(agent),
                 model: Some(tag.clone()),
+                pin_model: true,
                 notice: format!("switched to model {tag} (context preserved)"),
             }
         }
@@ -440,11 +447,13 @@ pub(super) async fn switch_model_task(
                 Ok(agent) => AgentRebuild {
                     agent: Some(agent),
                     model: Some(tag.clone()),
+                    pin_model: true,
                     notice: format!("switched to model {tag}"),
                 },
                 Err(err) => AgentRebuild {
                     agent: None,
                     model: None,
+                    pin_model: false,
                     notice: format!("failed to switch model: {err:#}"),
                 },
             }
@@ -467,6 +476,7 @@ mod tests {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }
     }
 

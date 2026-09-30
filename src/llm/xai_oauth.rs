@@ -69,8 +69,14 @@ const EXPIRY_LEEWAY_SECS: i64 = 120;
 
 /// Default Chat Completions base URL for both xAI provider kinds.
 pub const DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
-/// Default model for both xAI provider kinds.
-pub const DEFAULT_MODEL: &str = "grok-4.6";
+/// Offline floor when the model list cannot be fetched. Not a pin: an unpinned
+/// xAI provider follows [`newest_flagship_grok`] instead, so a later bare Grok
+/// (grok-4.8, grok-5) becomes the default without a release.
+pub const DEFAULT_MODEL: &str = "grok-4.7";
+
+/// The stamp written by builds that hardcoded the default. An xAI provider
+/// still carrying this, with no pin, was not a user choice.
+pub const LEGACY_STAMP: &str = "grok-4.6";
 /// Default env var holding a plain xAI API key (`kind = "xai"`).
 pub const DEFAULT_KEY_ENV: &str = "XAI_API_KEY";
 
@@ -399,7 +405,140 @@ pub fn provider_config() -> crate::config::ProviderConfig {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+        // A sign-in stamp is not a choice. The next flagship still wins.
+        model_pinned: Some(false),
     }
+}
+
+/// A flagship Grok chat model: `grok-4`, `grok-4.7`, `grok-5`. No suffix.
+/// Dated snapshots, fast, build, and imagine variants are not the default.
+/// Rank by catalog order (`created`), never by parsing the version:
+/// `grok-4.20` is a larger number than `grok-4.8` and an older product.
+pub fn is_flagship_grok(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("grok-") else {
+        return false;
+    };
+    let mut parts = rest.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    if major.is_empty() || !major.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(minor)
+            if !minor.is_empty()
+                && minor.bytes().all(|b| b.is_ascii_digit())
+                && parts.next().is_none() =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+/// First flagship in a list already ordered newest-first, as `list_models` returns.
+pub fn newest_flagship_grok<'a, S: AsRef<str>>(newest_first: &'a [S]) -> Option<&'a str> {
+    newest_first
+        .iter()
+        .map(AsRef::as_ref)
+        .find(|id| is_flagship_grok(id))
+}
+
+const FLAGSHIP_CACHE: &str = "grok-flagship.json";
+const FLAGSHIP_TTL_SECS: u64 = 12 * 60 * 60;
+
+#[derive(Serialize, Deserialize)]
+struct FlagshipCache {
+    model: String,
+    checked_unix: u64,
+}
+
+fn flagship_cache_path() -> Option<std::path::PathBuf> {
+    crate::config::Config::wizard_dir()
+        .ok()
+        .map(|dir| dir.join(FLAGSHIP_CACHE))
+}
+
+fn read_flagship_cache() -> Option<FlagshipCache> {
+    let path = flagship_cache_path()?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn fresh_cached_flagship() -> Option<String> {
+    let cache = read_flagship_cache()?;
+    if !is_flagship_grok(&cache.model) {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if now.saturating_sub(cache.checked_unix) > FLAGSHIP_TTL_SECS {
+        return None;
+    }
+    Some(cache.model)
+}
+
+fn save_flagship_cache(model: &str) {
+    let Some(path) = flagship_cache_path() else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cache = FlagshipCache {
+        model: model.to_string(),
+        checked_unix: now,
+    };
+    if let Ok(raw) = serde_json::to_string(&cache) {
+        let _ = std::fs::write(path, raw);
+    }
+}
+
+async fn fetch_flagship(provider: &crate::config::ProviderConfig) -> Option<String> {
+    let client = provider.build().ok()?;
+    let models = tokio::time::timeout(std::time::Duration::from_secs(2), client.list_models())
+        .await
+        .ok()?
+        .ok()?;
+    newest_flagship_grok(&models).map(str::to_string)
+}
+
+/// If the active xAI provider is unpinned, point it at the newest flagship
+/// Grok and save. A `WIZARD_MODEL` override is left alone. Returns whether
+/// the stored model changed.
+pub async fn refresh_unpinned_flagship(config: &mut crate::config::Config) -> bool {
+    if std::env::var("WIZARD_MODEL")
+        .ok()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return false;
+    }
+    let active = config.active();
+    if !active.follows_newest_grok() {
+        return false;
+    }
+    let resolved = if let Some(model) = fresh_cached_flagship() {
+        model
+    } else if let Some(model) = fetch_flagship(&active).await {
+        save_flagship_cache(&model);
+        model
+    } else if active.model.is_empty() || active.model == LEGACY_STAMP {
+        DEFAULT_MODEL.to_string()
+    } else {
+        return false;
+    };
+    if !config.adopt_unpinned_flagship(&resolved) {
+        return false;
+    }
+    if let Err(err) = config.save() {
+        tracing::warn!("could not save the resolved Grok default: {err:#}");
+    }
+    true
 }
 
 /// A browser sign-in in flight, holding the listener the redirect will land on.
@@ -1119,6 +1258,38 @@ mod tests {
         let header = enc.encode(br#"{"alg":"none","typ":"JWT"}"#);
         let body = enc.encode(payload.as_bytes());
         format!("{header}.{body}.sig")
+    }
+
+
+    #[test]
+    fn the_newest_flagship_is_the_first_plain_grok_in_catalog_order() {
+        // `list_models` returns newest-created first. `grok-4.20` sorts above
+        // `grok-4.8` as a number and is an older product, so the version is
+        // never parsed.
+        let catalog = [
+            "grok-4.20-0309-reasoning",
+            "grok-imagine-image",
+            "grok-4.7",
+            "grok-4.6",
+            "grok-4",
+        ];
+        assert_eq!(newest_flagship_grok(&catalog), Some("grok-4.7"));
+        assert!(is_flagship_grok("grok-4"));
+        assert!(is_flagship_grok("grok-5"));
+        assert!(is_flagship_grok("grok-4.8"));
+        for not in [
+            "grok-4.20-0309-reasoning",
+            "grok-4-fast",
+            "grok-4.7-beta",
+            "grok-build-0.1",
+            "grok-imagine-image",
+            "qwen3.6:27b",
+            "grok-",
+            "grok-4.",
+        ] {
+            assert!(!is_flagship_grok(not), "{not}");
+        }
+        assert_eq!(newest_flagship_grok(&["grok-4-fast"]), None);
     }
 
     #[test]

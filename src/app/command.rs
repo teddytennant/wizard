@@ -375,6 +375,7 @@ impl CommandContext<'_> {
             Event::AgentRebuilt(Box::new(crate::app::AgentRebuild {
                 agent: None,
                 model: None,
+                pin_model: false,
                 notice: "the model switch crashed — restarting the agent".to_string(),
             })),
             async move {
@@ -393,6 +394,7 @@ impl CommandContext<'_> {
                     Err(timed_out) => crate::app::AgentRebuild {
                         agent: None,
                         model: None,
+                        pin_model: false,
                         notice: timed_out,
                     },
                 };
@@ -1405,6 +1407,7 @@ impl CommandContext<'_> {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
         let reminder = api_key_env
             .map(|env| format!(" — remember to `export {env}=<key>` for this provider"))
@@ -1460,6 +1463,7 @@ impl CommandContext<'_> {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
         self.add_provider_config(provider, format!("added and switched to provider '{name}'"))
             .await;
@@ -1596,6 +1600,7 @@ impl CommandContext<'_> {
                         usd_per_mtok_in: None,
                         usd_per_mtok_out: None,
                         vision: None,
+                        model_pinned: None,
                     };
                     let _ = notify
                         .send(Event::ProviderActivated(Box::new(provider)))

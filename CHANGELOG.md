@@ -6,6 +6,17 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **An unpinned xAI provider follows the newest flagship Grok.** The default is
+  no longer a hardcoded id that lags the catalog. On launch Wizard asks the
+  model list and uses the newest plain `grok-<version>` (no dated, fast, build
+  or imagine suffix), and writes that id back so an offline start still has
+  it. `/model` and the picker pin the choice, so a model you picked stays put.
+  A config that still says `grok-4.6` with no pin was the old stamp and follows
+  too; any other hand-edited model is left alone. grok-4.7 is the offline floor
+  until the list answers.
+
 ## [3.7.1] - 2026-09-28
 
 ### Fixed

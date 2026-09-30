@@ -1761,6 +1761,7 @@ async fn cached_prompt_tokens_reach_the_usage_record_and_the_price() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+            model_pinned: None,
     }];
     config.active_provider = Some("anthropic".to_string());
 
@@ -1875,6 +1876,7 @@ async fn reasoning_tokens_reach_the_usage_record() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+            model_pinned: None,
     }];
     config.active_provider = Some("xai".to_string());
 
@@ -4187,6 +4189,7 @@ fn chat_config(kind: crate::llm::registry::ProviderKind) -> Config {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         ..Config::default()
     }

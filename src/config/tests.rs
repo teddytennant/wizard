@@ -261,6 +261,7 @@ fn full_file_round_trips() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("openai".to_string()),
         gateway: GatewayConfig {
@@ -560,6 +561,7 @@ fn the_env_var_wins_over_a_stored_provider_key() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+            model_pinned: None,
     };
     // Stand-ins for the process environment and for credentials.toml:
     // this test neither depends on nor disturbs either.
@@ -717,6 +719,7 @@ fn llamacpp_provider_round_trips_through_toml() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("local".to_string()),
         ..Config::default()
@@ -735,6 +738,44 @@ fn llamacpp_provider_round_trips_through_toml() {
 }
 
 #[test]
+fn an_unpinned_xai_provider_follows_the_flagship_and_a_choice_does_not() {
+    let mut config = Config {
+        providers: vec![ProviderConfig {
+            name: "xai-oauth".to_string(),
+            kind: ProviderKind::XAI_OAUTH,
+            base_url: "https://api.x.ai/v1".to_string(),
+            model: "grok-4.6".to_string(),
+            ..ProviderConfig::default()
+        }],
+        active_provider: Some("xai-oauth".to_string()),
+        ..Config::default()
+    };
+    // The old stamp, with no pin, is the case this change exists for.
+    assert!(config.active().follows_newest_grok());
+    assert!(config.adopt_unpinned_flagship("grok-4.7"));
+    assert_eq!(config.active().model, "grok-4.7");
+    assert_eq!(config.model, "grok-4.7");
+    // Already on the resolved id: nothing to write.
+    assert!(!config.adopt_unpinned_flagship("grok-4.7"));
+
+    config.pin_active_model("grok-4.5");
+    assert!(!config.active().follows_newest_grok());
+    assert!(!config.adopt_unpinned_flagship("grok-4.7"));
+    assert_eq!(config.active().model, "grok-4.5");
+
+    // A hand-edited model, never pinned, is also a choice.
+    config.providers[0].model = "grok-4.20-0309-reasoning".to_string();
+    config.providers[0].model_pinned = None;
+    assert!(!config.active().follows_newest_grok());
+
+    // Ollama never follows, even with the stamp in the model field.
+    config.providers[0].kind = ProviderKind::OLLAMA;
+    config.providers[0].model = "grok-4.6".to_string();
+    config.providers[0].model_pinned = None;
+    assert!(!config.active().follows_newest_grok());
+}
+
+#[test]
 fn xai_kinds_round_trip_through_toml() {
     let original = Config {
         providers: vec![
@@ -748,6 +789,7 @@ fn xai_kinds_round_trip_through_toml() {
                 usd_per_mtok_in: None,
                 usd_per_mtok_out: None,
                 vision: None,
+                model_pinned: None,
             },
             ProviderConfig {
                 name: "xai-account".to_string(),
@@ -759,6 +801,7 @@ fn xai_kinds_round_trip_through_toml() {
                 usd_per_mtok_in: None,
                 usd_per_mtok_out: None,
                 vision: None,
+                model_pinned: None,
             },
         ],
         active_provider: Some("xai-account".to_string()),
@@ -792,6 +835,7 @@ fn openrouter_kind_round_trips_through_toml() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("openrouter".to_string()),
         ..Config::default()
@@ -825,6 +869,7 @@ fn cloudflare_kind_round_trips_through_toml() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("cloudflare".to_string()),
         ..Config::default()
@@ -1092,6 +1137,7 @@ async fn preparing_an_unknown_kind_is_not_an_error() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+            model_pinned: None,
     };
     assert!(provider.prepare("m").await.is_ok());
     assert!(provider.build().is_err());
@@ -1173,6 +1219,7 @@ fn active_selects_by_name_and_falls_back_to_first() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         },
         ProviderConfig {
             name: "claude".to_string(),
@@ -1184,6 +1231,7 @@ fn active_selects_by_name_and_falls_back_to_first() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         },
     ];
 
@@ -1225,6 +1273,7 @@ fn active_provider_mismatch_flags_unknown_names_only() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
+            model_pinned: None,
     };
 
     // Resolving name / unset name: no mismatch.
@@ -1271,6 +1320,7 @@ fn env_model_overrides_active_provider_when_configured() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("openai".to_string()),
         ..Config::default()
@@ -1358,6 +1408,7 @@ fn env_gguf_path_feeds_synthesized_and_active_llamacpp_provider() {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         }],
         active_provider: Some("local".to_string()),
         ..Config::default()

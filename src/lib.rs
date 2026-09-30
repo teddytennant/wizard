@@ -231,7 +231,10 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
                  drives Wizard over stdio and gets the same agent the TUI does.",
             ));
         };
-        let config = config::Config::load()?;
+        let mut config = config::Config::load()?;
+        // Same resolution as the TUI path below: an editor session should not
+        // keep running a stamped Grok the account has moved past.
+        llm::xai_oauth::refresh_unpinned_flagship(&mut config).await;
         return server.run(config).await;
     }
 
@@ -482,6 +485,10 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         }
         config::Config::load()?
     };
+    // An unpinned xAI provider follows the newest flagship. Resolve it before
+    // the session is built so the first turn already uses it, and persist the
+    // resolved id so a later offline start does not fall back to a stale stamp.
+    llm::xai_oauth::refresh_unpinned_flagship(&mut config).await;
     config.apply_cli(&cli);
     crate::token_profile::init(config.token_profile.as_deref());
 

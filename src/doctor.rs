@@ -2433,6 +2433,7 @@ mod tests {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
         let check = check_provider(&provider).await;
         assert_eq!(check.status, Status::Skip);
@@ -2452,6 +2453,7 @@ mod tests {
             usd_per_mtok_in: None,
             usd_per_mtok_out: None,
             vision: None,
+            model_pinned: None,
         };
 
         let config = Config {

@@ -94,7 +94,10 @@ struct ProviderEntry {
 const XAI_PROVIDER: &str = "xai-oauth";
 const XAI_KIND: &str = "xaioauth";
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
-const XAI_MODEL: &str = "grok-4.6";
+/// Offline floor, not a pin. Matches `llm::xai_oauth::DEFAULT_MODEL`. The GUI
+/// crate cannot import the binary crate, so the string is duplicated; a test
+/// in that crate is what keeps the two from drifting.
+const XAI_MODEL: &str = "grok-4.7";
 /// Wizard refreshes with this client id; Grok CLI's login shares it.
 const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_TOKEN_FILE: &str = "xai_oauth.json";
@@ -1147,7 +1150,7 @@ mod tests {
             .filter(|t| t["name"].as_str() == Some("xai-oauth"))
             .collect();
         assert_eq!(xai.len(), 1);
-        assert_eq!(xai[0]["model"].as_str(), Some("grok-4.6"));
+        assert_eq!(xai[0]["model"].as_str(), Some("grok-4.7"));
     }
 
     #[test]
