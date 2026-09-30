@@ -1639,12 +1639,10 @@ impl Config {
         if self.providers.is_empty() {
             return None;
         }
-        let chosen = self
-            .active_provider
+        self.active_provider
             .as_ref()
             .and_then(|name| self.providers.iter().position(|p| &p.name == name))
-            .or_else(|| Some(0));
-        chosen
+            .or(Some(0))
     }
 
     /// Write `model` onto the active provider, pin it, and mirror the legacy

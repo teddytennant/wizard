@@ -439,7 +439,7 @@ pub fn is_flagship_grok(id: &str) -> bool {
 }
 
 /// First flagship in a list already ordered newest-first, as `list_models` returns.
-pub fn newest_flagship_grok<'a, S: AsRef<str>>(newest_first: &'a [S]) -> Option<&'a str> {
+pub fn newest_flagship_grok<S: AsRef<str>>(newest_first: &[S]) -> Option<&str> {
     newest_first
         .iter()
         .map(AsRef::as_ref)
