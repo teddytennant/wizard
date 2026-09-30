@@ -144,7 +144,10 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
     let all = vec![
         ProviderChoice {
             label: "xAI account sign-in",
-            detail: format!("{} via OAuth, no API key", crate::llm::xai_oauth::DEFAULT_MODEL),
+            detail: format!(
+                "{} via OAuth, no API key",
+                crate::llm::xai_oauth::DEFAULT_MODEL
+            ),
             kinds: vec![ProviderKind::XAI_OAUTH],
             collect: collect_xai_oauth,
         },

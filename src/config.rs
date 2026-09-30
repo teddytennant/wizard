@@ -961,9 +961,7 @@ impl ProviderConfig {
         match self.model_pinned {
             Some(true) => false,
             Some(false) => true,
-            None => {
-                self.model.is_empty() || self.model == crate::llm::xai_oauth::LEGACY_STAMP
-            }
+            None => self.model.is_empty() || self.model == crate::llm::xai_oauth::LEGACY_STAMP,
         }
     }
 

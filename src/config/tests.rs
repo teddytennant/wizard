@@ -561,7 +561,7 @@ fn the_env_var_wins_over_a_stored_provider_key() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
-            model_pinned: None,
+        model_pinned: None,
     };
     // Stand-ins for the process environment and for credentials.toml:
     // this test neither depends on nor disturbs either.
@@ -1137,7 +1137,7 @@ async fn preparing_an_unknown_kind_is_not_an_error() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
-            model_pinned: None,
+        model_pinned: None,
     };
     assert!(provider.prepare("m").await.is_ok());
     assert!(provider.build().is_err());
@@ -1273,7 +1273,7 @@ fn active_provider_mismatch_flags_unknown_names_only() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
-            model_pinned: None,
+        model_pinned: None,
     };
 
     // Resolving name / unset name: no mismatch.

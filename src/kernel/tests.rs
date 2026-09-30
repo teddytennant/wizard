@@ -629,7 +629,7 @@ async fn a_plugin_registered_provider_is_selectable_from_config() {
         usd_per_mtok_in: None,
         usd_per_mtok_out: None,
         vision: None,
-            model_pinned: None,
+        model_pinned: None,
     };
 
     // Nothing has registered it yet, so the config names a backend that is not

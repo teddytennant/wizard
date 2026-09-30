@@ -1260,7 +1260,6 @@ mod tests {
         format!("{header}.{body}.sig")
     }
 
-
     #[test]
     fn the_newest_flagship_is_the_first_plain_grok_in_catalog_order() {
         // `list_models` returns newest-created first. `grok-4.20` sorts above
