@@ -193,7 +193,7 @@ jobs:
       # Pinned by digest, so `toolchain` has to be spelled out: this action
       # reads the toolchain from the ref it was called by, and a digest is not
       # a version. The `stable` branch defaults the input, the v1 tag does not.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           components: rustfmt, clippy
@@ -213,7 +213,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Prebuilt binary, no cargo-install-from-source in CI.
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-machete
 
@@ -245,7 +245,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
 
@@ -264,7 +264,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
 
@@ -411,7 +411,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
 
@@ -480,7 +480,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
 
@@ -624,7 +624,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           # cargo-llvm-cov reads the instrumentation with llvm-profdata/llvm-cov
@@ -633,7 +633,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-llvm-cov
 
@@ -679,7 +679,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-deny
 
@@ -848,7 +848,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: zizmor@1.29.0
 
