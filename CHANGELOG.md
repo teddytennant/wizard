@@ -6,6 +6,16 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-09-29
+
+### Added
+
+- **`/ui` lists five looks, and first run asks which one.** `wizard` is the
+  house UI. `codex` and `grok` wear those frames here, and restart into
+  `wizard-ui-codex` or `wizard-ui-grok` when that binary is installed.
+  `opencode` and `pi` are their own UIs (`wizard-ui-opencode`, `wizard-ui-pi`);
+  a missing binary is an error and the house UI stays. The choice is `[ui] skin`.
+
 ### Changed
 
 - **An unpinned xAI provider follows the newest flagship Grok.** The default is

@@ -297,8 +297,8 @@ fn collect_full_answers(terminal: &mut Tui) -> Result<Option<Answers>> {
     let skin = match select(
         terminal,
         "Interface",
-        "Which terminal UI should Wizard wear? (looks only, same commands either way; \
-         change it any time with /ui)",
+        "Which look should Wizard start in? A full look restarts into that UI. \
+         Change it any time with /ui.",
         &skin_options,
         0,
     )? {

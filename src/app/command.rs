@@ -161,6 +161,10 @@ async fn git_diff_untracked(root: &Path, file: &str) -> String {
 /// writing the file. A failed write is reported and the switch still stands
 /// for this session — the user asked to see it, and they can see it.
 ///
+/// A full look (`codex`, `grok`, `opencode`, `pi`) is a different process.
+/// The binary is found before the config is written, then this process is
+/// replaced. A missing binary is an error and the house UI stays.
+///
 /// Switching brings the new skin's palette with it, unconditionally. It used
 /// to do so only for a user who had never set `[ui] theme` or `WIZARD_THEME`,
 /// which meant `/ui codex` drew Codex's frame in the old colors for exactly
@@ -178,9 +182,35 @@ pub(super) fn ui_command(app: &mut App, name: Option<&str>) -> String {
                 candidate.description()
             ));
         }
-        text.push_str("switch with /ui <name> — the commands and keys stay Wizard's");
+        text.push_str("switch with /ui <name>. a full look restarts into that UI");
         return text;
     };
+
+    let Some(switched) = skin::Skin::from_key(name) else {
+        return format!("error: unknown skin '{name}'. /ui lists them.");
+    };
+
+    // A full look with no in-process frame has to exec. Codex and Grok exec
+    // only when their binary is installed; otherwise they stay drawn here.
+    if let Some(bin) = switched.companion_bin() {
+        if !switched.in_process() || skin::launch::companion_installed(bin) {
+            let wizard = match std::env::current_exe() {
+                Ok(path) => path,
+                Err(err) => return format!("error: finding this wizard binary: {err}"),
+            };
+            if let Err(err) = skin::launch::find_companion(&wizard, bin) {
+                return format!("error: {err:#}");
+            }
+            app.config.ui.skin = Some(switched.key().to_string());
+            if let Err(err) = app.config.save() {
+                return format!("error: could not save config: {err:#}");
+            }
+            return match skin::launch::exec_skin(switched) {
+                Ok(()) => String::new(),
+                Err(err) => format!("error: {err:#}"),
+            };
+        }
+    }
 
     let switched = match skin::set_active_by_name(name) {
         Ok(switched) => switched,

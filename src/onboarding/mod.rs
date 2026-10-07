@@ -319,7 +319,7 @@ pub async fn run() -> Result<Option<(Config, FirstRun)>> {
     let outcome = loop {
         let reason = retry.take();
         let taken = screen.take();
-        let (mut opened, pick) = tokio::task::spawn_blocking(move || {
+        let (mut opened, pick, skin) = tokio::task::spawn_blocking(move || {
             let mut opened = match taken {
                 Some(opened) => opened,
                 None => {
@@ -331,7 +331,11 @@ pub async fn run() -> Result<Option<(Config, FirstRun)>> {
                 }
             };
             let pick = collect_first_run(&mut opened.terminal, reason);
-            Ok((opened, pick))
+            let skin = match pick.as_ref() {
+                Ok(Some(_)) => ask_skin(&mut opened.terminal),
+                _ => Ok(None),
+            };
+            Ok((opened, pick, skin))
         })
         .await
         .context("onboarding task panicked")??;
@@ -340,7 +344,11 @@ pub async fn run() -> Result<Option<(Config, FirstRun)>> {
             Ok(None) => break Ok(None),
             Err(err) => break Err(err),
         };
-        match finish_first_run(&mut opened, pick).await {
+        let skin = match skin {
+            Ok(skin) => skin,
+            Err(err) => break Err(err),
+        };
+        match finish_first_run(&mut opened, pick, skin).await {
             Ok(Finished::Rejected(reason)) => {
                 retry = Some(reason);
                 screen = Some(opened);
@@ -537,6 +545,26 @@ fn local_plan() -> Option<LocalPlan> {
         )
     })
     .clone()
+}
+
+/// Which look to start in. Esc keeps the house UI; the provider pick already
+/// landed, so backing out of this screen must not throw the first run away.
+fn ask_skin(terminal: &mut Tui) -> Result<Option<crate::skin::Skin>> {
+    let options: Vec<Opt> = crate::skin::Skin::ALL
+        .iter()
+        .map(|skin| Opt::new(skin.label(), skin.description()))
+        .collect();
+    let index = match select(
+        terminal,
+        "Which interface?",
+        "Change later with /ui. Esc keeps the house look.",
+        &options,
+        0,
+    )? {
+        Some(index) => index,
+        None => return Ok(Some(crate::skin::Skin::Wizard)),
+    };
+    Ok(Some(crate::skin::Skin::ALL[index]))
 }
 
 fn collect_first_run(terminal: &mut Tui, retry: Option<String>) -> Result<Option<FirstRunPick>> {
@@ -952,7 +980,11 @@ fn first_compat(terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
 /// rejected key never reaches the disk and a write that fails is reported
 /// as that. The config is saved before a sign-in, so an abandoned one leaves
 /// `wizard --login` as the only step left.
-async fn finish_first_run(screen: &mut Screen, pick: FirstRunPick) -> Result<Finished> {
+async fn finish_first_run(
+    screen: &mut Screen,
+    pick: FirstRunPick,
+    skin: Option<crate::skin::Skin>,
+) -> Result<Finished> {
     let FirstRunPick {
         answers,
         login,
@@ -961,7 +993,7 @@ async fn finish_first_run(screen: &mut Screen, pick: FirstRunPick) -> Result<Fin
     let answers = Answers::first_run(answers);
     let name = answers.provider_name.clone();
     let pasted = answers.provider_api_key.clone();
-    let config = answers.into_config();
+    let mut config = answers.into_config();
     let active = config.active();
     let mut notice = None;
     let exported = pasted.is_none() && !active.api_key().is_empty();
@@ -998,6 +1030,9 @@ async fn finish_first_run(screen: &mut Screen, pick: FirstRunPick) -> Result<Fin
     }
     if let Some(key) = &pasted {
         crate::credentials::store(&name, key).context("saving the API key")?;
+    }
+    if let Some(skin) = skin {
+        config.ui.skin = Some(skin.key().to_string());
     }
     config.save().context("saving config from onboarding")?;
     Ok(Finished::Saved {

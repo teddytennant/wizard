@@ -68,7 +68,7 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 
-use crate::config::Mode;
+use crate::config::{Config, Mode};
 
 /// Top-level entry point: load config, apply CLI overrides, and dispatch to
 /// the selected run mode (genie TUI, sovereign headless loop, or `--evolve`).
@@ -548,6 +548,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // Sovereign is headless and skips both (handled in the match below).
         update::print_startup_notice(&config.update);
         update::maybe_check_on_startup(&config.update).await;
+        enter_full_ui(&config);
         return app::run_tui(config, cli, first_run).await;
     }
 
@@ -555,6 +556,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         Mode::Genie => {
             update::print_startup_notice(&config.update);
             update::maybe_check_on_startup(&config.update).await;
+            enter_full_ui(&config);
             app::run_tui(config, cli, first_run).await
         }
         Mode::Sovereign => headless::run(config, cli).await,
@@ -565,8 +567,37 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         Mode::Chat => {
             update::print_startup_notice(&config.update);
             update::maybe_check_on_startup(&config.update).await;
+            enter_full_ui(&config);
             app::run_tui(config, cli, first_run).await
         }
+    }
+}
+
+/// A full-UI skin replaces this process with `wizard-ui-*`. A missing binary
+/// is a warning and the house UI, so a saved skin cannot lock the TUI out
+/// before the look is installed.
+fn enter_full_ui(config: &Config) {
+    let from_config = config
+        .ui
+        .skin
+        .as_deref()
+        .and_then(skin::Skin::from_key)
+        .unwrap_or_default();
+    let skin = std::env::var(skin::ENV_SKIN)
+        .ok()
+        .and_then(|value| skin::Skin::from_key(&value))
+        .unwrap_or(from_config);
+    // Codex and Grok can be drawn here when their binary is not installed.
+    // Opencode and Pi cannot, so a missing binary falls through to the house UI.
+    let Some(bin) = skin.companion_bin() else {
+        return;
+    };
+    if skin.in_process() && !skin::launch::companion_installed(bin) {
+        return;
+    }
+    if let Err(err) = skin::launch::exec_skin(skin) {
+        eprintln!("warning: {err:#}");
+        eprintln!("starting the house UI instead. /ui switches once that look is installed.");
     }
 }
 

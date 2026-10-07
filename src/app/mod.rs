@@ -520,10 +520,9 @@ impl App {
         // the documented precedence real.
         //
         // Skin first, because it is the theme's last resort: a skin names a
-        // companion palette (`claude` chrome wants Claude Code's terracotta),
-        // and that name is only consulted when the user has chosen no theme at
-        // all. Resolving the theme first would leave every skin looking like
-        // `minimal` on a fresh install.
+        // companion palette, and that name is only consulted when the user has
+        // chosen no theme at all. Resolving the theme first would leave every
+        // skin looking like `minimal` on a fresh install.
         let skin_warning = crate::skin::init(config.ui.skin.as_deref());
         let theme_warning = theme::init(crate::skin::active().companion_theme());
         let mode = config.mode;
@@ -757,7 +756,7 @@ impl App {
             (
                 "skin",
                 "Interface".to_string(),
-                crate::skin::active().label().to_string(),
+                format!("{}  ·  /ui for a full look", crate::skin::active().label()),
             ),
             (
                 "web_backend",
@@ -869,20 +868,22 @@ impl App {
                 self.open_web_backend_picker();
                 return None;
             }
-            // Cycles rather than opening a picker of four: the change is
-            // visible the instant it lands, and the menu is still on screen to
-            // show it, so cycling *is* the preview.
+            // Cycles the in-process looks. A full look is a different process,
+            // so the row points at `/ui` rather than execing out of the menu.
             "skin" => {
                 let active = crate::skin::active();
-                let next = crate::skin::Skin::ALL[(crate::skin::Skin::ALL
+                let in_process: Vec<_> = crate::skin::Skin::ALL
+                    .iter()
+                    .copied()
+                    .filter(|skin| skin.in_process())
+                    .collect();
+                let next = in_process[(in_process
                     .iter()
                     .position(|s| *s == active)
                     .unwrap_or(0)
                     + 1)
-                    % crate::skin::Skin::ALL.len()];
+                    % in_process.len()];
                 let notice = command::ui_command(self, Some(next.key()));
-                // `ui_command` has already persisted and re-resolved the
-                // palette; anything it has to say is worth saying.
                 if notice.starts_with("error:") || notice.contains("could not save") {
                     self.notice(notice);
                 }

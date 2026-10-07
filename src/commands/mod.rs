@@ -184,8 +184,9 @@ pub enum SlashCommand {
     Settings,
     /// `/vim` — toggle modal (vim-style) editing of the input composer.
     Vim,
-    /// `/ui [name]`: list the available interfaces (`wizard`, `claude`,
-    /// `codex`, `grok`), or wear one. `None` lists; `Some` switches.
+    /// `/ui [name]`: list the available interfaces (`wizard`, `codex`, `grok`,
+    /// `opencode`, `pi`), or wear one. `None` lists; `Some` switches. A full
+    /// look restarts into `wizard-ui-*`; `wizard` stays in this process.
     ///
     /// Separate from [`Self::Theme`] because they are separate settings: a
     /// skin is the shape of the chrome, a theme is its palette, and wanting
@@ -659,7 +660,7 @@ impl SlashCommand {
             "plugins" => parse_plugins(&args),
             "settings" | "setup" => Ok(Self::Settings),
             "vim" => Ok(Self::Vim),
-            // Joined so `/ui claude code` is the same request as `/ui claude`:
+            // Joined so `/ui grok build` is the same request as `/ui grok`:
             // people type the product name, not the key.
             "ui" => Ok(Self::Ui((!args.is_empty()).then(|| args.join(" ")))),
             "view" => match args.as_slice() {

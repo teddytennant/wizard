@@ -49,6 +49,11 @@
 # Environment variables:
 #   WIZARD_INSTALL_DIR           where to place the binary    (default /usr/local/bin;
 #                                ~/.local/bin on NixOS; $PREFIX/bin on Termux)
+#   WIZARD_UI_REPO               owner/repo of the full looks (default
+#                                teddytennant/openw). Installed beside wizard as
+#                                wizard-ui-codex, wizard-ui-grok,
+#                                wizard-ui-opencode, wizard-ui-pi. A failed
+#                                build is a warning: wizard still runs.
 #   WIZARD_LOCAL                 1 = preinstall the llama.cpp stack and a model
 #                                    (see above)               (default 0)
 #   WIZARD_MINIMAL               1 = minimal install (see above)        (default 0)
@@ -172,6 +177,7 @@ WIZARD_REF="${WIZARD_REF:-}"
 # people who have one set WIZARD_MIRROR.
 WIZARD_MIRROR="${WIZARD_MIRROR:-}"
 WIZARD_BUILD_FROM_SOURCE="${WIZARD_BUILD_FROM_SOURCE:-0}"
+WIZARD_UI_REPO="${WIZARD_UI_REPO:-teddytennant/openw}"
 
 # WIZARD_NATIVE and WIZARD_APP used to install a second binary with a window
 # in it. The desktop app is Wizard GUI now, a separate release asset, so say
@@ -1955,6 +1961,51 @@ build_from_source() {
     say "Installed wizard (built from source) to ${INSTALLED_PATH}"
 }
 
+# --- full looks ---------------------------------------------------------
+#
+# The four full UIs live in a separate repo and install beside wizard, under
+# the names /ui execs. A missing toolchain or a failed build is a warning:
+# wizard itself is already installed, and /ui says which look is missing.
+
+install_looks() {
+    if [ "$WIZARD_MINIMAL" = "1" ]; then
+        say "Minimal install: skipping the full looks (wizard-ui-*)"
+        return
+    fi
+    if ! cargo_works; then
+        warn "cargo is not available, so the full looks were not built."
+        warn "wizard still runs. Install Rust, then build ${WIZARD_UI_REPO} and copy the four binaries next to wizard as wizard-ui-codex, wizard-ui-grok, wizard-ui-opencode, wizard-ui-pi."
+        return
+    fi
+    command -v git >/dev/null 2>&1 || {
+        warn "git is not available, so the full looks were not built"
+        return
+    }
+    say "Building the full looks from ${WIZARD_UI_REPO} (codex, grok, opencode, pi) ..."
+    local src="${TMP_DIR}/openw-src"
+    if ! git clone --depth 1 "https://github.com/${WIZARD_UI_REPO}" "$src"; then
+        warn "could not clone ${WIZARD_UI_REPO}; wizard is installed, the full looks are not"
+        return
+    fi
+    if ! ( cd "$src" && cargo build --release -p codexw -p grokw -p openw -p piw ); then
+        warn "the full looks failed to build; wizard is installed without them"
+        return
+    fi
+    local name bin
+    for name in codex grok opencode pi; do
+        case "$name" in
+            opencode) bin="${src}/target/release/openw" ;;
+            *) bin="${src}/target/release/${name}w" ;;
+        esac
+        if [ ! -f "$bin" ]; then
+            warn "build produced no ${name} binary"
+            continue
+        fi
+        place_binary "$bin" "wizard-ui-${name}"
+        say "Installed wizard-ui-${name} to ${PLACED_PATH}"
+    done
+}
+
 # --- config -------------------------------------------------------------
 
 # Rewrite the first `model = …` line of $1 to name the model $2, in place.
@@ -2417,6 +2468,7 @@ main() {
     install_toolchain
     write_config
     install_loadout
+    install_looks
 
     printf '\n'
     if [ "${WIZARD_GUI_HINT:-0}" = "1" ]; then

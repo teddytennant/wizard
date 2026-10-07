@@ -141,7 +141,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match skin::active() {
         skin::Skin::Codex => codex::draw(frame, app),
         skin::Skin::Grok => grok::draw(frame, app),
-        skin::Skin::Wizard => draw_house(frame, app),
+        // Opencode and Pi have no in-process frame. If one is active here,
+        // the companion exec failed and the house frame is the fallback.
+        skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi => draw_house(frame, app),
     }
     // A drag over an overlay copies the overlay, which has no gutter.
     if overlay_open(app) {

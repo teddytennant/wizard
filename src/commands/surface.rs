@@ -794,7 +794,7 @@ fn unavailable(name: &str, surface: Surface) -> String {
                                   is a window's text field, and it edits the way the rest of your \
                                   desktop does"
             .to_string(),
-        (Surface::Gui, "ui") => "'/ui' swaps the terminal's chrome for Codex's or Grok Build's. \
+        (Surface::Gui, "ui") => "'/ui' switches the terminal to another Wizard look. \
                                  This window draws its own widgets, so there is no terminal \
                                  chrome in it to reshape"
             .to_string(),

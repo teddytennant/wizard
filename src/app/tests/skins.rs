@@ -318,9 +318,10 @@ fn ui_command_lists_the_skins_and_marks_the_active_one() {
     let mut app = app();
     let listing = command::ui_command(&mut app, None);
     assert!(listing.contains("● wizard"), "{listing}");
-    for other in ["codex", "grok"] {
+    for other in ["codex", "grok", "opencode", "pi"] {
         assert!(listing.contains(&format!("· {other}")), "{listing}");
     }
+    assert!(listing.contains("restarts"), "{listing}");
 }
 
 #[test]
@@ -328,18 +329,28 @@ fn ui_command_switches_brings_its_palette_and_persists_the_choice() {
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let _theme = theme::pin(theme::minimal());
     let mut app = app();
+    // Grok has an in-process frame, and this test binary has no companion
+    // beside it, so the switch stays in process.
     let notice = command::ui_command(&mut app, Some("grok build"));
     assert_eq!(crate::skin::active(), crate::skin::Skin::Grok);
-    assert!(notice.contains("grok build"), "{notice}");
-    // The skin brings its palette with it.
+    assert!(notice.contains("grok"), "{notice}");
     assert_eq!(theme::active().name, "grok");
     assert_eq!(app.config.ui.skin.as_deref(), Some("grok"));
 
-    // And switching again brings the next one's, unconditionally — there is
-    // no longer a user-set palette that could be left behind.
     command::ui_command(&mut app, Some("codex"));
     assert_eq!(crate::skin::active(), crate::skin::Skin::Codex);
     assert_eq!(theme::active().name, "codex");
+}
+
+#[test]
+fn a_full_look_with_no_in_process_frame_refuses_when_its_binary_is_missing() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = app();
+    let notice = command::ui_command(&mut app, Some("pi"));
+    assert!(notice.starts_with("error:"), "{notice}");
+    assert!(notice.contains("wizard-ui-pi"), "{notice}");
+    assert_eq!(crate::skin::active(), crate::skin::Skin::Wizard);
+    assert_ne!(app.config.ui.skin.as_deref(), Some("pi"));
 }
 
 #[test]
@@ -348,7 +359,7 @@ fn an_unknown_ui_name_is_an_error_and_changes_nothing() {
     let mut app = app();
     let notice = command::ui_command(&mut app, Some("emacs"));
     assert!(notice.starts_with("error:"), "{notice}");
-    assert!(notice.contains("wizard, codex, grok"), "{notice}");
+    assert!(notice.contains("/ui lists them"), "{notice}");
     assert_eq!(crate::skin::active(), crate::skin::Skin::Grok);
 }
 
@@ -367,6 +378,8 @@ fn the_settings_menu_cycles_the_interface_in_place() {
         .position(|item| item.value == "Interface")
         .expect("the menu offers the interface");
 
+    // The menu cycles looks this process can draw. A full look with no
+    // in-process frame is /ui, not a cycle that would exec out of the menu.
     for expected in [
         crate::skin::Skin::Codex,
         crate::skin::Skin::Grok,
@@ -377,7 +390,11 @@ fn the_settings_menu_cycles_the_interface_in_place() {
         assert_eq!(crate::skin::active(), expected);
         let picker = app.picker.as_ref().expect("the menu stays open");
         assert_eq!(picker.selected, row, "and the cursor stays on the row");
-        assert_eq!(picker.items[row].detail, expected.label());
+        assert!(
+            picker.items[row].detail.starts_with(expected.label()),
+            "{}",
+            picker.items[row].detail
+        );
     }
 }
 

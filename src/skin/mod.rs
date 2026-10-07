@@ -1,27 +1,21 @@
-//! UI skins: which coding agent's terminal chrome the TUI wears.
+//! UI skins: which interface Wizard starts in.
 //!
 //! [`crate::theme`] answers "what color is an accent". This module answers the
-//! other half: what *shape* the chrome is. A skin owns the gutter markers, the
-//! tool-card glyphs and label grammar, the composer frame, the welcome screen,
-//! the spinner, and the wording of the status line. Four ship:
+//! other half: which look is on. Five ship:
 //!
-//! - `wizard` — the house look: one rule over the composer, `❯`/`·` gutters,
-//!   a status line of facts and nothing decorative. `docs/design.md` is its
-//!   standard.
-//! - `codex` — OpenAI Codex's: a `>_` banner, `›` for the user and `•` for the
-//!   agent, `Ran <cmd>` with a `└` output arm, a bare composer under a `›`
-//!   prompt, and `Working (12s • esc to interrupt)`.
-//! - `grok` — xAI's Grok Build: a `┃` accent bar down the side of every block,
-//!   colored by whose block it is, a bordered composer, and `Thinking… 12s`.
+//! - `wizard` — the house look, drawn in this process: one rule over the
+//!   composer, `❯`/`·` gutters, a status line of facts and nothing decorative.
+//!   `docs/design.md` is its standard. It also owns the chrome tables below,
+//!   which the other looks do not use.
+//! - `codex`, `grok`, `opencode`, `pi` — full terminal UIs with those layouts.
+//!   `/ui` and onboarding write `[ui] skin` and start the matching
+//!   `wizard-ui-*` binary next to this one. The product name inside each is
+//!   Wizard. The look is the only thing that differs.
 //!
-//! **What a skin is not.** It does not change what Wizard *is*. The commands
-//! are Wizard's (`/model`, `/fusion`, `/ultra`, `/publish`), onboarding is
-//! Wizard's, the status line reports Wizard's own state — mode, ultra
-//! multiplier, background subagents, the context meter — under whichever skin
-//! is on. Wearing Codex's chrome must never imply Codex's feature set, so the
-//! skin layer is deliberately given no way to add, hide, or rename a command:
-//! it maps state that already exists onto a different set of glyphs. What it
-//! borrows is a *look*, and it says whose look it is on the welcome screen.
+//! **What a skin is not.** It does not change what Wizard *is*. The agent, the
+//! session store, and `wizard acp` are the same under every look. A borrowed
+//! layout must never imply that other product's feature set. What it borrows
+//! is a look.
 //!
 //! **Colors still come from the theme.** Nothing here names a
 //! [`ratatui::style::Color`] — a skin names a [`Token`], exactly like
@@ -45,6 +39,7 @@ use anyhow::{Result, bail};
 use crate::theme::Token;
 
 pub mod blend;
+pub mod launch;
 pub mod layout;
 pub mod motion;
 
@@ -69,18 +64,28 @@ pub const ENV_SKIN: &str = "WIZARD_SKIN";
 /// Which agent's terminal chrome the TUI wears.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Skin {
-    /// The house look (default).
+    /// The house look, drawn in this process (default).
     #[default]
     Wizard,
-    /// OpenAI Codex's chrome.
+    /// Codex's layout, as a full UI.
     Codex,
-    /// xAI Grok Build's chrome.
+    /// Grok Build's layout, as a full UI.
     Grok,
+    /// OpenCode's layout, as a full UI.
+    Opencode,
+    /// Pi's layout, as a full UI.
+    Pi,
 }
 
 impl Skin {
     /// Every skin, in the order pickers and listings show them.
-    pub const ALL: [Skin; 3] = [Skin::Wizard, Skin::Codex, Skin::Grok];
+    pub const ALL: [Skin; 5] = [
+        Skin::Wizard,
+        Skin::Codex,
+        Skin::Grok,
+        Skin::Opencode,
+        Skin::Pi,
+    ];
 
     /// The key written to `[ui] skin` and accepted by `/ui <name>`.
     pub fn key(self) -> &'static str {
@@ -88,6 +93,8 @@ impl Skin {
             Skin::Wizard => "wizard",
             Skin::Codex => "codex",
             Skin::Grok => "grok",
+            Skin::Opencode => "opencode",
+            Skin::Pi => "pi",
         }
     }
 
@@ -96,7 +103,9 @@ impl Skin {
         match self {
             Skin::Wizard => "wizard",
             Skin::Codex => "codex",
-            Skin::Grok => "grok build",
+            Skin::Grok => "grok",
+            Skin::Opencode => "opencode",
+            Skin::Pi => "pi",
         }
     }
 
@@ -104,9 +113,29 @@ impl Skin {
     pub fn description(self) -> &'static str {
         match self {
             Skin::Wizard => "the house look: one rule, no boxes, nothing decorative (default)",
-            Skin::Codex => "OpenAI Codex: >_ banner, › prompts, • bullets, └ output",
-            Skin::Grok => "Grok Build: a colored ┃ bar down every block, boxed composer",
+            Skin::Codex => "the codex layout: >_ banner, › prompts, a bare composer",
+            Skin::Grok => "the grok layout: a colored bar down every block, boxed composer",
+            Skin::Opencode => "the opencode layout, as its own UI (restarts into it)",
+            Skin::Pi => "the pi layout, as its own UI (restarts into it)",
         }
+    }
+
+    /// Binary that replaces this process for a full look. Codex and Grok also
+    /// have an in-process frame, so `/ui` only execs when that binary is
+    /// installed; otherwise it wears the look here.
+    pub fn companion_bin(self) -> Option<&'static str> {
+        match self {
+            Skin::Wizard => None,
+            Skin::Codex => Some("wizard-ui-codex"),
+            Skin::Grok => Some("wizard-ui-grok"),
+            Skin::Opencode => Some("wizard-ui-opencode"),
+            Skin::Pi => Some("wizard-ui-pi"),
+        }
+    }
+
+    /// True when this look can be drawn without leaving the process.
+    pub fn in_process(self) -> bool {
+        matches!(self, Skin::Wizard | Skin::Codex | Skin::Grok)
     }
 
     /// Parse a skin name. Generous about spelling because the names people
@@ -118,6 +147,8 @@ impl Skin {
             "wizard" | "default" | "house" => Some(Skin::Wizard),
             "codex" | "openai" | "openai-codex" => Some(Skin::Codex),
             "grok" | "grok-build" | "grokbuild" | "xai" => Some(Skin::Grok),
+            "opencode" | "open-code" | "openw" => Some(Skin::Opencode),
+            "pi" | "piw" => Some(Skin::Pi),
             _ => None,
         }
     }
@@ -134,16 +165,18 @@ impl Skin {
     /// and to `WIZARD_THEME` both.
     pub fn companion_theme(self) -> &'static str {
         match self {
-            Skin::Wizard => crate::theme::DEFAULT_THEME,
+            Skin::Wizard | Skin::Opencode | Skin::Pi => crate::theme::DEFAULT_THEME,
             Skin::Codex => "codex",
             Skin::Grok => "grok",
         }
     }
 
-    /// The chrome this skin draws with.
+    /// The chrome the in-process TUI draws with. The full-UI skins never reach
+    /// this: they start another binary. The tables stay so a match stays
+    /// exhaustive and the old chrome tests still have something to draw.
     pub fn chrome(self) -> &'static Chrome {
         match self {
-            Skin::Wizard => &WIZARD,
+            Skin::Wizard | Skin::Opencode | Skin::Pi => &WIZARD,
             Skin::Codex => &CODEX,
             Skin::Grok => &GROK,
         }
