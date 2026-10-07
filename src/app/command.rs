@@ -192,24 +192,24 @@ pub(super) fn ui_command(app: &mut App, name: Option<&str>) -> String {
 
     // A full look with no in-process frame has to exec. Codex and Grok exec
     // only when their binary is installed; otherwise they stay drawn here.
-    if let Some(bin) = switched.companion_bin() {
-        if !switched.in_process() || skin::launch::companion_installed(bin) {
-            let wizard = match std::env::current_exe() {
-                Ok(path) => path,
-                Err(err) => return format!("error: finding this wizard binary: {err}"),
-            };
-            if let Err(err) = skin::launch::find_companion(&wizard, bin) {
-                return format!("error: {err:#}");
-            }
-            app.config.ui.skin = Some(switched.key().to_string());
-            if let Err(err) = app.config.save() {
-                return format!("error: could not save config: {err:#}");
-            }
-            return match skin::launch::exec_skin(switched) {
-                Ok(()) => String::new(),
-                Err(err) => format!("error: {err:#}"),
-            };
+    if let Some(bin) = switched.companion_bin()
+        && (!switched.in_process() || skin::launch::companion_installed(bin))
+    {
+        let wizard = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(err) => return format!("error: finding this wizard binary: {err}"),
+        };
+        if let Err(err) = skin::launch::find_companion(&wizard, bin) {
+            return format!("error: {err:#}");
         }
+        app.config.ui.skin = Some(switched.key().to_string());
+        if let Err(err) = app.config.save() {
+            return format!("error: could not save config: {err:#}");
+        }
+        return match skin::launch::exec_skin(switched) {
+            Ok(()) => String::new(),
+            Err(err) => format!("error: {err:#}"),
+        };
     }
 
     let switched = match skin::set_active_by_name(name) {
