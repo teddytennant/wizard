@@ -435,6 +435,37 @@ impl CommandSurface for AcpSurface<'_> {
         }
     }
 
+    /// `/ui [name]`: the looks, or which one `wizard` starts in. A full look
+    /// is this server's client, so a switch made from inside one lands when
+    /// it quits and the `wizard` that started it reads `[ui] skin` again.
+    async fn set_ui(&mut self, name: Option<String>) {
+        let mut config = match Config::load() {
+            Ok(config) => config,
+            Err(err) => return self.say(format!("error: could not read config: {err:#}")),
+        };
+        let saved = config
+            .ui
+            .skin
+            .as_deref()
+            .and_then(crate::skin::Skin::from_key)
+            .unwrap_or_default();
+        let Some(name) = name else {
+            return self.say(crate::skin::listing(saved));
+        };
+        let Some(skin) = crate::skin::Skin::from_key(&name) else {
+            return self.say(format!("error: unknown skin '{name}'. /ui lists them."));
+        };
+        config.ui.skin = Some(skin.key().to_string());
+        match config.save() {
+            Ok(()) => self.say(format!(
+                "saved [ui] skin = \"{}\". Quit this look to switch now; anywhere else it \
+                 applies the next time wizard starts.",
+                skin.key()
+            )),
+            Err(err) => self.say(format!("error: could not save config: {err:#}")),
+        }
+    }
+
     /// No panels here: the panel's contents are the answer.
     async fn toggle_panel(&mut self, panel: Panel) {
         match panel {
@@ -477,7 +508,7 @@ mod tests {
     fn the_advertised_commands_are_what_acp_runs() {
         let names: Vec<String> = available_commands().into_iter().map(|c| c.name).collect();
         for name in [
-            "model", "effort", "mode", "plan", "compact", "usage", "help", "diff",
+            "model", "effort", "mode", "plan", "compact", "usage", "help", "diff", "ui",
         ] {
             assert!(
                 names.iter().any(|n| n == name),
@@ -485,7 +516,7 @@ mod tests {
             );
         }
         for name in [
-            "vim", "view", "ui", "quit", "clear", "resume", "settings", "login",
+            "vim", "view", "quit", "clear", "resume", "settings", "login",
         ] {
             assert!(
                 !names.iter().any(|n| n == name),

@@ -47,18 +47,19 @@ use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 /// screen), build the agent stack (LLM provider, registry with scripted +
 /// MCP tools, skills, session), pre-fill `cli.prompt` if given, and drive
 /// the [`EventLoop`](crate::event::EventLoop) until quit. Restores the
-/// terminal on exit and on panic. Returns the process exit code: 0 from the
-/// TUI itself; the headless fallback propagates its outcome code.
+/// terminal on exit and on panic. Returns how it ended: an exit code (0 from
+/// the TUI itself; the headless fallback propagates its outcome code), or the
+/// full look `/ui` asked for.
 pub async fn run_tui(
     mut config: Config,
     cli: Cli,
     first_run: Option<crate::onboarding::FirstRun>,
-) -> Result<i32> {
+) -> Result<TuiExit> {
     // No usable terminal: run headless when a task was given, otherwise we
     // cannot do anything sensible.
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         if cli.prompt.is_some() {
-            return crate::headless::run(config, cli).await;
+            return crate::headless::run(config, cli).await.map(TuiExit::Quit);
         }
         anyhow::bail!("wizard needs a terminal for the TUI; pass -p \"task\" to run headless");
     }
@@ -1253,7 +1254,16 @@ pub async fn run_tui(
 
     drop(_guard);
     restore_terminal_best_effort();
-    Ok(0)
+    Ok(app.look.map_or(TuiExit::Quit(0), TuiExit::Look))
+}
+
+/// How [`run_tui`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiExit {
+    /// Exit the process with this code.
+    Quit(i32),
+    /// `/ui` picked a full look. Start it now that the terminal is back.
+    Look(crate::skin::Skin),
 }
 
 /// Start one agent turn from a preprocessed prompt: take the agent out of its

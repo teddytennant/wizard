@@ -46,7 +46,7 @@ inline hints.
 | `/publish [branch]` | Fork Wizard to your GitHub and get a one-line installer ([market.md](market.md)) |
 | `/settings` | Open the in-app settings menu |
 | `/setup` | The same menu under the name the first-run card prints (`/setup changes it`) |
-| `/ui [name]` | List the available interfaces, or wear one: `wizard`, `codex`, `grok` ([The interface](#the-interface)) |
+| `/ui [name]` | List the looks, or switch to one: `wizard`, `codex`, `grok`, `opencode`, `pi` ([The interface](#the-interface)) |
 | `/view [compact\|full]` | Show the conversation only, or everything; no argument flips it ([Compact view](#compact-view)) |
 | `/vim` | Toggle modal (vim-style) editing of the input composer |
 | `/quit` | Exit Wizard |
@@ -122,14 +122,23 @@ background subagent.
 
 ## The interface
 
-The TUI can wear another coding agent's chrome. `/ui` lists the three that ship
-and `/ui <name>` switches immediately:
+The TUI can wear another coding agent's chrome. `/ui` lists the looks and
+`/ui <name>` switches:
 
 | Interface | Look |
 |-----------|------|
 | `wizard` (default) | The house look: one rule over the composer, `❯` for you and `·` for the agent, and a status line that reads `model · branch · context · cost`. [design.md](design.md) is the standard it is held to |
 | `codex` | OpenAI Codex's: a `>_` banner, `›` for you and `•` for the agent, `Ran <cmd>` headers with a `└` output arm, no composer frame at all, and `Working (step 3 • 12s • esc to interrupt)` |
 | `grok` | Grok Build's: a `┃` bar down the left of every block, colored by whose block it is, a boxed composer, and `Thinking… step 3 · 12s` |
+| `opencode` | OpenCode's layout, as its own UI (`wizard-ui-opencode`) |
+| `pi` | Pi's layout, as its own UI (`wizard-ui-pi`) |
+
+**Full looks.** `opencode` and `pi` are separate programs installed next to
+`wizard`, and so are `codex` and `grok` when `wizard-ui-codex` or
+`wizard-ui-grok` is there; without one, those two are drawn in the TUI as
+above. Switching to a full look quits the TUI and starts it. Inside the look,
+`/ui wizard` saves the choice, and quitting the look brings the TUI back.
+`wizard agents`, `-p`, `--resume`, `--plan` and `--mode` always open the TUI.
 
 **A skin is a look, and only a look.** The commands stay Wizard's (`/model`,
 `/fusion`, `/ultra`, `/publish`), onboarding is Wizard's, the provider
@@ -139,8 +148,8 @@ under both. Wearing Codex's chrome does not give you Codex. The home
 screen says whose look it is for that reason.
 
 `/ui` **persists**: it writes `[ui] skin` to `~/.wizard/config.toml`, so the
-choice survives a restart. The first run does not ask; it starts as `wizard`,
-and the interface row under `/setup` asks the same question later.
+choice survives a restart. The first run asks which look to start in, and
+the interface row under `/setup` cycles the three the TUI can draw.
 Resolution order at startup is **`[ui] skin` in `config.toml`, then
 `WIZARD_SKIN`, then `wizard`**; a blank value at either level counts as unset.
 

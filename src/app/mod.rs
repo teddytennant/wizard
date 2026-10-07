@@ -19,7 +19,7 @@ mod transcript;
 pub(crate) use command::git_diff_text;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
-pub use runtime::run_tui;
+pub use runtime::{TuiExit, run_tui};
 pub use tee::{SessionTee, TeeFactory};
 pub use term::restore_terminal_best_effort;
 pub use transcript::{
@@ -298,6 +298,9 @@ pub struct App {
     /// PNG once per image is exactly what a cache is for.
     pub images: std::cell::RefCell<ImageCache>,
     pub should_quit: bool,
+    /// The full look `/ui` asked for. Started after the TUI has quit and given
+    /// the terminal back.
+    pub look: Option<crate::skin::Skin>,
     /// Tick counter driving the busy spinner.
     pub tick: u64,
     /// Matching commands for the current `/input`, shown as the suggestion
@@ -582,6 +585,7 @@ impl App {
             text_origins: std::cell::RefCell::new(Vec::new()),
             images: std::cell::RefCell::new(ImageCache::fallback()),
             should_quit: false,
+            look: None,
             tick: 0,
             suggestions: Vec::new(),
             suggestion_index: 0,
@@ -868,8 +872,8 @@ impl App {
                 self.open_web_backend_picker();
                 return None;
             }
-            // Cycles the in-process looks. A full look is a different process,
-            // so the row points at `/ui` rather than execing out of the menu.
+            // Cycles the in-process looks, drawn here even when their full UI
+            // is installed. Starting another process out of a menu is `/ui`.
             "skin" => {
                 let active = crate::skin::active();
                 let in_process: Vec<_> = crate::skin::Skin::ALL
@@ -880,7 +884,7 @@ impl App {
                 let next = in_process[(in_process.iter().position(|s| *s == active).unwrap_or(0)
                     + 1)
                     % in_process.len()];
-                let notice = command::ui_command(self, Some(next.key()));
+                let notice = command::wear(self, next);
                 if notice.starts_with("error:") || notice.contains("could not save") {
                     self.notice(notice);
                 }

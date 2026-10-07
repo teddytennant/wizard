@@ -183,6 +183,21 @@ impl Skin {
     }
 }
 
+/// What bare `/ui` answers: every look, with `active` marked.
+pub fn listing(active: Skin) -> String {
+    let mut text = format!("ui: {} — {}\n", active.label(), active.description());
+    for candidate in Skin::ALL {
+        let marker = if candidate == active { "●" } else { "·" };
+        text.push_str(&format!(
+            "  {marker} {}  {}\n",
+            candidate.key(),
+            candidate.description()
+        ));
+    }
+    text.push_str("switch with /ui <name>. a full look restarts into that UI");
+    text
+}
+
 // ---------------------------------------------------------------------------
 // Chrome
 // ---------------------------------------------------------------------------

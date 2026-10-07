@@ -548,16 +548,14 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // Sovereign is headless and skips both (handled in the match below).
         update::print_startup_notice(&config.update);
         update::maybe_check_on_startup(&config.update).await;
-        enter_full_ui(&config);
-        return app::run_tui(config, cli, first_run).await;
+        return run_interactive(config, cli, first_run).await;
     }
 
     match config.mode {
         Mode::Genie => {
             update::print_startup_notice(&config.update);
             update::maybe_check_on_startup(&config.update).await;
-            enter_full_ui(&config);
-            app::run_tui(config, cli, first_run).await
+            run_interactive(config, cli, first_run).await
         }
         Mode::Sovereign => headless::run(config, cli).await,
         // `wizard --mode chat -p "question"` answers once and exits, which is
@@ -567,38 +565,90 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         Mode::Chat => {
             update::print_startup_notice(&config.update);
             update::maybe_check_on_startup(&config.update).await;
-            enter_full_ui(&config);
-            app::run_tui(config, cli, first_run).await
+            run_interactive(config, cli, first_run).await
         }
     }
 }
 
-/// A full-UI skin replaces this process with `wizard-ui-*`. A missing binary
-/// is a warning and the house UI, so a saved skin cannot lock the TUI out
-/// before the look is installed.
-fn enter_full_ui(config: &Config) {
-    let from_config = config
-        .ui
-        .skin
-        .as_deref()
-        .and_then(skin::Skin::from_key)
-        .unwrap_or_default();
-    let skin = std::env::var(skin::ENV_SKIN)
+/// The house TUI, or the full look `[ui] skin` names, until one of them quits
+/// for good. `/ui` in the TUI quits into a look. A look that changed
+/// `[ui] skin` while it ran (`/ui` over its `wizard acp`) hands over to what
+/// that now names when it exits; otherwise its exit code is this process's.
+async fn run_interactive(
+    mut config: Config,
+    mut cli: cli::Cli,
+    mut first_run: Option<onboarding::FirstRun>,
+) -> Result<i32> {
+    let mut look = startup_look(&config, &cli);
+    loop {
+        if let Some(skin) = look.take() {
+            let saved = config.ui.skin.clone();
+            match skin::launch::run(skin).await {
+                Ok(code) => {
+                    config = Config::load()?;
+                    config.apply_cli(&cli);
+                    if config.ui.skin == saved {
+                        return Ok(code);
+                    }
+                    look = full_look(config_skin(&config));
+                    if look.is_some() {
+                        continue;
+                    }
+                }
+                Err(err) => {
+                    eprintln!("warning: {err:#}");
+                    eprintln!(
+                        "starting the house UI instead. /ui switches once that look is installed."
+                    );
+                }
+            }
+        }
+        match app::run_tui(config.clone(), cli.clone(), first_run.take()).await? {
+            app::TuiExit::Quit(code) => return Ok(code),
+            app::TuiExit::Look(skin) => {
+                // The prompt was this TUI's first message; the next house TUI
+                // starts clean rather than sending it again.
+                cli.prompt = None;
+                config = Config::load()?;
+                config.apply_cli(&cli);
+                look = Some(skin);
+            }
+        }
+    }
+}
+
+/// The full look to start in, if any. A look is started with no arguments,
+/// so a subcommand (`wizard agents`), a prompt, `--resume` or a mode flag
+/// keeps the house TUI that knows what to do with them.
+fn startup_look(config: &Config, cli: &cli::Cli) -> Option<skin::Skin> {
+    let asks_the_house = cli.command.is_some()
+        || cli.prompt.is_some()
+        || cli.resume
+        || cli.mode.is_some()
+        || cli.plan
+        || cli.omakase
+        || cli.completion_review
+        || cli.no_completion_review;
+    if asks_the_house {
+        return None;
+    }
+    let env = std::env::var(skin::ENV_SKIN)
         .ok()
-        .and_then(|value| skin::Skin::from_key(&value))
-        .unwrap_or(from_config);
-    // Codex and Grok can be drawn here when their binary is not installed.
-    // Opencode and Pi cannot, so a missing binary falls through to the house UI.
-    let Some(bin) = skin.companion_bin() else {
-        return;
-    };
-    if skin.in_process() && !skin::launch::companion_installed(bin) {
-        return;
-    }
-    if let Err(err) = skin::launch::exec_skin(skin) {
-        eprintln!("warning: {err:#}");
-        eprintln!("starting the house UI instead. /ui switches once that look is installed.");
-    }
+        .and_then(|value| skin::Skin::from_key(&value));
+    full_look(env.or_else(|| config_skin(config)))
+}
+
+fn config_skin(config: &Config) -> Option<skin::Skin> {
+    config.ui.skin.as_deref().and_then(skin::Skin::from_key)
+}
+
+/// `skin` when it starts another process. Codex and Grok do only when their
+/// binary is installed; otherwise this process draws them. Opencode and Pi
+/// always do, and a missing binary is the warning in [`run_interactive`].
+fn full_look(skin: Option<skin::Skin>) -> Option<skin::Skin> {
+    let skin = skin?;
+    let bin = skin.companion_bin()?;
+    (!skin.in_process() || skin::launch::companion_installed(bin)).then_some(skin)
 }
 
 /// `Some(bundle)` when this invocation is a doctor run, where `bundle` is the
@@ -691,6 +741,21 @@ mod tests {
     fn non_interactive_runs_never_onboard() {
         assert!(!should_onboard_given(&parse(&["wizard", "--onboard"]), false).unwrap());
         assert!(!should_onboard_given(&parse(&["wizard"]), false).unwrap());
+    }
+
+    #[test]
+    fn arguments_a_look_would_drop_keep_the_house_tui() {
+        let mut config = Config::default();
+        config.ui.skin = Some("pi".to_string());
+        for args in [
+            &["wizard", "agents"][..],
+            &["wizard", "-p", "fix the build"],
+            &["wizard", "--resume"],
+            &["wizard", "--plan"],
+            &["wizard", "--mode", "chat"],
+        ] {
+            assert_eq!(startup_look(&config, &parse(args)), None, "{args:?}");
+        }
     }
 
     #[test]

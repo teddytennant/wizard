@@ -1412,8 +1412,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "ui",
-        args: "[wizard|codex|grok]",
-        description: "list interfaces, or wear one (codex, grok build)",
+        args: "[wizard|codex|grok|opencode|pi]",
+        description: "list the looks, or switch to one",
         takes_args: false,
         tui: Execution::Ui,
         // The window draws its own widgets; there is no terminal chrome in it
@@ -1421,7 +1421,8 @@ pub const COMMANDS: &[CommandSpec] = &[
         gui: Execution::Unavailable,
         // Telegram has no chrome of ours at all.
         gateway: Execution::Unavailable,
-        acp: Execution::Unavailable,
+        // A full look talks to wizard over ACP, and this is its way back.
+        acp: Execution::Agent,
         agent_arg: "",
     },
     CommandSpec {

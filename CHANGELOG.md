@@ -6,6 +6,23 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/ui` into a full look left the terminal half torn down.** Wizard replaced
+  itself while still in raw mode on the alternate screen, so the look drew over
+  the old frame, and the session-end hooks and dashboard entry never ran. The
+  TUI now quits the way `/quit` does and the look starts after.
+- **A full look had no way back.** `/ui` inside one answered "part of the
+  terminal UI". It now saves `[ui] skin` over ACP, and when the look quits,
+  wizard opens whatever that names. Wizard waits on the look instead of
+  replacing itself, so the startup update check also finishes.
+- **`wizard agents`, `-p`, `--resume`, `--plan` and `--mode` were dropped** when
+  `[ui] skin` named a full look. Those start the house TUI now.
+- **Cycling Interface in `/settings` could leave the process** when the codex
+  or grok look was installed. The row only switches looks drawn in place.
+- **`install.sh` could stop at a GitHub username prompt** when the looks'
+  repo was unreachable. The clone no longer asks.
+
 ## [3.8.0] - 2026-09-29
 
 ### Added

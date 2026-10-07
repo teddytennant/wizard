@@ -712,22 +712,14 @@ fn acp_advertises_the_commands_it_runs() {
         .collect();
     for expected in [
         "model", "mode", "effort", "plan", "compact", "diff", "usage", "memory", "ultra", "fusion",
-        "rewind", "todos", "agents", "provider", "help",
+        "rewind", "todos", "agents", "provider", "help", "ui",
     ] {
         assert!(
             names.contains(&expected),
             "/{expected} not advertised: {names:?}"
         );
     }
-    for terminal_only in [
-        "vim",
-        "ui",
-        "view",
-        "settings",
-        "dashboard",
-        "quit",
-        "resume",
-    ] {
+    for terminal_only in ["vim", "view", "settings", "dashboard", "quit", "resume"] {
         assert!(
             !names.contains(&terminal_only),
             "/{terminal_only} advertised: {names:?}"
@@ -742,6 +734,29 @@ fn acp_advertises_the_commands_it_runs() {
         effort["description"]
             .as_str()
             .is_some_and(|d| !d.is_empty())
+    );
+}
+
+/// `/ui` is how a full look gets back to the house TUI: it saves `[ui] skin`
+/// without a model turn, and the `wizard` that started the look reads it when
+/// the look quits.
+#[test]
+fn acp_ui_saves_the_look_wizard_starts_in() {
+    let mut acp = AcpSession::start("ui");
+    let (stop, updates) = acp.prompt("/ui pi");
+    assert_eq!(stop, "end_turn");
+    let saved = said(&updates);
+    assert!(saved.contains("[ui] skin = \"pi\""), "{saved}");
+    let config = std::fs::read_to_string(acp._home.0.join(".wizard/config.toml"))
+        .expect("the config is still there");
+    assert!(config.contains("skin = \"pi\""), "{config}");
+
+    let (_, updates) = acp.prompt("/ui");
+    let listing = said(&updates);
+    assert!(listing.contains("● pi"), "{listing}");
+    assert!(
+        acp.model_turns().is_empty(),
+        "a command is not a model turn"
     );
 }
 

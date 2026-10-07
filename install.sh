@@ -1983,7 +1983,9 @@ install_looks() {
     }
     say "Building the full looks from ${WIZARD_UI_REPO} (codex, grok, opencode, pi) ..."
     local src="${TMP_DIR}/openw-src"
-    if ! git clone --depth 1 "https://github.com/${WIZARD_UI_REPO}" "$src"; then
+    # A repo GitHub cannot find answers 401, and git would stop the install
+    # to ask for a username on /dev/tty.
+    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "https://github.com/${WIZARD_UI_REPO}" "$src"; then
         warn "could not clone ${WIZARD_UI_REPO}; wizard is installed, the full looks are not"
         return
     fi

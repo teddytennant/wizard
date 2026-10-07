@@ -829,7 +829,7 @@ fn unavailable(name: &str, surface: Surface) -> String {
         (Surface::Acp, "login") => "'/login' waits for a browser sign-in on this machine; run it \
                                     in the terminal"
             .to_string(),
-        (Surface::Acp, "vim" | "ui" | "view" | "dashboard" | "settings") => {
+        (Surface::Acp, "vim" | "view" | "dashboard" | "settings") => {
             format!("'/{name}' is part of the terminal UI; the client draws this session")
         }
         (_, other) => format!("'/{other}' does not run on this surface"),

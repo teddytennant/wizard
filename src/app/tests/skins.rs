@@ -353,6 +353,30 @@ fn a_full_look_with_no_in_process_frame_refuses_when_its_binary_is_missing() {
     assert_ne!(app.config.ui.skin.as_deref(), Some("pi"));
 }
 
+/// A look directory with the named `wizard-ui-*` binaries in it, searched by
+/// this thread only.
+fn installed_looks(names: &[&str]) -> (tempfile::TempDir, crate::skin::launch::SearchPinned) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for name in names {
+        std::fs::write(dir.path().join(name), "").expect("write a look");
+    }
+    let pinned = crate::skin::launch::pin_search(dir.path());
+    (dir, pinned)
+}
+
+#[test]
+fn a_full_look_quits_the_tui_and_starts_once_the_terminal_is_back() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let _looks = installed_looks(&["wizard-ui-pi"]);
+    let mut app = app();
+    let notice = command::ui_command(&mut app, Some("pi"));
+    assert_eq!(notice, "starting wizard-ui-pi");
+    assert!(app.should_quit);
+    assert_eq!(app.look, Some(crate::skin::Skin::Pi));
+    assert_eq!(app.config.ui.skin.as_deref(), Some("pi"));
+    assert_eq!(crate::skin::active(), crate::skin::Skin::Wizard);
+}
+
 #[test]
 fn an_unknown_ui_name_is_an_error_and_changes_nothing() {
     let _skin = crate::skin::pin(crate::skin::Skin::Grok);
@@ -367,6 +391,8 @@ fn an_unknown_ui_name_is_an_error_and_changes_nothing() {
 fn the_settings_menu_cycles_the_interface_in_place() {
     // The menu stays open and the row updates, so cycling is its own preview.
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let _theme = theme::pin(theme::minimal());
+    let _looks = installed_looks(&["wizard-ui-codex", "wizard-ui-grok"]);
     let mut app = app();
     app.open_settings_picker();
     let row = app
@@ -378,8 +404,8 @@ fn the_settings_menu_cycles_the_interface_in_place() {
         .position(|item| item.value == "Interface")
         .expect("the menu offers the interface");
 
-    // The menu cycles looks this process can draw. A full look with no
-    // in-process frame is /ui, not a cycle that would exec out of the menu.
+    // The menu cycles looks this process can draw, even with their full UIs
+    // installed. Leaving the process out of a menu is /ui's job.
     for expected in [
         crate::skin::Skin::Codex,
         crate::skin::Skin::Grok,
@@ -395,6 +421,7 @@ fn the_settings_menu_cycles_the_interface_in_place() {
             "{}",
             picker.items[row].detail
         );
+        assert!(!app.should_quit && app.look.is_none());
     }
 }
 

@@ -162,8 +162,9 @@ async fn git_diff_untracked(root: &Path, file: &str) -> String {
 /// for this session — the user asked to see it, and they can see it.
 ///
 /// A full look (`codex`, `grok`, `opencode`, `pi`) is a different process.
-/// The binary is found before the config is written, then this process is
-/// replaced. A missing binary is an error and the house UI stays.
+/// The binary is found before the config is written, then the TUI quits the
+/// way `/quit` does and the look starts once the terminal is restored. A
+/// missing binary is an error and the house UI stays.
 ///
 /// Switching brings the new skin's palette with it, unconditionally. It used
 /// to do so only for a user who had never set `[ui] theme` or `WIZARD_THEME`,
@@ -172,25 +173,14 @@ async fn git_diff_untracked(root: &Path, file: &str) -> String {
 /// owns its colors outright, so there is nothing left to defer to.
 pub(super) fn ui_command(app: &mut App, name: Option<&str>) -> String {
     let Some(name) = name else {
-        let active = skin::active();
-        let mut text = format!("ui: {} — {}\n", active.label(), active.description());
-        for candidate in skin::Skin::ALL {
-            let marker = if candidate == active { "●" } else { "·" };
-            text.push_str(&format!(
-                "  {marker} {}  {}\n",
-                candidate.key(),
-                candidate.description()
-            ));
-        }
-        text.push_str("switch with /ui <name>. a full look restarts into that UI");
-        return text;
+        return skin::listing(skin::active());
     };
 
     let Some(switched) = skin::Skin::from_key(name) else {
         return format!("error: unknown skin '{name}'. /ui lists them.");
     };
 
-    // A full look with no in-process frame has to exec. Codex and Grok exec
+    // A full look with no in-process frame has to leave. Codex and Grok leave
     // only when their binary is installed; otherwise they stay drawn here.
     if let Some(bin) = switched.companion_bin()
         && (!switched.in_process() || skin::launch::companion_installed(bin))
@@ -206,16 +196,25 @@ pub(super) fn ui_command(app: &mut App, name: Option<&str>) -> String {
         if let Err(err) = app.config.save() {
             return format!("error: could not save config: {err:#}");
         }
-        return match skin::launch::exec_skin(switched) {
-            Ok(()) => String::new(),
-            Err(err) => format!("error: {err:#}"),
-        };
+        app.look = Some(switched);
+        app.should_quit = true;
+        return format!("starting {bin}");
     }
 
-    let switched = match skin::set_active_by_name(name) {
-        Ok(switched) => switched,
-        Err(err) => return format!("error: {err:#}"),
-    };
+    wear(app, switched)
+}
+
+/// Draw `switched` in this process and persist it. Never starts another UI,
+/// so the settings menu can cycle through it without leaving.
+pub(super) fn wear(app: &mut App, switched: skin::Skin) -> String {
+    if !switched.in_process() {
+        return format!(
+            "error: {} is its own UI. /ui {} starts it.",
+            switched.label(),
+            switched.key()
+        );
+    }
+    skin::set_active(switched);
 
     let mut text = format!("ui: {} — {}", switched.label(), switched.description());
     if let Ok(theme) = theme::set_active_by_name(switched.companion_theme()) {
