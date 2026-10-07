@@ -877,10 +877,7 @@ impl App {
                     .copied()
                     .filter(|skin| skin.in_process())
                     .collect();
-                let next = in_process[(in_process
-                    .iter()
-                    .position(|s| *s == active)
-                    .unwrap_or(0)
+                let next = in_process[(in_process.iter().position(|s| *s == active).unwrap_or(0)
                     + 1)
                     % in_process.len()];
                 let notice = command::ui_command(self, Some(next.key()));
