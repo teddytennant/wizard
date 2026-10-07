@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-10-07
+
 ### Fixed
 
 - **`/ui` into a full look left the terminal half torn down.** Wizard replaced
