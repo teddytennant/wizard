@@ -83,10 +83,13 @@ and glyphs that say something.
   `▸ ran 3 commands  edited 2 files`. Enter or a click opens it (`▾`). The
   full view is Ctrl-O or `/view`, and the choice is saved.
 - **Diff**: the file name once, on the tool header, with `+n −m` in the
-  status tones (the minus is U+2212). The body is a line diff: a dim gutter
-  with the file's line number, a `-` or `+` only on a changed line, and dim
-  unchanged lines as context. A run of unchanged lines folds to
-  `┄ n unchanged lines`. Only the words that changed are bold and underlined,
+  status tones (the minus is U+2212). The body is a line diff: a dim gutter,
+  a `-` or `+` only on a changed line, and dim unchanged lines as context.
+  Context and added lines show the new file's line number. A removed line
+  shows the old file's number, which can sit beside a higher new number
+  when the line was replaced. A run of unchanged lines folds to
+  `┄ n unchanged lines`, and the `┄` starts in the code column of the
+  shallowest line it hides. Only the words that changed are bold and underlined,
   and only when they are a minority of the line. A line that is mostly new
   stays plain colored text. Nothing is filled.
 - **Errors**: `✗` then the message, bold, in the transcript where it happened.

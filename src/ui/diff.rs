@@ -3,8 +3,10 @@
 //! Unchanged lines stay dim. A run of them longer than the context window
 //! folds to `┄ n unchanged lines`. Changed lines keep a `-` or `+` and, when
 //! the edit is a minority of the line, a bold underline on that span. The
-//! gutter is the file's line number, dim, so the sign still carries the
-//! meaning when color is gone. Nothing is filled.
+//! gutter is dim. Context and added lines take the new file's number;
+//! a removed line takes the old file's. The sign still carries the
+//! meaning when color is gone. A fold sits on the first column of code
+//! in the lines it hides. Nothing is filled.
 
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -40,7 +42,10 @@ enum Row<'a> {
         other: Option<&'a str>,
         token: Token,
     },
-    Fold(usize),
+    Fold {
+        count: usize,
+        indent: usize,
+    },
 }
 
 /// The body of an edit, numbered from `origin` (the file line of the first
@@ -156,10 +161,12 @@ fn layout<'a>(ops: &[Op<'a>], origin: u32) -> Vec<Row<'a>> {
     for (op, other) in &annotated {
         match *op {
             Op::Equal(text) => {
+                // Context is where the line landed, so the gutter keeps
+                // climbing after an insert instead of repeating the old number.
                 numbered.push((
                     false,
                     Row::Line {
-                        number: old_no,
+                        number: new_no,
                         sign: ' ',
                         text,
                         other: None,
@@ -283,7 +290,11 @@ fn fold<'a>(rows: &[(bool, Row<'a>)]) -> Vec<Row<'a>> {
                 push_range(&mut out, rows, start, index);
             } else {
                 push_range(&mut out, rows, start, start + CONTEXT);
-                out.push(Row::Fold(hidden));
+                let hidden_at = start + CONTEXT;
+                out.push(Row::Fold {
+                    count: hidden,
+                    indent: fold_indent(rows, hidden_at, index - CONTEXT),
+                });
                 push_range(&mut out, rows, index - CONTEXT, index);
             }
         }
@@ -308,8 +319,30 @@ fn emit_ends<'a>(
         return;
     }
     push_range(out, rows, start, start + head);
-    out.push(Row::Fold(hidden));
+    out.push(Row::Fold {
+        count: hidden,
+        indent: fold_indent(rows, start + head, end - tail),
+    });
     push_range(out, rows, end - tail, end);
+}
+
+/// Columns of leading whitespace on the shallowest hidden line. The fold
+/// marker sits there, in the code column, rather than in the left margin.
+fn fold_indent(rows: &[(bool, Row<'_>)], start: usize, end: usize) -> usize {
+    rows[start..end]
+        .iter()
+        .filter_map(|(_, row)| match row {
+            Row::Line { text, .. } => Some(leading_indent(text)),
+            Row::Fold { .. } => None,
+        })
+        .min()
+        .unwrap_or(0)
+}
+
+fn leading_indent(text: &str) -> usize {
+    text.chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .count()
 }
 
 fn push_range<'a>(out: &mut Vec<Row<'a>>, rows: &[(bool, Row<'a>)], start: usize, end: usize) {
@@ -333,7 +366,7 @@ fn copy_row<'a>(row: &Row<'a>) -> Row<'a> {
             other,
             token,
         },
-        Row::Fold(n) => Row::Fold(n),
+        Row::Fold { count, indent } => Row::Fold { count, indent },
     }
 }
 
@@ -342,15 +375,15 @@ fn paint(rows: &[Row<'_>]) -> Vec<Line<'static>> {
         .iter()
         .filter_map(|row| match row {
             Row::Line { number, .. } => Some(number.to_string().len()),
-            Row::Fold(_) => None,
+            Row::Fold { .. } => None,
         })
         .max()
         .unwrap_or(1);
     rows.iter()
         .map(|row| match row {
-            Row::Fold(n) => {
+            Row::Fold { count: n, indent } => {
                 let word = if *n == 1 { "line" } else { "lines" };
-                let pad = " ".repeat(width + 3);
+                let pad = " ".repeat(width + 3 + indent);
                 Line::from(Span::styled(
                     format!("{pad}┄ {n} unchanged {word}"),
                     theme::style(Token::Faint),
@@ -590,6 +623,82 @@ pub fn fold() {\n\
                 .trim_start()
                 .starts_with(|ch: char| ch.is_ascii_digit()),
             "fold row: {fold}"
+        );
+    }
+
+    /// The fold.rs edit from the house-frame shots: two inserts, then a
+    /// replaced format line, with a run of unchanged branches between them.
+    #[test]
+    fn a_multi_hunk_diff_numbers_the_new_file_and_aligns_the_fold() {
+        let old = [
+            "pub fn fold_summary(turn: &Turn) -> String {",
+            "    let mut tools = 0;",
+            "    for item in turn.items() {",
+            "        if let Item::Tool(t) = item {",
+            "            tools += 1;",
+            "        } else if let Item::Text(_) = item {",
+            "            let _ = item;",
+            "        } else if let Item::Image(_) = item {",
+            "            let _ = item;",
+            "        } else {",
+            "            let _ = item;",
+            "        }",
+            "    }",
+            "    format!(\"{tools} tools\")",
+            "}",
+        ]
+        .join("\n");
+        let new = [
+            "pub fn fold_summary(turn: &Turn) -> String {",
+            "    let mut tools = 0;",
+            "    let mut images = 0;",
+            "    for item in turn.items() {",
+            "        if let Item::Tool(t) = item {",
+            "            tools += 1;",
+            "            images += t.output.images().count();",
+            "        } else if let Item::Text(_) = item {",
+            "            let _ = item;",
+            "        } else if let Item::Image(_) = item {",
+            "            let _ = item;",
+            "        } else {",
+            "            let _ = item;",
+            "        }",
+            "    }",
+            "    format!(\"{tools} tools, {images} images\")",
+            "}",
+        ]
+        .join("\n");
+        let rows = text(&render(&old, &new, 3).rows);
+        let fold_pad = " ".repeat(2 + 3 + 8);
+        assert_eq!(
+            rows,
+            vec![
+                " 3   pub fn fold_summary(turn: &Turn) -> String {".to_string(),
+                " 4       let mut tools = 0;".to_string(),
+                " 5 +     let mut images = 0;".to_string(),
+                " 6       for item in turn.items() {".to_string(),
+                " 7           if let Item::Tool(t) = item {".to_string(),
+                " 8               tools += 1;".to_string(),
+                " 9 +             images += t.output.images().count();".to_string(),
+                "10           } else if let Item::Text(_) = item {".to_string(),
+                "11               let _ = item;".to_string(),
+                format!("{fold_pad}┄ 4 unchanged lines"),
+                "16           }".to_string(),
+                "17       }".to_string(),
+                "16 -     format!(\"{tools} tools\")".to_string(),
+                "18 +     format!(\"{tools} tools, {images} images\")".to_string(),
+                "19   }".to_string(),
+            ]
+        );
+        let fold = rows.iter().find(|row| row.contains('┄')).unwrap();
+        let brace = rows
+            .iter()
+            .find(|row| row.ends_with("        }"))
+            .expect("the shallowest hidden neighbour");
+        assert_eq!(
+            fold.find('┄'),
+            brace.find('}'),
+            "the fold starts in the code column\nfold: {fold}\ncode: {brace}"
         );
     }
 }
