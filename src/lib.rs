@@ -35,6 +35,7 @@ pub mod llm;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
+pub mod mux;
 pub mod onboarding;
 pub mod output;
 pub mod pi_plugins;

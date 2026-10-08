@@ -288,6 +288,18 @@ pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
     })
 }
 
+/// How Wizard treats a multiplexer prefix (`[ui] mux`).
+///
+/// `auto` detects tmux, screen, and zellij and doubles a binding that is the
+/// prefix. `off` leaves every binding as a single key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MuxMode {
+    #[default]
+    Auto,
+    Off,
+}
+
 /// Cosmetic TUI settings (`[ui]` in `config.toml`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiConfig {
@@ -323,6 +335,18 @@ pub struct UiConfig {
     /// "the default, definitively".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<String>,
+    /// `auto` (the default) doubles a key the multiplexer already owns.
+    /// `off` leaves the hints as single chords.
+    #[serde(default, skip_serializing_if = "mux_is_auto")]
+    pub mux: MuxMode,
+    /// A prefix to use instead of the one detection found, such as `ctrl-a`.
+    /// Empty means detect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux_prefix: Option<String>,
+}
+
+fn mux_is_auto(mode: &MuxMode) -> bool {
+    *mode == MuxMode::Auto
 }
 
 /// serde `skip_serializing_if` helper: keep `false` flags out of the written
@@ -347,6 +371,8 @@ impl Default for UiConfig {
             vim: false,
             compact: true,
             skin: None,
+            mux: MuxMode::Auto,
+            mux_prefix: None,
         }
     }
 }

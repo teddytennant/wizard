@@ -253,7 +253,7 @@ click a tool card           expand / collapse its output\n  \
 Ctrl-O                      compact / full view, saved\n  \
 Ctrl-P                      model picker  \u{b7}  Ctrl-T open or close every collapsed turn\n  \
                             (in the full view, Ctrl-T toggles the last tool card)\n  \
-Ctrl-A/E Home/End \u{2190}/\u{2192}       move cursor   \u{b7} Ctrl-W/U/K kill word/to start/to end\n  \
+Ctrl-A · Ctrl-E · Home · End · \u{2190}/\u{2192}  move cursor   \u{b7} Ctrl-W/U/K kill word/to start/to end\n  \
 Ctrl-G                      edit the prompt in $EDITOR\n  \
 Ctrl-C                      interrupt \u{b7} press twice to quit\n  \
 Esc                         close what is open; interrupt a running turn at the tail\n  \
@@ -1834,6 +1834,7 @@ impl CommandSurface for CommandContext<'_> {
 
     /// One channel: a refusal reads like any other line of the transcript.
     fn notice(&mut self, text: String) {
+        let text = crate::mux::rewrite(&text);
         self.app.notice(text);
     }
 

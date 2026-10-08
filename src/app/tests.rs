@@ -238,6 +238,7 @@ fn spinner_verb_is_deterministic_and_stable_within_a_busy_period() {
             vim: false,
             compact: false,
             skin: None,
+            ..crate::config::UiConfig::default()
         },
         ..Config::default()
     };
@@ -4010,7 +4011,7 @@ const TOKEN_SITES: &[(&str, u16, Token)] = &[
     ("(http://x.test)", 0, Token::Link),
     ("quoted line", 0, Token::Quote),
     ("weighing options", 0, Token::Faint),
-    ("⠋ probe", 0, Token::ToolRunning),
+    ("│ probe", 0, Token::ToolRunning),
     ("● inspect", 0, Token::ToolDone),
     ("✕ explode", 0, Token::ToolFailed),
     ("output line", 0, Token::Muted),

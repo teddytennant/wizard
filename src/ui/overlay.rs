@@ -44,7 +44,7 @@ fn draw_text(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
 }
 
 fn keys_lines() -> Vec<Line<'static>> {
-    crate::app::help_keys()
+    crate::mux::rewrite(crate::app::help_keys())
         .lines()
         .map(|line| Line::from(Span::styled(line.to_string(), dim())))
         .collect()

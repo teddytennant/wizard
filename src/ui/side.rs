@@ -46,7 +46,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::default());
         }
         for task in listed.iter().rev().take(4) {
-            lines.extend(task_rows(task, tasks, inner));
+            lines.extend(task_rows(task, tasks, inner, app.tick));
         }
     }
 
@@ -75,7 +75,7 @@ fn agent_rows(app: &App, pane: &crate::app::SubagentPane, inner: usize) -> Vec<L
     let clock = format!("{}:{:02}", elapsed / 60, elapsed % 60);
     let (glyph, style) = match pane.status {
         PaneStatus::Running => (
-            pane.glyph(app.tick).to_string(),
+            super::motion::glyph(super::motion::Kind::Subagent, app.tick),
             theme::style(Token::ToolRunning),
         ),
         PaneStatus::Done => ("●".to_string(), theme::style(Token::ToolDone)),
@@ -108,10 +108,10 @@ fn agent_rows(app: &App, pane: &crate::app::SubagentPane, inner: usize) -> Vec<L
         .unwrap_or("")
         .to_string();
     if !activity.is_empty() {
-        rows.extend(wrapped(
+        rows.extend(cap_activity(wrapped(
             Line::from(Span::styled(format!("  {activity}"), dim())),
             inner,
-        ));
+        )));
     }
     if pane.status == PaneStatus::Running {
         rows.extend(wrapped(progress_line(pane.steps, inner), inner));
@@ -141,6 +141,7 @@ fn task_rows(
     task: &crate::tools::tasks::Task,
     tasks: &crate::tools::tasks::TaskRegistry,
     inner: usize,
+    tick: u64,
 ) -> Vec<Line<'static>> {
     let elapsed = task
         .finished
@@ -148,9 +149,12 @@ fn task_rows(
         .saturating_duration_since(task.started);
     let clock = super::fmt_elapsed(elapsed).unwrap_or_else(|| "0s".to_string());
     let (glyph, style) = match task.status {
-        TaskStatus::Running => ("●", theme::style(Token::ToolRunning)),
-        TaskStatus::Done(0) => ("●", theme::style(Token::ToolDone)),
-        _ => ("✕", theme::style(Token::ToolFailed).bold()),
+        TaskStatus::Running => (
+            super::motion::glyph(super::motion::Kind::Tool, tick),
+            theme::style(Token::ToolRunning),
+        ),
+        TaskStatus::Done(0) => ("●".to_string(), theme::style(Token::ToolDone)),
+        _ => ("✕".to_string(), theme::style(Token::ToolFailed).bold()),
     };
     let state = match task.status {
         TaskStatus::Running => "running",
@@ -174,14 +178,17 @@ fn task_rows(
         ]),
         inner,
     );
-    if let Some((_, output)) = tasks.output(task.id, 4_000)
-        && let Some(last) = output.lines().rev().find(|line| !line.trim().is_empty())
-    {
-        let arm = glyphs::tool_arm().0.trim_end();
-        rows.extend(wrapped(
-            Line::from(Span::styled(format!("  {arm} {last}"), dim())),
-            inner,
-        ));
+    if let Some((_, output)) = tasks.output(task.id, 4_000) {
+        if let Some(bar) = super::motion::command_line(&task.command, &output, &clock, inner, tick)
+        {
+            rows.extend(wrapped(prefix_bar(bar), inner));
+        } else if let Some(last) = output.lines().rev().find(|line| !line.trim().is_empty()) {
+            let arm = glyphs::tool_arm().0.trim_end();
+            rows.extend(wrapped(
+                Line::from(Span::styled(format!("  {arm} {last}"), dim())),
+                inner,
+            ));
+        }
     }
     rows
 }
@@ -205,6 +212,34 @@ fn todo_row(item: &crate::tools::todo::TodoItem) -> Line<'static> {
 
 fn first_word(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or(command)
+}
+
+/// At most three lines of a subagent's note. The last ends in `…` when the
+/// rest is on the open run.
+const ACTIVITY_LINES: usize = 3;
+
+fn cap_activity(mut rows: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if rows.len() <= ACTIVITY_LINES {
+        return rows;
+    }
+    rows.truncate(ACTIVITY_LINES);
+    if let Some(line) = rows.last_mut() {
+        let style = line.spans.last().map(|span| span.style).unwrap_or_else(dim);
+        let mut text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        text.pop();
+        text.push('…');
+        *line = Line::from(Span::styled(text, style));
+    }
+    rows
+}
+
+fn prefix_bar(mut line: Line<'static>) -> Line<'static> {
+    line.spans.insert(0, Span::styled("  ", dim()));
+    line
 }
 
 /// Wrap `line` to `inner` columns. Continuation rows keep the line's hanging

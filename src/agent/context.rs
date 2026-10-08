@@ -613,6 +613,20 @@ pub async fn compact(
     client: &Arc<dyn LlmProvider>,
     model: &str,
 ) -> Compacted {
+    compact_reporting(history, anchor, budget, client, model, &|_, _| {}).await
+}
+
+/// [`compact`] plus a chunk counter. `report(done, total)` fires before the
+/// first summary call and after each chunk, so a bar can fill without
+/// inventing a percent.
+pub async fn compact_reporting(
+    history: &mut Vec<ChatMessage>,
+    anchor: Anchor,
+    budget: Budget,
+    client: &Arc<dyn LlmProvider>,
+    model: &str,
+    report: &(dyn Fn(u32, u32) + Sync),
+) -> Compacted {
     // First, for free: results the transcript itself proves are out of date.
     // Done before the boundary is chosen so the tail is measured at the size
     // it will actually be sent at, and so the summarizer is not paid to read
@@ -640,7 +654,7 @@ pub async fn compact(
     let count = end - start;
 
     let mut usage = CompactUsage::default();
-    match summarize_span(&history[start..end], client, model, &mut usage).await {
+    match summarize_span(&history[start..end], client, model, &mut usage, report).await {
         Ok(summary) => {
             let text = format!("{COMPACT_SUMMARY_HEADING}\n{summary}");
             let note = if history[end].role == Role::User {
@@ -1165,6 +1179,7 @@ async fn summarize_span(
     client: &Arc<dyn LlmProvider>,
     model: &str,
     usage: &mut CompactUsage,
+    report: &(dyn Fn(u32, u32) + Sync),
 ) -> Result<String> {
     // Render each message and pack into ~20k-char chunks, splitting oversized
     // messages at char boundaries.
@@ -1203,8 +1218,10 @@ async fn summarize_span(
         }
     }
 
+    let total = chunks.len() as u32;
+    report(0, total.max(1));
     let mut summary: Option<String> = None;
-    for chunk in &chunks {
+    for (index, chunk) in chunks.iter().enumerate() {
         let blob = match &summary {
             None => chunk.clone(),
             Some(prev) => format!(
@@ -1213,6 +1230,7 @@ async fn summarize_span(
             ),
         };
         summary = Some(summarize_transcript(&blob, client, model, usage).await?);
+        report(index as u32 + 1, total.max(1));
     }
     summary.ok_or_else(|| anyhow::anyhow!("nothing to summarize"))
 }

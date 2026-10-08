@@ -451,6 +451,11 @@ pub struct App {
     /// True while a background `/compact` is running: the status bar shows an
     /// animated progress bar instead of its usual contents.
     pub compacting: bool,
+    /// Tokens in the window when this compaction started, and how many
+    /// summary chunks have finished. The status bar's bar reads both.
+    pub compact_before: u64,
+    pub compact_done: u32,
+    pub compact_total: u32,
     /// Set by `/btw <question>`; the main loop answers it off the event loop
     /// against a snapshot of the conversation (so it works mid-turn too).
     /// Cleared once the task is spawned.
@@ -647,6 +652,9 @@ impl App {
             pending_edit_prompt: false,
             pending_compact: false,
             compacting: false,
+            compact_before: 0,
+            compact_done: 0,
+            compact_total: 0,
             pending_btw: None,
             btw_inflight: false,
             active_goal: None,
@@ -2885,6 +2893,11 @@ impl App {
             }
             // Owned by the main loop (it holds the agent slot / config); never
             // reach here.
+            Event::CompactProgress { done, total } => {
+                self.compact_done = done;
+                self.compact_total = total;
+                Ok(None)
+            }
             Event::AgentRebuilt(_)
             | Event::ProviderActivated(_)
             | Event::McpConnected { .. }

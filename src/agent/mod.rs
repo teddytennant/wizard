@@ -2007,6 +2007,16 @@ impl Agent {
     /// so resume and the model both see that stewardship happened (the full
     /// pre-compact transcript remains earlier in the JSONL).
     pub async fn compact_now(&mut self) -> CompactOutcome {
+        self.compact_reporting(&|_, _| {}).await
+    }
+
+    /// [`compact_now`] with a chunk counter. `report(done, total)` runs before
+    /// the first summary call and after each chunk, on the task that owns the
+    /// agent, so the TUI can fill a bar without polling.
+    pub async fn compact_reporting(
+        &mut self,
+        report: &(dyn Fn(u32, u32) + Sync),
+    ) -> CompactOutcome {
         let budget = context::Budget {
             window: context::effective_window(
                 self.client.context_window(&self.model).await,
@@ -2014,12 +2024,13 @@ impl Agent {
             ),
             byte_threshold: self.config.compact_threshold_bytes,
         };
-        let compacted = context::compact(
+        let compacted = context::compact_reporting(
             &mut self.history,
             context::Anchor::Conversation,
             budget,
             &self.client,
             &self.model,
+            report,
         )
         .await;
         self.record_compaction_usage(&compacted.usage);

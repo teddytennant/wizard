@@ -305,6 +305,7 @@ pub async fn run_tui(
         }
         Detection::Asked(query) => Some(query),
     };
+    crate::mux::install(&app.config.ui);
     let mut terminal = match setup_terminal() {
         Ok(terminal) => terminal,
         Err(err) => {
@@ -514,6 +515,7 @@ pub async fn run_tui(
             let rebuild = *rebuild;
             app.rebuilding = None;
             let was_compacting = app.compacting;
+            let restored_agent = rebuild.agent.is_some();
             app.compacting = false;
             if let Some(model) = rebuild.model.clone() {
                 if rebuild.pin_model {
@@ -551,7 +553,16 @@ pub async fn run_tui(
                 fork_snapshot = Some(agent.fork_context());
                 agent_slot = Some(agent);
             }
-            app.notice(rebuild.notice);
+            if was_compacting && restored_agent && app.compact_before > 0 {
+                let after = app.status.context_tokens;
+                app.notice(format!(
+                    "compacted {} → {}",
+                    crate::ui::fmt_tokens(app.compact_before),
+                    crate::ui::fmt_tokens(after),
+                ));
+            } else {
+                app.notice(rebuild.notice);
+            }
             // An empty agent slot is invisible: the composer still accepts
             // text, `drain_message_queue` still declines to start a turn, and
             // the session is over without ever saying so. Try again from the
@@ -907,11 +918,15 @@ pub async fn run_tui(
             match agent_slot.take() {
                 Some(mut agent) => {
                     app.compacting = true;
+                    app.compact_before = app.status.context_tokens;
+                    app.compact_done = 0;
+                    app.compact_total = 0;
                     // The agent has left its slot, so a panic in the summariser
                     // would strand it: no `AgentRebuilt`, no agent, `compacting`
                     // lit forever, and every message from then on silently
                     // queued. The fallback hands the loop an empty rebuild,
                     // which its recovery path turns back into a working agent.
+                    let progress = events.sender();
                     spawn_answering(
                         events.sender(),
                         Event::AgentRebuilt(Box::new(AgentRebuild {
@@ -924,11 +939,16 @@ pub async fn run_tui(
                             // Bounded for the same reason the rebuild is: a
                             // summarisation call that never returns holds the
                             // agent hostage, and there is no key that gets it
-                            // back.
+                            // back. Chunk counts ride the same channel the
+                            // rebuild will, so the bar fills while this task
+                            // still holds the agent.
                             let rebuild = match within(
                                 "compacting the conversation",
                                 COMPACTION_DEADLINE,
-                                agent.compact_now(),
+                                agent.compact_reporting(&|done, total| {
+                                    let _ =
+                                        progress.try_send(Event::CompactProgress { done, total });
+                                }),
                             )
                             .await
                             {

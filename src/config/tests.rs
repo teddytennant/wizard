@@ -274,6 +274,7 @@ fn full_file_round_trips() {
             vim: true,
             compact: true,
             skin: Some("codex".to_string()),
+            ..UiConfig::default()
         },
         web: WebConfig {
             fetch_max_bytes: 250_000,
@@ -488,6 +489,19 @@ fn compact_view_is_on_unless_the_ui_table_says_otherwise() {
     verbose.ui.compact = false;
     let saved = toml::to_string_pretty(&verbose).expect("serializes");
     assert!(saved.contains("compact = false"), "{saved}");
+}
+
+#[test]
+fn mux_defaults_to_auto_and_a_prefix_can_be_named() {
+    let config: Config = toml::from_str("").expect("valid toml");
+    assert_eq!(config.ui.mux, MuxMode::Auto);
+    assert_eq!(config.ui.mux_prefix, None);
+    let saved = toml::to_string_pretty(&Config::default()).expect("serializes");
+    assert!(!saved.contains("mux"), "{saved}");
+    let config: Config =
+        toml::from_str("[ui]\nmux = \"off\"\nmux_prefix = \"ctrl-a\"").expect("valid toml");
+    assert_eq!(config.ui.mux, MuxMode::Off);
+    assert_eq!(config.ui.mux_prefix.as_deref(), Some("ctrl-a"));
 }
 
 #[test]

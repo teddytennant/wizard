@@ -232,12 +232,17 @@ pub enum ColorDepth {
 impl ColorDepth {
     /// Read the depth from the process environment.
     pub fn detect() -> ColorDepth {
-        Self::from_env(
+        let term = std::env::var("TERM").ok();
+        let depth = Self::from_env(
             std::env::var(ENV_COLOR).ok().as_deref(),
             std::env::var("NO_COLOR").ok().as_deref(),
             std::env::var("COLORTERM").ok().as_deref(),
-            std::env::var("TERM").ok().as_deref(),
-        )
+            term.as_deref(),
+        );
+        // Inside tmux or screen, COLORTERM is often the outer shell's and the
+        // pane is 256. [`crate::mux::degrade`] keeps truecolor only when the
+        // multiplexer advertises RGB.
+        crate::mux::degrade(depth, term.as_deref())
     }
 
     /// Testable core of [`detect`](Self::detect).

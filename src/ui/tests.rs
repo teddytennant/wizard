@@ -1621,10 +1621,10 @@ fn an_edit_card_shows_the_change_as_a_diff() {
         timing: ToolTiming::default(),
     };
     let rows = card(&tool);
-    assert_eq!(rows[0], "● edit_file  src/x.rs:12", "{rows:?}");
-    assert_eq!(rows[1], "╰ - let a = 1;");
-    assert_eq!(rows[2], "  + let a = 2;");
-    assert_eq!(rows[3], "  + let b = 3;");
+    assert_eq!(rows[0], "● edit_file  src/x.rs:12 +2 \u{2212}1", "{rows:?}");
+    assert_eq!(rows[1], "╰ 12 - let a = 1;");
+    assert_eq!(rows[2], "  12 + let a = 2;");
+    assert_eq!(rows[3], "  13 + let b = 3;");
     assert!(
         !rows.iter().any(|row| row.contains("replaced")),
         "the sentence is not the body: {rows:?}"
@@ -2055,7 +2055,11 @@ fn a_streaming_reply_keeps_its_caret_and_the_composer() {
     let (rows, _) = screen_at(&app, 80, 24);
     let screen = rows.join("\n");
     assert!(screen.contains("The parser walks each token"), "{screen}");
-    assert!(screen.contains('▍'), "streaming caret:\n{screen}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("The parser walks each token") && row.contains('⠋')),
+        "streaming caret is the thinking braille:\n{screen}"
+    );
     assert!(
         rows.iter().any(|row| row.contains('❯')),
         "composer:\n{screen}"
@@ -2081,10 +2085,10 @@ fn a_tool_call_is_a_single_header_row() {
         .find(|row| row.contains("execute") && row.contains("cargo test"))
         .expect("tool header");
     assert!(
-        header.contains('⠋'),
-        "a running call shows the spinner, not a box: {header}"
+        header.contains('│'),
+        "a running call shows the line spinner, not a box: {header}"
     );
-    assert!(!header.contains('┌') && !header.contains('│'), "{header}");
+    assert!(!header.contains('┌') && !header.contains('└'), "{header}");
 }
 
 /// Every command the TUI can run shows up in the slash menu, by name.
@@ -2513,8 +2517,10 @@ fn the_house_palette_reads_on_a_dark_terminal() {
         "body ink follows the terminal"
     );
     assert!(
-        colors.contains(&Color::DarkGray),
-        "chrome is grey on a dark ground"
+        colors
+            .iter()
+            .any(|color| matches!(color, Color::Rgb(_, _, _))),
+        "chrome is a real grey, not the ANSI darkgray that vanishes on slate"
     );
     assert!(!colors.contains(&Color::White));
     for y in 0..buffer.area.height {
@@ -2602,6 +2608,9 @@ fn colors_are_emitted_in_truecolor_and_suppressed_under_no_color() {
 
     let wizard = theme::load("wizard").expect("wizard theme");
     let accent = wizard.declared(theme::Token::Accent);
+    let add = wizard.declared(theme::Token::DiffAdd);
+    let del = wizard.declared(theme::Token::DiffDel);
+    let faint = wizard.declared(theme::Token::Faint);
     assert!(
         matches!(accent, Color::Rgb(_, _, _)),
         "the house accent is a real color, got {accent:?}"
@@ -2618,7 +2627,7 @@ fn colors_are_emitted_in_truecolor_and_suppressed_under_no_color() {
         args: serde_json::json!({
             "path": "src/transcript/fold.rs",
             "old_string": "tools += 1;",
-            "new_string": "tools += 1;\nimages += t.output.images().count();",
+            "new_string": "tools += 2;\nimages += t.output.images().count();",
         }),
     });
     app.handle_agent_event(AgentEvent::ToolFinished {
@@ -2641,21 +2650,21 @@ fn colors_are_emitted_in_truecolor_and_suppressed_under_no_color() {
             if (cell.symbol() == "◆" || cell.symbol() == "❯") && cell.fg == accent {
                 saw_accent = true;
             }
-            if cell.fg == Color::Green {
+            if cell.fg == add {
                 saw_add = true;
             }
-            if cell.fg == Color::Red {
+            if cell.fg == del {
                 saw_del = true;
             }
-            if cell.fg == Color::DarkGray {
+            if cell.fg == faint {
                 saw_dim = true;
             }
         }
     }
     assert!(saw_accent, "accent foreground was not emitted");
-    assert!(saw_add, "diff additions were not green");
-    assert!(saw_del, "diff deletions were not red");
-    assert!(saw_dim, "dim chrome was not darker than the body");
+    assert!(saw_add, "diff additions were not the sage");
+    assert!(saw_del, "diff deletions were not the rose");
+    assert!(saw_dim, "dim chrome was not the faint tone");
 
     let _pin = theme::pin(std::sync::Arc::new(
         wizard.with_depth(theme::ColorDepth::Mono),
@@ -2818,4 +2827,166 @@ fn a_diff_marks_the_changed_word_without_a_fill() {
         })
     });
     assert!(marked, "the changed digit should be underlined: {lines:?}");
+}
+
+/// The draft sits between two dim rules. The status line is the row under
+/// the lower one. A multiline draft grows the gap; a narrow frame does not
+/// spill the rule.
+#[test]
+fn the_composer_sits_between_two_rules() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.input = "hello".to_string();
+    let area = Rect::new(0, 0, 80, 24);
+    let laid = regions(&app, area);
+    let (_, buffer) = screen_at(&app, 80, 24);
+    let row = |buffer: &Buffer, area: Rect, y: u16| -> String {
+        (0..area.width)
+            .map(|x| buffer[(area.x + x, y)].symbol())
+            .collect()
+    };
+    let top = laid.composer.y;
+    let bottom = laid.composer.y + laid.composer.height - 1;
+    assert!(row(&buffer, laid.composer, top).contains('─'), "top rule");
+    assert!(
+        row(&buffer, laid.composer, bottom).contains('─'),
+        "bottom rule"
+    );
+    assert!(
+        row(&buffer, laid.composer, top + 1).contains('❯'),
+        "the prompt is between the rules"
+    );
+    assert!(
+        laid.footer.y > bottom,
+        "the status line is below the bottom rule"
+    );
+    for x in 0..laid.composer.width {
+        assert_eq!(buffer[(laid.composer.x + x, bottom)].bg, Color::Reset);
+    }
+
+    app.input = "one\ntwo\nthree".to_string();
+    let grown = regions(&app, area);
+    assert!(
+        grown.composer.height > laid.composer.height,
+        "a multiline draft grows the composer"
+    );
+    let (_, buffer) = screen_at(&app, 80, 24);
+    let top = grown.composer.y;
+    let bottom = grown.composer.y + grown.composer.height - 1;
+    assert!(row(&buffer, grown.composer, top).contains('─'));
+    assert!(row(&buffer, grown.composer, bottom).contains('─'));
+    let between = (top + 1..bottom).any(|y| row(&buffer, grown.composer, y).contains('❯'));
+    assert!(between, "the prompt stays between the two rules");
+
+    let narrow = Rect::new(0, 0, 40, 16);
+    let laid = regions(&app, narrow);
+    let (_, buffer) = screen_at(&app, 40, 16);
+    let y = laid.composer.y + laid.composer.height - 1;
+    let rule = row(&buffer, laid.composer, y);
+    assert_eq!(rule.chars().count(), laid.composer.width as usize);
+    assert!(rule.contains('─'), "narrow bottom rule: {rule:?}");
+    assert!(!rule.contains('\n'));
+}
+
+/// A long note on the rail stops at three lines. Opening the run shows the rest.
+#[test]
+fn the_rail_folds_a_long_note_and_the_open_run_shows_it() {
+    use crate::agent::AgentEvent;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    let tail = "TAILTOKEN-fold-the-rest";
+    let note = format!(
+        "The parser walks every token in the turn and then counts images and tools and \
+         skipped blocks before it writes the summary that the rail must not try to show \
+         in full because the column is narrow {tail}"
+    );
+    app.handle_agent_event(AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: Some(1),
+        name: "researcher".to_string(),
+        task: "where is the parser".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::SubagentRunText {
+        run: 1,
+        text: note.clone(),
+    });
+
+    let side = regions(&app, Rect::new(0, 0, 132, 36)).side;
+    let (_, buffer) = screen_at(&app, 132, 36);
+    let mut rail = String::new();
+    for y in side.y..side.y + side.height {
+        for x in side.x..side.x + side.width {
+            rail.push_str(buffer[(x, y)].symbol());
+        }
+        rail.push('\n');
+    }
+    assert!(
+        rail.contains('…'),
+        "the folded note ends in an ellipsis:\n{rail}"
+    );
+    assert!(!rail.contains(tail), "the tail stays off the rail:\n{rail}");
+
+    app.attach_pane(0);
+    let screen = screen_at(&app, 132, 36).0.join("\n");
+    assert!(
+        screen.contains(tail),
+        "opening the run shows the whole note:\n{screen}"
+    );
+}
+
+/// Accent and the quiet tones clear the same contrast floor on slate and cream.
+/// A single foreground cannot reach 4.5:1 on both of those grounds; the floor
+/// is the ridge between them.
+#[test]
+fn the_house_tones_read_on_slate_and_on_cream() {
+    let theme = theme::load("wizard").expect("wizard theme");
+    let slate = (0x3d, 0x4f, 0x66);
+    let cream = (0xf4, 0xef, 0xe4);
+    for token in [
+        theme::Token::Accent,
+        theme::Token::Faint,
+        theme::Token::Muted,
+        theme::Token::DiffAdd,
+        theme::Token::DiffDel,
+        theme::Token::Error,
+        theme::Token::Success,
+    ] {
+        let Color::Rgb(r, g, b) = theme.declared(token) else {
+            panic!("{} is not an rgb tone", token.key());
+        };
+        let on_slate = contrast((r, g, b), slate);
+        let on_cream = contrast((r, g, b), cream);
+        assert!(
+            on_slate >= 2.6 && on_cream >= 2.6,
+            "{} is {on_slate:.2} on slate and {on_cream:.2} on cream",
+            token.key()
+        );
+    }
+    let Color::Rgb(r, g, _) = theme.declared(theme::Token::DiffDel) else {
+        unreachable!()
+    };
+    assert!(r > g, "a deletion stays warmer than it is green");
+    let Color::Rgb(r, g, _) = theme.declared(theme::Token::DiffAdd) else {
+        unreachable!()
+    };
+    assert!(g > r, "an addition stays greener than it is red");
+}
+
+fn contrast(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> f64 {
+    let l = |c: (u8, u8, u8)| {
+        let lin = |v: u8| {
+            let c = f64::from(v) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.0) + 0.7152 * lin(c.1) + 0.0722 * lin(c.2)
+    };
+    let (a, b) = (l(fg), l(bg));
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
 }

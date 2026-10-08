@@ -89,6 +89,7 @@ pub(super) fn setup_terminal() -> Result<Tui> {
         stdout,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableFocusChange,
         crossterm::event::EnableMouseCapture,
     )
     .context("entering alternate screen")?;
@@ -1022,6 +1023,7 @@ fn restore_terminal() -> Result<()> {
     crossterm::execute!(
         std::io::stdout(),
         crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableFocusChange,
         crossterm::event::DisableBracketedPaste,
         crossterm::terminal::LeaveAlternateScreen,
     )
