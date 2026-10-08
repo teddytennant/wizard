@@ -39,8 +39,10 @@ pub struct UsageTracker {
     session_completion: AtomicU64,
     turn_prompt: AtomicU64,
     turn_completion: AtomicU64,
-    /// Prompt size of the most recent model call, +1 so 0 means "unknown"
-    /// (a genuinely 0-token prompt cannot occur: the system prompt counts).
+    /// Prompt size of the most recent model call that reported one, +1 so 0
+    /// means "unknown". A reported 0 is not stored: the system prompt is on
+    /// every request, so an empty prompt is not a measurement, and treating
+    /// it as one zeroes the context meter.
     last_prompt: AtomicU64,
     session_cache_read: AtomicU64,
     session_cache_write: AtomicU64,
@@ -61,8 +63,14 @@ impl UsageTracker {
         if let Some(prompt) = prompt_tokens {
             self.session_prompt.fetch_add(prompt, Ordering::Relaxed);
             self.turn_prompt.fetch_add(prompt, Ordering::Relaxed);
-            self.last_prompt
-                .store(prompt.saturating_add(1), Ordering::Relaxed);
+            // 0 is not a reading. Storing it (as 1, so it reads back as
+            // `Some(0)`) makes the meter report an empty window, and a later
+            // 0 wipes a count that was real. Completion tokens may be 0; a
+            // prompt may not.
+            if prompt > 0 {
+                self.last_prompt
+                    .store(prompt.saturating_add(1), Ordering::Relaxed);
+            }
         }
         if let Some(completion) = completion_tokens {
             self.session_completion
@@ -226,8 +234,9 @@ impl UsageTracker {
         )
     }
 
-    /// Prompt size of the most recent model call, when the backend reported
-    /// one. Drives token-aware compaction.
+    /// Prompt size of the most recent model call that reported a real count.
+    /// `None` when the backend has not, including a reported 0. Drives
+    /// token-aware compaction.
     pub fn last_prompt_tokens(&self) -> Option<u64> {
         match self.last_prompt.load(Ordering::Relaxed) {
             0 => None,
@@ -1256,6 +1265,23 @@ mod tests {
         assert_eq!(tracker.session_totals(), (0, 0));
         assert_eq!(tracker.turn_totals(), (0, 0));
         assert_eq!(tracker.last_prompt_tokens(), None);
+    }
+
+    /// A provider that sends `prompt_tokens: 0` did not measure the prompt.
+    /// That must not become the context meter's last reading, and it must not
+    /// wipe a reading that was real. The completion half can still be 0.
+    #[test]
+    fn a_zero_prompt_count_is_not_a_reading() {
+        let tracker = UsageTracker::new();
+        tracker.record(Some(0), Some(0));
+        assert_eq!(tracker.last_prompt_tokens(), None);
+        assert_eq!(tracker.session_totals(), (0, 0));
+
+        tracker.record(Some(400), Some(10));
+        tracker.record(Some(0), Some(0));
+        assert_eq!(tracker.last_prompt_tokens(), Some(400));
+        assert_eq!(tracker.session_totals(), (400, 10));
+        assert_eq!(tracker.turn_totals(), (400, 10));
     }
 
     /// Reasoning rides beside the totals, never inside them a second time:
