@@ -6,6 +6,23 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.4] - 2026-10-08
+
+### Changed
+
+- **The house TUI is quieter.** Subagents stay on one row until focused, a turn's tool work collapses to one line, and the frame stays on the terminal's own background. Frames are drawn inside one synchronized update, so a busy turn no longer tears.
+- **`/ui` switches looks in place**, and the looks pin moves to openw `1b51ada`. The name in the frame says wizard.
+
+### Added
+
+- **A HOL Guard pre-tool hook adapter** in `contrib/hol-guard-hook.py`, with a test and a section in `docs/hol-guard.md`.
+
+### Fixed
+
+- **A torn last line in a session file broke the next append.** Wizard now seals the line before writing.
+- **A reported prompt size of zero was counted** in usage totals. It is ignored.
+- **The `safe` token profile kept old tool-call arguments in full.** It digests them now, like old tool results.
+
 ## [3.8.3] - 2026-10-08
 
 Ship the four full looks in the release tarball. A new install was reporting `/ui opencode` and `/ui pi` as not installed: the installer tried to clone `teddytennant/openw`, which did not exist, and skipped the build on a machine without cargo. The installer and `wizard update` now place `wizard-ui-opencode`, `wizard-ui-pi`, `wizard-ui-codex` and `wizard-ui-grok` next to wizard.
