@@ -864,7 +864,9 @@ impl XaiTokenSource {
         cache.tokens.as_mut().ok_or_else(|| {
             refresh_error(
                 Some(401),
-                "not signed in to xAI; run `wizard --login xai` (or /login xai) first".to_string(),
+                "not signed in to xAI; the session may have expired or been rejected and was \
+                 cleared; run `wizard --login xai` (or /login xai) again"
+                    .to_string(),
             )
         })
     }
@@ -924,8 +926,8 @@ impl XaiTokenSource {
             return Err(refresh_error(
                 Some(401),
                 format!(
-                    "the xAI session was revoked or expired (HTTP {status}: {body}); \
-                     run `wizard --login xai` to sign in again"
+                    "the xAI session expired or was rejected (HTTP {status}: {body}); the \
+                     stored xAI session was cleared; run `wizard --login xai` again"
                 ),
             ));
         }
@@ -1577,6 +1579,28 @@ mod tests {
                 .is_transient()
         );
         assert!(format!("{err:#}").contains("wizard --login xai"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_refresh_that_cleared_the_session_names_the_relogin_fix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("xai_oauth.json");
+        save_tokens(&path, &sample_tokens("at", Some("spent-rt"))).expect("save");
+        let mut cache = TokenCache {
+            tokens: Some(sample_tokens("at", Some("spent-rt"))),
+            refreshed_at: None,
+        };
+        assert!(
+            !forget_spent_grant(&mut cache, &path, "spent-rt"),
+            "the spent grant should be deleted"
+        );
+        let source = XaiTokenSource::with_path(path);
+        let err = source.bearer().await.expect_err("must fail");
+        let detail = format!("{err:#}");
+        assert!(detail.contains("expired"), "{detail}");
+        assert!(detail.contains("rejected"), "{detail}");
+        assert!(detail.contains("was cleared"), "{detail}");
+        assert!(detail.contains("wizard --login xai"), "{detail}");
     }
 
     /// A 401 that another task's refresh has already answered must not spend a

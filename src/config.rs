@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
@@ -1910,9 +1910,12 @@ impl Config {
     /// until the user found and deleted it by hand. A rename is atomic, so a
     /// reader sees the whole old file or the whole new one.
     pub fn save(&self) -> Result<()> {
-        let path = Self::path()?;
+        self.save_to(&Self::path()?)
+    }
+
+    fn save_to(&self, path: &Path) -> Result<()> {
         let raw = toml::to_string_pretty(self).context("serializing config")?;
-        crate::platform::secrets::write_atomic(&path, raw.as_bytes())
+        crate::platform::secrets::write_private_atomic(path, raw.as_bytes())
             .with_context(|| format!("writing {}", path.display()))
     }
 

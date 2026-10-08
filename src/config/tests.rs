@@ -728,6 +728,30 @@ fn saved_default_config_stays_llamacpp_on_reload() {
 }
 
 #[test]
+fn rewriting_config_restores_owner_only_permissions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    let config = Config::default();
+    config.save_to(&path).expect("save");
+    assert!(
+        crate::platform::secrets::is_private_file(&path).expect("stat"),
+        "first save should write 0600"
+    );
+
+    crate::platform::secrets::expose_to_other_users(&path).expect("loosen mode");
+    assert!(
+        !crate::platform::secrets::is_private_file(&path).expect("stat"),
+        "test setup should make the file non-private"
+    );
+
+    config.save_to(&path).expect("rewrite");
+    assert!(
+        crate::platform::secrets::is_private_file(&path).expect("stat"),
+        "rewrite should restore 0600"
+    );
+}
+
+#[test]
 fn llamacpp_provider_round_trips_through_toml() {
     let original = Config {
         providers: vec![ProviderConfig {
