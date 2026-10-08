@@ -11844,7 +11844,7 @@ dependencies = [
 
 [[package]]
 name = "zeron"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -11868,7 +11868,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-doc"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "chrono",
  "loro",
@@ -11882,7 +11882,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-engine"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11922,7 +11922,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-harness"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11949,7 +11949,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-mcp"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11967,7 +11967,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-preview"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11995,7 +11995,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-proto"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "chrono",
  "pulldown-cmark",
@@ -12005,7 +12005,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-rpc"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -12022,7 +12022,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-sync"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "block2 0.6.2",
  "chrono",
@@ -12044,7 +12044,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-syntax"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
@@ -12078,7 +12078,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-theme"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -12093,7 +12093,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-ui"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -12159,7 +12159,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-update"
-version = "3.8.2"
+version = "3.8.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
