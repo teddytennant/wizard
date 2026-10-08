@@ -8,10 +8,10 @@
 //! - `safe` fixes skill frontmatter parsing, sends the subagent roster as
 //!   names only, sends a continuous run's mission once per compaction, stubs
 //!   an identical re-read of an unchanged file, stops repeating a subagent
-//!   result the completion note already delivered, and puts MCP tools behind
-//!   `tool_search`.
-//! - `lean` defers every tool outside the everyday set behind `tool_search`,
-//!   digests old tool-call arguments, and caps `execute` output at 12 KB.
+//!   result the completion note already delivered, puts MCP tools behind
+//!   `tool_search`, and digests old tool-call arguments.
+//! - `lean` defers every tool outside the everyday set behind `tool_search`
+//!   and caps `execute` output at 12 KB.
 //! - `min` cuts the system prompt and core tool schemas to the bone.
 
 use std::sync::OnceLock;

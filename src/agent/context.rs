@@ -871,12 +871,13 @@ pub(crate) fn shrink_old_results(
         history,
         keep_whole,
         min_reclaim,
-        crate::token_profile::current().lean(),
+        crate::token_profile::current().safe(),
     )
 }
 
-/// [`shrink_old_results`] with the `lean` profile's argument digest chosen by
-/// the caller, so a test can exercise both.
+/// [`shrink_old_results`] with argument digest chosen by the caller, so a
+/// test can exercise both. On for [`crate::token_profile::TokenProfile::safe`]
+/// and above; `stock` leaves arguments whole.
 fn shrink_old_results_with(
     history: &mut [ChatMessage],
     keep_whole: usize,
@@ -901,7 +902,7 @@ fn shrink_old_results_with(
         let calls = calls_by_id(history);
         let mut seen = 0usize;
         // Calls whose results fall in the digest band: their arguments are as
-        // far back as their results, and under the `lean` profile they go too.
+        // far back as their results, and on `safe` and above they go too.
         let mut old_calls: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (index, message) in history.iter().enumerate() {
             for (block_index, block) in message.content.iter().enumerate() {
@@ -1772,6 +1773,65 @@ mod tests {
             0,
             "a second pass finds nothing left to digest"
         );
+    }
+
+    /// Old `write_file` bodies are the largest thing a long session re-sends,
+    /// and on `safe` they are digested with the old results. `stock` still
+    /// sends them whole. The printed counts are
+    /// [`crate::llm::estimate_history_tokens`] for this fixture.
+    #[test]
+    fn safe_digests_old_write_arguments() {
+        const STEPS: usize = 28;
+        let content = "x".repeat(8 * 1024);
+        let mut history = vec![ChatMessage::system("you are wizard")];
+        for step in 0..STEPS {
+            let mut call_message = ChatMessage::assistant(format!("step {step}"));
+            let mut call = crate::llm::ToolCall::new(
+                "write_file",
+                serde_json::json!({ "path": format!("src/f{step}.rs"), "content": content }),
+            );
+            call.id = format!("id{step}");
+            call_message.push_tool_call(call);
+            history.push(call_message);
+            history.push(ChatMessage::tool_result(
+                format!("id{step}"),
+                "write_file",
+                "wrote it",
+            ));
+        }
+
+        let before = crate::llm::estimate_history_tokens(&history);
+        let mut stock = history.clone();
+        assert_eq!(
+            shrink_old_results_with(&mut stock, KEEP_WHOLE_RESULTS, 0, false),
+            0,
+            "stock leaves the write bodies in the prompt"
+        );
+        assert_eq!(crate::llm::estimate_history_tokens(&stock), before);
+
+        let digested = STEPS - KEEP_WHOLE_RESULTS;
+        let shrunk = shrink_old_results_with(&mut history, KEEP_WHOLE_RESULTS, 0, true);
+        let after = crate::llm::estimate_history_tokens(&history);
+        assert_eq!(shrunk, digested);
+        eprintln!(
+            "write-arg digest fixture: {before} est. tokens before, {after} after, {digested} of {STEPS} calls digested"
+        );
+        assert!(
+            after * 2 < before,
+            "digesting the old write bodies should cut this history by more than half: {before} -> {after}"
+        );
+
+        // The production path follows the process profile, which defaults to
+        // `safe` and therefore digests. A profile already chosen for this
+        // process (the flag is process-global) is honored instead.
+        if crate::token_profile::current().safe() {
+            let mut via_profile = stock;
+            assert_eq!(
+                shrink_old_results(&mut via_profile, KEEP_WHOLE_RESULTS, 0),
+                digested
+            );
+            assert_eq!(crate::llm::estimate_history_tokens(&via_profile), after);
+        }
     }
 
     /// A tool result several times the per-result budget.

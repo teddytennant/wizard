@@ -6,8 +6,8 @@ request. The default is `safe`.
 | Profile | What it changes |
 |---|---|
 | `stock` | Nothing. The harness as it was through 3.2.5. |
-| `safe` | Skill frontmatter is read as YAML (a nested `always: true` no longer puts a skill's whole body in every prompt). Subagents are listed one line each. A continuous run's cycle prompt points at the pinned mission instead of repeating it. An identical re-read of an unchanged file returns a short stub. `subagent_status` stops repeating a report the completion note already delivered. MCP tools are listed by name and loaded on first call. |
-| `lean` | `safe`, plus every tool outside the everyday set (`execute`, `read_file`, `edit_file`, `write_file`, `search_files`, `todo`, `spawn_subagent`) is deferred, old tool-call arguments are digested along with old results, and `execute` output is capped at 12 KB with the rest spilled to a file. |
+| `safe` | Skill frontmatter is read as YAML (a nested `always: true` no longer puts a skill's whole body in every prompt). Subagents are listed one line each. A continuous run's cycle prompt points at the pinned mission instead of repeating it. An identical re-read of an unchanged file returns a short stub. `subagent_status` stops repeating a report the completion note already delivered. MCP tools are listed by name and loaded on first call. Old tool-call arguments are digested along with old results. |
+| `lean` | `safe`, plus every tool outside the everyday set (`execute`, `read_file`, `edit_file`, `write_file`, `search_files`, `todo`, `spawn_subagent`) is deferred, and `execute` output is capped at 12 KB with the rest spilled to a file. |
 | `min` | `lean`, plus a short system prompt and terse schemas for four core tools. |
 
 Deferred tools run when the model calls them by name. `tool_search` returns a
@@ -55,7 +55,8 @@ original tests and fails if it edits them), two tries each, 64 runs:
 | min | 16/16 | 568k | $0.66 | 349 s |
 
 These runs predate MCP deferral under `safe`, so its per-task number above
-still carries the Playwright schemas on every call.
+still carries the Playwright schemas on every call. They also predate
+digesting old tool-call arguments on `safe`.
 
 `lean` and `min` send far less per request but take 3 to 5 more calls per
 task, and each extra call adds uncached tokens and output. The trimmed prompt
