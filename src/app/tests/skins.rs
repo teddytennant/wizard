@@ -650,6 +650,12 @@ fn the_health_line_names_the_fix() {
     );
     assert_eq!(
         super::health_line(
+            "not signed in to xAI; the session may have expired or been rejected and was cleared; run `wizard --login xai` (or /login xai) again"
+        ),
+        "xAI session expired/rejected and was cleared: /login xai"
+    );
+    assert_eq!(
+        super::health_line(
             "https://api.anthropic.com rejected the API key (HTTP 401), check the env var"
         ),
         "api.anthropic.com rejected the key (401): /provider to replace it"

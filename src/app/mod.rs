@@ -145,6 +145,13 @@ pub fn health_line(err: &str) -> String {
     if err.starts_with("no API key") {
         return err.to_string();
     }
+    if err.contains("not signed in to xAI")
+        && err.contains("expired")
+        && err.contains("rejected")
+        && err.contains("was cleared")
+    {
+        return "xAI session expired/rejected and was cleared: /login xai".to_string();
+    }
     if err.contains("not signed in to xAI") {
         return "not signed in to xAI: /login xai".to_string();
     }
