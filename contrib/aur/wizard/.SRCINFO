@@ -1,6 +1,6 @@
 pkgbase = wizard
 	pkgdesc = One line. Your sovereign agent. Self-extending. Bring any model
-	pkgver = 3.8.1
+	pkgver = 3.8.3
 	pkgrel = 1
 	url = https://github.com/teddytennant/wizard
 	arch = x86_64
@@ -10,7 +10,7 @@ pkgbase = wizard
 	depends = gcc-libs
 	depends = glibc
 	options = !lto
-	source = wizard-3.8.1.tar.gz::https://github.com/teddytennant/wizard/archive/refs/tags/v3.8.1.tar.gz
-	sha256sums = 62a6a3ec71df3a0e8d3425aaa489fb08dd8a87b48ad431036d23e116ba3b321d
+	source = wizard-3.8.3.tar.gz::https://github.com/teddytennant/wizard/archive/refs/tags/v3.8.3.tar.gz
+	sha256sums = de4d2074b234fde00fd1f8d067e6cdb92ba56a89802b9fe4d21163aa3c5cedc2
 
 pkgname = wizard
