@@ -1362,11 +1362,16 @@ fn tool_card_lines(
     };
     // `execute` folds a non-zero exit into its last output line; the header
     // is where the reader looks for it, so it moves up there and the body
-    // keeps only what the command printed.
+    // keeps only what the command printed. Humanizing happens after that
+    // split, or the exit line would be painted twice.
     let (output, exit_code) = match output {
         Some(text) if is_error => split_exit_code(text),
         other => (other, None),
     };
+    // The model still receives the harness sentences (how to poll a
+    // background task, that a subagent will report back). The transcript
+    // shows one human line instead of that boilerplate.
+    let display = output.map(human_tool_text);
 
     let chrome = skin::chrome();
     let glyph = match (running, is_error) {
@@ -1410,7 +1415,10 @@ fn tool_card_lines(
     }
     let hidden = match &edit {
         Some(rows) => rows.len(),
-        None => output.map(|text| text.lines().count()).unwrap_or(0),
+        None => display
+            .as_ref()
+            .map(|text| text.lines().count())
+            .unwrap_or(0),
     };
     if collapsed && hidden > 0 {
         card.push(Span::styled(format!("  +{hidden} lines"), dim().italic()));
@@ -1445,7 +1453,7 @@ fn tool_card_lines(
         ));
         return lines;
     }
-    if let Some(text) = output {
+    if let Some(text) = display.as_deref() {
         let out_lines: Vec<&str> = text.lines().collect();
         let over = out_lines.len().saturating_sub(MAX_OUTPUT_LINES);
         // A finished result is read from the top; a running command is read
@@ -1485,6 +1493,25 @@ fn tool_card_lines(
         ));
     }
     lines
+}
+
+/// The two harness sentences a person should never have to read: a
+/// background `execute`, and a detached `spawn_subagent`. Anything else is
+/// the tool's own output and stays as the tool wrote it.
+fn human_tool_text(text: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = text.trim();
+    let first = trimmed.lines().next().unwrap_or("");
+    if first.starts_with("Background task #") && first.contains(" started:") {
+        return std::borrow::Cow::Owned("started in background · ctrl+b output".to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("Delegated to subagent '")
+        && trimmed.contains("Running in the background")
+        && let Some(who) = rest.split('\'').next()
+        && !who.is_empty()
+    {
+        return std::borrow::Cow::Owned(format!("{who} · running"));
+    }
+    std::borrow::Cow::Borrowed(text)
 }
 
 /// Split the `exit code: N` line [`crate::tools::shell::render_command_result`]
@@ -1823,16 +1850,13 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
         return;
     }
     let spinner = spinner_frame(app.tick);
-    // What is on the line, and why (`docs/design.md`): the model, then only
-    // the states that are true right now, then where you are and what the
-    // next call costs. The default mode and the working directory are not
-    // here: `genie` is the default and says nothing, and the branch names the
-    // repo (`/status` has the path).
+    // Model, mode, branch, the context meter, and cost when a rate is known
+    // (`docs/design.md`). The working directory stays off this line; the
+    // opening block and `/status` have the path. Plan, omakase, ultra, vim,
+    // and background work appear only while they are true.
     let mut spans = vec![Span::raw(" "), model_span(app)];
-    if app.status.mode != Mode::Genie {
-        spans.push(sep());
-        spans.push(mode_span(app.status.mode));
-    }
+    spans.push(sep());
+    spans.push(mode_span(app.status.mode));
     // Vim mode indicator: NORMAL stands out (bold accent), INSERT stays quiet.
     if let Some(label) = app.vim.label() {
         spans.push(sep());
@@ -1868,10 +1892,11 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     // reported prompt size, or a post-compact / post-clear estimate. Not the
     // session-lifetime sum (that double-counts multi-step history and stays
     // inflated after /clear).
-    if app.status.context_tokens > 0 {
+    let window = app.config.max_context_tokens as u64;
+    if window > 0 {
         spans.push(sep());
         spans.push(Span::styled(
-            crate::usage::format_tokens(app.status.context_tokens),
+            context_meter(app.status.context_tokens, window),
             dim(),
         ));
     }
@@ -3704,6 +3729,22 @@ fn read_git_head(root: &std::path::Path) -> Option<String> {
         Some(branch) => branch.to_string(),
         None => head.chars().take(7).collect(),
     })
+}
+
+/// A ten-cell gauge and the percent of `total` that `used` fills. Empty
+/// when the window is unknown. No fill behind it: the bar is the characters.
+pub(super) fn context_meter(used: u64, total: u64) -> String {
+    const WIDTH: usize = 10;
+    if total == 0 {
+        return String::new();
+    }
+    let pct = (used.saturating_mul(100) / total).min(100) as usize;
+    let filled = pct * WIDTH / 100;
+    format!(
+        "{}{} {pct}%",
+        "━".repeat(filled),
+        "─".repeat(WIDTH - filled)
+    )
 }
 
 /// The session's cost so far, when the active provider carries a rate. The

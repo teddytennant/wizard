@@ -862,7 +862,7 @@ fn todo_band_sits_above_the_composer_without_covering_chat() {
 /// splash actively getting in the way, so the art is conditional and this
 /// pins both directions.
 #[test]
-fn the_empty_state_is_three_plain_lines_at_every_width() {
+fn the_empty_state_names_the_session_and_one_hint() {
     fn screen(width: u16, height: u16) -> String {
         let app = App::new(crate::config::Config::default());
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -890,11 +890,15 @@ fn the_empty_state_is_three_plain_lines_at_every_width() {
             screen.contains("type a message"),
             "{width}x{height}: {screen}"
         );
+        assert!(screen.contains("model"), "{width}x{height}: {screen}");
+        assert!(screen.contains("mode"), "{width}x{height}: {screen}");
+        assert!(screen.contains("genie"), "{width}x{height}: {screen}");
+        assert!(screen.contains("context"), "{width}x{height}: {screen}");
         assert!(
             !screen.contains("· / lists"),
             "one hint, not a tip row: {width}x{height}: {screen}"
         );
-        for absent in ["⣿", "w i z a r d", "sovereign agent", "/model", "genie"] {
+        for absent in ["⣿", "w i z a r d", "sovereign agent", "/model"] {
             assert!(
                 !screen.contains(absent),
                 "{absent} at {width}x{height}: {screen}"
@@ -922,17 +926,22 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
         .iter()
         .position(|row| row.contains("type a message"))
         .expect("the hint");
+    let first = rows
+        .iter()
+        .position(|row| row.contains("Explain how this project is put together"))
+        .expect("first prompt");
+    assert!(first < hint, "prompts sit above the hint: {screen}");
     assert_eq!(
-        rows[hint + 1].trim(),
+        rows[first].trim(),
         "❯ Explain how this project is put together",
         "{screen}"
     );
-    assert_eq!(rows[hint + 2].trim(), "❯ Review my uncommitted changes");
-    assert_eq!(rows[hint + 3].trim(), "");
+    assert_eq!(rows[first + 1].trim(), "❯ Review my uncommitted changes");
+    assert_eq!(rows[hint + 1].trim(), "");
     assert_eq!(
-        rows[hint + 4].trim(),
+        rows[hint + 2].trim(),
         "saved ~/.wizard/config.toml · /setup changes it",
-        "the summary comes after the prompts, apart: {screen}"
+        "the summary comes after the hint, apart: {screen}"
     );
     assert!(!screen.contains("1  Explain"), "no digits: {screen}");
     assert!(!screen.contains("pick one"), "no key hint: {screen}");
@@ -965,7 +974,7 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
     app.provider_health_error = None;
     app.first_run_notice = None;
 
-    // No prompts, no hook: the card is the name, the hint and nothing else.
+    // No prompts, no hook: the title, the four-row block, and one hint.
     app.starter_prompts.clear();
     app.first_run_summary = None;
     let rows = render(&app);
@@ -975,13 +984,18 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
         .filter(|row| !row.is_empty())
         .collect();
     assert_eq!(
-        &text[..2],
-        &[
-            format!("◆ wizard {}", env!("CARGO_PKG_VERSION")).as_str(),
-            "type a message",
-        ],
+        text[0],
+        format!("◆ wizard {}", env!("CARGO_PKG_VERSION")),
         "{rows:?}"
     );
+    assert!(text.iter().any(|row| row.starts_with("model")), "{rows:?}");
+    assert!(text.iter().any(|row| row.starts_with("mode")), "{rows:?}");
+    assert!(text.iter().any(|row| row.starts_with("dir")), "{rows:?}");
+    assert!(
+        text.iter().any(|row| row.starts_with("context")),
+        "{rows:?}"
+    );
+    assert!(text.contains(&"type a message"), "{rows:?}");
 }
 
 /// At 40 columns every card row that does not fit ends in `…` instead of
@@ -1664,7 +1678,7 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
 }
 
 #[test]
-fn the_status_line_names_the_branch_and_drops_the_defaults() {
+fn the_status_line_names_the_model_mode_meter_and_branch() {
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -1675,8 +1689,12 @@ fn the_status_line_names_the_branch_and_drops_the_defaults() {
     let status = rows.last().unwrap();
     assert!(status.contains("feature-x"), "{status}");
     assert!(
-        !status.contains("genie"),
-        "the default mode says nothing: {status}"
+        status.contains("genie"),
+        "the mode is on the line: {status}"
+    );
+    assert!(
+        status.contains("0%"),
+        "the context meter is on the line: {status}"
     );
     assert!(!status.contains("commands"), "no idle hint: {status}");
     assert!(
@@ -1684,17 +1702,41 @@ fn the_status_line_names_the_branch_and_drops_the_defaults() {
         "{status}"
     );
 
-    // Sovereign is the mode worth a word.
+    // Sovereign replaces the mode word.
     app.status.mode = crate::config::Mode::Sovereign;
     let rows = render(&app);
     assert!(rows.last().unwrap().contains("sovereign"));
 
-    // Outside a repository there is no branch chip and no stray separator.
+    // A priced session shows the meter at the real percent and the cost.
+    app.status.mode = crate::config::Mode::Genie;
+    app.status.model = "gpt-4o".to_string();
+    app.status.context_tokens = 42_000;
+    app.status.prompt_tokens = 42_000;
+    app.status.completion_tokens = 800;
+    app.config.max_context_tokens = 128_000;
+    app.config.providers.push(crate::config::ProviderConfig {
+        name: "openai".to_string(),
+        kind: crate::config::ProviderKind::OPENAI,
+        model: "gpt-4o".to_string(),
+        usd_per_mtok_in: Some(2.5),
+        usd_per_mtok_out: Some(10.0),
+        ..crate::config::ProviderConfig::default()
+    });
+    app.config.active_provider = Some("openai".to_string());
+    let status = render(&app).last().unwrap().clone();
+    assert!(status.contains("gpt-4o"), "{status}");
+    assert!(status.contains("genie"), "{status}");
+    assert!(status.contains("feature-x"), "{status}");
+    assert!(status.contains("32%"), "{status}");
+    assert!(status.contains("$0.11"), "{status}");
+
+    // Outside a repository there is no branch chip.
     let bare = tempfile::tempdir().unwrap();
     app.project_root = bare.path().to_path_buf();
-    app.status.mode = crate::config::Mode::Genie;
-    let rows = render(&app);
-    assert_eq!(rows.last().unwrap().trim(), app.status.model, "{rows:?}");
+    let status = render(&app).last().unwrap().clone();
+    assert!(!status.contains("feature-x"), "{status}");
+    assert!(status.contains("gpt-4o"), "{status}");
+    assert!(status.contains("32%"), "{status}");
 }
 
 #[test]
@@ -1959,7 +2001,9 @@ fn pin_house() -> (crate::skin::Pinned, theme::Pinned) {
     (
         crate::skin::pin(crate::skin::Skin::Wizard),
         theme::pin(std::sync::Arc::new(
-            theme::minimal().with_depth(theme::ColorDepth::TrueColor),
+            theme::load("wizard")
+                .expect("wizard theme")
+                .with_depth(theme::ColorDepth::TrueColor),
         )),
     )
 }
@@ -2532,6 +2576,215 @@ fn the_side_rail_opens_at_120_columns_and_stays_shut_below() {
             assert_eq!(buffer[(x, y)].bg, Color::Reset);
         }
     }
+}
+
+/// Foreground color is what a truecolor terminal gets, and `NO_COLOR` takes
+/// it away. Backgrounds stay unset either way.
+///
+/// The cream and slate screenshots that came back unpainted were the first
+/// case: this environment exports `NO_COLOR=1`, and that forces
+/// [`ColorDepth::Mono`](theme::ColorDepth::Mono) no matter what `COLORTERM`
+/// says. The cells below are what the same frame emits once that is unset.
+#[test]
+fn colors_are_emitted_in_truecolor_and_suppressed_under_no_color() {
+    use crate::agent::AgentEvent;
+    use crate::tools::ToolOutput;
+
+    assert_eq!(
+        theme::ColorDepth::from_env(None, Some("1"), Some("truecolor"), Some("xterm-256color")),
+        theme::ColorDepth::Mono,
+        "a non-empty NO_COLOR is monochrome even in a truecolor terminal"
+    );
+    assert_eq!(
+        theme::ColorDepth::from_env(None, None, Some("truecolor"), Some("xterm-256color")),
+        theme::ColorDepth::TrueColor
+    );
+
+    let wizard = theme::load("wizard").expect("wizard theme");
+    let accent = wizard.declared(theme::Token::Accent);
+    assert!(
+        matches!(accent, Color::Rgb(_, _, _)),
+        "the house accent is a real color, got {accent:?}"
+    );
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.set_compact(false);
+    app.transcript
+        .user("count the images".to_string(), Vec::new());
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({
+            "path": "src/transcript/fold.rs",
+            "old_string": "tools += 1;",
+            "new_string": "tools += 1;\nimages += t.output.images().count();",
+        }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "edit_file".to_string(),
+        output: ToolOutput::ok("Edited src/transcript/fold.rs (line 12)"),
+    });
+
+    let _pin = theme::pin(std::sync::Arc::new(
+        wizard.clone().with_depth(theme::ColorDepth::TrueColor),
+    ));
+    let (_, buffer) = screen_at(&app, 100, 28);
+    let mut saw_accent = false;
+    let mut saw_add = false;
+    let mut saw_del = false;
+    let mut saw_dim = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            assert_eq!(cell.bg, Color::Reset, "filled cell at {x},{y}");
+            if (cell.symbol() == "◆" || cell.symbol() == "❯") && cell.fg == accent {
+                saw_accent = true;
+            }
+            if cell.fg == Color::Green {
+                saw_add = true;
+            }
+            if cell.fg == Color::Red {
+                saw_del = true;
+            }
+            if cell.fg == Color::DarkGray {
+                saw_dim = true;
+            }
+        }
+    }
+    assert!(saw_accent, "accent foreground was not emitted");
+    assert!(saw_add, "diff additions were not green");
+    assert!(saw_del, "diff deletions were not red");
+    assert!(saw_dim, "dim chrome was not darker than the body");
+
+    let _pin = theme::pin(std::sync::Arc::new(
+        wizard.with_depth(theme::ColorDepth::Mono),
+    ));
+    let (_, buffer) = screen_at(&app, 100, 28);
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            assert_eq!(
+                cell.fg,
+                Color::Reset,
+                "mono still painted {}",
+                cell.symbol()
+            );
+            assert_eq!(cell.bg, Color::Reset);
+        }
+    }
+}
+
+/// A long activity line wraps inside the rail. The continuation keeps the
+/// rule and the indent; it does not start on the rule's column.
+#[test]
+fn rail_text_wraps_inside_the_column() {
+    use crate::agent::AgentEvent;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.handle_agent_event(AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: Some(1),
+        name: "researcher".to_string(),
+        task: "where is the parser".to_string(),
+    });
+    let activity = "The parser lives in src/transcript/fold.rs and the summary skips every image.";
+    app.handle_agent_event(AgentEvent::SubagentRunText {
+        run: 1,
+        text: activity.to_string(),
+    });
+    app.handle_agent_event(AgentEvent::SubagentRunStep { run: 1, step: 4 });
+
+    let (rows, buffer) = screen_at(&app, 132, 36);
+    let side = regions(&app, ratatui::layout::Rect::new(0, 0, 132, 36)).side;
+    assert!(side.width >= 30);
+    let mut rail_rows = Vec::new();
+    for y in side.y..side.y + side.height {
+        let row: String = (side.x..side.x + side.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        let trimmed = row.trim_end().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        assert!(
+            trimmed.starts_with('│'),
+            "rail row left the rule: {trimmed:?}\n{}",
+            rows.join("\n")
+        );
+        rail_rows.push(trimmed);
+    }
+    let joined = rail_rows.join("\n");
+    assert!(
+        joined.contains("fold.rs"),
+        "the activity was cut off entirely: {joined}"
+    );
+    assert!(
+        joined.contains("4/50"),
+        "steps should read n/budget, got {joined}"
+    );
+    assert!(
+        !rail_rows
+            .iter()
+            .any(|row| row.trim() == "│ 0" || row.ends_with(" 0")),
+        "a bare step count: {joined}"
+    );
+    // The wrapped tail is on its own row and still behind the rule.
+    assert!(
+        rail_rows
+            .iter()
+            .any(|row| row.contains("fold.rs") && row.starts_with("│ ")),
+        "{joined}"
+    );
+}
+
+/// Expanded background and subagent results are one human line, not the
+/// sentence the model was given.
+#[test]
+fn harness_boilerplate_renders_as_one_human_line() {
+    use crate::agent::AgentEvent;
+    use crate::tools::ToolOutput;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.set_compact(false);
+    app.transcript
+        .user("find the parser".to_string(), Vec::new());
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({
+            "command": "printf 'hello'",
+            "run_in_background": true,
+        }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "execute".to_string(),
+        output: ToolOutput::ok(
+            "Background task #1 started: printf 'hello'\nYou will be notified when it finishes; \
+             use task_output to inspect it or task_kill to stop it.",
+        ),
+    });
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "spawn_subagent".to_string(),
+        args: serde_json::json!({ "subagent": "researcher", "task": "where is the parser" }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "spawn_subagent".to_string(),
+        output: ToolOutput::ok(
+            "Delegated to subagent 'researcher' (#1): where is the parser.\nRunning in the \
+             background — you'll see its progress as it works, and the report lands in your \
+             context once it's done.",
+        ),
+    });
+    let screen = screen_at(&app, 100, 32).0.join("\n");
+    assert!(
+        screen.contains("started in background · ctrl+b output"),
+        "{screen}"
+    );
+    assert!(screen.contains("researcher · running"), "{screen}");
+    assert!(!screen.contains("You will be notified"), "{screen}");
+    assert!(!screen.contains("you'll see its progress"), "{screen}");
 }
 
 /// A small word change is bold and underlined, and the row itself is not filled.

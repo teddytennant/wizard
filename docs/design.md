@@ -32,11 +32,12 @@ and glyphs that say something.
   stay tight. Nothing is centered. Fewer `·` separators and fewer dim labels;
   alignment is the label.
 - **Nothing on screen the user did not ask for.** No splash, no pixel
-  wordmark, no tagline, no tip row, no idle key hints. The empty state is one
-  line, `◆ wizard {version}`, then at most one dim hint (`type a message`). A
-  startup problem sits between them. Under that, up to three recent sessions,
-  or — when there are none — up to three starter `❯` rows. On the first run
-  one dim line after them says where the config went.
+  wordmark, no tagline, no tip row, no idle key hints. The empty state is
+  `◆ wizard {version}`, then a small aligned block (model, mode, directory
+  and branch, context), then up to three recent sessions — or, when there
+  are none, up to three starter `❯` rows — then one dim hint
+  (`type a message`). A startup problem sits under the title. On the first
+  run one dim line after the hint says where the config went.
 - **Say what is happening.** A waiting turn is a spinner and a plain word:
   `thinking`, `writing`, or `running cargo` — the thing actually in flight.
   Cute verbs (`Conjuring…`) are not the house voice. A custom
@@ -50,17 +51,18 @@ and glyphs that say something.
 
 ## What each thing looks like
 
-- **Opening.** `◆ wizard 3.8.3` in one line. The version is dim. The default
-  mode is not labeled; plan, omakase, and sovereign appear only while they
-  are on.
-- **Status line** (bottom row): `model  branch  ctx  cost`, separated by
-  space. The model, the git branch, the tokens the next call will load, and
-  the session cost when a rate is known. Sovereign mode, `PLAN`, `OMAKASE`,
-  `ULTRA ×N`, vim `NORMAL`, background tasks and a failed provider probe
-  appear only while they are true. Right side: the elapsed time of a running
-  turn, or the keys a modal state needs. Idle shows no hints. The working
-  directory stays off this line; the branch names the repo and `/status` has
-  the path.
+- **Opening.** `◆ wizard 3.8.3` on one line (the version is dim), then a
+  small left-aligned block: `model`, `mode`, `dir` (leaf and branch), and
+  `context` as a meter. Up to three recent sessions under that, then one dim
+  hint. No wordmark, no divider, no fill. Plan and omakase replace the mode
+  word while they are on.
+- **Status line** (bottom row): model, mode, branch, a context meter
+  (`━━━━────── 32%`), and the session cost when a rate is known. `PLAN`,
+  `OMAKASE`, `ULTRA ×N`, vim `NORMAL`, background tasks and a failed provider
+  probe appear only while they are true. Right side: the elapsed time of a
+  running turn, or the keys a modal state needs. Idle shows no hints. The
+  working directory stays off this line; the branch names the repo and
+  `/status` has the path.
 - **Streaming text** renders as markdown as it arrives, with a dim `▍` at the
   tail.
 - **Tool call**: one header row, `● execute  ls -la  0.4s`. The glyph is the
@@ -83,8 +85,9 @@ and glyphs that say something.
 - **Side rail** (120 columns and wider, and only when there is something to
   put there): a right column, about a quarter of the width, split off by one
   faint vertical rule. Subagents (name, elapsed, what they are doing, steps
-  toward the default budget), background commands (command, elapsed, the last
-  output line), and todos. No fill. Under 120 columns this collapses to the
+  as `n/budget`), background commands (command, elapsed, the last output
+  line), and todos. Text wraps inside the rule, indented, and never back
+  onto it. No fill. Under 120 columns this collapses to the
   one-row summary above the status line, and todos stay in their band.
 - **Background output** (Ctrl-B): the newest task's tail, in the transcript
   area, on the terminal's own background. Esc closes it. `x` stops a task

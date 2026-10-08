@@ -13,7 +13,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
-use super::{accent, dim, format_cwd, mode_span, model_span, muted, truncate_line, warning};
+use super::{
+    accent, context_meter, dim, format_cwd, git_branch, mode_span, model_span, muted,
+    truncate_line, warning,
+};
 use crate::app::App;
 use crate::skin::{self, WelcomeStyle};
 use crate::theme::{self, Token};
@@ -121,14 +124,14 @@ fn draw_welcome_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) 
     frame.render_widget(Paragraph::new(Text::from(lines)), body);
 }
 
-/// The house empty state: the name and version, then how to start.
+/// The house empty state: the name and version, then where you are, then
+/// how to start.
 ///
-/// Nothing else is repeated here: the status line already says the model and
-/// the branch, and `/status` has the path. The mode only appears when it is
-/// `sovereign`. Startup problems go between, where they cannot be missed.
-/// Starter prompts, when the directory suggested any, hang under the hint as
-/// one muted `❯` row each; the first run's one line about where the config
-/// went comes last, apart from the rest.
+/// The block under the title is model, mode, directory and branch, and the
+/// context meter — aligned, not decorated. Up to three recent sessions (or
+/// starter prompts, when there are none) sit under that, and one dim hint
+/// is last. Startup problems go between the title and the block, where they
+/// cannot be missed. No wordmark, no divider, no fill.
 fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
     let mark = crate::skin::glyphs::adapt("◆ ");
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
@@ -136,22 +139,73 @@ fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("wizard", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(format!(" {}", env!("CARGO_PKG_VERSION")), dim()),
     ])];
-    if app.status.mode != crate::config::Mode::Genie {
-        lines.push(Line::from(mode_span(app.status.mode)));
-    }
     let notices = welcome_notices(app);
     if !notices.is_empty() {
         lines.push(Line::raw(""));
         lines.extend(notices);
     }
     lines.push(Line::raw(""));
+    lines.extend(session_block(app));
+    let picks = welcome_pick_lines(app);
+    if !picks.is_empty() {
+        lines.push(Line::raw(""));
+        lines.extend(picks);
+    }
+    lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled("type a message", dim())));
-    lines.extend(welcome_pick_lines(app));
     if let Some(summary) = &app.first_run_summary {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(summary.clone(), dim())));
     }
     draw_welcome_lines(frame, area, lines);
+}
+
+/// Four aligned rows. Labels share a column; the values are the text.
+fn session_block(app: &App) -> Vec<Line<'static>> {
+    let mode = if app.omakase {
+        Span::styled("omakase", accent().add_modifier(Modifier::BOLD))
+    } else if app.plan_mode {
+        Span::styled("plan", accent())
+    } else {
+        mode_span(app.status.mode)
+    };
+    vec![
+        labeled(
+            "model",
+            Span::styled(app.status.model.clone(), theme::style(Token::Text)),
+        ),
+        labeled("mode", mode),
+        labeled("dir", Span::styled(place_label(app), muted())),
+        labeled(
+            "context",
+            Span::styled(
+                context_meter(
+                    app.status.context_tokens,
+                    app.config.max_context_tokens as u64,
+                ),
+                dim(),
+            ),
+        ),
+    ]
+}
+
+fn labeled(label: &str, value: Span<'static>) -> Line<'static> {
+    Line::from(vec![Span::styled(format!("{label:<8}"), dim()), value])
+}
+
+/// Leaf directory and branch when this is a repo, otherwise the path.
+fn place_label(app: &App) -> String {
+    let leaf = app
+        .project_root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty());
+    match (leaf, git_branch(&app.project_root)) {
+        (Some(dir), Some(branch)) => format!("{dir} · {branch}"),
+        (Some(dir), None) => dir,
+        (None, Some(branch)) => branch,
+        (None, None) => format_cwd(&app.project_root, 32),
+    }
 }
 
 /// Recent sessions when any were loaded at startup, otherwise the starter
