@@ -2049,9 +2049,7 @@ fn pixel_rows(buf: &ratatui::buffer::Buffer) -> Vec<u16> {
     // is a pixel and nothing else.
     (0..buf.area.height)
         .filter(|&y| {
-            (0..buf.area.width).any(|x| {
-                matches!(buf.cell((x, y)).unwrap().bg, Color::Rgb(..))
-            })
+            (0..buf.area.width).any(|x| matches!(buf.cell((x, y)).unwrap().bg, Color::Rgb(..)))
         })
         .collect()
 }

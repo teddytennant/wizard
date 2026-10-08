@@ -8,7 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 
 use super::{accent, dim, muted};
 use crate::app::{App, PaneStatus};
@@ -57,7 +57,11 @@ pub(super) fn draw(frame: &mut Frame, app: &App, area: Rect) {
     if lines.is_empty() {
         return;
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    let lines: Vec<Line<'static>> = lines
+        .into_iter()
+        .map(|line| super::truncate_line(line, width))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn agent_rows(app: &App, pane: &crate::app::SubagentPane, width: usize) -> Vec<Line<'static>> {
