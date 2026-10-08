@@ -5,7 +5,7 @@
 //! sessions) still load.
 
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -392,11 +392,7 @@ impl Session {
             message: message.clone(),
             system_note,
         };
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("opening {}", self.path.display()))?;
+        let mut file = self.open_for_append()?;
         let line = serde_json::to_string(&record).context("serializing session record")?;
         writeln!(file, "{line}").with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
@@ -417,14 +413,29 @@ impl Session {
             turn,
             prompt: snippet,
         };
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("opening {}", self.path.display()))?;
+        let mut file = self.open_for_append()?;
         let line = serde_json::to_string(&marker).context("serializing turn marker")?;
         writeln!(file, "{line}").with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
+    }
+
+    /// Open the session file for appending, after sealing a trailing partial
+    /// line.
+    ///
+    /// A kill mid-`writeln` leaves the last record without its newline. The
+    /// next append would then glue onto that fragment, so load skips both the
+    /// torn record and the one that followed it. Finishing the line first
+    /// keeps them apart: a record that only lost its newline parses, and a
+    /// half-written one is one corrupt line that load already skips.
+    fn open_for_append(&self) -> Result<std::fs::File> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&self.path)
+            .with_context(|| format!("opening {}", self.path.display()))?;
+        seal_torn_tail(&mut file)?;
+        Ok(file)
     }
 
     /// Every line of this session in file order — header, turn markers, and
@@ -550,6 +561,31 @@ impl Session {
             .with_context(|| format!("rewriting {}", self.path.display()))?;
         Ok(true)
     }
+}
+
+/// If `file` does not end in a newline, write one.
+///
+/// `O_APPEND` ignores the seek position for the write, so the newline lands
+/// at the end even after the read that looked at the last byte.
+fn seal_torn_tail(file: &mut std::fs::File) -> Result<()> {
+    let len = file
+        .metadata()
+        .context("reading the session file length")?
+        .len();
+    if len == 0 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::End(-1))
+        .context("seeking the session file tail")?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)
+        .context("reading the session file tail")?;
+    if last[0] == b'\n' {
+        return Ok(());
+    }
+    file.write_all(b"\n")
+        .context("sealing a torn session line")?;
+    Ok(())
 }
 
 /// The cwd recorded in a session file's header line, if any. Only the first
@@ -1212,6 +1248,57 @@ mod tests {
         assert_eq!(results[1].tool_use_id, dangling);
         assert_eq!(results[1].name, "execute");
         assert_eq!(results[1].content, INTERRUPTED_TOOL_RESULT);
+    }
+
+    /// A kill during `writeln` leaves the last line without a newline. The
+    /// next append must not glue onto it: that makes both lines unreadable,
+    /// and the turn that survived the crash disappears with the one that didn't.
+    #[test]
+    fn appending_after_a_killed_write_keeps_the_next_record() {
+        let tmp = TempDir::new();
+        let session = Session::create(&tmp.0).unwrap();
+        session.append(&ChatMessage::user("kept")).unwrap();
+
+        let path = session.path().to_path_buf();
+        let raw = std::fs::read(&path).unwrap();
+        assert!(raw.ends_with(b"\n"));
+        // Drop the newline and a tail of the record, the shape a killed
+        // `write` leaves.
+        std::fs::write(&path, &raw[..raw.len() - 40]).unwrap();
+
+        session
+            .append(&ChatMessage::assistant("after the kill"))
+            .unwrap();
+        let loaded = session.load_messages().unwrap();
+        let texts: Vec<String> = loaded.iter().map(ChatMessage::text).collect();
+        assert!(
+            texts.iter().any(|text| text == "after the kill"),
+            "the record written after the kill must load on its own line: {texts:?}"
+        );
+    }
+
+    /// A record that was written in full and only lost its newline is still
+    /// that record. Sealing the line makes it parse instead of discarding it.
+    #[test]
+    fn a_record_that_only_lost_its_newline_is_recovered() {
+        let tmp = TempDir::new();
+        let session = Session::create(&tmp.0).unwrap();
+        session.append(&ChatMessage::user("kept")).unwrap();
+
+        let path = session.path().to_path_buf();
+        let raw = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &raw[..raw.len() - 1]).unwrap();
+
+        session
+            .append(&ChatMessage::assistant("after the kill"))
+            .unwrap();
+        let texts: Vec<String> = session
+            .load_messages()
+            .unwrap()
+            .iter()
+            .map(ChatMessage::text)
+            .collect();
+        assert_eq!(texts, ["kept", "after the kill"]);
     }
 
     #[test]
