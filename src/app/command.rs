@@ -238,6 +238,7 @@ Shift+Tab                   toggle plan mode\n  \
 \u{2191} / \u{2193}                       select suggestion \u{b7} browse input history\n  \
 PgUp/PgDn \u{b7} wheel           scroll the transcript (stays put while streaming)\n  \
 Esc \u{b7} Ctrl-End              jump back to the live tail\n  \
+\u{2193}                           focus subagents \u{b7} enter opens one \u{b7} esc back\n  \
 drag                        select text \u{2014} copied to the clipboard on release\n  \
 Ctrl-Y                      copy the last reply (works over SSH, tmux, zellij)\n  \
 click a tool card           expand / collapse its output\n  \

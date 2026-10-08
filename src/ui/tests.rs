@@ -1264,7 +1264,7 @@ fn composer_growth_is_capped_and_the_status_bar_survives() {
 }
 
 #[test]
-fn rail_collapses_overflow_runs_into_one_row() {
+fn rail_stays_one_row_until_it_is_focused() {
     let mut app = App::new(crate::config::Config::default());
     for run in 0..12u64 {
         app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
@@ -1273,12 +1273,22 @@ fn rail_collapses_overflow_runs_into_one_row() {
             name: format!("agent{run}"),
             task: "t".to_string(),
         });
-        let expected = match app.panes.len() {
-            n if n <= 5 => n as u16,
-            _ => 6,
-        };
-        assert_eq!(rail_height(&app), expected, "{} panes", app.panes.len());
+        // Unfocused: one summary, however many runs. The list must not eat
+        // the transcript just because work was delegated.
+        assert_eq!(rail_height(&app), 1, "{} panes, unfocused", app.panes.len());
     }
+    assert!(app.focus_rail());
+    assert_eq!(
+        rail_height(&app),
+        6,
+        "focused list is capped at five plus overflow"
+    );
+    app.attach_pane(0);
+    assert_eq!(
+        rail_height(&app),
+        1,
+        "inside a run the siblings collapse back to the summary"
+    );
 }
 
 #[test]
@@ -1930,4 +1940,282 @@ fn compact_in_the_config_starts_the_session_compact() {
     let mut config = crate::config::Config::default();
     config.ui.compact = true;
     assert!(App::new(config).transcript.compact());
+}
+
+fn pin_house() -> (crate::skin::Pinned, theme::Pinned) {
+    (
+        crate::skin::pin(crate::skin::Skin::Wizard),
+        theme::pin(std::sync::Arc::new(
+            theme::minimal().with_depth(theme::ColorDepth::TrueColor),
+        )),
+    )
+}
+
+fn screen_at(app: &App, width: u16, height: u16) -> (Vec<String>, ratatui::buffer::Buffer) {
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let rows = (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    (rows, buffer)
+}
+
+fn buffer_colors(buffer: &ratatui::buffer::Buffer) -> Vec<Color> {
+    let area = buffer.area;
+    let mut colors = Vec::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let cell = &buffer[(x, y)];
+            colors.push(cell.fg);
+            colors.push(cell.bg);
+        }
+    }
+    colors
+}
+
+/// Mid-stream: the partial reply is on screen with the streaming caret, and
+/// the composer is still the composer.
+#[test]
+fn a_streaming_reply_keeps_its_caret_and_the_composer() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript
+        .user("explain the parser".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "The parser walks each token".to_string(),
+    ));
+    app.status.busy = true;
+    app.tick = 0;
+    let (rows, _) = screen_at(&app, 80, 24);
+    let screen = rows.join("\n");
+    assert!(screen.contains("The parser walks each token"), "{screen}");
+    assert!(screen.contains('▍'), "streaming caret:\n{screen}");
+    assert!(
+        rows.iter().any(|row| row.contains('❯')),
+        "composer:\n{screen}"
+    );
+}
+
+/// A tool call is one header: glyph, name, argument. Not a panel.
+#[test]
+fn a_tool_call_is_a_single_header_row() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.user("run the tests".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "cargo test" }),
+    });
+    app.tick = 0;
+    let (rows, _) = screen_at(&app, 80, 24);
+    let header = rows
+        .iter()
+        .find(|row| row.contains("execute") && row.contains("cargo test"))
+        .expect("tool header");
+    assert!(
+        header.contains('⠋'),
+        "a running call shows the spinner, not a box: {header}"
+    );
+    assert!(!header.contains('┌') && !header.contains('│'), "{header}");
+}
+
+/// Every command the TUI can run shows up in the slash menu, by name.
+#[test]
+fn the_slash_menu_offers_every_tui_command() {
+    let _pins = pin_house();
+    let available = crate::commands::available(crate::commands::Surface::Tui);
+    for spec in crate::commands::COMMANDS {
+        let listed = available.iter().any(|row| row.name == spec.name);
+        let runnable = spec.tui != crate::commands::Execution::Unavailable;
+        assert_eq!(listed, runnable, "/{}", spec.name);
+    }
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.input = "/".to_string();
+    app.suggestions = available.iter().map(crate::app::Suggestion::from).collect();
+    app.input_mode = crate::app::InputMode::Command;
+    for index in 0..app.suggestions.len() {
+        app.suggestion_index = index;
+        let name = app.suggestions[index].name.clone();
+        let (rows, _) = screen_at(&app, 80, 24);
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains(&format!("/{name}")) || screen.contains(&name),
+            "/{name} missing from the menu:\n{screen}"
+        );
+        assert!(screen.contains('❯'), "selection marker:\n{screen}");
+    }
+}
+
+/// Several runs are one summary until the rail is focused, then a list, and
+/// opening one shows its own transcript with a way back and a follow state.
+#[test]
+fn subagents_summarize_then_open_without_a_pane_grid() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript
+        .user("delegate the review".to_string(), Vec::new());
+    for (run, name) in [(1u64, "researcher"), (2, "reviewer"), (3, "tester")] {
+        app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+            run,
+            bg: Some(run as u32),
+            name: name.to_string(),
+            task: format!("task for {name}"),
+        });
+    }
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunToolStarted {
+        run: 1,
+        name: "read_file".to_string(),
+        args: serde_json::json!({}),
+    });
+    app.tick = 0;
+
+    let (rows, _) = screen_at(&app, 80, 24);
+    let screen = rows.join("\n");
+    let summary = rows
+        .iter()
+        .find(|row| row.contains("running"))
+        .expect("summary row");
+    assert!(summary.contains("researcher"), "{summary}");
+    assert!(summary.contains("reviewer"), "{summary}");
+    assert!(
+        !screen.contains("task for reviewer"),
+        "the task list is not a grid:\n{screen}"
+    );
+    assert_eq!(rail_height(&app), 1);
+
+    assert!(app.focus_rail());
+    let (focused, _) = screen_at(&app, 80, 24);
+    let joined = focused.join("\n");
+    assert!(joined.contains('❯'), "focused rail has a cursor:\n{joined}");
+    assert!(joined.contains("researcher"), "{joined}");
+    assert!(joined.contains("tester"), "{joined}");
+    assert!(rail_height(&app) > 1);
+
+    app.attach_pane(0);
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunText {
+        run: 1,
+        text: "auth starts in login.rs".to_string(),
+    });
+    let (inside, _) = screen_at(&app, 80, 24);
+    let inside_text = inside.join("\n");
+    assert!(inside_text.contains("researcher"), "{inside_text}");
+    assert!(inside_text.contains("running"), "{inside_text}");
+    assert!(
+        inside_text.contains("auth starts in login.rs"),
+        "{inside_text}"
+    );
+    assert!(inside_text.contains("esc back"), "{inside_text}");
+    assert!(
+        !inside_text.contains("delegate the review"),
+        "the main chat yields:\n{inside_text}"
+    );
+    assert_eq!(rail_height(&app), 1, "siblings stay a summary");
+
+    app.panes[0].transcript.follow = false;
+    let (scrolled, _) = screen_at(&app, 80, 24);
+    let scrolled_text = scrolled.join("\n");
+    assert!(scrolled_text.contains("scrolled"), "{scrolled_text}");
+    assert!(scrolled_text.contains("ctrl-end follow"), "{scrolled_text}");
+}
+
+/// 40 columns: the summary, the tool header, and the menu still read.
+#[test]
+fn a_narrow_terminal_keeps_the_summary_and_drops_nothing_essential() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.user("narrow".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "still streaming on a narrow screen".to_string(),
+    ));
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "cargo test --all" }),
+    });
+    for (run, name) in [(1u64, "researcher"), (2, "reviewer")] {
+        app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+            run,
+            bg: Some(run as u32),
+            name: name.to_string(),
+            task: "a long task description that must not wrap the header".to_string(),
+        });
+    }
+    let (rows, buffer) = screen_at(&app, 40, 20);
+    let screen = rows.join("\n");
+    assert!(screen.contains("running"), "{screen}");
+    assert!(screen.contains("researcher"), "{screen}");
+    assert!(
+        screen.contains('▍') || screen.contains("execute"),
+        "{screen}"
+    );
+    // Every painted row fits. A cell past the edge would have panicked;
+    // this checks the summary itself was cut with an ellipsis rather than
+    // run on into the next row.
+    let summary = rows
+        .iter()
+        .find(|row| row.contains("running"))
+        .expect("summary");
+    assert!(summary.width() <= 40, "{summary}");
+    assert_eq!(buffer.area.width, 40);
+
+    app.input = "/".to_string();
+    app.suggestions = crate::commands::available(crate::commands::Surface::Tui)
+        .iter()
+        .take(4)
+        .map(crate::app::Suggestion::from)
+        .collect();
+    app.suggestion_index = 0;
+    app.input_mode = crate::app::InputMode::Command;
+    let (menu, _) = screen_at(&app, 40, 20);
+    let menu_text = menu.join("\n");
+    assert!(
+        menu_text.contains("/model") || menu_text.contains("model"),
+        "{menu_text}"
+    );
+    assert!(menu.iter().all(|row| row.width() <= 40), "{menu_text}");
+}
+
+/// Without truecolor the frame uses the degraded palette: no 24-bit cells.
+#[test]
+fn the_frame_degrades_without_truecolor() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.user("color".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "a short reply".to_string(),
+    ));
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "true" }),
+    });
+
+    for depth in [theme::ColorDepth::Ansi16, theme::ColorDepth::Mono] {
+        let _pin = theme::pin(std::sync::Arc::new(theme::minimal().with_depth(depth)));
+        let (_, buffer) = screen_at(&app, 80, 24);
+        for color in buffer_colors(&buffer) {
+            assert!(
+                !matches!(color, Color::Rgb(..)),
+                "{depth:?} painted truecolor {color:?}"
+            );
+            if depth == theme::ColorDepth::Mono {
+                assert!(
+                    matches!(color, Color::Reset),
+                    "mono should be reset, got {color:?}"
+                );
+            }
+        }
+    }
 }

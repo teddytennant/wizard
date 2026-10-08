@@ -39,7 +39,8 @@ use super::session::{
 };
 use super::term::{
     TerminalGuard, Tui, copy_to_clipboard, edit_config_file, edit_prompt_in_editor,
-    is_terminal_armed, restore_terminal_best_effort, run_setup_suspended, setup_terminal,
+    is_terminal_armed, present, present_resized, resize_rect, restore_terminal_best_effort,
+    run_setup_suspended, setup_terminal,
 };
 use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 
@@ -297,7 +298,7 @@ pub async fn run_tui(
         }
     };
     let _guard = TerminalGuard;
-    if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
+    if let Err(err) = present(&mut terminal, |frame| crate::ui::draw(frame, &app)) {
         tracing::warn!("first frame not drawn: {err}");
     }
     tracing::debug!("first frame painted");
@@ -456,7 +457,7 @@ pub async fn run_tui(
             }
         }
 
-        if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
+        if let Err(err) = present(&mut terminal, |frame| crate::ui::draw(frame, &app)) {
             if draw_faults.failed() {
                 return Err(
                     anyhow::Error::new(err).context("the terminal stopped accepting frames")
@@ -480,6 +481,16 @@ pub async fn run_tui(
         let Some(event) = events.next().await else {
             break;
         };
+
+        // Resize before anything else, and paint the new size in the same
+        // update that clears the old one. Waiting for the next tick left a
+        // torn frame in tmux for as long as nothing else arrived.
+        if let Event::Resize(cols, rows) = event {
+            if let Some(area) = resize_rect(cols, rows) {
+                let _ = present_resized(&mut terminal, area, |frame| crate::ui::draw(frame, &app));
+            }
+            continue;
+        }
 
         // A background rebuild finished: restore the agent into the slot.
         if let Event::AgentRebuilt(rebuild) = event {
@@ -1552,7 +1563,7 @@ async fn drain_agent_commands(
 fn copy_app_selection(terminal: &mut Tui, app: &mut App) {
     if let Some(selection) = app.selection {
         let mut text = String::new();
-        let drawn = terminal.draw(|frame| {
+        let drawn = present(terminal, |frame| {
             crate::ui::draw(frame, app);
             text = crate::ui::selection_text(
                 frame.buffer_mut(),
@@ -1583,7 +1594,7 @@ fn pick_then_copy(
     pick: impl FnOnce(&ratatui::buffer::Buffer, &App) -> Option<super::picker::Selection>,
 ) {
     let mut sel = None;
-    match terminal.draw(|frame| {
+    match present(terminal, |frame| {
         crate::ui::draw(frame, app);
         sel = pick(frame.buffer_mut(), app);
     }) {

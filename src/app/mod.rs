@@ -249,8 +249,8 @@ pub struct App {
     /// the only time somebody asks it. `None` until the agent is built.
     pub tasks: Option<Arc<crate::tools::tasks::TaskRegistry>>,
     /// Selected rail row while the rail has keyboard focus (↓ from the
-    /// composer). `None` means the composer has focus and the rail is just
-    /// on display. Indexes [`App::panes`].
+    /// composer). `None` means the composer has focus and several runs
+    /// collapse to one summary row. Indexes [`App::panes`].
     pub rail_focus: Option<usize>,
     /// The pane the user is *inside*: its transcript replaces the main chat
     /// until Esc. Indexes [`App::panes`].

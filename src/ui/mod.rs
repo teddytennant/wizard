@@ -1,7 +1,8 @@
 //! Ratatui rendering: pure functions from [`App`] state to widgets.
 //! Layout: chat transcript (with optional git diff sidebar), optional todo
-//! band above the composer, the input line, the subagent rail, and a quiet
-//! status line. Floating layers: the command-suggestion popup and the
+//! band above the composer, the input line, a one-row subagent summary (the
+//! list opens only while you are choosing a run), and a quiet status line.
+//! Floating layers: the command-suggestion popup and the
 //! model/mode/rewind/subagent picker.
 //!
 //! Design rules (do not regress):
@@ -263,8 +264,8 @@ pub fn regions(app: &App, area: Rect) -> Regions {
     let budget = composer_budget(area.width);
     let input_rows =
         (wrap_rows(&composer_chars(app), budget).len() as u16).clamp(1, MAX_INPUT_ROWS) + 2;
-    // The rail sits between the composer and the footer: one row per subagent,
-    // so the dots are always in the same place.
+    // The rail sits between the composer and the footer. One summary row
+    // until the rail has focus, then one row per run (capped).
     let rail_rows = rail_height(app);
     // Codex narrates a running turn on its own row directly above the
     // composer, and shows nothing there when idle.
@@ -2615,19 +2616,116 @@ fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
 /// selection rather than eating the transcript.
 const MAX_RAIL_ROWS: usize = 5;
 
-/// Rows the rail needs: one per subagent, capped, plus a row for the "+N more"
-/// marker when it is capped. Zero when nothing has been delegated — the rail
-/// costs no screen space until there is something to show.
+/// The per-run list is open only while the rail has focus and the chat is
+/// showing. Attached to a run, or just watching, the rail is one summary row
+/// so several agents never become a stack of panes.
+fn rail_list_open(app: &App) -> bool {
+    app.attached.is_none() && app.rail_focus.is_some() && app.panes.len() > 1
+}
+
+/// Rows the rail needs. Zero until something has been delegated. One summary
+/// row the rest of the time, and the capped list only while choosing a run.
 pub(super) fn rail_height(app: &App) -> u16 {
     if app.panes.is_empty() {
         return 0;
+    }
+    if !rail_list_open(app) {
+        return 1;
     }
     let shown = app.panes.len().min(MAX_RAIL_ROWS);
     let overflow = usize::from(app.panes.len() > MAX_RAIL_ROWS);
     (shown + overflow) as u16
 }
 
-/// The subagent rail: one dot per run, directly under the composer.
+/// One line for every run that is not being picked through right now.
+///
+/// ```text
+///   ● 2 running · 1 done · researcher, reviewer +3
+/// ```
+///
+/// Counts first, then the names of the runs that are still going (or the
+/// latest names, once nothing is). `+N` is unread work. The glyph is the
+/// same one a single row uses, so a pulsing dot still means "alive".
+fn rail_summary(app: &App, width: usize) -> Line<'static> {
+    let running: Vec<&SubagentPane> = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Running)
+        .collect();
+    let done = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Done)
+        .count();
+    let failed = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Failed)
+        .count();
+    let (glyph, glyph_style) = if let Some(pane) = running.first() {
+        (pane.glyph(app.tick), theme::style(Token::ToolRunning))
+    } else if failed > 0 {
+        ("✗", theme::style(Token::ToolFailed).bold())
+    } else {
+        ("✔", theme::style(Token::ToolDone))
+    };
+
+    let mut label = String::new();
+    let mut push = |part: String| {
+        if !label.is_empty() {
+            label.push_str(" · ");
+        }
+        label.push_str(&part);
+    };
+    if !running.is_empty() {
+        push(format!("{} running", running.len()));
+    }
+    if done > 0 {
+        push(format!("{done} done"));
+    }
+    if failed > 0 {
+        push(format!("{failed} failed"));
+    }
+
+    let named: Vec<&str> = if !running.is_empty() {
+        running.iter().map(|pane| pane.name.as_str()).collect()
+    } else {
+        app.panes
+            .iter()
+            .rev()
+            .map(|pane| pane.name.as_str())
+            .collect()
+    };
+    let mut names = named.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    if named.len() > 3 {
+        names.push('…');
+    }
+
+    let unread: usize = app.panes.iter().map(|pane| pane.unread).sum();
+    let mut spans = vec![
+        Span::styled("   ", accent()),
+        Span::styled(format!("{glyph} "), glyph_style),
+        Span::styled(label, muted()),
+    ];
+    if !names.is_empty() {
+        spans.push(Span::styled(format!(" · {names}"), dim()));
+    }
+    if unread > 0 {
+        spans.push(Span::styled(format!(" +{unread}"), accent().bold()));
+    }
+    // Which run the screen is showing, when it is one of several.
+    if let Some(index) = app.attached
+        && let Some(pane) = app.panes.get(index)
+    {
+        spans.push(Span::styled(format!(" · in {}", pane.name), accent()));
+    }
+    truncate_line(Line::from(spans), width)
+}
+
+/// The subagent rail, directly under the composer.
+///
+/// One run is a row. Several runs are one summary until ↓ focuses the rail,
+/// which opens the list:
 ///
 /// ```text
 ///   ◉ researcher   read_file                     0:12 +3
@@ -2635,11 +2733,16 @@ pub(super) fn rail_height(app: &App) -> u16 {
 ///   ✔ tester       214 passed                    1:31 +1
 /// ```
 ///
-/// ↓ from the composer focuses it, ↑/↓ move, Enter opens the selected run as a
-/// full chat view. `❯` marks the selection while the rail has focus. `+N` is
-/// the unread count: what that subagent did while you were looking elsewhere.
+/// ↑/↓ move, Enter opens the selected run as a full chat view, Esc returns
+/// to the composer. `❯` marks the selection while the rail has focus. `+N`
+/// is the unread count: what that subagent did while you were looking
+/// elsewhere.
 pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 || area.width < 8 {
+        return;
+    }
+    if !rail_list_open(app) && app.panes.len() > 1 {
+        frame.render_widget(Paragraph::new(rail_summary(app, area.width as usize)), area);
         return;
     }
     let focused = app.rail_focus;
@@ -2714,8 +2817,48 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
+/// Keys for the pane header. Short on a narrow terminal so the activity
+/// still has a column; the way back is always the part that stays.
+fn pane_hint(app: &App, pane: &SubagentPane, width: usize) -> &'static str {
+    if width < 56 {
+        "esc back"
+    } else if !pane.transcript.follow {
+        "esc back · ctrl-end follow"
+    } else if app.panes.len() > 1 {
+        "esc back · ↑↓ next"
+    } else {
+        "esc back"
+    }
+}
+
+/// Activity on the left, the way back on the right. The hint is reserved
+/// first: a long task must not push "esc back" off the row.
+fn pane_second_line(activity: &str, hint: &str, width: usize) -> Line<'static> {
+    if width == 0 {
+        return Line::raw("");
+    }
+    let hint_w = hint.width();
+    if width <= hint_w {
+        return truncate_line(Line::from(Span::styled(hint.to_string(), dim())), width);
+    }
+    let activity_w = width.saturating_sub(hint_w + 1 + 3);
+    let activity = if activity_w == 0 {
+        String::new()
+    } else {
+        truncate_width(activity, activity_w)
+    };
+    let gap = width.saturating_sub(3 + activity.width() + hint_w);
+    Line::from(vec![
+        Span::raw(" ".repeat(3)),
+        Span::styled(activity, dim().italic()),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(hint.to_string(), dim()),
+    ])
+}
+
 /// A subagent's pane: its own conversation, rendered with the same machinery as
-/// the main chat, under a header naming the run. Esc goes back.
+/// the main chat, under a header naming the run. Esc goes back. Ctrl-End
+/// follows the live tail again after scrolling up.
 pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area: Rect) {
     // The pane owns the screen, so no main-transcript card is clickable.
     app.card_hits.borrow_mut().clear();
@@ -2731,41 +2874,39 @@ pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area:
         PaneStatus::Failed => ("failed", theme::style(Token::ToolFailed).bold()),
     };
     let elapsed = pane.elapsed().as_secs();
-    let steps = if pane.steps == 1 {
-        "1 step".to_string()
-    } else {
-        format!("{} steps", pane.steps)
-    };
+    let width = area.width as usize;
     let mut header = vec![
         Span::styled(" ▌ ", accent()),
         Span::styled(pane.name.clone(), accent().bold()),
         Span::styled(" · ", dim()),
         Span::styled(status.0, status.1),
-        Span::styled(
-            format!(" · {}:{:02} · {steps}", elapsed / 60, elapsed % 60),
-            dim(),
-        ),
+        Span::styled(format!(" · {}:{:02}", elapsed / 60, elapsed % 60), dim()),
     ];
+    if pane.steps > 0 {
+        let word = if pane.steps == 1 { "step" } else { "steps" };
+        header.push(Span::styled(format!(" · {} {word}", pane.steps), dim()));
+    }
+    // Off the live tail. Ctrl-End (already the transcript's jump-to-tail)
+    // follows again; the word is how you can tell the view has stopped.
+    if !pane.transcript.follow {
+        header.push(Span::styled(" · scrolled", dim().italic()));
+    }
     if pane.bg.is_none() {
         // Worth flagging: the parent turn is blocked until this one reports.
         header.push(Span::styled(" · foreground", dim().italic()));
     }
-    let hint = if app.panes.len() > 1 {
-        "esc back to chat · ↑↓ next agent · shift+↑↓ scroll"
-    } else {
-        "esc back to chat · ↑↓ scroll"
-    };
+    let hint = pane_hint(app, pane, width);
+    let activity = pane
+        .activity()
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
     frame.render_widget(
         Paragraph::new(Text::from(vec![
-            Line::from(header),
-            Line::from(vec![
-                Span::styled("   ", dim()),
-                Span::styled(
-                    truncate_width(&pane.task, area.width.saturating_sub(6) as usize),
-                    dim().italic(),
-                ),
-                Span::styled(format!("  {hint}"), dim()),
-            ]),
+            truncate_line(Line::from(header), width),
+            pane_second_line(&activity, hint, width),
         ])),
         header_area,
     );

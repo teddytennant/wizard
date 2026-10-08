@@ -12,6 +12,63 @@ use super::{App, SetupSection};
 
 pub(super) type Tui = Terminal<CrosstermBackend<std::io::Stdout>>;
 
+/// Area a resize event should apply.
+///
+/// A zero column or row is the transient report some multiplexers emit
+/// mid-drag. Applying it collapses the buffer; the next real size then has
+/// to rebuild a frame that was never blank on screen.
+pub(super) fn resize_rect(cols: u16, rows: u16) -> Option<ratatui::layout::Rect> {
+    if cols == 0 || rows == 0 {
+        None
+    } else {
+        Some(ratatui::layout::Rect::new(0, 0, cols, rows))
+    }
+}
+
+/// Paint one frame, optionally after applying a resize, inside one
+/// synchronized update.
+///
+/// `CSI ? 2026` asks the terminal to hold the diff and present it in one
+/// shot. tmux 3.4 and current terminals honor it; older ones ignore the
+/// private mode. The sequences do not move the cursor, so the diff backend's
+/// idea of where it is stays true. A resize's clear stays inside the same
+/// bracket as the frame that replaces it, which is what keeps a drag from
+/// flashing a blank pane.
+pub(super) fn present(
+    terminal: &mut Tui,
+    draw: impl FnOnce(&mut ratatui::Frame),
+) -> std::io::Result<ratatui::CompletedFrame<'_>> {
+    present_with(terminal, |_| {}, draw)
+}
+
+/// [`present`] after resizing to `area`, both inside the same update.
+pub(super) fn present_resized(
+    terminal: &mut Tui,
+    area: ratatui::layout::Rect,
+    draw: impl FnOnce(&mut ratatui::Frame),
+) -> std::io::Result<ratatui::CompletedFrame<'_>> {
+    present_with(
+        terminal,
+        |terminal| {
+            let _ = terminal.resize(area);
+        },
+        draw,
+    )
+}
+
+fn present_with(
+    terminal: &mut Tui,
+    before: impl FnOnce(&mut Tui),
+    draw: impl FnOnce(&mut ratatui::Frame),
+) -> std::io::Result<ratatui::CompletedFrame<'_>> {
+    let mut out = std::io::stdout();
+    let _ = crossterm::execute!(out, crossterm::terminal::BeginSynchronizedUpdate);
+    before(terminal);
+    let result = terminal.draw(draw);
+    let _ = crossterm::execute!(out, crossterm::terminal::EndSynchronizedUpdate);
+    result
+}
+
 pub(super) fn setup_terminal() -> Result<Tui> {
     crossterm::terminal::enable_raw_mode().context("enabling raw mode")?;
     let mut stdout = std::io::stdout();
@@ -1007,6 +1064,35 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zero_axis_resize_is_not_applied() {
+        assert_eq!(
+            resize_rect(80, 24).map(|area| (area.width, area.height)),
+            Some((80, 24))
+        );
+        assert!(resize_rect(0, 24).is_none());
+        assert!(resize_rect(80, 0).is_none());
+        assert!(resize_rect(0, 0).is_none());
+    }
+
+    #[test]
+    fn synchronized_update_is_a_private_mode_a_terminal_can_ignore() {
+        use crossterm::Command;
+        let mut begin = String::new();
+        crossterm::terminal::BeginSynchronizedUpdate
+            .write_ansi(&mut begin)
+            .unwrap();
+        let mut end = String::new();
+        crossterm::terminal::EndSynchronizedUpdate
+            .write_ansi(&mut end)
+            .unwrap();
+        // Held until the matching reset. No cursor motion in either, which is
+        // what keeps the diff backend's position honest.
+        assert_eq!(begin, "\u{1b}[?2026h");
+        assert_eq!(end, "\u{1b}[?2026l");
+        assert!(!begin.contains('H') && !end.contains('H'));
+    }
 
     #[test]
     fn the_prompt_scratch_file_is_private_and_not_in_the_shared_temp_dir() {
