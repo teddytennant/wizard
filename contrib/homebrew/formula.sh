@@ -57,7 +57,7 @@ class Wizard < Formula
   end
 
   def install
-    bin.install "wizard"
+    bin.install "wizard", "wizard-ui-opencode", "wizard-ui-pi", "wizard-ui-codex", "wizard-ui-grok"
   end
 
   test do

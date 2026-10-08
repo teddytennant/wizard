@@ -136,8 +136,10 @@ The TUI can wear another coding agent's chrome. `/ui` lists the looks and
 **Full looks.** `opencode` and `pi` are separate programs installed next to
 `wizard`, and so are `codex` and `grok` when `wizard-ui-codex` or
 `wizard-ui-grok` is there; without one, those two are drawn in the TUI as
-above. Switching to a full look quits the TUI and starts it. Inside the look,
-`/ui wizard` saves the choice, and quitting the look brings the TUI back.
+above. The installer puts all four next to `wizard` from the release tarball.
+A source install, or a release from before that, builds them when `cargo` is
+available. Switching to a full look quits the TUI and starts it. Inside the
+look, `/ui wizard` saves the choice, and quitting the look brings the TUI back.
 `wizard agents`, `-p`, `--resume`, `--plan` and `--mode` always open the TUI.
 
 **A skin is a look, and only a look.** The commands stay Wizard's (`/model`,

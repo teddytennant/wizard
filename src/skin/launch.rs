@@ -120,7 +120,7 @@ pub fn find_companion(wizard: &Path, name: &str) -> Result<PathBuf> {
         return Ok(found);
     }
     bail!(
-        "the {name} look is not installed. Put it next to wizard ({}) or on PATH.",
+        "the {name} look is not installed. Re-run the installer, or put wizard-ui-{name} next to wizard ({}) or on PATH.",
         wizard
             .parent()
             .map(|dir| dir.join(name))

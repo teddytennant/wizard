@@ -1084,6 +1084,18 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> Result
 }
 
 /// Extract the single `wizard` file from a gzip+tar `tarball` to `dest`.
+const LOOK_BINS: &[&str] = &[
+    "wizard-ui-opencode",
+    "wizard-ui-pi",
+    "wizard-ui-codex",
+    "wizard-ui-grok",
+];
+
+fn is_look_name(name: &str) -> bool {
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    LOOK_BINS.contains(&name)
+}
+
 fn extract_wizard(tarball: &Path, dest: &Path) -> Result<()> {
     let file =
         std::fs::File::open(tarball).with_context(|| format!("opening {}", tarball.display()))?;
@@ -1103,6 +1115,95 @@ fn extract_wizard(tarball: &Path, dest: &Path) -> Result<()> {
         }
     }
     bail!("the release tarball contained no `wizard` file");
+}
+
+/// Pull the look binaries out of a release tarball. An older tarball has none;
+/// that is an empty list, not an error. Only the four known names are taken.
+fn extract_companions(tarball: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(dest_dir)
+        .with_context(|| format!("creating {}", dest_dir.display()))?;
+    let file =
+        std::fs::File::open(tarball).with_context(|| format!("opening {}", tarball.display()))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    let mut out = Vec::new();
+    for entry in archive.entries().context("reading the release tarball")? {
+        let mut entry = entry.context("reading a release tarball entry")?;
+        let name = {
+            let path = entry
+                .path()
+                .context("a release tarball entry had a bad path")?;
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !is_look_name(name) {
+                continue;
+            }
+            name.to_string()
+        };
+        let dest = dest_dir.join(&name);
+        let mut file =
+            std::fs::File::create(&dest).with_context(|| format!("writing {}", dest.display()))?;
+        std::io::copy(&mut entry, &mut file)
+            .with_context(|| format!("unpacking {name} to {}", dest.display()))?;
+        exe_swap::set_executable(&dest)?;
+        out.push(dest);
+    }
+    Ok(out)
+}
+
+/// Place look binaries next to `dest_exe`. A look that does not run, or that
+/// cannot be written, is skipped: the wizard swap already succeeded, and a
+/// missing look is the same state `/ui` already reports.
+fn install_companions(files: &[PathBuf], dest_exe: &Path, writable: bool) {
+    let Some(dir) = dest_exe.parent() else {
+        return;
+    };
+    for src in files {
+        let Some(name) = src.file_name() else {
+            continue;
+        };
+        let dest = dir.join(name);
+        if !binary_runs(src) {
+            eprintln!(
+                "wizard update: {} did not run, leaving it out",
+                name.to_string_lossy()
+            );
+            continue;
+        }
+        if let Err(err) = install_companion(src, &dest, writable) {
+            eprintln!(
+                "wizard update: could not install {}: {err:#}",
+                dest.display()
+            );
+        }
+    }
+}
+
+fn install_companion(staged: &Path, dest: &Path, writable: bool) -> Result<()> {
+    if writable {
+        return exe_swap::install_executable(staged, dest, UPDATE_BACKUP_SUFFIX).map(|_| ());
+    }
+    if !interactive() {
+        bail!(
+            "cannot write {} and no terminal to escalate — install manually:\n  \
+             sudo install -m755 {} {}",
+            dest.display(),
+            staged.display(),
+            dest.display()
+        );
+    }
+    let backup = backup_path(dest)?;
+    for argv in sudo_install_plan(staged, dest, &backup) {
+        let status = std::process::Command::new("sudo")
+            .args(&argv)
+            .status()
+            .with_context(|| format!("running sudo install for {}", dest.display()))?;
+        if !status.success() {
+            bail!("sudo install to {} failed", dest.display());
+        }
+    }
+    Ok(())
 }
 
 /// The `sudo` argv sequence that installs `staged` over `dest_exe`: back the
@@ -1498,6 +1599,14 @@ async fn install_from_source(
         let _ = std::fs::remove_file(&staged);
         let extracted =
             extract_wizard(&tarball, &staged).and_then(|()| exe_swap::set_executable(&staged));
+        let looks_dir = scratch.join(format!(".wizard.looks.{pid}"));
+        let companions = match extract_companions(&tarball, &looks_dir) {
+            Ok(files) => files,
+            Err(err) => {
+                eprintln!("wizard update: left the looks uninstalled: {err:#}");
+                Vec::new()
+            }
+        };
         let _ = std::fs::remove_file(&tarball);
         if let Err(err) = extracted {
             let _ = std::fs::remove_file(&staged);
@@ -1517,7 +1626,9 @@ async fn install_from_source(
         // 5. Swap it in (backs the current binary up to `<name>.bak` first).
         //    A swap that fails is a local problem — a read-only directory, no
         //    terminal to escalate on — and no other host fixes it.
-        return install_over(&staged, dest_exe, writable).map_err(SourceFailure::Fatal);
+        install_over(&staged, dest_exe, writable).map_err(SourceFailure::Fatal)?;
+        install_companions(&companions, dest_exe, writable);
+        return Ok(());
     }
 
     if unrunnable.is_empty() {
@@ -1804,6 +1915,46 @@ pub fn print_startup_notice(cfg: &UpdateConfig) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extract_keeps_wizard_and_only_the_bundled_looks() {
+        let dir = std::env::temp_dir().join(format!("wizard-looks-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tarball = dir.join("rel.tar.gz");
+        {
+            let file = std::fs::File::create(&tarball).unwrap();
+            let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut builder = tar::Builder::new(enc);
+            for name in [
+                "wizard",
+                "wizard-ui-opencode",
+                "not-a-look",
+                "wizard-ui-pi.exe",
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_mode(0o755);
+                header.set_size(2);
+                header.set_cksum();
+                builder.append_data(&mut header, name, &b"x\n"[..]).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let wizard = dir.join("wizard");
+        super::extract_wizard(&tarball, &wizard).unwrap();
+        assert!(wizard.is_file());
+        let looks = dir.join("looks");
+        let found = super::extract_companions(&tarball, &looks).unwrap();
+        let mut names: Vec<_> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["wizard-ui-opencode", "wizard-ui-pi.exe"]);
+        assert!(!looks.join("not-a-look").exists());
+        assert!(!looks.join("wizard").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_latest_tag_comes_from_the_release_redirect() {
         use super::tag_from_release_location as tag;

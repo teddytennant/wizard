@@ -249,10 +249,51 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # The four full looks (wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex,
+      # wizard-ui-grok) ship in the same tarball as wizard. install.sh and
+      # wizard update place them beside it, so a machine without cargo still
+      # gets /ui opencode and the rest. looks.rev pins the source; floating
+      # main would make a tag unreproducible.
+      - name: Read looks pin
+        id: looks-rev
+        run: |
+          set -eu
+          rev="$(grep -E '^[0-9a-f]{40}$' looks.rev | head -1)"
+          test -n "$rev"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout look UIs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: teddytennant/openw
+          ref: ${{ steps.looks-rev.outputs.rev }}
+          path: openw
+          persist-credentials: false
+
+      - name: Build look UIs
+        working-directory: openw
+        env:
+          RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }} -p openw -p piw -p codexw -p grokw
+
       - name: Package
         run: |
-          strip "target/${{ matrix.target }}/release/wizard"
-          tar -C "target/${{ matrix.target }}/release" -czf "wizard-${{ matrix.target }}.tar.gz" wizard
+          set -eu
+          stage="${{ runner.temp }}/wizard-stage"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          release="target/${{ matrix.target }}/release"
+          looks="openw/target/${{ matrix.target }}/release"
+          cp "$release/wizard" "$stage/wizard"
+          cp "$looks/openw" "$stage/wizard-ui-opencode"
+          cp "$looks/piw" "$stage/wizard-ui-pi"
+          cp "$looks/codexw" "$stage/wizard-ui-codex"
+          cp "$looks/grokw" "$stage/wizard-ui-grok"
+          strip "$stage"/*
+          tar -C "$stage" -czf "wizard-${{ matrix.target }}.tar.gz" \
+            wizard wizard-ui-opencode wizard-ui-pi wizard-ui-codex wizard-ui-grok
 
       # Start what we are about to ship. Deliberately the unpacked tarball and
       # not target/release/wizard: strip and tar are the last two things that
@@ -276,13 +317,20 @@ jobs:
         if: contains(matrix.target, '-musl')
         run: |
           set -eu
-          bin="target/${{ matrix.target }}/release/wizard"
-          if readelf -l "$bin" | grep -q INTERP; then
-            interp="$(readelf -l "$bin" | grep -i 'Requesting program interpreter' | sed 's/.*: //; s/\]//')"
-            echo "::warning::${{ matrix.target }} is NOT static — it requests ${interp}. It will segfault on Alpine and will not run on any host without that loader."
-            exit 1
-          fi
-          echo "${{ matrix.target }} has no PT_INTERP: genuinely static."
+          rm -rf musl-check && mkdir musl-check
+          tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C musl-check
+          found=0
+          for bin in musl-check/wizard musl-check/wizard-ui-opencode musl-check/wizard-ui-pi musl-check/wizard-ui-codex musl-check/wizard-ui-grok; do
+            test -f "$bin"
+            found=$((found + 1))
+            if readelf -l "$bin" | grep -q INTERP; then
+              interp="$(readelf -l "$bin" | grep -i 'Requesting program interpreter' | sed 's/.*: //; s/\]//')"
+              echo "::warning::${bin} on ${{ matrix.target }} is NOT static — it requests ${interp}. It will segfault on Alpine and will not run on any host without that loader."
+              exit 1
+            fi
+            echo "$bin has no PT_INTERP: genuinely static."
+          done
+          test "$found" -eq 5
 
       - name: Smoke test the packaged binary
         if: matrix.native
@@ -292,6 +340,10 @@ jobs:
           rm -rf smoke && mkdir smoke
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/wizard --version
+          ./smoke/wizard-ui-opencode --version
+          ./smoke/wizard-ui-pi --version
+          ./smoke/wizard-ui-codex --version
+          ./smoke/wizard-ui-grok --version
           rm -rf smoke
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

@@ -1761,6 +1761,7 @@ download_binary() {
             INSTALLED_PATH="$PLACED_PATH"
             BINARY_INSTALLED=1
             say "Installed wizard to ${INSTALLED_PATH} (from ${DOWNLOAD_SOURCE})"
+            install_bundled_looks "$unpack"
             return
         fi
     done
@@ -1963,18 +1964,57 @@ build_from_source() {
 
 # --- full looks ---------------------------------------------------------
 #
-# The four full UIs live in a separate repo and install beside wizard, under
-# the names /ui execs. A missing toolchain or a failed build is a warning:
-# wizard itself is already installed, and /ui says which look is missing.
+# Current releases ship wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex and
+# wizard-ui-grok in the same tarball as wizard. install_bundled_looks places
+# those. The clone-and-build below is only the fallback for an old release, a
+# source install, or a tarball that did not contain them. A missing toolchain
+# or a failed build is a warning: wizard itself is already installed, and /ui
+# says which look is missing.
+
+# Names already placed from the release tarball, space-padded so a substring
+# match cannot accept "pi" inside "opencode".
+BUNDLED_LOOKS=" "
+
+look_bundled() {
+    case "$BUNDLED_LOOKS" in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+install_bundled_looks() {
+    local unpack="$1" name bin
+    for name in opencode pi codex grok; do
+        bin="$(find "$unpack" -type f -name "wizard-ui-${name}" | head -n1 || true)"
+        if [ -z "$bin" ]; then
+            continue
+        fi
+        chmod 755 "$bin"
+        if ! "$bin" --version >/dev/null 2>&1; then
+            warn "wizard-ui-${name} is in the release but did not run on this system"
+            continue
+        fi
+        place_binary "$bin" "wizard-ui-${name}"
+        BUNDLED_LOOKS="${BUNDLED_LOOKS}${name} "
+        say "Installed wizard-ui-${name} to ${PLACED_PATH}"
+    done
+}
 
 install_looks() {
     if [ "$WIZARD_MINIMAL" = "1" ]; then
         say "Minimal install: skipping the full looks (wizard-ui-*)"
         return
     fi
+    local missing=0 name
+    for name in opencode pi codex grok; do
+        look_bundled "$name" || missing=1
+    done
+    if [ "$missing" = 0 ]; then
+        return
+    fi
     if ! cargo_works; then
-        warn "cargo is not available, so the full looks were not built."
-        warn "wizard still runs. Install Rust, then build ${WIZARD_UI_REPO} and copy the four binaries next to wizard as wizard-ui-codex, wizard-ui-grok, wizard-ui-opencode, wizard-ui-pi."
+        warn "this release did not include every look, and cargo is not available to build the rest."
+        warn "wizard still runs. /ui names the missing look. Re-run the installer against a current release, or build ${WIZARD_UI_REPO} and copy wizard-ui-codex, wizard-ui-grok, wizard-ui-opencode, wizard-ui-pi next to wizard."
         return
     fi
     command -v git >/dev/null 2>&1 || {
@@ -1995,6 +2035,9 @@ install_looks() {
     fi
     local name bin
     for name in codex grok opencode pi; do
+        if look_bundled "$name"; then
+            continue
+        fi
         case "$name" in
             opencode) bin="${src}/target/release/openw" ;;
             *) bin="${src}/target/release/${name}w" ;;

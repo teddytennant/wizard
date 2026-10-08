@@ -19,5 +19,12 @@ sha256sums_aarch64=('d155581e6461b29882b31a0e52a41a8ade4ea1478fe3b1fa0aaed6b3a1b
 
 package() {
   install -Dm755 wizard "$pkgdir/usr/bin/wizard"
+  # 3.8.2+ tarballs carry the looks. A tarball from before that has none, and
+  # bump.sh has not pointed this file at the new release yet.
+  for look in wizard-ui-opencode wizard-ui-pi wizard-ui-codex wizard-ui-grok; do
+    if [ -f "$look" ]; then
+      install -Dm755 "$look" "$pkgdir/usr/bin/$look"
+    fi
+  done
   install -Dm644 "LICENSE-MIT-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
 }

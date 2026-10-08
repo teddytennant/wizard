@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.2] - 2026-10-08
+
+Ship the four full looks in the release tarball. A new install was reporting `/ui opencode` and `/ui pi` as not installed: the installer tried to clone `teddytennant/openw`, which did not exist, and skipped the build on a machine without cargo. The installer and `wizard update` now place `wizard-ui-opencode`, `wizard-ui-pi`, `wizard-ui-codex` and `wizard-ui-grok` next to wizard.
+
 ## [3.8.1] - 2026-10-07
 
 ### Fixed

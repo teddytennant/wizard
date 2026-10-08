@@ -16,7 +16,7 @@ Homebrew installs the same release tarball, pinned by sha256, on macOS and Linux
 brew install teddytennant/tap/wizard
 ```
 
-On Arch, `contrib/aur/wizard-bin` packages that tarball and `contrib/aur/wizard` builds the tag with cargo (`makepkg -si` in either directory); they aren't on the AUR yet. Both put down the binary only, the same as `WIZARD_MINIMAL=1` below.
+On Arch, `contrib/aur/wizard-bin` packages that tarball, including the four looks, and `contrib/aur/wizard` builds the tag with cargo (`makepkg -si` in either directory); they aren't on the AUR yet. The source package puts down the wizard binary only, the same as `WIZARD_MINIMAL=1` below.
 
 The curl installer:
 
