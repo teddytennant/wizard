@@ -862,7 +862,7 @@ fn todo_band_sits_above_the_composer_without_covering_chat() {
 /// splash actively getting in the way, so the art is conditional and this
 /// pins both directions.
 #[test]
-fn the_empty_state_is_three_plain_lines_at_every_width() {
+fn the_empty_state_names_the_session_and_one_hint() {
     fn screen(width: u16, height: u16) -> String {
         let app = App::new(crate::config::Config::default());
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -881,12 +881,24 @@ fn the_empty_state_is_three_plain_lines_at_every_width() {
     for (width, height) in [(120, 40), (80, 24), (40, 20)] {
         let screen = screen(width, height);
         let first = screen.lines().nth(1).unwrap_or_default();
-        assert!(first.starts_with(" wizard "), "{width}x{height}: {screen}");
+        assert!(first.contains("◆ wizard"), "{width}x{height}: {screen}");
+        assert!(
+            first.contains(env!("CARGO_PKG_VERSION")),
+            "{width}x{height}: {screen}"
+        );
         assert!(
             screen.contains("type a message"),
             "{width}x{height}: {screen}"
         );
-        for absent in ["⣿", "w i z a r d", "sovereign agent", "/model", "genie"] {
+        assert!(screen.contains("model"), "{width}x{height}: {screen}");
+        assert!(screen.contains("mode"), "{width}x{height}: {screen}");
+        assert!(screen.contains("genie"), "{width}x{height}: {screen}");
+        assert!(screen.contains("context"), "{width}x{height}: {screen}");
+        assert!(
+            !screen.contains("· / lists"),
+            "one hint, not a tip row: {width}x{height}: {screen}"
+        );
+        for absent in ["⣿", "w i z a r d", "sovereign agent", "/model"] {
             assert!(
                 !screen.contains(absent),
                 "{absent} at {width}x{height}: {screen}"
@@ -912,19 +924,24 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
     let screen = rows.join("\n");
     let hint = rows
         .iter()
-        .position(|row| row.contains("type a message · / lists commands"))
+        .position(|row| row.contains("type a message"))
         .expect("the hint");
+    let first = rows
+        .iter()
+        .position(|row| row.contains("Explain how this project is put together"))
+        .expect("first prompt");
+    assert!(first < hint, "prompts sit above the hint: {screen}");
     assert_eq!(
-        rows[hint + 1].trim(),
+        rows[first].trim(),
         "❯ Explain how this project is put together",
         "{screen}"
     );
-    assert_eq!(rows[hint + 2].trim(), "❯ Review my uncommitted changes");
-    assert_eq!(rows[hint + 3].trim(), "");
+    assert_eq!(rows[first + 1].trim(), "❯ Review my uncommitted changes");
+    assert_eq!(rows[hint + 1].trim(), "");
     assert_eq!(
-        rows[hint + 4].trim(),
+        rows[hint + 2].trim(),
         "saved ~/.wizard/config.toml · /setup changes it",
-        "the summary comes after the prompts, apart: {screen}"
+        "the summary comes after the hint, apart: {screen}"
     );
     assert!(!screen.contains("1  Explain"), "no digits: {screen}");
     assert!(!screen.contains("pick one"), "no key hint: {screen}");
@@ -957,7 +974,7 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
     app.provider_health_error = None;
     app.first_run_notice = None;
 
-    // No prompts, no hook: the card is the name, the hint and nothing else.
+    // No prompts, no hook: the title, the four-row block, and one hint.
     app.starter_prompts.clear();
     app.first_run_summary = None;
     let rows = render(&app);
@@ -967,13 +984,18 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
         .filter(|row| !row.is_empty())
         .collect();
     assert_eq!(
-        &text[..2],
-        &[
-            format!("wizard {}", env!("CARGO_PKG_VERSION")).as_str(),
-            "type a message · / lists commands"
-        ],
+        text[0],
+        format!("◆ wizard {}", env!("CARGO_PKG_VERSION")),
         "{rows:?}"
     );
+    assert!(text.iter().any(|row| row.starts_with("model")), "{rows:?}");
+    assert!(text.iter().any(|row| row.starts_with("mode")), "{rows:?}");
+    assert!(text.iter().any(|row| row.starts_with("dir")), "{rows:?}");
+    assert!(
+        text.iter().any(|row| row.starts_with("context")),
+        "{rows:?}"
+    );
+    assert!(text.contains(&"type a message"), "{rows:?}");
 }
 
 /// At 40 columns every card row that does not fit ends in `…` instead of
@@ -1264,7 +1286,7 @@ fn composer_growth_is_capped_and_the_status_bar_survives() {
 }
 
 #[test]
-fn rail_collapses_overflow_runs_into_one_row() {
+fn rail_stays_one_row_until_it_is_focused() {
     let mut app = App::new(crate::config::Config::default());
     for run in 0..12u64 {
         app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
@@ -1273,12 +1295,22 @@ fn rail_collapses_overflow_runs_into_one_row() {
             name: format!("agent{run}"),
             task: "t".to_string(),
         });
-        let expected = match app.panes.len() {
-            n if n <= 5 => n as u16,
-            _ => 6,
-        };
-        assert_eq!(rail_height(&app), expected, "{} panes", app.panes.len());
+        // Unfocused: one summary, however many runs. The list must not eat
+        // the transcript just because work was delegated.
+        assert_eq!(rail_height(&app), 1, "{} panes, unfocused", app.panes.len());
     }
+    assert!(app.focus_rail());
+    assert_eq!(
+        rail_height(&app),
+        6,
+        "focused list is capped at five plus overflow"
+    );
+    app.attach_pane(0);
+    assert_eq!(
+        rail_height(&app),
+        1,
+        "inside a run the siblings collapse back to the summary"
+    );
 }
 
 #[test]
@@ -1560,14 +1592,14 @@ fn a_finished_tool_card_carries_its_exit_code_and_elapsed_time() {
         },
     };
     let rows = card(&tool);
-    assert_eq!(rows[0], "✗ execute  make  exit 2  0.4s", "{rows:?}");
-    assert_eq!(rows[1].trim(), "boom", "{rows:?}");
+    assert_eq!(rows[0], "✕ execute  make  exit 2  0.4s", "{rows:?}");
+    assert_eq!(rows[1], "╰ boom", "{rows:?}");
     assert_eq!(rows.len(), 2, "the exit line moved to the header: {rows:?}");
 
     // Folded, the header still says how it ended.
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let folded = flats(&tool_card_lines(&tool, true, 0, 80));
-    assert_eq!(folded, vec!["✗ execute  make  exit 2  0.4s  +1 lines"]);
+    assert_eq!(folded, vec!["✕ execute  make  exit 2  0.4s  +1 lines"]);
 }
 
 #[test]
@@ -1589,10 +1621,10 @@ fn an_edit_card_shows_the_change_as_a_diff() {
         timing: ToolTiming::default(),
     };
     let rows = card(&tool);
-    assert_eq!(rows[0], "✓ edit_file  src/x.rs:12", "{rows:?}");
-    assert_eq!(rows[1], "  - let a = 1;");
-    assert_eq!(rows[2], "  + let a = 2;");
-    assert_eq!(rows[3], "  + let b = 3;");
+    assert_eq!(rows[0], "● edit_file  src/x.rs:12 +2 \u{2212}1", "{rows:?}");
+    assert_eq!(rows[1], "╰ 12 - let a = 1;");
+    assert_eq!(rows[2], "  12 + let a = 2;");
+    assert_eq!(rows[3], "  13 + let b = 3;");
     assert!(
         !rows.iter().any(|row| row.contains("replaced")),
         "the sentence is not the body: {rows:?}"
@@ -1624,7 +1656,10 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     app.turn_started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
     let rows = render(&app);
     let screen = rows.join("\n");
-    assert!(rows.iter().any(|row| row.trim() == "⠋"), "{screen}");
+    assert!(
+        rows.iter().any(|row| row.trim() == "⠋ thinking"),
+        "{screen}"
+    );
     // One clock, on the status line.
     assert_eq!(screen.matches("3.0s").count(), 1, "{screen}");
     for verb in crate::config::UiConfig::DEFAULT_SPINNER_VERBS {
@@ -1643,7 +1678,7 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
 }
 
 #[test]
-fn the_status_line_names_the_branch_and_drops_the_defaults() {
+fn the_status_line_names_the_model_mode_meter_and_branch() {
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -1654,8 +1689,12 @@ fn the_status_line_names_the_branch_and_drops_the_defaults() {
     let status = rows.last().unwrap();
     assert!(status.contains("feature-x"), "{status}");
     assert!(
-        !status.contains("genie"),
-        "the default mode says nothing: {status}"
+        status.contains("genie"),
+        "the mode is on the line: {status}"
+    );
+    assert!(
+        status.contains("0%"),
+        "the context meter is on the line: {status}"
     );
     assert!(!status.contains("commands"), "no idle hint: {status}");
     assert!(
@@ -1663,17 +1702,41 @@ fn the_status_line_names_the_branch_and_drops_the_defaults() {
         "{status}"
     );
 
-    // Sovereign is the mode worth a word.
+    // Sovereign replaces the mode word.
     app.status.mode = crate::config::Mode::Sovereign;
     let rows = render(&app);
     assert!(rows.last().unwrap().contains("sovereign"));
 
-    // Outside a repository there is no branch chip and no stray separator.
+    // A priced session shows the meter at the real percent and the cost.
+    app.status.mode = crate::config::Mode::Genie;
+    app.status.model = "gpt-4o".to_string();
+    app.status.context_tokens = 42_000;
+    app.status.prompt_tokens = 42_000;
+    app.status.completion_tokens = 800;
+    app.config.max_context_tokens = 128_000;
+    app.config.providers.push(crate::config::ProviderConfig {
+        name: "openai".to_string(),
+        kind: crate::config::ProviderKind::OPENAI,
+        model: "gpt-4o".to_string(),
+        usd_per_mtok_in: Some(2.5),
+        usd_per_mtok_out: Some(10.0),
+        ..crate::config::ProviderConfig::default()
+    });
+    app.config.active_provider = Some("openai".to_string());
+    let status = render(&app).last().unwrap().clone();
+    assert!(status.contains("gpt-4o"), "{status}");
+    assert!(status.contains("genie"), "{status}");
+    assert!(status.contains("feature-x"), "{status}");
+    assert!(status.contains("32%"), "{status}");
+    assert!(status.contains("$0.11"), "{status}");
+
+    // Outside a repository there is no branch chip.
     let bare = tempfile::tempdir().unwrap();
     app.project_root = bare.path().to_path_buf();
-    app.status.mode = crate::config::Mode::Genie;
-    let rows = render(&app);
-    assert_eq!(rows.last().unwrap().trim(), app.status.model, "{rows:?}");
+    let status = render(&app).last().unwrap().clone();
+    assert!(!status.contains("feature-x"), "{status}");
+    assert!(status.contains("gpt-4o"), "{status}");
+    assert!(status.contains("32%"), "{status}");
 }
 
 #[test]
@@ -1743,6 +1806,7 @@ fn a_long_tool_output_is_folded_from_the_first_frame_it_is_in() {
     for skin in crate::skin::Skin::ALL {
         let _pinned = crate::skin::pin(skin);
         let mut app = App::new(crate::config::Config::default());
+        app.transcript.set_compact(false);
         app.welcome_dismissed = true;
         let (gate, _host) = ConsoleGate::open();
 
@@ -1848,6 +1912,7 @@ fn compact_view_keeps_the_conversation_and_drops_the_work() {
     for skin in crate::skin::Skin::ALL {
         let _pinned = crate::skin::pin(skin);
         let mut app = a_busy_turn();
+        app.transcript.set_compact(false);
 
         let full = frame_text(&app);
         for shown in ["fix the parser", "Looking at it now.", "test-output-failed"] {
@@ -1864,7 +1929,7 @@ fn compact_view_keeps_the_conversation_and_drops_the_work() {
             "Looking at it now.",
             "Fixed it.",
             "provider-said-no",
-            "ran 3 tools, 1 failed",
+            "▸ ran 1 command · edited 1 file · read 1 file · 1 failed",
         ] {
             assert!(
                 compact.contains(kept),
@@ -1899,7 +1964,7 @@ fn compact_view_names_the_tool_that_is_running() {
             args: serde_json::json!({ "command": "make" }),
         });
         let frame = frame_text(&app);
-        assert!(frame.contains("running execute"), "{skin:?}\n{frame}");
+        assert!(frame.contains("▸ running make"), "{skin:?}\n{frame}");
     }
 }
 
@@ -1907,22 +1972,22 @@ fn compact_view_names_the_tool_that_is_running() {
 fn view_toggles_the_transcript_that_is_already_there() {
     let _pinned = crate::skin::pin(crate::skin::Skin::Wizard);
     let mut app = a_busy_turn();
-    assert!(!app.transcript.compact(), "off by default");
-    assert!(frame_text(&app).contains("parse-body"));
-
-    app.set_compact_view(None);
-    assert!(app.transcript.compact() && app.config.ui.compact);
+    assert!(app.transcript.compact(), "on by default");
     assert!(!frame_text(&app).contains("parse-body"));
 
-    app.set_compact_view(Some(true));
+    app.set_compact_view(None);
+    assert!(!app.transcript.compact() && !app.config.ui.compact);
+    assert!(frame_text(&app).contains("parse-body"));
+
+    app.set_compact_view(Some(false));
     assert!(
-        app.transcript.compact(),
+        !app.transcript.compact(),
         "naming the view it is in keeps it"
     );
 
-    app.set_compact_view(Some(false));
-    assert!(!app.config.ui.compact);
-    assert!(frame_text(&app).contains("parse-body"));
+    app.set_compact_view(Some(true));
+    assert!(app.config.ui.compact);
+    assert!(!frame_text(&app).contains("parse-body"));
 }
 
 #[test]
@@ -1930,4 +1995,998 @@ fn compact_in_the_config_starts_the_session_compact() {
     let mut config = crate::config::Config::default();
     config.ui.compact = true;
     assert!(App::new(config).transcript.compact());
+}
+
+fn pin_house() -> (crate::skin::Pinned, theme::Pinned) {
+    (
+        crate::skin::pin(crate::skin::Skin::Wizard),
+        theme::pin(std::sync::Arc::new(
+            theme::load("wizard")
+                .expect("wizard theme")
+                .with_depth(theme::ColorDepth::TrueColor),
+        )),
+    )
+}
+
+fn screen_at(app: &App, width: u16, height: u16) -> (Vec<String>, ratatui::buffer::Buffer) {
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let rows = (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    (rows, buffer)
+}
+
+fn buffer_colors(buffer: &ratatui::buffer::Buffer) -> Vec<Color> {
+    let area = buffer.area;
+    let mut colors = Vec::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let cell = &buffer[(x, y)];
+            colors.push(cell.fg);
+            colors.push(cell.bg);
+        }
+    }
+    colors
+}
+
+/// Mid-stream: the partial reply is on screen with the streaming caret, and
+/// the composer is still the composer.
+#[test]
+fn a_streaming_reply_keeps_its_caret_and_the_composer() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript
+        .user("explain the parser".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "The parser walks each token".to_string(),
+    ));
+    app.status.busy = true;
+    app.tick = 0;
+    let (rows, _) = screen_at(&app, 80, 24);
+    let screen = rows.join("\n");
+    assert!(screen.contains("The parser walks each token"), "{screen}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("The parser walks each token") && row.contains('⠋')),
+        "streaming caret is the thinking braille:\n{screen}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains('❯')),
+        "composer:\n{screen}"
+    );
+}
+
+/// A tool call is one header: glyph, name, argument. Not a panel.
+#[test]
+fn a_tool_call_is_a_single_header_row() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.transcript.set_compact(false);
+    app.welcome_dismissed = true;
+    app.transcript.user("run the tests".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "cargo test" }),
+    });
+    app.tick = 0;
+    let (rows, _) = screen_at(&app, 80, 24);
+    let header = rows
+        .iter()
+        .find(|row| row.contains("execute") && row.contains("cargo test"))
+        .expect("tool header");
+    assert!(
+        header.contains('│'),
+        "a running call shows the line spinner, not a box: {header}"
+    );
+    assert!(!header.contains('┌') && !header.contains('└'), "{header}");
+}
+
+/// Every command the TUI can run shows up in the slash menu, by name.
+#[test]
+fn the_slash_menu_offers_every_tui_command() {
+    let _pins = pin_house();
+    let available = crate::commands::available(crate::commands::Surface::Tui);
+    for spec in crate::commands::COMMANDS {
+        let listed = available.iter().any(|row| row.name == spec.name);
+        let runnable = spec.tui != crate::commands::Execution::Unavailable;
+        assert_eq!(listed, runnable, "/{}", spec.name);
+    }
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.input = "/".to_string();
+    app.suggestions = available.iter().map(crate::app::Suggestion::from).collect();
+    app.input_mode = crate::app::InputMode::Command;
+    for index in 0..app.suggestions.len() {
+        app.suggestion_index = index;
+        let name = app.suggestions[index].name.clone();
+        let (rows, _) = screen_at(&app, 80, 24);
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains(&format!("/{name}")) || screen.contains(&name),
+            "/{name} missing from the menu:\n{screen}"
+        );
+        assert!(screen.contains('❯'), "selection marker:\n{screen}");
+    }
+}
+
+/// Several runs are one summary until the rail is focused, then a list, and
+/// opening one shows its own transcript with a way back and a follow state.
+#[test]
+fn subagents_summarize_then_open_without_a_pane_grid() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript
+        .user("delegate the review".to_string(), Vec::new());
+    for (run, name) in [(1u64, "researcher"), (2, "reviewer"), (3, "tester")] {
+        app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+            run,
+            bg: Some(run as u32),
+            name: name.to_string(),
+            task: format!("task for {name}"),
+        });
+    }
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunToolStarted {
+        run: 1,
+        name: "read_file".to_string(),
+        args: serde_json::json!({}),
+    });
+    app.tick = 0;
+
+    let (rows, _) = screen_at(&app, 80, 24);
+    let screen = rows.join("\n");
+    let summary = rows
+        .iter()
+        .find(|row| row.contains("running"))
+        .expect("summary row");
+    assert!(summary.contains("researcher"), "{summary}");
+    assert!(summary.contains("reviewer"), "{summary}");
+    assert!(
+        !screen.contains("task for reviewer"),
+        "the task list is not a grid:\n{screen}"
+    );
+    assert_eq!(rail_height(&app), 1);
+
+    assert!(app.focus_rail());
+    let (focused, _) = screen_at(&app, 80, 24);
+    let joined = focused.join("\n");
+    assert!(joined.contains('❯'), "focused rail has a cursor:\n{joined}");
+    assert!(joined.contains("researcher"), "{joined}");
+    assert!(joined.contains("tester"), "{joined}");
+    assert!(rail_height(&app) > 1);
+
+    app.attach_pane(0);
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunText {
+        run: 1,
+        text: "auth starts in login.rs".to_string(),
+    });
+    let (inside, _) = screen_at(&app, 80, 24);
+    let inside_text = inside.join("\n");
+    assert!(inside_text.contains("researcher"), "{inside_text}");
+    assert!(inside_text.contains("running"), "{inside_text}");
+    assert!(
+        inside_text.contains("auth starts in login.rs"),
+        "{inside_text}"
+    );
+    assert!(inside_text.contains("esc back"), "{inside_text}");
+    assert!(
+        !inside_text.contains("delegate the review"),
+        "the main chat yields:\n{inside_text}"
+    );
+    assert_eq!(rail_height(&app), 1, "siblings stay a summary");
+
+    app.panes[0].transcript.follow = false;
+    let (scrolled, _) = screen_at(&app, 80, 24);
+    let scrolled_text = scrolled.join("\n");
+    assert!(scrolled_text.contains("scrolled"), "{scrolled_text}");
+    assert!(scrolled_text.contains("ctrl-end follow"), "{scrolled_text}");
+}
+
+/// 40 columns: the summary, the tool header, and the menu still read.
+#[test]
+fn a_narrow_terminal_keeps_the_summary_and_drops_nothing_essential() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.user("narrow".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "still streaming on a narrow screen".to_string(),
+    ));
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "cargo test --all" }),
+    });
+    for (run, name) in [(1u64, "researcher"), (2, "reviewer")] {
+        app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+            run,
+            bg: Some(run as u32),
+            name: name.to_string(),
+            task: "a long task description that must not wrap the header".to_string(),
+        });
+    }
+    let (rows, buffer) = screen_at(&app, 40, 20);
+    let screen = rows.join("\n");
+    assert!(screen.contains("running"), "{screen}");
+    assert!(screen.contains("researcher"), "{screen}");
+    assert!(
+        screen.contains('▍') || screen.contains("execute") || screen.contains('▸'),
+        "{screen}"
+    );
+    // Every painted row fits. A cell past the edge would have panicked;
+    // this checks the summary itself was cut with an ellipsis rather than
+    // run on into the next row.
+    let summary = rows
+        .iter()
+        .find(|row| row.contains("running"))
+        .expect("summary");
+    assert!(summary.width() <= 40, "{summary}");
+    assert_eq!(buffer.area.width, 40);
+
+    app.input = "/".to_string();
+    app.suggestions = crate::commands::available(crate::commands::Surface::Tui)
+        .iter()
+        .take(4)
+        .map(crate::app::Suggestion::from)
+        .collect();
+    app.suggestion_index = 0;
+    app.input_mode = crate::app::InputMode::Command;
+    let (menu, _) = screen_at(&app, 40, 20);
+    let menu_text = menu.join("\n");
+    assert!(
+        menu_text.contains("/model") || menu_text.contains("model"),
+        "{menu_text}"
+    );
+    assert!(menu.iter().all(|row| row.width() <= 40), "{menu_text}");
+}
+
+/// Without truecolor the frame uses the degraded palette: no 24-bit cells.
+#[test]
+fn the_frame_degrades_without_truecolor() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.user("color".to_string(), Vec::new());
+    app.handle_agent_event(crate::agent::AgentEvent::TextDelta(
+        "a short reply".to_string(),
+    ));
+    app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({ "command": "true" }),
+    });
+
+    for depth in [theme::ColorDepth::Ansi16, theme::ColorDepth::Mono] {
+        let _pin = theme::pin(std::sync::Arc::new(theme::minimal().with_depth(depth)));
+        let (_, buffer) = screen_at(&app, 80, 24);
+        for color in buffer_colors(&buffer) {
+            assert!(
+                !matches!(color, Color::Rgb(..)),
+                "{depth:?} painted truecolor {color:?}"
+            );
+            if depth == theme::ColorDepth::Mono {
+                assert!(
+                    matches!(color, Color::Reset),
+                    "mono should be reset, got {color:?}"
+                );
+            }
+        }
+    }
+}
+
+fn work_turn() -> App {
+    let mut app = a_busy_turn();
+    app.transcript.set_compact(true);
+    app
+}
+
+fn click_row(app: &mut App, row: u16) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_event(crate::event::Event::Mouse(MouseEvent {
+            kind,
+            column: 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+    }
+}
+
+/// Compact draws the conversation and one summary. Verbose draws the work.
+#[test]
+fn compact_and_verbose_draw_different_frames() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let (compact, _) = screen_at(&app, 80, 24);
+    let compact_text = compact.join("\n");
+    assert!(
+        compact_text.contains("▸ ran 1 command · edited 1 file · read 1 file · 1 failed"),
+        "{compact_text}"
+    );
+    assert!(
+        compact_text.contains("Looking at it now."),
+        "{compact_text}"
+    );
+    assert!(compact_text.contains("fix the parser"), "{compact_text}");
+    assert!(!compact_text.contains("parse-body"), "{compact_text}");
+    assert!(!compact_text.contains("old-diff-line"), "{compact_text}");
+
+    app.transcript.set_compact(false);
+    let (verbose, _) = screen_at(&app, 80, 24);
+    let verbose_text = verbose.join("\n");
+    assert!(verbose_text.contains("parse-body"), "{verbose_text}");
+    assert!(verbose_text.contains("execute"), "{verbose_text}");
+    assert!(!verbose_text.contains('▸'), "{verbose_text}");
+}
+
+#[test]
+fn a_click_opens_the_summary_and_a_second_click_shuts_it() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let _ = screen_at(&app, 80, 24);
+    let row = app
+        .group_hits
+        .borrow()
+        .first()
+        .map(|(row, _)| *row)
+        .expect("the summary is clickable");
+    click_row(&mut app, row);
+    let (open, _) = screen_at(&app, 80, 24);
+    let open_text = open.join("\n");
+    assert!(open_text.contains('▾'), "{open_text}");
+    assert!(open_text.contains("parse-body"), "{open_text}");
+    assert!(open_text.contains("- old-diff-line"), "{open_text}");
+    assert!(open_text.contains("+ new-diff-line"), "{open_text}");
+
+    let row = app
+        .group_hits
+        .borrow()
+        .first()
+        .map(|(row, _)| *row)
+        .expect("the open summary is still clickable");
+    click_row(&mut app, row);
+    let (shut, _) = screen_at(&app, 80, 24);
+    let shut_text = shut.join("\n");
+    assert!(shut_text.contains('▸'), "{shut_text}");
+    assert!(!shut_text.contains("parse-body"), "{shut_text}");
+}
+
+#[test]
+fn tab_and_enter_open_the_focused_summary() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let action = app
+        .handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ))
+        .unwrap();
+    assert!(action.is_none());
+    assert!(app.transcript.focused_group().is_some());
+    let (focused, _) = screen_at(&app, 80, 24);
+    assert!(focused.join("\n").contains('▸'));
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ))
+    .unwrap();
+    let (open, _) = screen_at(&app, 80, 24);
+    let open_text = open.join("\n");
+    assert!(open_text.contains('▾'), "{open_text}");
+    assert!(open_text.contains("cargo test"), "{open_text}");
+}
+
+#[test]
+fn ctrl_t_opens_every_summary_and_ctrl_o_flips_the_saved_view() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('t'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
+    .unwrap();
+    let opened = screen_at(&app, 80, 24).0.join("\n");
+    assert!(opened.contains("parse-body"), "{opened}");
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
+    .unwrap();
+    assert!(!app.transcript.compact());
+    assert!(!app.config.ui.compact);
+    let verbose = screen_at(&app, 80, 24).0.join("\n");
+    assert!(verbose.contains("execute"), "{verbose}");
+
+    let saved = toml::to_string(&app.config).unwrap();
+    let loaded: crate::config::Config = toml::from_str(&saved).unwrap();
+    assert!(!loaded.ui.compact, "the flipped view survives a save");
+}
+
+#[test]
+fn markdown_renders_a_heading_a_list_and_inline_code() {
+    let _pins = pin_house();
+    let rendered = render_markdown_at("# Title\n\n- one item\n\nuse `parse` here\n", 60);
+    let text = rendered
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Title"), "{text}");
+    assert!(text.contains("one item"), "{text}");
+    assert!(text.contains("parse"), "{text}");
+    let code = rendered
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains("parse"));
+    let code = code.expect("inline code");
+    assert!(
+        code.style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
+fn a_summary_fits_a_narrow_terminal_and_a_wider_one() {
+    let _pins = pin_house();
+    let app = work_turn();
+    for width in [40u16, 100] {
+        let (rows, buffer) = screen_at(&app, width, 20);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▸"), "{width}: {screen}");
+        assert!(screen.contains("command"), "{width}: {screen}");
+        assert!(
+            rows.iter().all(|row| row.width() <= width as usize),
+            "{width}: {screen}"
+        );
+        assert_eq!(buffer.area.width, width);
+    }
+}
+
+/// A resize is a new frame of the same conversation: the summary survives,
+/// and the buffer's size is the size it was given.
+#[test]
+fn a_resize_redraws_the_compact_frame_at_the_new_size() {
+    let _pins = pin_house();
+    let app = work_turn();
+    let (wide, wide_buf) = screen_at(&app, 100, 30);
+    let (narrow, narrow_buf) = screen_at(&app, 44, 16);
+    assert_eq!((wide_buf.area.width, wide_buf.area.height), (100, 30));
+    assert_eq!((narrow_buf.area.width, narrow_buf.area.height), (44, 16));
+    assert_ne!(wide, narrow, "the resize painted the same frame");
+    for (label, rows, width) in [("wide", &wide, 100usize), ("narrow", &narrow, 44)] {
+        let screen = rows.join("\n");
+        assert!(screen.contains('▸'), "{label}: {screen}");
+        assert!(screen.contains("command"), "{label}: {screen}");
+        assert!(
+            rows.iter().all(|row| row.width() <= width),
+            "{label} overflowed {width}: {screen}"
+        );
+    }
+}
+
+/// White ink disappears on a light terminal. The house palette does not use it.
+#[test]
+fn the_house_palette_reads_on_a_light_terminal() {
+    let theme = theme::load("minimal").expect("minimal");
+    for token in theme::Token::ALL {
+        assert_ne!(
+            theme.declared(token),
+            Color::White,
+            "{} is white",
+            token.key()
+        );
+    }
+    let _pin = theme::pin(std::sync::Arc::new(theme));
+    let (_, buffer) = screen_at(&work_turn(), 80, 24);
+    for color in buffer_colors(&buffer) {
+        assert_ne!(color, Color::White, "a cell painted white");
+    }
+}
+
+/// On a dark terminal the same palette is grey chrome and the terminal's own
+/// foreground, with no filled background.
+#[test]
+fn the_house_palette_reads_on_a_dark_terminal() {
+    let _pins = pin_house();
+    let (_, buffer) = screen_at(&work_turn(), 80, 24);
+    let colors = buffer_colors(&buffer);
+    assert!(
+        colors.contains(&Color::Reset),
+        "body ink follows the terminal"
+    );
+    assert!(
+        colors
+            .iter()
+            .any(|color| matches!(color, Color::Rgb(_, _, _))),
+        "chrome is a real grey, not the ANSI darkgray that vanishes on slate"
+    );
+    assert!(!colors.contains(&Color::White));
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset);
+        }
+    }
+}
+
+/// The house palette names an accent and still paints no background, so a
+/// light or transparent terminal shows through every cell.
+#[test]
+fn the_wizard_theme_paints_no_background() {
+    let theme = theme::load("wizard").expect("wizard theme");
+    for token in [
+        theme::Token::BgBase,
+        theme::Token::BgRaised,
+        theme::Token::BgSunken,
+    ] {
+        assert_eq!(theme.declared(token), Color::Reset, "{}", token.key());
+    }
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let _theme = theme::pin(std::sync::Arc::new(theme));
+    let (_, buffer) = screen_at(&work_turn(), 100, 28);
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset, "filled cell at {x},{y}");
+        }
+    }
+}
+
+/// A wide frame with a running agent uses the side column. A narrow one keeps
+/// the single summary row and does not open that column.
+#[test]
+fn the_side_rail_opens_at_120_columns_and_stays_shut_below() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: None,
+        name: "researcher".to_string(),
+        task: "read the parser".to_string(),
+    });
+    let wide = regions(&app, ratatui::layout::Rect::new(0, 0, 132, 36));
+    assert!(wide.side.width >= 30, "side column: {:?}", wide.side);
+    assert_eq!(wide.rail.height, 0, "the bottom rail yields to the column");
+    let narrow = regions(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    assert_eq!(narrow.side.width, 0);
+    assert_eq!(narrow.rail.height, 1);
+
+    let (rows, buffer) = screen_at(&app, 132, 36);
+    let screen = rows.join("\n");
+    assert!(
+        screen.contains('│') || screen.contains("researcher"),
+        "{screen}"
+    );
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset);
+        }
+    }
+}
+
+/// Foreground color is what a truecolor terminal gets, and `NO_COLOR` takes
+/// it away. Backgrounds stay unset either way.
+///
+/// The cream and slate screenshots that came back unpainted were the first
+/// case: this environment exports `NO_COLOR=1`, and that forces
+/// [`ColorDepth::Mono`](theme::ColorDepth::Mono) no matter what `COLORTERM`
+/// says. The cells below are what the same frame emits once that is unset.
+#[test]
+fn colors_are_emitted_in_truecolor_and_suppressed_under_no_color() {
+    use crate::agent::AgentEvent;
+    use crate::tools::ToolOutput;
+
+    assert_eq!(
+        theme::ColorDepth::from_env(None, Some("1"), Some("truecolor"), Some("xterm-256color")),
+        theme::ColorDepth::Mono,
+        "a non-empty NO_COLOR is monochrome even in a truecolor terminal"
+    );
+    assert_eq!(
+        theme::ColorDepth::from_env(None, None, Some("truecolor"), Some("xterm-256color")),
+        theme::ColorDepth::TrueColor
+    );
+
+    let wizard = theme::load("wizard").expect("wizard theme");
+    let accent = wizard.declared(theme::Token::Accent);
+    let add = wizard.declared(theme::Token::DiffAdd);
+    let del = wizard.declared(theme::Token::DiffDel);
+    let faint = wizard.declared(theme::Token::Faint);
+    assert!(
+        matches!(accent, Color::Rgb(_, _, _)),
+        "the house accent is a real color, got {accent:?}"
+    );
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.set_compact(false);
+    app.transcript
+        .user("count the images".to_string(), Vec::new());
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({
+            "path": "src/transcript/fold.rs",
+            "old_string": "tools += 1;",
+            "new_string": "tools += 2;\nimages += t.output.images().count();",
+        }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "edit_file".to_string(),
+        output: ToolOutput::ok("Edited src/transcript/fold.rs (line 12)"),
+    });
+
+    let _pin = theme::pin(std::sync::Arc::new(
+        wizard.clone().with_depth(theme::ColorDepth::TrueColor),
+    ));
+    let (_, buffer) = screen_at(&app, 100, 28);
+    let mut saw_accent = false;
+    let mut saw_add = false;
+    let mut saw_del = false;
+    let mut saw_dim = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            assert_eq!(cell.bg, Color::Reset, "filled cell at {x},{y}");
+            if (cell.symbol() == "◆" || cell.symbol() == "❯") && cell.fg == accent {
+                saw_accent = true;
+            }
+            if cell.fg == add {
+                saw_add = true;
+            }
+            if cell.fg == del {
+                saw_del = true;
+            }
+            if cell.fg == faint {
+                saw_dim = true;
+            }
+        }
+    }
+    assert!(saw_accent, "accent foreground was not emitted");
+    assert!(saw_add, "diff additions were not the sage");
+    assert!(saw_del, "diff deletions were not the rose");
+    assert!(saw_dim, "dim chrome was not the faint tone");
+
+    let _pin = theme::pin(std::sync::Arc::new(
+        wizard.with_depth(theme::ColorDepth::Mono),
+    ));
+    let (_, buffer) = screen_at(&app, 100, 28);
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            assert_eq!(
+                cell.fg,
+                Color::Reset,
+                "mono still painted {}",
+                cell.symbol()
+            );
+            assert_eq!(cell.bg, Color::Reset);
+        }
+    }
+}
+
+/// A long activity line wraps inside the rail. The continuation keeps the
+/// rule and the indent; it does not start on the rule's column.
+#[test]
+fn rail_text_wraps_inside_the_column() {
+    use crate::agent::AgentEvent;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.handle_agent_event(AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: Some(1),
+        name: "researcher".to_string(),
+        task: "where is the parser".to_string(),
+    });
+    let activity = "The parser lives in src/transcript/fold.rs and the summary skips every image.";
+    app.handle_agent_event(AgentEvent::SubagentRunText {
+        run: 1,
+        text: activity.to_string(),
+    });
+    app.handle_agent_event(AgentEvent::SubagentRunStep { run: 1, step: 4 });
+
+    let (rows, buffer) = screen_at(&app, 132, 36);
+    let side = regions(&app, ratatui::layout::Rect::new(0, 0, 132, 36)).side;
+    assert!(side.width >= 30);
+    let mut rail_rows = Vec::new();
+    for y in side.y..side.y + side.height {
+        let row: String = (side.x..side.x + side.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        let trimmed = row.trim_end().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        assert!(
+            trimmed.starts_with('│'),
+            "rail row left the rule: {trimmed:?}\n{}",
+            rows.join("\n")
+        );
+        rail_rows.push(trimmed);
+    }
+    let joined = rail_rows.join("\n");
+    assert!(
+        joined.contains("fold.rs"),
+        "the activity was cut off entirely: {joined}"
+    );
+    assert!(
+        joined.contains("4/50"),
+        "steps should read n/budget, got {joined}"
+    );
+    assert!(
+        !rail_rows
+            .iter()
+            .any(|row| row.trim() == "│ 0" || row.ends_with(" 0")),
+        "a bare step count: {joined}"
+    );
+    // The wrapped tail is on its own row and still behind the rule.
+    assert!(
+        rail_rows
+            .iter()
+            .any(|row| row.contains("fold.rs") && row.starts_with("│ ")),
+        "{joined}"
+    );
+}
+
+/// Expanded background and subagent results are one human line, not the
+/// sentence the model was given.
+#[test]
+fn harness_boilerplate_renders_as_one_human_line() {
+    use crate::agent::AgentEvent;
+    use crate::tools::ToolOutput;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.set_compact(false);
+    app.transcript
+        .user("find the parser".to_string(), Vec::new());
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "execute".to_string(),
+        args: serde_json::json!({
+            "command": "printf 'hello'",
+            "run_in_background": true,
+        }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "execute".to_string(),
+        output: ToolOutput::ok(
+            "Background task #1 started: printf 'hello'\nYou will be notified when it finishes; \
+             use task_output to inspect it or task_kill to stop it.",
+        ),
+    });
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "spawn_subagent".to_string(),
+        args: serde_json::json!({ "subagent": "researcher", "task": "where is the parser" }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "spawn_subagent".to_string(),
+        output: ToolOutput::ok(
+            "Delegated to subagent 'researcher' (#1): where is the parser.\nRunning in the \
+             background — you'll see its progress as it works, and the report lands in your \
+             context once it's done.",
+        ),
+    });
+    let screen = screen_at(&app, 100, 32).0.join("\n");
+    assert!(
+        screen.contains("started in background · ctrl+b output"),
+        "{screen}"
+    );
+    assert!(screen.contains("researcher · running"), "{screen}");
+    assert!(!screen.contains("You will be notified"), "{screen}");
+    assert!(!screen.contains("you'll see its progress"), "{screen}");
+}
+
+/// A small word change is bold and underlined, and the row itself is not filled.
+#[test]
+fn a_diff_marks_the_changed_word_without_a_fill() {
+    use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
+    use ratatui::style::Modifier;
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let tool = ToolItem {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({
+            "path": "src/x.rs",
+            "old_string": "let a = 1;",
+            "new_string": "let a = 2;",
+        }),
+        call_id: String::new(),
+        output: Some(ToolItemOutput {
+            content: "Edited src/x.rs (line 1)".to_string(),
+            is_error: false,
+        }),
+        progress: String::new(),
+        timing: ToolTiming::default(),
+    };
+    let lines = tool_card_lines(&tool, false, 0, 80);
+    let marked = lines.iter().any(|line| {
+        line.spans.iter().any(|span| {
+            span.style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED)
+                && matches!(span.style.bg, Some(Color::Reset) | None)
+        })
+    });
+    assert!(marked, "the changed digit should be underlined: {lines:?}");
+}
+
+/// The draft sits between two dim rules. The status line is the row under
+/// the lower one. A multiline draft grows the gap; a narrow frame does not
+/// spill the rule.
+#[test]
+fn the_composer_sits_between_two_rules() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.input = "hello".to_string();
+    let area = Rect::new(0, 0, 80, 24);
+    let laid = regions(&app, area);
+    let (_, buffer) = screen_at(&app, 80, 24);
+    let row = |buffer: &Buffer, area: Rect, y: u16| -> String {
+        (0..area.width)
+            .map(|x| buffer[(area.x + x, y)].symbol())
+            .collect()
+    };
+    let top = laid.composer.y;
+    let bottom = laid.composer.y + laid.composer.height - 1;
+    assert!(row(&buffer, laid.composer, top).contains('─'), "top rule");
+    assert!(
+        row(&buffer, laid.composer, bottom).contains('─'),
+        "bottom rule"
+    );
+    assert!(
+        row(&buffer, laid.composer, top + 1).contains('❯'),
+        "the prompt is between the rules"
+    );
+    assert!(
+        laid.footer.y > bottom,
+        "the status line is below the bottom rule"
+    );
+    for x in 0..laid.composer.width {
+        assert_eq!(buffer[(laid.composer.x + x, bottom)].bg, Color::Reset);
+    }
+
+    app.input = "one\ntwo\nthree".to_string();
+    let grown = regions(&app, area);
+    assert!(
+        grown.composer.height > laid.composer.height,
+        "a multiline draft grows the composer"
+    );
+    let (_, buffer) = screen_at(&app, 80, 24);
+    let top = grown.composer.y;
+    let bottom = grown.composer.y + grown.composer.height - 1;
+    assert!(row(&buffer, grown.composer, top).contains('─'));
+    assert!(row(&buffer, grown.composer, bottom).contains('─'));
+    let between = (top + 1..bottom).any(|y| row(&buffer, grown.composer, y).contains('❯'));
+    assert!(between, "the prompt stays between the two rules");
+
+    let narrow = Rect::new(0, 0, 40, 16);
+    let laid = regions(&app, narrow);
+    let (_, buffer) = screen_at(&app, 40, 16);
+    let y = laid.composer.y + laid.composer.height - 1;
+    let rule = row(&buffer, laid.composer, y);
+    assert_eq!(rule.chars().count(), laid.composer.width as usize);
+    assert!(rule.contains('─'), "narrow bottom rule: {rule:?}");
+    assert!(!rule.contains('\n'));
+}
+
+/// A long note on the rail stops at three lines. Opening the run shows the rest.
+#[test]
+fn the_rail_folds_a_long_note_and_the_open_run_shows_it() {
+    use crate::agent::AgentEvent;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    let tail = "TAILTOKEN-fold-the-rest";
+    let note = format!(
+        "The parser walks every token in the turn and then counts images and tools and \
+         skipped blocks before it writes the summary that the rail must not try to show \
+         in full because the column is narrow {tail}"
+    );
+    app.handle_agent_event(AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: Some(1),
+        name: "researcher".to_string(),
+        task: "where is the parser".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::SubagentRunText {
+        run: 1,
+        text: note.clone(),
+    });
+
+    let side = regions(&app, Rect::new(0, 0, 132, 36)).side;
+    let (_, buffer) = screen_at(&app, 132, 36);
+    let mut rail = String::new();
+    for y in side.y..side.y + side.height {
+        for x in side.x..side.x + side.width {
+            rail.push_str(buffer[(x, y)].symbol());
+        }
+        rail.push('\n');
+    }
+    assert!(
+        rail.contains('…'),
+        "the folded note ends in an ellipsis:\n{rail}"
+    );
+    assert!(!rail.contains(tail), "the tail stays off the rail:\n{rail}");
+
+    app.attach_pane(0);
+    let screen = screen_at(&app, 132, 36).0.join("\n");
+    assert!(
+        screen.contains(tail),
+        "opening the run shows the whole note:\n{screen}"
+    );
+}
+
+/// Accent and the quiet tones clear the same contrast floor on slate and cream.
+/// A single foreground cannot reach 4.5:1 on both of those grounds; the floor
+/// is the ridge between them.
+#[test]
+fn the_house_tones_read_on_slate_and_on_cream() {
+    let theme = theme::load("wizard").expect("wizard theme");
+    let slate = (0x3d, 0x4f, 0x66);
+    let cream = (0xf4, 0xef, 0xe4);
+    for token in [
+        theme::Token::Accent,
+        theme::Token::Faint,
+        theme::Token::Muted,
+        theme::Token::DiffAdd,
+        theme::Token::DiffDel,
+        theme::Token::Error,
+        theme::Token::Success,
+    ] {
+        let Color::Rgb(r, g, b) = theme.declared(token) else {
+            panic!("{} is not an rgb tone", token.key());
+        };
+        let on_slate = contrast((r, g, b), slate);
+        let on_cream = contrast((r, g, b), cream);
+        assert!(
+            on_slate >= 2.6 && on_cream >= 2.6,
+            "{} is {on_slate:.2} on slate and {on_cream:.2} on cream",
+            token.key()
+        );
+    }
+    let Color::Rgb(r, g, _) = theme.declared(theme::Token::DiffDel) else {
+        unreachable!()
+    };
+    assert!(r > g, "a deletion stays warmer than it is green");
+    let Color::Rgb(r, g, _) = theme.declared(theme::Token::DiffAdd) else {
+        unreachable!()
+    };
+    assert!(g > r, "an addition stays greener than it is red");
+}
+
+fn contrast(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> f64 {
+    let l = |c: (u8, u8, u8)| {
+        let lin = |v: u8| {
+            let c = f64::from(v) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.0) + 0.7152 * lin(c.1) + 0.0722 * lin(c.2)
+    };
+    let (a, b) = (l(fg), l(bg));
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
 }

@@ -1,0 +1,51 @@
+# wizard: the house palette.
+#
+# One accent, the usual status hues, and the terminal's own background.
+# `text` and every `bg.*` token stay `reset`, so a transparent, blurred,
+# light, or dark terminal shows through. Meaning never rests on hue — glyphs
+# and signs carry the state when color is gone.
+#
+# A single foreground cannot clear WCAG 4.5:1 on both a slate ground
+# (`#3d4f66`, relative luminance ~0.075) and a cream ground (`#f4efe4`,
+# ~0.866). The equal-ratio ridge is about 2.69:1. These tones sit on that
+# ridge (about 2.6:1 against both), still distinct from each other, and
+# still signed (`+`/`−`, `●`/`✕`) so red/green colorblindness does not hide
+# the fact. `minimal` is the monochrome fallback.
+
+name = "wizard"
+description = "one accent, status hues, the terminal's own background"
+
+border = "rounded"
+
+[tokens]
+text = "reset"
+# Cool gray. Darkgray is invisible on slate; this still reads on cream.
+muted = "#8E93A0"
+faint = "#949494"
+# Periwinkle. The old indigo `#4C5FD6` disappeared into slate.
+accent = "#828FE2"
+code = "reset"
+heading = "reset"
+link = "#949494"
+quote = "#8E93A0"
+border = "#949494"
+
+# Dusty rose. Saturated red fails cream; the sign still says failure.
+error = "#C08286"
+warning = "yellow"
+# Sage. Saturated green fails cream; the sign still says success.
+success = "#669E82"
+
+"tool.running" = "#828FE2"
+"tool.done" = "#8E93A0"
+"tool.failed" = "#C08286"
+
+"diff.add" = "#669E82"
+"diff.del" = "#C08286"
+"diff.meta" = "#949494"
+"diff.hunk" = "#949494"
+
+# Never a painted page. Reset means the terminal's own background.
+"bg.base" = "reset"
+"bg.raised" = "reset"
+"bg.sunken" = "reset"

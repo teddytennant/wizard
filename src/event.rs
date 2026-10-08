@@ -66,6 +66,12 @@ pub enum Event {
     /// Carries the agent back to the main loop's slot (boxed: an [`Agent`]
     /// is large next to the input variants).
     AgentRebuilt(Box<crate::app::AgentRebuild>),
+    /// One chunk of a `/compact` pass finished. `done`/`total` are chunks;
+    /// both stay 0 until the pass knows how many there are.
+    CompactProgress {
+        done: u32,
+        total: u32,
+    },
     /// A background sign-in (xAI OAuth) succeeded: add this provider and switch
     /// to it. Owned by the main loop (it holds the config + agent slot); boxed
     /// because [`ProviderConfig`](crate::config::ProviderConfig) is large next

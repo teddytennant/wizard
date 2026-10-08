@@ -39,6 +39,7 @@ use anyhow::{Result, bail};
 use crate::theme::Token;
 
 pub mod blend;
+pub mod glyphs;
 pub mod launch;
 pub mod layout;
 pub mod motion;
@@ -165,7 +166,11 @@ impl Skin {
     /// and to `WIZARD_THEME` both.
     pub fn companion_theme(self) -> &'static str {
         match self {
-            Skin::Wizard | Skin::Opencode | Skin::Pi => crate::theme::DEFAULT_THEME,
+            // The house palette: one accent, status hues, no painted background.
+            // Pi and OpenCode share this frame and keep the monochrome palette,
+            // which is also what a name that does not load falls back to.
+            Skin::Wizard => "wizard",
+            Skin::Opencode | Skin::Pi => crate::theme::DEFAULT_THEME,
             Skin::Codex => "codex",
             Skin::Grok => "grok",
         }
@@ -352,15 +357,15 @@ pub struct Chrome {
 const WIZARD: Chrome = Chrome {
     blocks: Blocks {
         user: plain(Marker::hanging("❯ ", Token::Faint, true)),
-        assistant: plain(Marker::hanging("· ", Token::Accent, false)),
-        thinking: plain(Marker::hanging("· ", Token::Faint, false)),
+        assistant: plain(Marker::hanging("◆ ", Token::Accent, false)),
+        thinking: plain(Marker::hanging("◆ ", Token::Faint, false)),
         tool: plain(Marker::none()),
         notice: plain(Marker::hanging("  ", Token::Faint, false)),
     },
-    tool_done: "✓",
-    tool_failed: "✗",
+    tool_done: "●",
+    tool_failed: "✕",
     tool_label: ToolLabel::Plain,
-    tool_output: ("  ", "  "),
+    tool_output: ("╰ ", "  "),
     spinner: &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
     prompt: "❯ ",
     composer: ComposerFrame::Rules,

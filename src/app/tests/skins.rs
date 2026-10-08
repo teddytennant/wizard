@@ -44,7 +44,7 @@ fn each_skin_marks_the_transcript_with_its_own_glyphs() {
     for (skin, needles) in [
         (
             crate::skin::Skin::Wizard,
-            ["· weighing options", "✓ inspect"],
+            ["◆ weighing options", "● inspect"],
         ),
         (
             crate::skin::Skin::Codex,

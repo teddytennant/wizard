@@ -238,6 +238,7 @@ fn spinner_verb_is_deterministic_and_stable_within_a_busy_period() {
             vim: false,
             compact: false,
             skin: None,
+            ..crate::config::UiConfig::default()
         },
         ..Config::default()
     };
@@ -1802,6 +1803,9 @@ fn failed_tool_cards_start_open_unless_long() {
 #[test]
 fn a_running_command_folds_when_its_stream_gets_long() {
     let mut app = app();
+    // Ctrl-T unfolds the last tool card in the full view. Compact mode uses
+    // the same key to open every summary, which is a different test.
+    app.transcript.set_compact(false);
     let (gate, _host) = crate::agent::ConsoleGate::open();
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "execute".to_string(),
@@ -1975,6 +1979,7 @@ fn mouse_up_after_a_word_copy_leaves_the_selection_alone() {
 #[test]
 fn clicking_a_tool_card_header_toggles_its_output() {
     let mut app = app();
+    app.transcript.set_compact(false);
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "execute".to_string(),
         args: serde_json::json!({"command": "ls"}),
@@ -2040,12 +2045,12 @@ fn screen(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
 /// fixtures never render.
 fn pixel_rows(buf: &ratatui::buffer::Buffer) -> Vec<u16> {
     use ratatui::style::Color;
+    // An image paints a background into the cell. The house accent is a
+    // foreground only — the frame never fills a cell — so an RGB background
+    // is a pixel and nothing else.
     (0..buf.area.height)
         .filter(|&y| {
-            (0..buf.area.width).any(|x| {
-                let cell = buf.cell((x, y)).unwrap();
-                matches!(cell.fg, Color::Rgb(..)) || matches!(cell.bg, Color::Rgb(..))
-            })
+            (0..buf.area.width).any(|x| matches!(buf.cell((x, y)).unwrap().bg, Color::Rgb(..)))
         })
         .collect()
 }
@@ -2062,6 +2067,8 @@ fn an_image_from_the_model_and_one_from_a_tool_both_render_with_their_file() {
     let image = red_png(dir.path());
     let mut app = app();
     app.welcome_dismissed = true;
+    // A tool image is hidden while its turn is collapsed.
+    app.transcript.set_compact(false);
 
     app.handle_agent_event(AgentEvent::TextDelta("here it is".to_string()));
     app.handle_agent_event(AgentEvent::Images {
@@ -2247,13 +2254,47 @@ fn a_resumed_session_replays_the_images_it_left_on_disk() {
 }
 
 #[test]
-fn backtab_toggles_plan_mode() {
+fn backtab_cycles_out_of_genie() {
     let mut app = app();
     let action = press(&mut app, KeyCode::BackTab);
+    assert!(matches!(action, Some(AppAction::CycleMode)));
+
+    app.config.mode = crate::config::Mode::Sovereign;
+    assert!(press(&mut app, KeyCode::BackTab).is_none());
+}
+
+#[test]
+fn esc_interrupts_only_when_the_turn_is_running_and_nothing_is_open() {
+    let mut app = app();
+    app.welcome_dismissed = true;
+    app.status.busy = true;
     assert!(matches!(
-        action,
-        Some(AppAction::Command(SlashCommand::Plan))
+        press(&mut app, KeyCode::Esc),
+        Some(AppAction::Interrupt)
     ));
+
+    app.status.busy = true;
+    app.input = "draft".to_string();
+    assert!(
+        press(&mut app, KeyCode::Esc).is_none(),
+        "a draft is cleared, and the turn keeps running"
+    );
+    assert!(app.input.is_empty());
+
+    app.status.busy = true;
+    app.input.clear();
+    app.show_todos = true;
+    assert!(press(&mut app, KeyCode::Esc).is_none());
+    assert!(!app.show_todos);
+}
+
+#[test]
+fn ctrl_f_opens_find_and_escape_closes_it() {
+    let mut app = app();
+    assert!(press_ctrl(&mut app, 'f').is_none());
+    assert!(app.find.is_some());
+    assert!(press(&mut app, KeyCode::Esc).is_none());
+    assert!(app.find.is_none());
 }
 
 #[test]
@@ -3779,6 +3820,10 @@ fn themed_fixture() -> App {
     use crate::llm::ChatMessage;
 
     let mut app = app();
+    // The fixture exists to paint every element. Compact view hides tools,
+    // thinking, and diffs behind one summary line, which is covered by its
+    // own tests; the snapshots stay on the full transcript.
+    app.transcript.set_compact(false);
     app.welcome_dismissed = true;
     app.tick = 0;
     // Sovereign is the mode the status bar renders as a warning.
@@ -3959,16 +4004,16 @@ fn fg_at(buf: &Buffer, needle: &str, offset: u16) -> Color {
 /// `(needle, offset, token)`. Shared by both theme snapshots so the two are
 /// the same test with a different palette behind it.
 const TOKEN_SITES: &[(&str, u16, Token)] = &[
-    ("show me the theme", 0, Token::Muted),
+    ("show me the theme", 0, Token::Text),
     ("Heading", 0, Token::Heading),
     ("Body prose.", 0, Token::Text),
     ("wizardry", 0, Token::Code),
     ("(http://x.test)", 0, Token::Link),
     ("quoted line", 0, Token::Quote),
     ("weighing options", 0, Token::Faint),
-    ("⠋ probe", 0, Token::ToolRunning),
-    ("✓ inspect", 0, Token::ToolDone),
-    ("✗ explode", 0, Token::ToolFailed),
+    ("│ probe", 0, Token::ToolRunning),
+    ("● inspect", 0, Token::ToolDone),
+    ("✕ explode", 0, Token::ToolFailed),
     ("output line", 0, Token::Muted),
     ("plain notice", 0, Token::Faint),
     ("✗ something broke", 0, Token::Error),
@@ -4002,8 +4047,10 @@ fn assert_fixture_paints_tokens(name: &str) -> Buffer {
 #[test]
 fn minimal_theme_snapshot_over_the_fixture_transcript() {
     let buf = assert_fixture_paints_tokens("minimal");
-    // The default look: greys plus one white accent, hues only where a diff
-    // makes them conventional. `rgb` is the syntax highlighter's grey ramp.
+    // The default look: greys, with the accent following the terminal
+    // (`Reset`) so the same frame reads on a light background. Hues only
+    // where a diff makes them conventional. `rgb` is the syntax highlighter's
+    // grey ramp.
     assert_eq!(
         palette(&buf),
         [
@@ -4012,7 +4059,6 @@ fn minimal_theme_snapshot_over_the_fixture_transcript() {
             "Green".to_string(),
             "Red".to_string(),
             "Reset".to_string(),
-            "White".to_string(),
             "rgb".to_string(),
         ]
     );
@@ -4091,7 +4137,7 @@ fn the_fixture_survives_the_smallest_terminal_under_both_themes() {
         // rail, the composer, the status line.
         for needle in [
             "✗ something broke",
-            "✗ explode",
+            "✕ explode",
             "git diff",
             "todos",
             "running",

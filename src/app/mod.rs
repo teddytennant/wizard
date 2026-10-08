@@ -17,6 +17,7 @@ mod transcript;
 
 #[cfg(feature = "acp")]
 pub(crate) use command::git_diff_text;
+pub(crate) use command::help_keys;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
 pub use runtime::{TuiExit, run_tui};
@@ -249,8 +250,8 @@ pub struct App {
     /// the only time somebody asks it. `None` until the agent is built.
     pub tasks: Option<Arc<crate::tools::tasks::TaskRegistry>>,
     /// Selected rail row while the rail has keyboard focus (↓ from the
-    /// composer). `None` means the composer has focus and the rail is just
-    /// on display. Indexes [`App::panes`].
+    /// composer). `None` means the composer has focus and several runs
+    /// collapse to one summary row. Indexes [`App::panes`].
     pub rail_focus: Option<usize>,
     /// The pane the user is *inside*: its transcript replaces the main chat
     /// until Esc. Indexes [`App::panes`].
@@ -285,6 +286,11 @@ pub struct App {
     /// [`crate::ui::draw`] every frame (hence the interior mutability: draw
     /// takes `&App`) and emptied while an overlay covers the transcript.
     pub card_hits: std::cell::RefCell<Vec<(u16, usize)>>,
+    /// Screen rows of compact-view summary lines, as `(row, anchor)`. A click
+    /// here opens that turn's work. Separate from [`Self::card_hits`] because
+    /// the anchor is also the first tool's index, and a click on the card
+    /// must not be read as a click on the summary.
+    pub group_hits: std::cell::RefCell<Vec<(u16, usize)>>,
     /// Where the text starts on each transcript row of the last-drawn frame,
     /// as `(row, column)`. Everything left of it is gutter (margin, marker,
     /// rail), so a drag-copy skips those cells. Rebuilt every frame like
@@ -415,6 +421,20 @@ pub struct App {
     /// Prompts an empty session offers, from the cwd. Empty once the
     /// conversation starts, or when nothing was derived.
     pub starter_prompts: Vec<String>,
+    /// Up to three recent sessions for the welcome list, loaded once at
+    /// startup. `(id, summary)`. Empty in tests and whenever the sessions
+    /// directory cannot be read.
+    pub recent_sessions: Vec<(String, String)>,
+    /// Transcript search. `None` when closed. The string is the query.
+    pub find: Option<String>,
+    /// Input-history search. `None` when closed.
+    pub history_search: Option<String>,
+    /// Background-task output, over the transcript.
+    pub task_view: bool,
+    /// The key list, from `?` on an empty composer.
+    pub keys_help: bool,
+    /// Which row of a search or history overlay is selected.
+    pub overlay_index: usize,
     /// The starter prompt ↓/↑ landed on; `None` until they were used.
     pub starter_index: Option<usize>,
     /// The first run's one-line summary, when this session followed one.
@@ -431,6 +451,11 @@ pub struct App {
     /// True while a background `/compact` is running: the status bar shows an
     /// animated progress bar instead of its usual contents.
     pub compacting: bool,
+    /// Tokens in the window when this compaction started, and how many
+    /// summary chunks have finished. The status bar's bar reads both.
+    pub compact_before: u64,
+    pub compact_done: u32,
+    pub compact_total: u32,
     /// Set by `/btw <question>`; the main loop answers it off the event loop
     /// against a snapshot of the conversation (so it works mid-turn too).
     /// Cleared once the task is spawned.
@@ -582,6 +607,7 @@ impl App {
             click_count: 0,
             last_click: None,
             card_hits: std::cell::RefCell::new(Vec::new()),
+            group_hits: std::cell::RefCell::new(Vec::new()),
             text_origins: std::cell::RefCell::new(Vec::new()),
             images: std::cell::RefCell::new(ImageCache::fallback()),
             should_quit: false,
@@ -614,12 +640,21 @@ impl App {
             pending_edit_config: false,
             pending_setup: None,
             starter_prompts: Vec::new(),
+            recent_sessions: Vec::new(),
+            find: None,
+            history_search: None,
+            task_view: false,
+            keys_help: false,
+            overlay_index: 0,
             starter_index: None,
             first_run_summary: None,
             first_run_notice: None,
             pending_edit_prompt: false,
             pending_compact: false,
             compacting: false,
+            compact_before: 0,
+            compact_done: 0,
+            compact_total: 0,
             pending_btw: None,
             btw_inflight: false,
             active_goal: None,
@@ -2015,6 +2050,7 @@ impl App {
     }
 
     fn insert_char(&mut self, c: char) {
+        self.transcript.clear_group_focus();
         let index = self.byte_index();
         self.input.insert(index, c);
         self.cursor += 1;
@@ -2158,7 +2194,7 @@ impl App {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.notice(if on {
-            "compact view: tool calls show as one line per run. /view full to see them"
+            "compact view: a turn's work is one line. tab, enter or click opens it. /view full for everything"
         } else {
             "full view"
         });
@@ -2591,8 +2627,12 @@ impl App {
                         // todo update, so it needs a way out that isn't
                         // `/todos`).
                         self.show_todos = false;
+                    } else if self.transcript.focused_group().is_some() {
+                        self.transcript.clear_group_focus();
                     } else if !self.transcript.follow {
                         self.scroll_to_bottom();
+                    } else if self.status.busy && self.input.is_empty() {
+                        action = Some(AppAction::Interrupt);
                     }
                 }
                 // Completing is not a motion, and Normal mode is still where
@@ -2650,9 +2690,14 @@ impl App {
         self.set_input(draft);
     }
 
-    /// Toggle the expansion of the most recent finished tool card (Ctrl-T).
+    /// Toggle the expansion of the most recent finished tool card (Ctrl-T),
+    /// or every compact summary when that view is on.
     fn toggle_last_tool_card(&mut self) {
-        self.transcript.toggle_last_tool();
+        if self.transcript.compact() {
+            self.transcript.toggle_all_groups();
+        } else {
+            self.transcript.toggle_last_tool();
+        }
     }
 
     /// Copy the last block of assistant text to the clipboard (Ctrl-Y).
@@ -2701,6 +2746,16 @@ impl App {
             .map(|(_, index)| *index);
         // A still-running card has nothing folded away, so clicking it is a
         // no-op rather than a fold with no content behind it.
+        if let Some((_, index)) = self
+            .group_hits
+            .borrow()
+            .iter()
+            .find(|(y, _)| *y == row)
+            .copied()
+        {
+            self.transcript.toggle_group(index);
+            return;
+        }
         if let Some(index) = hit
             && let Some(TranscriptItem::Tool(tool)) = self.transcript.get(index)
             && tool.output.is_some()
@@ -2744,7 +2799,8 @@ impl App {
                         // A tool-card header already owns the click (toggle).
                         // Stealing the second one as a word-copy made a
                         // quick expand-then-collapse miss.
-                        let on_card = self.card_hits.borrow().iter().any(|(y, _)| *y == cell.1);
+                        let on_card = self.card_hits.borrow().iter().any(|(y, _)| *y == cell.1)
+                            || self.group_hits.borrow().iter().any(|(y, _)| *y == cell.1);
                         if !on_card {
                             match count {
                                 2 => {
@@ -2837,6 +2893,11 @@ impl App {
             }
             // Owned by the main loop (it holds the agent slot / config); never
             // reach here.
+            Event::CompactProgress { done, total } => {
+                self.compact_done = done;
+                self.compact_total = total;
+                Ok(None)
+            }
             Event::AgentRebuilt(_)
             | Event::ProviderActivated(_)
             | Event::McpConnected { .. }
@@ -2953,6 +3014,11 @@ impl App {
                     self.toggle_last_tool_card();
                     return Ok(None);
                 }
+                // Compact or full, and remember it. The same switch as /view.
+                KeyCode::Char('o') => {
+                    self.set_compact_view(None);
+                    return Ok(None);
+                }
                 // Copy the last reply. The keyboard half of the copy story,
                 // which until now was a mouse drag or nothing.
                 KeyCode::Char('y') => {
@@ -2978,8 +3044,24 @@ impl App {
                     }
                     return Ok(Some(AppAction::Command(SlashCommand::Model(None))));
                 }
+                KeyCode::Char('f') => {
+                    self.open_overlay(OverlayKind::Find);
+                    return Ok(None);
+                }
+                KeyCode::Char('b') => {
+                    self.open_overlay(OverlayKind::Task);
+                    return Ok(None);
+                }
+                KeyCode::Char('r') => {
+                    self.open_overlay(OverlayKind::History);
+                    return Ok(None);
+                }
                 _ => {}
             }
+        }
+
+        if self.overlay_active() {
+            return self.overlay_key(key);
         }
 
         // The dashboard is modal: ↑/↓ move the selection, typing fills the
@@ -3565,7 +3647,18 @@ impl App {
                 self.insert_newline();
                 None
             }
-            KeyCode::Enter => self.submit(),
+            KeyCode::Enter => {
+                // An empty composer with a summary line focused opens that
+                // turn instead of sending nothing.
+                if self.input.is_empty()
+                    && let Some(anchor) = self.transcript.focused_group()
+                {
+                    self.transcript.toggle_group(anchor);
+                    None
+                } else {
+                    self.submit()
+                }
+            }
             KeyCode::Backspace => {
                 self.delete_back();
                 None
@@ -3601,16 +3694,24 @@ impl App {
             KeyCode::Tab => {
                 if suggesting {
                     self.accept_suggestion();
+                } else if self.input.is_empty() && self.transcript.focus_next_group() {
+                    // The composer had nothing to complete, so Tab walks the
+                    // summary lines. After the last one it comes back here.
                 } else {
                     self.complete_at_path();
                 }
                 None
             }
-            // Shift+Tab toggles plan mode (same as /plan, welcome screen
-            // included).
+            // Shift+Tab cycles genie → plan → omakase. Sovereign and chat
+            // stay put: `/mode` is what leaves them. A picker captures
+            // BackTab before this arm, so it still moves a selection.
             KeyCode::BackTab => {
                 self.welcome_dismissed = true;
-                Some(AppAction::Command(SlashCommand::Plan))
+                if self.mode() == crate::config::Mode::Genie {
+                    Some(AppAction::CycleMode)
+                } else {
+                    None
+                }
             }
             KeyCode::Esc => {
                 if self.console.is_some() {
@@ -3637,8 +3738,15 @@ impl App {
                     self.dismissed_suggestions_for = Some(self.input.clone());
                     self.suggestions.clear();
                     self.suggestion_index = 0;
+                } else if self.transcript.focused_group().is_some() {
+                    self.transcript.clear_group_focus();
                 } else if !self.transcript.follow {
                     self.scroll_to_bottom();
+                } else if self.status.busy && self.input.is_empty() {
+                    // Nothing is open and the draft is empty, at the live
+                    // tail: Esc interrupts. Ctrl-C still interrupts even when
+                    // a draft or an overlay is up.
+                    return Ok(Some(AppAction::Interrupt));
                 } else {
                     self.clear_input();
                 }
@@ -3708,6 +3816,15 @@ impl App {
                 self.pending_edit_prompt = true;
                 None
             }
+            KeyCode::Char('?')
+                if self.input.is_empty()
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.open_overlay(OverlayKind::Keys);
+                None
+            }
             KeyCode::Char(c) => {
                 // Unbound Ctrl/Alt chords must not insert their literal char.
                 if !key
@@ -3724,15 +3841,149 @@ impl App {
         Ok(action)
     }
 
-    /// Enter pressed: complete the highlighted suggestion if the command is
-    /// still partial, then parse the input line into an action.
+    fn overlay_active(&self) -> bool {
+        self.keys_help || self.task_view || self.find.is_some() || self.history_search.is_some()
+    }
+
+    fn close_overlays(&mut self) {
+        self.keys_help = false;
+        self.task_view = false;
+        self.find = None;
+        self.history_search = None;
+        self.overlay_index = 0;
+    }
+
+    fn open_overlay(&mut self, kind: OverlayKind) {
+        let reopen = match kind {
+            OverlayKind::Find => self.find.is_some(),
+            OverlayKind::History => self.history_search.is_some(),
+            OverlayKind::Task => self.task_view,
+            OverlayKind::Keys => self.keys_help,
+        };
+        self.close_overlays();
+        if reopen {
+            return;
+        }
+        self.overlay_index = 0;
+        match kind {
+            OverlayKind::Find => self.find = Some(String::new()),
+            OverlayKind::History => self.history_search = Some(String::new()),
+            OverlayKind::Task => self.task_view = true,
+            OverlayKind::Keys => self.keys_help = true,
+        }
+    }
+
+    fn overlay_key(&mut self, key: KeyEvent) -> Result<Option<AppAction>> {
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        if self.keys_help {
+            if key.code == KeyCode::Esc {
+                self.keys_help = false;
+            }
+            return Ok(None);
+        }
+        if self.task_view {
+            match key.code {
+                KeyCode::Esc => self.task_view = false,
+                KeyCode::Char('x') if plain => self.stop_newest_task(),
+                _ => {}
+            }
+            return Ok(None);
+        }
+        if self.find.is_some() {
+            match key.code {
+                KeyCode::Esc => self.find = None,
+                KeyCode::Backspace => {
+                    if let Some(query) = self.find.as_mut() {
+                        query.pop();
+                    }
+                }
+                KeyCode::Char(c) if plain => {
+                    if let Some(query) = self.find.as_mut() {
+                        query.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+        if self.history_search.is_some() {
+            let matches = self.history_matches();
+            match key.code {
+                KeyCode::Esc => self.history_search = None,
+                KeyCode::Backspace => {
+                    if let Some(query) = self.history_search.as_mut() {
+                        query.pop();
+                    }
+                    self.overlay_index = 0;
+                }
+                KeyCode::Up => self.overlay_index = self.overlay_index.saturating_sub(1),
+                KeyCode::Down => {
+                    if self.overlay_index + 1 < matches.len() {
+                        self.overlay_index += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(line) = matches.get(self.overlay_index) {
+                        self.set_input(line.clone());
+                    }
+                    self.history_search = None;
+                }
+                KeyCode::Char(c) if plain => {
+                    if let Some(query) = self.history_search.as_mut() {
+                        query.push(c);
+                    }
+                    self.overlay_index = 0;
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
+    }
+
+    fn history_matches(&self) -> Vec<String> {
+        let query = self
+            .history_search
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        self.history
+            .iter()
+            .rev()
+            .filter(|line| query.is_empty() || line.to_ascii_lowercase().contains(&query))
+            .take(12)
+            .cloned()
+            .collect()
+    }
+
+    fn stop_newest_task(&mut self) {
+        let Some(tasks) = &self.tasks else {
+            return;
+        };
+        let running = tasks
+            .list()
+            .into_iter()
+            .filter(|task| !task.status.is_finished())
+            .max_by_key(|task| task.id);
+        if let Some(task) = running {
+            tasks.kill(task.id);
+        }
+    }
+
     /// A starter prompt picked from the welcome screen: ↓ then Enter on an
     /// empty composer. `None` when the key is not that. Digits are never
     /// claimed: a message can start with one.
     ///
     /// ↑ alone keeps recalling history, so ↓ is what enters the list.
     fn starter_key(&mut self, key: &KeyEvent) -> Option<Option<AppAction>> {
-        if self.starter_prompts.is_empty()
+        let recents = !self.recent_sessions.is_empty();
+        let count = if recents {
+            self.recent_sessions.len().min(3)
+        } else {
+            self.starter_prompts.len()
+        };
+        if count == 0
             || !self.input.is_empty()
             || !self.suggestions.is_empty()
             || self.prompt.is_some()
@@ -3744,7 +3995,6 @@ impl App {
         {
             return None;
         }
-        let count = self.starter_prompts.len();
         match key.code {
             KeyCode::Down => {
                 self.starter_index = Some(self.starter_index.map_or(0, |i| (i + 1) % count));
@@ -3758,7 +4008,13 @@ impl App {
             }
             KeyCode::Enter => {
                 let index = self.starter_index?;
-                Some(self.pick_starter(index))
+                if recents {
+                    let id = self.recent_sessions.get(index)?.0.clone();
+                    self.welcome_dismissed = true;
+                    Some(Some(AppAction::Command(SlashCommand::Resume(Some(id)))))
+                } else {
+                    Some(self.pick_starter(index))
+                }
             }
             _ => None,
         }
@@ -3776,6 +4032,8 @@ impl App {
         self.provider_health_error.as_deref().map(health_line)
     }
 
+    /// Enter pressed: complete the highlighted suggestion if the command is
+    /// still partial, then parse the input line into an action.
     fn submit(&mut self) -> Option<AppAction> {
         // The inline prompts intercept Enter: each submission is an answer to a
         // field (provider setup) or a pasted web-search key, not a message.
@@ -4751,6 +5009,15 @@ fn renumber_image_tokens_after(input: &mut String, removed_n: usize) {
     }
 }
 
+/// Which house overlay a chord just opened. A second press of the same chord
+/// closes it; opening one closes the others.
+enum OverlayKind {
+    Find,
+    History,
+    Task,
+    Keys,
+}
+
 /// Side effects the main loop performs on behalf of [`App`] (the app itself
 /// stays synchronous and side-effect free).
 #[derive(Debug)]
@@ -4762,6 +5029,9 @@ pub enum AppAction {
     /// Interrupt the running turn (Ctrl-C): ask it to stop cooperatively, and
     /// abort its task if it does not (see [`INTERRUPT_GRACE`]).
     Interrupt,
+    /// Shift+Tab: genie → plan → omakase → genie. Applied by the main loop,
+    /// which owns the agent the flags have to be mirrored onto.
+    CycleMode,
     /// Copy the current mouse selection to the clipboard. Handled in the main
     /// loop because it owns the terminal (and thus the rendered cell buffer).
     CopySelection,

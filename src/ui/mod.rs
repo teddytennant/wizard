@@ -1,7 +1,8 @@
 //! Ratatui rendering: pure functions from [`App`] state to widgets.
 //! Layout: chat transcript (with optional git diff sidebar), optional todo
-//! band above the composer, the input line, the subagent rail, and a quiet
-//! status line. Floating layers: the command-suggestion popup and the
+//! band above the composer, the input line, a one-row subagent summary (the
+//! list opens only while you are choosing a run), and a quiet status line.
+//! Floating layers: the command-suggestion popup and the
 //! model/mode/rewind/subagent picker.
 //!
 //! Design rules (do not regress):
@@ -71,8 +72,14 @@ use crate::theme::{self, Token};
 use crate::vim::VimMode;
 
 mod codex;
+mod diff;
 mod grok;
+mod motion;
+mod overlay;
+mod side;
 mod welcome;
+
+pub(crate) use motion::fmt_tokens;
 
 use welcome::draw_welcome;
 
@@ -81,8 +88,28 @@ use welcome::draw_welcome;
 /// `claude`, a half-circle under `grok` — and they have different frame
 /// counts, so the modulus has to come from the table rather than a constant.
 pub(crate) fn spinner_frame(tick: u64) -> char {
+    if reduced_motion() {
+        return skin::glyphs::still();
+    }
     let frames = skin::chrome().spinner;
     frames[(tick as usize) % frames.len()]
+}
+
+/// `WIZARD_REDUCED_MOTION=1` freezes the spinner. Read each frame so a test
+/// (and a user who exports it mid-session) does not need a restart to matter,
+/// and so nothing here queries the terminal.
+fn house_skin() -> bool {
+    matches!(
+        skin::active(),
+        skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi
+    )
+}
+
+fn reduced_motion() -> bool {
+    matches!(
+        std::env::var("WIZARD_REDUCED_MOTION").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 /// Tallest the multi-line composer grows before it scrolls internally.
@@ -161,6 +188,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
         composer: input_area,
         rail: rail_area,
         footer: status_area,
+        side: side_area,
     } = regions(app, frame.area());
 
     if let Some(pane) = app.attached_pane() {
@@ -185,6 +213,9 @@ fn draw_house(frame: &mut Frame, app: &App) {
     draw_input(frame, app, input_area);
     if rail_area.height > 0 {
         draw_rail(frame, app, rail_area);
+    }
+    if side_area.width > 0 {
+        side::draw(frame, app, side_area);
     }
     // Codex narrates the turn on its own row above the composer; the other
     // two carry it on the status bar below everything.
@@ -216,11 +247,15 @@ fn draw_house(frame: &mut Frame, app: &App) {
     if app.show_dashboard {
         draw_dashboard(frame, app);
     }
+    if app.keys_help || app.task_view || app.history_search.is_some() || app.find.is_some() {
+        overlay::draw(frame, app, main_area);
+    }
 
     // With any overlay floating above the transcript, a click belongs to the
     // overlay — drop the card hit map so it can't toggle a card underneath.
     if overlay_open(app) {
         app.card_hits.borrow_mut().clear();
+        app.group_hits.borrow_mut().clear();
     }
 
     // The selection highlight paints last so it reverses whatever ended up on
@@ -253,26 +288,56 @@ pub struct Regions {
     pub rail: Rect,
     /// The bottom row: a status bar, or key hints, depending on the skin.
     pub footer: Rect,
+    /// Right-hand column on a wide house frame. Empty (zero width) unless the
+    /// terminal is at least 120 columns and there is something to put there.
+    pub side: Rect,
 }
 
 /// Lay `area` out for the active skin.
 pub fn regions(app: &App, area: Rect) -> Regions {
+    // At 120 columns and up, a house frame with something to report puts that
+    // in a right column instead of a row under the composer. The column is
+    // about a quarter of the width, and it replaces the bottom rail and the
+    // todo band so the same facts are not drawn twice.
+    let side_on = side_rail_open(app, area.width);
+    let (main, side) = if side_on {
+        let rail_w = (area.width / 4).clamp(30, 40);
+        let left = area.width.saturating_sub(rail_w);
+        let [main, side] =
+            Layout::horizontal([Constraint::Length(left), Constraint::Length(rail_w)]).areas(area);
+        (main, side)
+    } else {
+        (
+            area,
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: 0,
+                height: 0,
+            },
+        )
+    };
     // The composer grows with its content (hard line breaks plus soft-wrapped
     // continuations) up to MAX_INPUT_ROWS, then scrolls vertically. +2 for
     // whatever frames it — rules, a border, or the blank rows Codex leaves.
-    let budget = composer_budget(area.width);
+    let budget = composer_budget(main.width);
     let input_rows =
         (wrap_rows(&composer_chars(app), budget).len() as u16).clamp(1, MAX_INPUT_ROWS) + 2;
-    // The rail sits between the composer and the footer: one row per subagent,
-    // so the dots are always in the same place.
-    let rail_rows = rail_height(app);
+    // The rail sits between the composer and the footer. One summary row
+    // until the rail has focus, then one row per run (capped). A side column
+    // takes that job on a wide frame.
+    let rail_rows = if side_on { 0 } else { rail_height(app) };
     // Codex narrates a running turn on its own row directly above the
     // composer, and shows nothing there when idle.
     let status_rows = match skin::chrome().status_above {
         true if app.status.busy || app.rebuilding.is_some() => 1,
         _ => 0,
     };
-    let todo_rows = todo_height(app, area.height, input_rows + status_rows, rail_rows);
+    let todo_rows = if side_on {
+        0
+    } else {
+        todo_height(app, main.height, input_rows + status_rows, rail_rows)
+    };
     let [body, todo, status_top, composer, rail, footer] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(todo_rows),
@@ -281,7 +346,7 @@ pub fn regions(app: &App, area: Rect) -> Regions {
         Constraint::Length(rail_rows),
         Constraint::Length(1),
     ])
-    .areas(area);
+    .areas(main);
     Regions {
         body,
         status_top,
@@ -289,7 +354,21 @@ pub fn regions(app: &App, area: Rect) -> Regions {
         composer,
         rail,
         footer,
+        side,
     }
+}
+
+/// Whether the house frame should give the right column to agents, background
+/// commands, and todos. Narrow terminals keep the one-row summary.
+fn side_rail_open(app: &App, width: u16) -> bool {
+    if width < 120 || matches!(skin::active(), skin::Skin::Codex | skin::Skin::Grok) {
+        return false;
+    }
+    let tasks = app
+        .tasks
+        .as_ref()
+        .is_some_and(|tasks| !tasks.list().is_empty());
+    !app.panes.is_empty() || app.show_todos || tasks
 }
 
 /// Rows reserved for the todo band (0 when hidden). Caps so a long list
@@ -552,6 +631,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // Rebuilt from scratch every frame; cleared up front so the early
     // returns below can't leave stale clickable rows behind.
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
 
     // Stay on the welcome screen until the conversation actually begins (see
     // `App::welcome_visible`: early system notices alone don't dismiss it,
@@ -566,8 +646,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Two columns of air. One was the edge; two is enough that a line of
+    // prose does not touch the bezel, and a 40-column terminal still has a
+    // line worth reading.
     let inner = area.inner(Margin {
-        horizontal: 1,
+        horizontal: 2,
         vertical: 0,
     });
     if inner.width == 0 || inner.height == 0 {
@@ -603,9 +686,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // Record where card headers landed on screen for click-to-toggle.
     {
         let mut hits = app.card_hits.borrow_mut();
+        let mut groups = app.group_hits.borrow_mut();
         for (offset, tag) in row_tags[start..end].iter().enumerate() {
-            if let RowTag::Card(index) = tag {
-                hits.push((inner.y + offset as u16, *index));
+            match tag {
+                RowTag::Card(index) => hits.push((inner.y + offset as u16, *index)),
+                RowTag::Group(index) => groups.push((inner.y + offset as u16, *index)),
+                RowTag::Text | RowTag::Image { .. } => {}
             }
         }
     }
@@ -721,6 +807,9 @@ pub(super) enum RowTag {
     /// The *header* line of the tool card at this transcript index — the
     /// click-to-toggle target.
     Card(usize),
+    /// The one-line summary of a turn's work. The index is that turn's first
+    /// tool. A click or Enter opens the cards; it is not itself a card.
+    Group(usize),
     /// Row `row` of the image block at `slot` in [`Rendered::blocks`]. The row
     /// is left blank in the text and the pixels are painted into it afterwards
     /// (see [`paint_images`]), so an image scrolls and clips like any other
@@ -762,6 +851,10 @@ pub(super) fn overlay_open(app: &App) -> bool {
         || app.plan_review.is_some()
         || app.interview.is_some()
         || app.show_dashboard
+        || app.keys_help
+        || app.task_view
+        || app.find.is_some()
+        || app.history_search.is_some()
 }
 
 /// The two lines that always accompany an image, whatever the terminal can
@@ -864,7 +957,16 @@ pub(super) fn transcript_text(
             .of(BlockKind::Assistant)
             .content_width(width as u16) as usize;
         let mut text = render_markdown_streaming(streaming, content_width);
-        let tail = Span::styled("▍", dim());
+        // The same braille the thinking row uses, one cell, so a stream and
+        // a wait read as the same kind of motion.
+        let tail = if matches!(
+            skin::active(),
+            skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi
+        ) {
+            Span::styled(motion::glyph(motion::Kind::Thinking, app.tick), dim())
+        } else {
+            Span::styled("▍", dim())
+        };
         match text.lines.last_mut() {
             Some(last) => last.spans.push(tail),
             None => text.lines.push(Line::from(tail)),
@@ -873,10 +975,21 @@ pub(super) fn transcript_text(
     } else if app.status.busy && !tool_running(&app.transcript) {
         // Waiting on the model with nothing to show for it yet. A running
         // tool's card is its own indicator, so this row stays away then.
+        // Compact view hides the reasoning text; the row still says that
+        // thinking is what the wait is.
         if !first {
             lines.push(Line::raw(""));
         }
-        lines.push(Line::from(busy_row(app)));
+        let mut spans = busy_row(app);
+        // A custom verb list does not say "thinking" on its own. The stock
+        // row already names the activity, so this only adds the word then.
+        if !app.config.ui.spinner_verbs.is_empty() {
+            let (thinking, _) = app.transcript.streaming();
+            if app.transcript.compact() && !thinking.is_empty() {
+                spans.push(Span::styled(" thinking", dim().italic()));
+            }
+        }
+        lines.push(Line::from(spans));
     }
 
     tags.resize(lines.len(), RowTag::Text);
@@ -901,12 +1014,19 @@ fn tool_running(view: &TranscriptView) -> bool {
 /// `[ui] spinner_verbs` list still puts its word after the spinner; the stock
 /// look has none.
 pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
-    let mut spans = vec![Span::styled(spinner_frame(app.tick).to_string(), accent())];
+    let mark = if house_skin() {
+        motion::glyph(motion::Kind::Thinking, app.tick)
+    } else {
+        spinner_frame(app.tick).to_string()
+    };
+    let mut spans = vec![Span::styled(mark, accent())];
     if !app.config.ui.spinner_verbs.is_empty() {
         spans.push(Span::styled(
             format!(" {}…", app.spinner_verb),
             dim().italic(),
         ));
+    } else {
+        spans.push(Span::styled(format!(" {}", waiting_on(app)), dim()));
     }
     // The round trips so far, once there is one; the budget too when the
     // turn has one.
@@ -919,6 +1039,55 @@ pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
         spans.push(Span::styled(step, dim()));
     }
     spans
+}
+
+/// What the spinner is waiting on, in the user's words. A running tool names
+/// the command or the file; otherwise the model is thinking, or writing once
+/// text has started.
+fn waiting_on(app: &App) -> String {
+    let (thinking, text) = app.transcript.streaming();
+    if !text.is_empty() {
+        return "writing".to_string();
+    }
+    if !thinking.is_empty() {
+        return "thinking".to_string();
+    }
+    if let Some(TranscriptItem::Tool(tool)) = app.transcript.last()
+        && tool.output.is_none()
+    {
+        return tool_activity(&tool.name, &tool.args);
+    }
+    "thinking".to_string()
+}
+
+fn tool_activity(name: &str, args: &serde_json::Value) -> String {
+    let arg = |key: &str| {
+        args.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let base = |path: String| {
+        path.rsplit(['/', '\\'])
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or("file")
+            .to_string()
+    };
+    match name {
+        "execute" | "bash" | "shell" | "run_command" => {
+            let command = arg("command");
+            let first = command.split_whitespace().next().unwrap_or(name);
+            format!("running {first}")
+        }
+        "read_file" | "grep" | "glob" | "list_dir" | "list_files" => {
+            format!("reading {}", base(arg("path")))
+        }
+        "edit_file" | "write_file" | "apply_patch" | "multi_edit" => {
+            format!("editing {}", base(arg("path")))
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Render a conversation to lines, tagging each row with what it belongs to
@@ -957,7 +1126,10 @@ pub(super) fn items_text(
             continue;
         }
         let is_tool = matches!(item, TranscriptItem::Tool(_));
-        let is_notice = matches!(item, TranscriptItem::Notice(_));
+        let is_summary = view.compact()
+            && matches!(item, TranscriptItem::Notice(_))
+            && matches!(view.get(index), Some(TranscriptItem::Tool(_)));
+        let is_notice = matches!(item, TranscriptItem::Notice(_)) && !is_summary;
         let is_image = matches!(item, TranscriptItem::Images { .. });
         // Comfortable spacing between turns; runs of tool cards or notices
         // stay tight so they read as one group. An image is always tight: it
@@ -997,12 +1169,22 @@ pub(super) fn items_text(
             // path does with them too (see `App::record_prompt`): drawing one
             // on replay would make a resumed conversation look unlike the one
             // it resumed.
-            TranscriptItem::User { text, .. } => wrap_all(
-                text.lines()
-                    .map(|line| Line::from(Span::styled(line.to_string(), muted())))
-                    .collect(),
-                content_width,
-            ),
+            TranscriptItem::User { text, .. } => {
+                // The house voice is the terminal's own foreground, so a user
+                // message reads as text and not as a dim echo of it. The other
+                // skins keep the quieter ink they were drawn with.
+                let ink = if matches!(skin::active(), skin::Skin::Wizard) {
+                    theme::style(Token::Text)
+                } else {
+                    muted()
+                };
+                wrap_all(
+                    text.lines()
+                        .map(|line| Line::from(Span::styled(line.to_string(), ink)))
+                        .collect(),
+                    content_width,
+                )
+            }
             TranscriptItem::Text(message) => {
                 wrap_lines(render_markdown_at(message, content_width), content_width)
             }
@@ -1031,6 +1213,14 @@ pub(super) fn items_text(
                     lines.extend(image_caption(source, image));
                 }
                 Vec::new()
+            }
+            TranscriptItem::Notice(message) if is_summary => {
+                let style = if view.focused_group() == Some(index) {
+                    accent().add_modifier(Modifier::BOLD)
+                } else {
+                    dim()
+                };
+                vec![Line::from(Span::styled(message.clone(), style))]
             }
             TranscriptItem::Notice(message) => {
                 // An error leads with the same glyph a failed tool gets, so
@@ -1071,7 +1261,9 @@ pub(super) fn items_text(
         // margin and nothing should fold.
         tags.resize(lines.len(), RowTag::Text);
         let header_at = header_at + style.pad_y as usize;
-        if is_tool && header_at < lines.len() {
+        if is_summary && header_at < lines.len() {
+            tags[header_at] = RowTag::Group(index);
+        } else if is_tool && header_at < lines.len() {
             tags[header_at] = RowTag::Card(index);
         }
         for (at, slot, rows) in image_rows {
@@ -1194,20 +1386,35 @@ fn tool_card_lines(
     };
     // `execute` folds a non-zero exit into its last output line; the header
     // is where the reader looks for it, so it moves up there and the body
-    // keeps only what the command printed.
+    // keeps only what the command printed. Humanizing happens after that
+    // split, or the exit line would be painted twice.
     let (output, exit_code) = match output {
         Some(text) if is_error => split_exit_code(text),
         other => (other, None),
     };
+    // The model still receives the harness sentences (how to poll a
+    // background task, that a subagent will report back). The transcript
+    // shows one human line instead of that boilerplate.
+    let display = output.map(human_tool_text);
 
     let chrome = skin::chrome();
     let glyph = match (running, is_error) {
-        (true, _) => Span::styled(
-            spinner_frame(tick).to_string(),
-            theme::style(Token::ToolRunning),
+        (true, _) => {
+            let mark = if house_skin() {
+                motion::glyph(motion::Kind::Tool, tick)
+            } else {
+                spinner_frame(tick).to_string()
+            };
+            Span::styled(mark, theme::style(Token::ToolRunning))
+        }
+        (false, false) => Span::styled(
+            skin::glyphs::adapt(chrome.tool_done),
+            theme::style(Token::ToolDone),
         ),
-        (false, false) => Span::styled(chrome.tool_done, theme::style(Token::ToolDone)),
-        (false, true) => Span::styled(chrome.tool_failed, theme::style(Token::ToolFailed).bold()),
+        (false, true) => Span::styled(
+            skin::glyphs::adapt(chrome.tool_failed),
+            theme::style(Token::ToolFailed).bold(),
+        ),
     };
 
     let (label, mut summary) = tool_label(name, args, chrome.tool_label);
@@ -1228,6 +1435,20 @@ fn tool_card_lines(
             dim(),
         ));
     }
+    if let Some(edit) = &edit {
+        if edit.added > 0 {
+            card.push(Span::styled(
+                format!(" +{}", edit.added),
+                theme::style(Token::DiffAdd),
+            ));
+        }
+        if edit.removed > 0 {
+            card.push(Span::styled(
+                format!(" \u{2212}{}", edit.removed),
+                theme::style(Token::DiffDel),
+            ));
+        }
+    }
     if let Some(code) = exit_code {
         card.push(Span::styled(format!("  exit {code}"), muted()));
     }
@@ -1235,17 +1456,22 @@ fn tool_card_lines(
         card.push(Span::styled(format!("  {took}"), dim()));
     }
     let hidden = match &edit {
-        Some(rows) => rows.len(),
-        None => output.map(|text| text.lines().count()).unwrap_or(0),
+        Some(edit) => edit.rows.len(),
+        None => display
+            .as_ref()
+            .map(|text| text.lines().count())
+            .unwrap_or(0),
     };
-    if collapsed && hidden > 0 {
+    // An edit's header already carries `+n −m`. A second `+N lines` collides
+    // with that plus.
+    if collapsed && edit.is_none() && hidden > 0 {
         card.push(Span::styled(format!("  +{hidden} lines"), dim().italic()));
     }
     // The header is one row by construction: it is a summary, and a summary
     // that wraps onto a second line has stopped being one.
     lines.push(truncate_line(Line::from(card), width));
 
-    let (first_arm, rest_arm) = chrome.tool_output;
+    let (first_arm, rest_arm) = skin::glyphs::tool_arm();
     // The arm is drawn once, on the first body row, and replaced by blanks
     // of the same width below it — that is what makes Claude Code's `⎿`
     // and Codex's `└` read as one arm rather than a column of them. The
@@ -1255,7 +1481,8 @@ fn tool_card_lines(
     if collapsed {
         return lines;
     }
-    if let Some(mut rows) = edit {
+    if let Some(edit) = edit {
+        let mut rows = edit.rows;
         // The same cap as text output: a 3000-line write_file is not read
         // in the transcript, and rewrapping it every frame is not free.
         let over = rows.len().saturating_sub(MAX_OUTPUT_LINES);
@@ -1271,7 +1498,18 @@ fn tool_card_lines(
         ));
         return lines;
     }
-    if let Some(text) = output {
+    if let Some(text) = display.as_deref() {
+        if running && matches!(name, "execute" | "bash" | "shell") {
+            let elapsed = tool
+                .timing
+                .elapsed()
+                .and_then(fmt_elapsed)
+                .unwrap_or_default();
+            if let Some(bar) = motion::command_line(&summary, text, &elapsed, body_width, tick) {
+                lines.extend(prefix_rows(vec![bar], first_arm, rest_arm, dim()));
+                return lines;
+            }
+        }
         let out_lines: Vec<&str> = text.lines().collect();
         let over = out_lines.len().saturating_sub(MAX_OUTPUT_LINES);
         // A finished result is read from the top; a running command is read
@@ -1313,6 +1551,25 @@ fn tool_card_lines(
     lines
 }
 
+/// The two harness sentences a person should never have to read: a
+/// background `execute`, and a detached `spawn_subagent`. Anything else is
+/// the tool's own output and stays as the tool wrote it.
+fn human_tool_text(text: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = text.trim();
+    let first = trimmed.lines().next().unwrap_or("");
+    if first.starts_with("Background task #") && first.contains(" started:") {
+        return std::borrow::Cow::Owned(crate::mux::background_hint());
+    }
+    if let Some(rest) = trimmed.strip_prefix("Delegated to subagent '")
+        && trimmed.contains("Running in the background")
+        && let Some(who) = rest.split('\'').next()
+        && !who.is_empty()
+    {
+        return std::borrow::Cow::Owned(format!("{who} · running"));
+    }
+    std::borrow::Cow::Borrowed(text)
+}
+
 /// Split the `exit code: N` line [`crate::tools::shell::render_command_result`]
 /// appends off a failed command's output. The body that comes back may be
 /// empty, which is a command that failed silently, and that is worth showing
@@ -1342,7 +1599,7 @@ fn edit_diff_lines(
     name: &str,
     args: &serde_json::Value,
     output: Option<&str>,
-) -> Option<Vec<Line<'static>>> {
+) -> Option<diff::Rendered> {
     let arg = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
     let (old, new) = match name {
         "edit_file" => (arg("old_string")?, arg("new_string")?),
@@ -1350,20 +1607,8 @@ fn edit_diff_lines(
         _ => return None,
     };
     output?;
-    let mut rows = Vec::new();
-    for line in old.lines() {
-        rows.push(Line::from(Span::styled(
-            format!("- {line}"),
-            theme::style(Token::DiffDel),
-        )));
-    }
-    for line in new.lines() {
-        rows.push(Line::from(Span::styled(
-            format!("+ {line}"),
-            theme::style(Token::DiffAdd),
-        )));
-    }
-    Some(rows)
+    let origin = output.and_then(edited_line).unwrap_or(1);
+    Some(diff::render(old, new, origin))
 }
 
 /// `0.4s`, `12s`, `2m05s`: as much precision as the number has. `None`
@@ -1652,26 +1897,35 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     // Compaction owns the status line while it runs: a label plus the animated
     // bar, full width.
     if app.compacting {
-        let label = " compacting… ";
+        let before = fmt_tokens(app.compact_before);
+        let label = if app.compact_total > 0 {
+            format!(
+                " compacting {before}  {}/{} ",
+                app.compact_done, app.compact_total
+            )
+        } else {
+            format!(" compacting {before} ")
+        };
         let bar_width = (area.width as usize)
             .saturating_sub(label.width() + 1)
-            .max(4);
-        let mut spans = vec![Span::styled(label, accent().bold())];
-        spans.extend(indeterminate_bar(bar_width, app.tick).spans);
+            .clamp(4, 24);
+        let bar = if app.compact_total > 0 {
+            motion::determinate(app.compact_done as u64, app.compact_total as u64, bar_width)
+        } else {
+            motion::sweep(bar_width, app.tick, reduced_motion())
+        };
+        let mut spans = vec![Span::styled(label, dim())];
+        spans.extend(bar.spans);
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
-    let spinner = spinner_frame(app.tick);
-    // What is on the line, and why (`docs/design.md`): the model, then only
-    // the states that are true right now, then where you are and what the
-    // next call costs. The default mode and the working directory are not
-    // here: `genie` is the default and says nothing, and the branch names the
-    // repo (`/status` has the path).
+    // Model, mode, branch, the context meter, and cost when a rate is known
+    // (`docs/design.md`). The working directory stays off this line; the
+    // opening block and `/status` have the path. Plan, omakase, ultra, vim,
+    // and background work appear only while they are true.
     let mut spans = vec![Span::raw(" "), model_span(app)];
-    if app.status.mode != Mode::Genie {
-        spans.push(sep());
-        spans.push(mode_span(app.status.mode));
-    }
+    spans.push(sep());
+    spans.push(mode_span(app.status.mode));
     // Vim mode indicator: NORMAL stands out (bold accent), INSERT stays quiet.
     if let Some(label) = app.vim.label() {
         spans.push(sep());
@@ -1707,10 +1961,11 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     // reported prompt size, or a post-compact / post-clear estimate. Not the
     // session-lifetime sum (that double-counts multi-step history and stays
     // inflated after /clear).
-    if app.status.context_tokens > 0 {
+    let window = app.config.max_context_tokens as u64;
+    if window > 0 {
         spans.push(sep());
         spans.push(Span::styled(
-            crate::usage::format_tokens(app.status.context_tokens),
+            context_meter(app.status.context_tokens, window),
             dim(),
         ));
     }
@@ -1720,16 +1975,23 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     }
     if let Some(label) = &app.rebuilding {
         spans.push(sep());
-        spans.push(Span::styled(format!("{spinner} "), accent()));
-        spans.push(Span::styled(format!("{label}…"), dim().italic()));
+        spans.push(Span::styled(
+            format!("{} {label}", motion::glyph(motion::Kind::Waiting, app.tick)),
+            dim(),
+        ));
     }
     // Background tasks (`/bashes`): a persistent marker while any are
     // running, so a detached command doesn't silently vanish from view.
     if app.status.background_tasks > 0 {
         spans.push(sep());
+        let orbit = if house_skin() {
+            motion::glyph(motion::Kind::Background, app.tick)
+        } else {
+            "⏵".to_string()
+        };
         spans.push(Span::styled(
             format!(
-                "⏵ {} bg task{}",
+                "{orbit} {} bg task{}",
                 app.status.background_tasks,
                 if app.status.background_tasks == 1 {
                     ""
@@ -1764,8 +2026,13 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     // connect finishes.
     if app.mcp_connecting {
         spans.push(sep());
-        spans.push(Span::styled(format!("{spinner} "), accent()));
-        spans.push(Span::styled("connecting tools…", dim().italic()));
+        spans.push(Span::styled(
+            format!(
+                "{} connecting",
+                motion::glyph(motion::Kind::Waiting, app.tick)
+            ),
+            dim(),
+        ));
     }
     // A failed health probe leaves a persistent marker so the breakage survives
     // once the user starts typing and the welcome screen is gone.
@@ -1904,6 +2171,15 @@ pub(super) fn top_row(area: Rect) -> Rect {
     Rect { height: 1, ..area }
 }
 
+/// The composer's bottom row: the same dim rule, above the status line.
+pub(super) fn bottom_row(area: Rect) -> Rect {
+    Rect {
+        y: area.y.saturating_add(area.height.saturating_sub(1)),
+        height: 1,
+        ..area
+    }
+}
+
 /// The rows between a composer's top and bottom rows.
 pub(super) fn inset(area: Rect) -> Rect {
     Rect {
@@ -2029,10 +2305,10 @@ pub(super) fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
                 Some(console) => console_rule(&console.command, area.width),
                 None => rule.clone(),
             };
-            // One rule, above: it says where the transcript stops scrolling.
-            // The row below the draft is left blank; the status line is the
-            // boundary there and a second rule would only repeat it.
+            // The draft sits between two rules of the same dim line. The
+            // status line is the row under the lower one.
             frame.render_widget(Paragraph::new(Text::from(vec![head])), top_row(area));
+            frame.render_widget(Paragraph::new(Text::from(vec![rule])), bottom_row(area));
             (inset(area), 1usize)
         }
         // A box in the theme's border style. The console banner becomes its
@@ -2615,19 +2891,121 @@ fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
 /// selection rather than eating the transcript.
 const MAX_RAIL_ROWS: usize = 5;
 
-/// Rows the rail needs: one per subagent, capped, plus a row for the "+N more"
-/// marker when it is capped. Zero when nothing has been delegated — the rail
-/// costs no screen space until there is something to show.
+/// The per-run list is open only while the rail has focus and the chat is
+/// showing. Attached to a run, or just watching, the rail is one summary row
+/// so several agents never become a stack of panes.
+fn rail_list_open(app: &App) -> bool {
+    app.attached.is_none() && app.rail_focus.is_some() && app.panes.len() > 1
+}
+
+/// Rows the rail needs. Zero until something has been delegated. One summary
+/// row the rest of the time, and the capped list only while choosing a run.
 pub(super) fn rail_height(app: &App) -> u16 {
     if app.panes.is_empty() {
         return 0;
+    }
+    if !rail_list_open(app) {
+        return 1;
     }
     let shown = app.panes.len().min(MAX_RAIL_ROWS);
     let overflow = usize::from(app.panes.len() > MAX_RAIL_ROWS);
     (shown + overflow) as u16
 }
 
-/// The subagent rail: one dot per run, directly under the composer.
+/// One line for every run that is not being picked through right now.
+///
+/// ```text
+///   ● 2 running · 1 done · researcher, reviewer +3
+/// ```
+///
+/// Counts first, then the names of the runs that are still going (or the
+/// latest names, once nothing is). `+N` is unread work. The glyph is the
+/// same one a single row uses, so a pulsing dot still means "alive".
+fn rail_summary(app: &App, width: usize) -> Line<'static> {
+    let running: Vec<&SubagentPane> = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Running)
+        .collect();
+    let done = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Done)
+        .count();
+    let failed = app
+        .panes
+        .iter()
+        .filter(|pane| pane.status == PaneStatus::Failed)
+        .count();
+    let (glyph, glyph_style) = if let Some(pane) = running.first() {
+        let glyph = if house_skin() {
+            motion::glyph(motion::Kind::Subagent, app.tick)
+        } else {
+            pane.glyph(app.tick).to_string()
+        };
+        (glyph, theme::style(Token::ToolRunning))
+    } else if failed > 0 {
+        ("✗".to_string(), theme::style(Token::ToolFailed).bold())
+    } else {
+        ("✔".to_string(), theme::style(Token::ToolDone))
+    };
+
+    let mut label = String::new();
+    let mut push = |part: String| {
+        if !label.is_empty() {
+            label.push_str(" · ");
+        }
+        label.push_str(&part);
+    };
+    if !running.is_empty() {
+        push(format!("{} running", running.len()));
+    }
+    if done > 0 {
+        push(format!("{done} done"));
+    }
+    if failed > 0 {
+        push(format!("{failed} failed"));
+    }
+
+    let named: Vec<&str> = if !running.is_empty() {
+        running.iter().map(|pane| pane.name.as_str()).collect()
+    } else {
+        app.panes
+            .iter()
+            .rev()
+            .map(|pane| pane.name.as_str())
+            .collect()
+    };
+    let mut names = named.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    if named.len() > 3 {
+        names.push('…');
+    }
+
+    let unread: usize = app.panes.iter().map(|pane| pane.unread).sum();
+    let mut spans = vec![
+        Span::styled("   ", accent()),
+        Span::styled(format!("{glyph} "), glyph_style),
+        Span::styled(label, muted()),
+    ];
+    if !names.is_empty() {
+        spans.push(Span::styled(format!(" · {names}"), dim()));
+    }
+    if unread > 0 {
+        spans.push(Span::styled(format!(" +{unread}"), accent().bold()));
+    }
+    // Which run the screen is showing, when it is one of several.
+    if let Some(index) = app.attached
+        && let Some(pane) = app.panes.get(index)
+    {
+        spans.push(Span::styled(format!(" · in {}", pane.name), accent()));
+    }
+    truncate_line(Line::from(spans), width)
+}
+
+/// The subagent rail, directly under the composer.
+///
+/// One run is a row. Several runs are one summary until ↓ focuses the rail,
+/// which opens the list:
 ///
 /// ```text
 ///   ◉ researcher   read_file                     0:12 +3
@@ -2635,11 +3013,16 @@ pub(super) fn rail_height(app: &App) -> u16 {
 ///   ✔ tester       214 passed                    1:31 +1
 /// ```
 ///
-/// ↓ from the composer focuses it, ↑/↓ move, Enter opens the selected run as a
-/// full chat view. `❯` marks the selection while the rail has focus. `+N` is
-/// the unread count: what that subagent did while you were looking elsewhere.
+/// ↑/↓ move, Enter opens the selected run as a full chat view, Esc returns
+/// to the composer. `❯` marks the selection while the rail has focus. `+N`
+/// is the unread count: what that subagent did while you were looking
+/// elsewhere.
 pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 || area.width < 8 {
+        return;
+    }
+    if !rail_list_open(app) && app.panes.len() > 1 {
+        frame.render_widget(Paragraph::new(rail_summary(app, area.width as usize)), area);
         return;
     }
     let focused = app.rail_focus;
@@ -2695,7 +3078,17 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {cursor} "), accent()),
-            Span::styled(format!("{} ", pane.glyph(app.tick)), dot_style),
+            Span::styled(
+                format!(
+                    "{} ",
+                    if house_skin() && pane.status == PaneStatus::Running {
+                        motion::glyph(motion::Kind::Subagent, app.tick)
+                    } else {
+                        pane.glyph(app.tick).to_string()
+                    }
+                ),
+                dot_style,
+            ),
             Span::styled(format!("{name:<12} "), name_style),
             Span::styled(format!("{activity:<activity_width$} "), dim()),
             Span::styled(clock, dim()),
@@ -2714,11 +3107,52 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
+/// Keys for the pane header. Short on a narrow terminal so the activity
+/// still has a column; the way back is always the part that stays.
+fn pane_hint(app: &App, pane: &SubagentPane, width: usize) -> &'static str {
+    if width < 56 {
+        "esc back"
+    } else if !pane.transcript.follow {
+        "esc back · ctrl-end follow"
+    } else if app.panes.len() > 1 {
+        "esc back · ↑↓ next"
+    } else {
+        "esc back"
+    }
+}
+
+/// Activity on the left, the way back on the right. The hint is reserved
+/// first: a long task must not push "esc back" off the row.
+fn pane_second_line(activity: &str, hint: &str, width: usize) -> Line<'static> {
+    if width == 0 {
+        return Line::raw("");
+    }
+    let hint_w = hint.width();
+    if width <= hint_w {
+        return truncate_line(Line::from(Span::styled(hint.to_string(), dim())), width);
+    }
+    let activity_w = width.saturating_sub(hint_w + 1 + 3);
+    let activity = if activity_w == 0 {
+        String::new()
+    } else {
+        truncate_width(activity, activity_w)
+    };
+    let gap = width.saturating_sub(3 + activity.width() + hint_w);
+    Line::from(vec![
+        Span::raw(" ".repeat(3)),
+        Span::styled(activity, dim().italic()),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(hint.to_string(), dim()),
+    ])
+}
+
 /// A subagent's pane: its own conversation, rendered with the same machinery as
-/// the main chat, under a header naming the run. Esc goes back.
+/// the main chat, under a header naming the run. Esc goes back. Ctrl-End
+/// follows the live tail again after scrolling up.
 pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area: Rect) {
     // The pane owns the screen, so no main-transcript card is clickable.
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
 
     let [header_area, body_area] =
         Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
@@ -2731,41 +3165,39 @@ pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area:
         PaneStatus::Failed => ("failed", theme::style(Token::ToolFailed).bold()),
     };
     let elapsed = pane.elapsed().as_secs();
-    let steps = if pane.steps == 1 {
-        "1 step".to_string()
-    } else {
-        format!("{} steps", pane.steps)
-    };
+    let width = area.width as usize;
     let mut header = vec![
         Span::styled(" ▌ ", accent()),
         Span::styled(pane.name.clone(), accent().bold()),
         Span::styled(" · ", dim()),
         Span::styled(status.0, status.1),
-        Span::styled(
-            format!(" · {}:{:02} · {steps}", elapsed / 60, elapsed % 60),
-            dim(),
-        ),
+        Span::styled(format!(" · {}:{:02}", elapsed / 60, elapsed % 60), dim()),
     ];
+    if pane.steps > 0 {
+        let word = if pane.steps == 1 { "step" } else { "steps" };
+        header.push(Span::styled(format!(" · {} {word}", pane.steps), dim()));
+    }
+    // Off the live tail. Ctrl-End (already the transcript's jump-to-tail)
+    // follows again; the word is how you can tell the view has stopped.
+    if !pane.transcript.follow {
+        header.push(Span::styled(" · scrolled", dim().italic()));
+    }
     if pane.bg.is_none() {
         // Worth flagging: the parent turn is blocked until this one reports.
         header.push(Span::styled(" · foreground", dim().italic()));
     }
-    let hint = if app.panes.len() > 1 {
-        "esc back to chat · ↑↓ next agent · shift+↑↓ scroll"
-    } else {
-        "esc back to chat · ↑↓ scroll"
-    };
+    let hint = pane_hint(app, pane, width);
+    let activity = pane
+        .activity()
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
     frame.render_widget(
         Paragraph::new(Text::from(vec![
-            Line::from(header),
-            Line::from(vec![
-                Span::styled("   ", dim()),
-                Span::styled(
-                    truncate_width(&pane.task, area.width.saturating_sub(6) as usize),
-                    dim().italic(),
-                ),
-                Span::styled(format!("  {hint}"), dim()),
-            ]),
+            truncate_line(Line::from(header), width),
+            pane_second_line(&activity, hint, width),
         ])),
         header_area,
     );
@@ -2793,14 +3225,22 @@ pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area:
     );
     let (mut lines, mut row_tags, mut indents) = (rendered.lines, rendered.tags, rendered.indents);
     if lines.is_empty() {
-        let spinner = spinner_frame(app.tick);
+        let spinner = if house_skin() {
+            motion::glyph(motion::Kind::Subagent, app.tick)
+        } else {
+            spinner_frame(app.tick).to_string()
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("{spinner} "), accent()),
             Span::styled("starting…", dim().italic()),
         ]));
     } else if pane.status == PaneStatus::Running {
         // Same live tail as the main chat, so a running pane reads as alive.
-        let spinner = spinner_frame(app.tick);
+        let spinner = if house_skin() {
+            motion::glyph(motion::Kind::Subagent, app.tick)
+        } else {
+            spinner_frame(app.tick).to_string()
+        };
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![
             Span::styled(format!("{spinner} "), accent()),
@@ -3404,6 +3844,22 @@ fn read_git_head(root: &std::path::Path) -> Option<String> {
     })
 }
 
+/// A ten-cell gauge and the percent of `total` that `used` fills. Empty
+/// when the window is unknown. No fill behind it: the bar is the characters.
+pub(super) fn context_meter(used: u64, total: u64) -> String {
+    const WIDTH: usize = 10;
+    if total == 0 {
+        return String::new();
+    }
+    let pct = (used.saturating_mul(100) / total).min(100) as usize;
+    let filled = pct * WIDTH / 100;
+    format!(
+        "{}{} {pct}%",
+        "━".repeat(filled),
+        "─".repeat(WIDTH - filled)
+    )
+}
+
 /// The session's cost so far, when the active provider carries a rate. The
 /// same arithmetic `/cost` uses, priced as all-fresh tokens because the
 /// status bar mirrors only the two flat totals.
@@ -3988,8 +4444,12 @@ impl MarkdownRenderer {
             MdEvent::End(tag) => self.end(tag),
             MdEvent::Text(text) => self.push_text(&text),
             MdEvent::Code(code) => {
-                self.current
-                    .push(Span::styled(code.to_string(), theme::style(Token::Code)));
+                // Weight, not a second hue: inline code has to read on a light
+                // terminal, where a bright color would vanish into the page.
+                self.current.push(Span::styled(
+                    code.to_string(),
+                    theme::style(Token::Code).add_modifier(Modifier::BOLD),
+                ));
             }
             MdEvent::InlineMath(tex) => self.push_math(&tex, false),
             MdEvent::DisplayMath(tex) => self.push_math(&tex, true),

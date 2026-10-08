@@ -288,8 +288,20 @@ pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
     })
 }
 
+/// How Wizard treats a multiplexer prefix (`[ui] mux`).
+///
+/// `auto` detects tmux, screen, and zellij and doubles a binding that is the
+/// prefix. `off` leaves every binding as a single key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MuxMode {
+    #[default]
+    Auto,
+    Off,
+}
+
 /// Cosmetic TUI settings (`[ui]` in `config.toml`).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiConfig {
     /// Gerund verbs shown next to the busy spinner ("Conjuring…"). A
     /// non-empty list replaces [`UiConfig::DEFAULT_SPINNER_VERBS`]; missing
@@ -301,10 +313,11 @@ pub struct UiConfig {
     /// default; toggle live with `/vim`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub vim: bool,
-    /// Compact transcript: the conversation without tool cards, command
-    /// output, diffs, file reads or reasoning, each run of tool calls shown as
-    /// one line. Off by default; switch live with `/view`.
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Compact transcript: the conversation, with each turn's commands, edits
+    /// and other tool work collapsed to one line. On by default; switch live
+    /// with `/view` or Ctrl-O. A missing key means on, so an old config that
+    /// never set it picks up the default.
+    #[serde(default = "default_compact", skip_serializing_if = "is_true")]
     pub compact: bool,
     /// Which coding agent's terminal chrome the TUI wears: `wizard` (default),
     /// `codex`, or `grok`. See [`crate::skin`], which owns the
@@ -322,12 +335,46 @@ pub struct UiConfig {
     /// "the default, definitively".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<String>,
+    /// `auto` (the default) doubles a key the multiplexer already owns.
+    /// `off` leaves the hints as single chords.
+    #[serde(default, skip_serializing_if = "mux_is_auto")]
+    pub mux: MuxMode,
+    /// A prefix to use instead of the one detection found, such as `ctrl-a`.
+    /// Empty means detect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux_prefix: Option<String>,
+}
+
+fn mux_is_auto(mode: &MuxMode) -> bool {
+    *mode == MuxMode::Auto
 }
 
 /// serde `skip_serializing_if` helper: keep `false` flags out of the written
 /// config so the file stays minimal.
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Compact view is the default, so the key is written only when it is off.
+fn default_compact() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            spinner_verbs: Vec::new(),
+            vim: false,
+            compact: true,
+            skin: None,
+            mux: MuxMode::Auto,
+            mux_prefix: None,
+        }
+    }
 }
 
 impl UiConfig {

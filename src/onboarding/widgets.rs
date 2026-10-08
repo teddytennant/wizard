@@ -577,11 +577,10 @@ mod tests {
             assert_eq!(theme::style(Token::Warning).fg, Some(Color::Reset));
         }
 
-        // And under the default theme they are the palette the wizard used to
-        // hard-code, so honouring the theme changed nothing for the user who
-        // set none of those variables.
+        // Under the default theme the accent follows the terminal, so a light
+        // background is not painted white-on-white. Dim stays a grey.
         let _pin = theme::pin(theme::minimal());
-        assert_eq!(accent().fg, Some(Color::White));
+        assert_eq!(accent().fg, Some(Color::Reset));
         assert_eq!(dim().fg, Some(Color::DarkGray));
         assert_eq!(text_dim().fg, Some(Color::Gray));
     }

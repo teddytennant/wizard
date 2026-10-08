@@ -504,6 +504,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     // overlay, so no card underneath may claim it.
     if super::overlay_open(app) {
         app.card_hits.borrow_mut().clear();
+        app.group_hits.borrow_mut().clear();
     }
 
     // The drag-selection highlight paints last so it covers whatever ended
@@ -529,6 +530,7 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // Rebuilt every frame, cleared up front so the early returns cannot leave
     // stale clickable rows behind.
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -558,9 +560,12 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
 
     {
         let mut hits = app.card_hits.borrow_mut();
+        let mut groups = app.group_hits.borrow_mut();
         for (offset, tag) in rendered.tags[start..end].iter().enumerate() {
-            if let RowTag::Card(index) = tag {
-                hits.push((area.y + offset as u16, *index));
+            match tag {
+                RowTag::Card(index) => hits.push((area.y + offset as u16, *index)),
+                RowTag::Group(index) => groups.push((area.y + offset as u16, *index)),
+                RowTag::Text | RowTag::Image { .. } => {}
             }
         }
     }

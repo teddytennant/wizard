@@ -39,7 +39,8 @@ use super::session::{
 };
 use super::term::{
     TerminalGuard, Tui, copy_to_clipboard, edit_config_file, edit_prompt_in_editor,
-    is_terminal_armed, restore_terminal_best_effort, run_setup_suspended, setup_terminal,
+    is_terminal_armed, present, present_resized, resize_rect, restore_terminal_best_effort,
+    run_setup_suspended, setup_terminal,
 };
 use super::{AgentRebuild, App, AppAction, INTERRUPT_GRACE};
 
@@ -189,6 +190,23 @@ pub async fn run_tui(
 
     let mut app = App::new(config);
     app.project_root = project_root.clone();
+    if let Ok(dir) = crate::config::Config::sessions_dir() {
+        app.recent_sessions = crate::agent::session::summaries(&dir)
+            .into_iter()
+            .filter(|session| session.id != session_id)
+            .take(3)
+            .map(|session| {
+                let summary = session
+                    .summary
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                (session.id, summary)
+            })
+            .collect();
+    }
     app.custom_commands = crate::commands::load(&project_root);
     app.session_id = session_id.clone();
     app.session_name = session_name;
@@ -287,6 +305,7 @@ pub async fn run_tui(
         }
         Detection::Asked(query) => Some(query),
     };
+    crate::mux::install(&app.config.ui);
     let mut terminal = match setup_terminal() {
         Ok(terminal) => terminal,
         Err(err) => {
@@ -297,7 +316,7 @@ pub async fn run_tui(
         }
     };
     let _guard = TerminalGuard;
-    if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
+    if let Err(err) = present(&mut terminal, |frame| crate::ui::draw(frame, &app)) {
         tracing::warn!("first frame not drawn: {err}");
     }
     tracing::debug!("first frame painted");
@@ -456,7 +475,7 @@ pub async fn run_tui(
             }
         }
 
-        if let Err(err) = terminal.draw(|frame| crate::ui::draw(frame, &app)) {
+        if let Err(err) = present(&mut terminal, |frame| crate::ui::draw(frame, &app)) {
             if draw_faults.failed() {
                 return Err(
                     anyhow::Error::new(err).context("the terminal stopped accepting frames")
@@ -481,11 +500,22 @@ pub async fn run_tui(
             break;
         };
 
+        // Resize before anything else, and paint the new size in the same
+        // update that clears the old one. Waiting for the next tick left a
+        // torn frame in tmux for as long as nothing else arrived.
+        if let Event::Resize(cols, rows) = event {
+            if let Some(area) = resize_rect(cols, rows) {
+                let _ = present_resized(&mut terminal, area, |frame| crate::ui::draw(frame, &app));
+            }
+            continue;
+        }
+
         // A background rebuild finished: restore the agent into the slot.
         if let Event::AgentRebuilt(rebuild) = event {
             let rebuild = *rebuild;
             app.rebuilding = None;
             let was_compacting = app.compacting;
+            let restored_agent = rebuild.agent.is_some();
             app.compacting = false;
             if let Some(model) = rebuild.model.clone() {
                 if rebuild.pin_model {
@@ -523,7 +553,16 @@ pub async fn run_tui(
                 fork_snapshot = Some(agent.fork_context());
                 agent_slot = Some(agent);
             }
-            app.notice(rebuild.notice);
+            if was_compacting && restored_agent && app.compact_before > 0 {
+                let after = app.status.context_tokens;
+                app.notice(format!(
+                    "compacted {} → {}",
+                    crate::ui::fmt_tokens(app.compact_before),
+                    crate::ui::fmt_tokens(after),
+                ));
+            } else {
+                app.notice(rebuild.notice);
+            }
             // An empty agent slot is invisible: the composer still accepts
             // text, `drain_message_queue` still declines to start a turn, and
             // the session is over without ever saying so. Try again from the
@@ -773,6 +812,20 @@ pub async fn run_tui(
                     .run(command)
                     .await;
                 }
+                AppAction::CycleMode => {
+                    CommandContext {
+                        app: &mut app,
+                        client: &mut client,
+                        agent_slot: &mut agent_slot,
+                        manager: &manager,
+                        skills: &mut skills,
+                        project_root: &project_root,
+                        mcp_path: &mcp_path,
+                        genie_max_steps,
+                        events: &events,
+                    }
+                    .cycle_mode();
+                }
                 AppAction::Interrupt => {
                     // Ask the turn to stop before killing it. The agent checks
                     // the cancel flag between stream chunks and between tool
@@ -865,11 +918,15 @@ pub async fn run_tui(
             match agent_slot.take() {
                 Some(mut agent) => {
                     app.compacting = true;
+                    app.compact_before = app.status.context_tokens;
+                    app.compact_done = 0;
+                    app.compact_total = 0;
                     // The agent has left its slot, so a panic in the summariser
                     // would strand it: no `AgentRebuilt`, no agent, `compacting`
                     // lit forever, and every message from then on silently
                     // queued. The fallback hands the loop an empty rebuild,
                     // which its recovery path turns back into a working agent.
+                    let progress = events.sender();
                     spawn_answering(
                         events.sender(),
                         Event::AgentRebuilt(Box::new(AgentRebuild {
@@ -882,11 +939,16 @@ pub async fn run_tui(
                             // Bounded for the same reason the rebuild is: a
                             // summarisation call that never returns holds the
                             // agent hostage, and there is no key that gets it
-                            // back.
+                            // back. Chunk counts ride the same channel the
+                            // rebuild will, so the bar fills while this task
+                            // still holds the agent.
                             let rebuild = match within(
                                 "compacting the conversation",
                                 COMPACTION_DEADLINE,
-                                agent.compact_now(),
+                                agent.compact_reporting(&|done, total| {
+                                    let _ =
+                                        progress.try_send(Event::CompactProgress { done, total });
+                                }),
                             )
                             .await
                             {
@@ -1552,7 +1614,7 @@ async fn drain_agent_commands(
 fn copy_app_selection(terminal: &mut Tui, app: &mut App) {
     if let Some(selection) = app.selection {
         let mut text = String::new();
-        let drawn = terminal.draw(|frame| {
+        let drawn = present(terminal, |frame| {
             crate::ui::draw(frame, app);
             text = crate::ui::selection_text(
                 frame.buffer_mut(),
@@ -1583,7 +1645,7 @@ fn pick_then_copy(
     pick: impl FnOnce(&ratatui::buffer::Buffer, &App) -> Option<super::picker::Selection>,
 ) {
     let mut sel = None;
-    match terminal.draw(|frame| {
+    match present(terminal, |frame| {
         crate::ui::draw(frame, app);
         sel = pick(frame.buffer_mut(), app);
     }) {

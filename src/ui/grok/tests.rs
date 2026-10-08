@@ -1180,6 +1180,7 @@ fn execute_and_read_window_on_wrapped_count_not_raw_lines() {
 
 #[test]
 fn execute_and_read_bodies_are_primary_on_the_panel() {
+    let _theme = grok_theme();
     let primary = theme::style(Token::Text).fg;
     let muted = theme::style(Token::Muted).fg;
     assert_ne!(primary, muted, "the test needs Text and Muted to differ");
@@ -1538,6 +1539,7 @@ fn mcp_shows_key_val_input_rows_before_the_output_panel() {
 
 #[test]
 fn fetch_and_web_search_sit_in_a_primary_content_box() {
+    let _theme = grok_theme();
     let primary = theme::style(Token::Text).fg;
     let muted = theme::style(Token::Muted).fg;
     assert_ne!(primary, muted, "the test needs Text and Muted to differ");

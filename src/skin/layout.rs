@@ -196,7 +196,8 @@ pub fn decorate(
             spans.push(padding(style.pad_left as usize, bg));
         }
         if let Some(marker) = marker {
-            let mark = if first { marker.head } else { marker.rest };
+            let raw = if first { marker.head } else { marker.rest };
+            let mark = super::glyphs::adapt(raw);
             if !mark.is_empty() {
                 spans.push(Span::styled(mark, with_bg(marker.style(), bg)));
             }
