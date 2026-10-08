@@ -72,7 +72,10 @@ use crate::theme::{self, Token};
 use crate::vim::VimMode;
 
 mod codex;
+mod diff;
 mod grok;
+mod overlay;
+mod side;
 mod welcome;
 
 use welcome::draw_welcome;
@@ -82,8 +85,21 @@ use welcome::draw_welcome;
 /// `claude`, a half-circle under `grok` — and they have different frame
 /// counts, so the modulus has to come from the table rather than a constant.
 pub(crate) fn spinner_frame(tick: u64) -> char {
+    if reduced_motion() {
+        return skin::glyphs::still();
+    }
     let frames = skin::chrome().spinner;
     frames[(tick as usize) % frames.len()]
+}
+
+/// `WIZARD_REDUCED_MOTION=1` freezes the spinner. Read each frame so a test
+/// (and a user who exports it mid-session) does not need a restart to matter,
+/// and so nothing here queries the terminal.
+fn reduced_motion() -> bool {
+    matches!(
+        std::env::var("WIZARD_REDUCED_MOTION").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 /// Tallest the multi-line composer grows before it scrolls internally.
@@ -162,6 +178,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
         composer: input_area,
         rail: rail_area,
         footer: status_area,
+        side: side_area,
     } = regions(app, frame.area());
 
     if let Some(pane) = app.attached_pane() {
@@ -186,6 +203,9 @@ fn draw_house(frame: &mut Frame, app: &App) {
     draw_input(frame, app, input_area);
     if rail_area.height > 0 {
         draw_rail(frame, app, rail_area);
+    }
+    if side_area.width > 0 {
+        side::draw(frame, app, side_area);
     }
     // Codex narrates the turn on its own row above the composer; the other
     // two carry it on the status bar below everything.
@@ -216,6 +236,9 @@ fn draw_house(frame: &mut Frame, app: &App) {
     // The dashboard is modal and full-screen, so it paints last (on top).
     if app.show_dashboard {
         draw_dashboard(frame, app);
+    }
+    if app.keys_help || app.task_view || app.history_search.is_some() || app.find.is_some() {
+        overlay::draw(frame, app, main_area);
     }
 
     // With any overlay floating above the transcript, a click belongs to the
@@ -255,26 +278,56 @@ pub struct Regions {
     pub rail: Rect,
     /// The bottom row: a status bar, or key hints, depending on the skin.
     pub footer: Rect,
+    /// Right-hand column on a wide house frame. Empty (zero width) unless the
+    /// terminal is at least 120 columns and there is something to put there.
+    pub side: Rect,
 }
 
 /// Lay `area` out for the active skin.
 pub fn regions(app: &App, area: Rect) -> Regions {
+    // At 120 columns and up, a house frame with something to report puts that
+    // in a right column instead of a row under the composer. The column is
+    // about a quarter of the width, and it replaces the bottom rail and the
+    // todo band so the same facts are not drawn twice.
+    let side_on = side_rail_open(app, area.width);
+    let (main, side) = if side_on {
+        let rail_w = (area.width / 4).clamp(30, 40);
+        let left = area.width.saturating_sub(rail_w);
+        let [main, side] =
+            Layout::horizontal([Constraint::Length(left), Constraint::Length(rail_w)]).areas(area);
+        (main, side)
+    } else {
+        (
+            area,
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: 0,
+                height: 0,
+            },
+        )
+    };
     // The composer grows with its content (hard line breaks plus soft-wrapped
     // continuations) up to MAX_INPUT_ROWS, then scrolls vertically. +2 for
     // whatever frames it — rules, a border, or the blank rows Codex leaves.
-    let budget = composer_budget(area.width);
+    let budget = composer_budget(main.width);
     let input_rows =
         (wrap_rows(&composer_chars(app), budget).len() as u16).clamp(1, MAX_INPUT_ROWS) + 2;
     // The rail sits between the composer and the footer. One summary row
-    // until the rail has focus, then one row per run (capped).
-    let rail_rows = rail_height(app);
+    // until the rail has focus, then one row per run (capped). A side column
+    // takes that job on a wide frame.
+    let rail_rows = if side_on { 0 } else { rail_height(app) };
     // Codex narrates a running turn on its own row directly above the
     // composer, and shows nothing there when idle.
     let status_rows = match skin::chrome().status_above {
         true if app.status.busy || app.rebuilding.is_some() => 1,
         _ => 0,
     };
-    let todo_rows = todo_height(app, area.height, input_rows + status_rows, rail_rows);
+    let todo_rows = if side_on {
+        0
+    } else {
+        todo_height(app, main.height, input_rows + status_rows, rail_rows)
+    };
     let [body, todo, status_top, composer, rail, footer] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(todo_rows),
@@ -283,7 +336,7 @@ pub fn regions(app: &App, area: Rect) -> Regions {
         Constraint::Length(rail_rows),
         Constraint::Length(1),
     ])
-    .areas(area);
+    .areas(main);
     Regions {
         body,
         status_top,
@@ -291,7 +344,21 @@ pub fn regions(app: &App, area: Rect) -> Regions {
         composer,
         rail,
         footer,
+        side,
     }
+}
+
+/// Whether the house frame should give the right column to agents, background
+/// commands, and todos. Narrow terminals keep the one-row summary.
+fn side_rail_open(app: &App, width: u16) -> bool {
+    if width < 120 || matches!(skin::active(), skin::Skin::Codex | skin::Skin::Grok) {
+        return false;
+    }
+    let tasks = app
+        .tasks
+        .as_ref()
+        .is_some_and(|tasks| !tasks.list().is_empty());
+    !app.panes.is_empty() || app.show_todos || tasks
 }
 
 /// Rows reserved for the todo band (0 when hidden). Caps so a long list
@@ -774,6 +841,10 @@ pub(super) fn overlay_open(app: &App) -> bool {
         || app.plan_review.is_some()
         || app.interview.is_some()
         || app.show_dashboard
+        || app.keys_help
+        || app.task_view
+        || app.find.is_some()
+        || app.history_search.is_some()
 }
 
 /// The two lines that always accompany an image, whatever the terminal can
@@ -891,9 +962,13 @@ pub(super) fn transcript_text(
             lines.push(Line::raw(""));
         }
         let mut spans = busy_row(app);
-        let (thinking, _) = app.transcript.streaming();
-        if app.transcript.compact() && !thinking.is_empty() {
-            spans.push(Span::styled(" thinking", dim().italic()));
+        // A custom verb list does not say "thinking" on its own. The stock
+        // row already names the activity, so this only adds the word then.
+        if !app.config.ui.spinner_verbs.is_empty() {
+            let (thinking, _) = app.transcript.streaming();
+            if app.transcript.compact() && !thinking.is_empty() {
+                spans.push(Span::styled(" thinking", dim().italic()));
+            }
         }
         lines.push(Line::from(spans));
     }
@@ -926,6 +1001,8 @@ pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
             format!(" {}…", app.spinner_verb),
             dim().italic(),
         ));
+    } else {
+        spans.push(Span::styled(format!(" {}", waiting_on(app)), dim()));
     }
     // The round trips so far, once there is one; the budget too when the
     // turn has one.
@@ -938,6 +1015,55 @@ pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
         spans.push(Span::styled(step, dim()));
     }
     spans
+}
+
+/// What the spinner is waiting on, in the user's words. A running tool names
+/// the command or the file; otherwise the model is thinking, or writing once
+/// text has started.
+fn waiting_on(app: &App) -> String {
+    let (thinking, text) = app.transcript.streaming();
+    if !text.is_empty() {
+        return "writing".to_string();
+    }
+    if !thinking.is_empty() {
+        return "thinking".to_string();
+    }
+    if let Some(TranscriptItem::Tool(tool)) = app.transcript.last()
+        && tool.output.is_none()
+    {
+        return tool_activity(&tool.name, &tool.args);
+    }
+    "thinking".to_string()
+}
+
+fn tool_activity(name: &str, args: &serde_json::Value) -> String {
+    let arg = |key: &str| {
+        args.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let base = |path: String| {
+        path.rsplit(['/', '\\'])
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or("file")
+            .to_string()
+    };
+    match name {
+        "execute" | "bash" | "shell" | "run_command" => {
+            let command = arg("command");
+            let first = command.split_whitespace().next().unwrap_or(name);
+            format!("running {first}")
+        }
+        "read_file" | "grep" | "glob" | "list_dir" | "list_files" => {
+            format!("reading {}", base(arg("path")))
+        }
+        "edit_file" | "write_file" | "apply_patch" | "multi_edit" => {
+            format!("editing {}", base(arg("path")))
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Render a conversation to lines, tagging each row with what it belongs to
@@ -1248,8 +1374,14 @@ fn tool_card_lines(
             spinner_frame(tick).to_string(),
             theme::style(Token::ToolRunning),
         ),
-        (false, false) => Span::styled(chrome.tool_done, theme::style(Token::ToolDone)),
-        (false, true) => Span::styled(chrome.tool_failed, theme::style(Token::ToolFailed).bold()),
+        (false, false) => Span::styled(
+            skin::glyphs::adapt(chrome.tool_done),
+            theme::style(Token::ToolDone),
+        ),
+        (false, true) => Span::styled(
+            skin::glyphs::adapt(chrome.tool_failed),
+            theme::style(Token::ToolFailed).bold(),
+        ),
     };
 
     let (label, mut summary) = tool_label(name, args, chrome.tool_label);
@@ -1287,7 +1419,7 @@ fn tool_card_lines(
     // that wraps onto a second line has stopped being one.
     lines.push(truncate_line(Line::from(card), width));
 
-    let (first_arm, rest_arm) = chrome.tool_output;
+    let (first_arm, rest_arm) = skin::glyphs::tool_arm();
     // The arm is drawn once, on the first body row, and replaced by blanks
     // of the same width below it — that is what makes Claude Code's `⎿`
     // and Codex's `└` read as one arm rather than a column of them. The
@@ -1392,20 +1524,7 @@ fn edit_diff_lines(
         _ => return None,
     };
     output?;
-    let mut rows = Vec::new();
-    for line in old.lines() {
-        rows.push(Line::from(Span::styled(
-            format!("- {line}"),
-            theme::style(Token::DiffDel),
-        )));
-    }
-    for line in new.lines() {
-        rows.push(Line::from(Span::styled(
-            format!("+ {line}"),
-            theme::style(Token::DiffAdd),
-        )));
-    }
-    Some(rows)
+    Some(diff::lines(old, new))
 }
 
 /// `0.4s`, `12s`, `2m05s`: as much precision as the number has. `None`

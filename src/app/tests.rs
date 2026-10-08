@@ -2044,11 +2044,13 @@ fn screen(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
 /// fixtures never render.
 fn pixel_rows(buf: &ratatui::buffer::Buffer) -> Vec<u16> {
     use ratatui::style::Color;
+    // An image paints a background into the cell. The house accent is a
+    // foreground only — the frame never fills a cell — so an RGB background
+    // is a pixel and nothing else.
     (0..buf.area.height)
         .filter(|&y| {
             (0..buf.area.width).any(|x| {
-                let cell = buf.cell((x, y)).unwrap();
-                matches!(cell.fg, Color::Rgb(..)) || matches!(cell.bg, Color::Rgb(..))
+                matches!(buf.cell((x, y)).unwrap().bg, Color::Rgb(..))
             })
         })
         .collect()
@@ -2253,13 +2255,47 @@ fn a_resumed_session_replays_the_images_it_left_on_disk() {
 }
 
 #[test]
-fn backtab_toggles_plan_mode() {
+fn backtab_cycles_out_of_genie() {
     let mut app = app();
     let action = press(&mut app, KeyCode::BackTab);
+    assert!(matches!(action, Some(AppAction::CycleMode)));
+
+    app.config.mode = crate::config::Mode::Sovereign;
+    assert!(press(&mut app, KeyCode::BackTab).is_none());
+}
+
+#[test]
+fn esc_interrupts_only_when_the_turn_is_running_and_nothing_is_open() {
+    let mut app = app();
+    app.welcome_dismissed = true;
+    app.status.busy = true;
     assert!(matches!(
-        action,
-        Some(AppAction::Command(SlashCommand::Plan))
+        press(&mut app, KeyCode::Esc),
+        Some(AppAction::Interrupt)
     ));
+
+    app.status.busy = true;
+    app.input = "draft".to_string();
+    assert!(
+        press(&mut app, KeyCode::Esc).is_none(),
+        "a draft is cleared, and the turn keeps running"
+    );
+    assert!(app.input.is_empty());
+
+    app.status.busy = true;
+    app.input.clear();
+    app.show_todos = true;
+    assert!(press(&mut app, KeyCode::Esc).is_none());
+    assert!(!app.show_todos);
+}
+
+#[test]
+fn ctrl_f_opens_find_and_escape_closes_it() {
+    let mut app = app();
+    assert!(press_ctrl(&mut app, 'f').is_none());
+    assert!(app.find.is_some());
+    assert!(press(&mut app, KeyCode::Esc).is_none());
+    assert!(app.find.is_none());
 }
 
 #[test]
@@ -3977,8 +4013,8 @@ const TOKEN_SITES: &[(&str, u16, Token)] = &[
     ("quoted line", 0, Token::Quote),
     ("weighing options", 0, Token::Faint),
     ("⠋ probe", 0, Token::ToolRunning),
-    ("✓ inspect", 0, Token::ToolDone),
-    ("✗ explode", 0, Token::ToolFailed),
+    ("● inspect", 0, Token::ToolDone),
+    ("✕ explode", 0, Token::ToolFailed),
     ("output line", 0, Token::Muted),
     ("plain notice", 0, Token::Faint),
     ("✗ something broke", 0, Token::Error),
@@ -4102,7 +4138,7 @@ fn the_fixture_survives_the_smallest_terminal_under_both_themes() {
         // rail, the composer, the status line.
         for needle in [
             "✗ something broke",
-            "✗ explode",
+            "✕ explode",
             "git diff",
             "todos",
             "running",

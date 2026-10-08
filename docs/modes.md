@@ -426,7 +426,7 @@ Omakase is the chef's-choice flavor of plan mode: it goes beyond a simple review
 ### TUI (genie)
 
 ```
-/plan          # toggle plan mode (Shift+Tab does the same)
+/plan          # toggle plan mode (Shift+Tab cycles genie → plan → omakase)
 /omakase       # toggle omakase (chef's-choice) mode
 ```
 

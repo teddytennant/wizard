@@ -881,10 +881,18 @@ fn the_empty_state_is_three_plain_lines_at_every_width() {
     for (width, height) in [(120, 40), (80, 24), (40, 20)] {
         let screen = screen(width, height);
         let first = screen.lines().nth(1).unwrap_or_default();
-        assert!(first.starts_with(" wizard "), "{width}x{height}: {screen}");
+        assert!(first.contains("◆ wizard"), "{width}x{height}: {screen}");
+        assert!(
+            first.contains(env!("CARGO_PKG_VERSION")),
+            "{width}x{height}: {screen}"
+        );
         assert!(
             screen.contains("type a message"),
             "{width}x{height}: {screen}"
+        );
+        assert!(
+            !screen.contains("· / lists"),
+            "one hint, not a tip row: {width}x{height}: {screen}"
         );
         for absent in ["⣿", "w i z a r d", "sovereign agent", "/model", "genie"] {
             assert!(
@@ -912,7 +920,7 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
     let screen = rows.join("\n");
     let hint = rows
         .iter()
-        .position(|row| row.contains("type a message · / lists commands"))
+        .position(|row| row.contains("type a message"))
         .expect("the hint");
     assert_eq!(
         rows[hint + 1].trim(),
@@ -969,8 +977,8 @@ fn starter_prompts_and_the_first_run_summary_sit_on_the_welcome_card() {
     assert_eq!(
         &text[..2],
         &[
-            format!("wizard {}", env!("CARGO_PKG_VERSION")).as_str(),
-            "type a message · / lists commands"
+            format!("◆ wizard {}", env!("CARGO_PKG_VERSION")).as_str(),
+            "type a message",
         ],
         "{rows:?}"
     );
@@ -1570,14 +1578,14 @@ fn a_finished_tool_card_carries_its_exit_code_and_elapsed_time() {
         },
     };
     let rows = card(&tool);
-    assert_eq!(rows[0], "✗ execute  make  exit 2  0.4s", "{rows:?}");
-    assert_eq!(rows[1].trim(), "boom", "{rows:?}");
+    assert_eq!(rows[0], "✕ execute  make  exit 2  0.4s", "{rows:?}");
+    assert_eq!(rows[1], "╰ boom", "{rows:?}");
     assert_eq!(rows.len(), 2, "the exit line moved to the header: {rows:?}");
 
     // Folded, the header still says how it ended.
     let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
     let folded = flats(&tool_card_lines(&tool, true, 0, 80));
-    assert_eq!(folded, vec!["✗ execute  make  exit 2  0.4s  +1 lines"]);
+    assert_eq!(folded, vec!["✕ execute  make  exit 2  0.4s  +1 lines"]);
 }
 
 #[test]
@@ -1599,8 +1607,8 @@ fn an_edit_card_shows_the_change_as_a_diff() {
         timing: ToolTiming::default(),
     };
     let rows = card(&tool);
-    assert_eq!(rows[0], "✓ edit_file  src/x.rs:12", "{rows:?}");
-    assert_eq!(rows[1], "  - let a = 1;");
+    assert_eq!(rows[0], "● edit_file  src/x.rs:12", "{rows:?}");
+    assert_eq!(rows[1], "╰ - let a = 1;");
     assert_eq!(rows[2], "  + let a = 2;");
     assert_eq!(rows[3], "  + let b = 3;");
     assert!(
@@ -1634,7 +1642,10 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     app.turn_started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
     let rows = render(&app);
     let screen = rows.join("\n");
-    assert!(rows.iter().any(|row| row.trim() == "⠋"), "{screen}");
+    assert!(
+        rows.iter().any(|row| row.trim() == "⠋ thinking"),
+        "{screen}"
+    );
     // One clock, on the status line.
     assert_eq!(screen.matches("3.0s").count(), 1, "{screen}");
     for verb in crate::config::UiConfig::DEFAULT_SPINNER_VERBS {
@@ -2467,4 +2478,91 @@ fn the_house_palette_reads_on_a_dark_terminal() {
             assert_eq!(buffer[(x, y)].bg, Color::Reset);
         }
     }
+}
+
+/// The house palette names an accent and still paints no background, so a
+/// light or transparent terminal shows through every cell.
+#[test]
+fn the_wizard_theme_paints_no_background() {
+    let theme = theme::load("wizard").expect("wizard theme");
+    for token in [
+        theme::Token::BgBase,
+        theme::Token::BgRaised,
+        theme::Token::BgSunken,
+    ] {
+        assert_eq!(theme.declared(token), Color::Reset, "{}", token.key());
+    }
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let _theme = theme::pin(std::sync::Arc::new(theme));
+    let (_, buffer) = screen_at(&work_turn(), 100, 28);
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset, "filled cell at {x},{y}");
+        }
+    }
+}
+
+/// A wide frame with a running agent uses the side column. A narrow one keeps
+/// the single summary row and does not open that column.
+#[test]
+fn the_side_rail_opens_at_120_columns_and_stays_shut_below() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.handle_agent_event(crate::agent::AgentEvent::SubagentRunStarted {
+        run: 1,
+        bg: None,
+        name: "researcher".to_string(),
+        task: "read the parser".to_string(),
+    });
+    let wide = regions(&app, ratatui::layout::Rect::new(0, 0, 132, 36));
+    assert!(wide.side.width >= 30, "side column: {:?}", wide.side);
+    assert_eq!(wide.rail.height, 0, "the bottom rail yields to the column");
+    let narrow = regions(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    assert_eq!(narrow.side.width, 0);
+    assert_eq!(narrow.rail.height, 1);
+
+    let (rows, buffer) = screen_at(&app, 132, 36);
+    let screen = rows.join("\n");
+    assert!(
+        screen.contains('│') || screen.contains("researcher"),
+        "{screen}"
+    );
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset);
+        }
+    }
+}
+
+/// A small word change is bold and underlined, and the row itself is not filled.
+#[test]
+fn a_diff_marks_the_changed_word_without_a_fill() {
+    use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
+    use ratatui::style::Modifier;
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let tool = ToolItem {
+        name: "edit_file".to_string(),
+        args: serde_json::json!({
+            "path": "src/x.rs",
+            "old_string": "let a = 1;",
+            "new_string": "let a = 2;",
+        }),
+        call_id: String::new(),
+        output: Some(ToolItemOutput {
+            content: "Edited src/x.rs (line 1)".to_string(),
+            is_error: false,
+        }),
+        progress: String::new(),
+        timing: ToolTiming::default(),
+    };
+    let lines = tool_card_lines(&tool, false, 0, 80);
+    let marked = lines.iter().any(|line| {
+        line.spans.iter().any(|span| {
+            span.style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED)
+                && matches!(span.style.bg, Some(Color::Reset) | None)
+        })
+    });
+    assert!(marked, "the changed digit should be underlined: {lines:?}");
 }

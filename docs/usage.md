@@ -17,7 +17,7 @@ inline hints.
 | `/model [tag]` | Show the current model, or switch to `tag` |
 | `/mode [genie\|sovereign]` | Show or switch personality mode (`/genie` and `/sovereign` are shortcuts) |
 | `/effort [low\|medium\|high\|default]` | Set reasoning effort for models that support it (xAI Grok 4.x, OpenAI o-series/gpt-5); no argument opens the picker, `default` clears to the provider default |
-| `/plan` | Toggle plan mode (also Shift+Tab): read-only investigation until a plan is approved |
+| `/plan` | Toggle plan mode. Shift+Tab cycles genie → plan → omakase |
 | `/omakase` | Toggle omakase: chef's-choice plan mode, the agent decides and auto-approves its own plan ([modes.md](modes.md)) |
 | `/evolve [--deep] <desc>` | Self-extend: add a skill, MCP server, scripted tool, or subagent; `--deep` rebuilds the binary ([evolve.md](evolve.md)) |
 | `/reload` | Reload skills, scripted tools, and MCP servers without a restart |
@@ -272,7 +272,8 @@ independently — picking the skin picks the palette:
 
 | Palette | Skin | Look |
 |---------|------|------|
-| `minimal` | `wizard` (default) | Monochrome base, one accent, rounded edges on floating layers, no background colors. Every value is already an ANSI-16 name, so it renders identically over SSH and on a serial console |
+| `wizard` | `wizard` (default) | One indigo accent, status hues, no background colors. Body text and every background token are `reset`, so the terminal's own background shows through |
+| `minimal` | `opencode`, `pi`, and the fallback when a palette name does not load | Monochrome. Every value is an ANSI-16 name, so it renders the same over SSH and on a serial console |
 | `codex` | `codex` | Near-monochrome with one cyan, all ANSI-16 names, plain borders |
 | `grok` | `grok` | Violet and steel on neutral gray |
 

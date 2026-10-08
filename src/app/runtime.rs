@@ -190,6 +190,23 @@ pub async fn run_tui(
 
     let mut app = App::new(config);
     app.project_root = project_root.clone();
+    if let Ok(dir) = crate::config::Config::sessions_dir() {
+        app.recent_sessions = crate::agent::session::summaries(&dir)
+            .into_iter()
+            .filter(|session| session.id != session_id)
+            .take(3)
+            .map(|session| {
+                let summary = session
+                    .summary
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                (session.id, summary)
+            })
+            .collect();
+    }
     app.custom_commands = crate::commands::load(&project_root);
     app.session_id = session_id.clone();
     app.session_name = session_name;
@@ -783,6 +800,20 @@ pub async fn run_tui(
                     }
                     .run(command)
                     .await;
+                }
+                AppAction::CycleMode => {
+                    CommandContext {
+                        app: &mut app,
+                        client: &mut client,
+                        agent_slot: &mut agent_slot,
+                        manager: &manager,
+                        skills: &mut skills,
+                        project_root: &project_root,
+                        mcp_path: &mcp_path,
+                        genie_max_steps,
+                        events: &events,
+                    }
+                    .cycle_mode();
                 }
                 AppAction::Interrupt => {
                     // Ask the turn to stop before killing it. The agent checks

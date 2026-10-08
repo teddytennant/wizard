@@ -210,6 +210,24 @@ impl PlanState {
         }
     }
 
+    /// Shift+Tab: off → plan → omakase → off.
+    pub(crate) fn cycled(self) -> Self {
+        match (self.plan, self.omakase) {
+            (false, false) => Self {
+                plan: true,
+                omakase: false,
+            },
+            (true, false) => Self {
+                plan: true,
+                omakase: true,
+            },
+            _ => Self {
+                plan: false,
+                omakase: false,
+            },
+        }
+    }
+
     /// How `/status` says it.
     fn describe(self) -> &'static str {
         match (self.plan, self.omakase) {
@@ -1974,5 +1992,16 @@ mod tests {
         // And it is not filed under "terminal only", which is the table's own
         // gap and not a promise this build can make for somebody else's plugin.
         assert!(!help_text(Surface::Gui).contains("zzhelp"));
+    }
+
+    #[test]
+    fn shift_tab_walks_genie_plan_omakase() {
+        let off = PlanState::default();
+        let plan = off.cycled();
+        assert!(plan.plan && !plan.omakase);
+        let omakase = plan.cycled();
+        assert!(omakase.plan && omakase.omakase);
+        let back = omakase.cycled();
+        assert!(!back.plan && !back.omakase);
     }
 }

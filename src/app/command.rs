@@ -232,9 +232,13 @@ pub(super) fn wear(app: &mut App, switched: skin::Skin) -> String {
 /// answer is derived from [`crate::commands::COMMANDS`] on every surface:
 /// there used to be a hand-written list in this file, and it had already lost
 /// `/exit`. Keys are the terminal's own, and have no table to come from.
+pub(crate) fn help_keys() -> &'static str {
+    HELP_KEYS
+}
+
 const HELP_KEYS: &str = "keys:\n  \
 Tab / \u{2192}                     accept command completion\n  \
-Shift+Tab                   toggle plan mode\n  \
+Shift+Tab                   cycle genie, plan, omakase\n  \
 \u{2191} / \u{2193}                       select suggestion \u{b7} browse input history\n  \
 PgUp/PgDn \u{b7} wheel           scroll the transcript (stays put while streaming)\n  \
 Esc \u{b7} Ctrl-End              jump back to the live tail\n  \
@@ -251,7 +255,10 @@ Ctrl-P                      model picker  \u{b7}  Ctrl-T open or close every col
                             (in the full view, Ctrl-T toggles the last tool card)\n  \
 Ctrl-A/E Home/End \u{2190}/\u{2192}       move cursor   \u{b7} Ctrl-W/U/K kill word/to start/to end\n  \
 Ctrl-G                      edit the prompt in $EDITOR\n  \
-Ctrl-C                      interrupt \u{b7} press twice to quit";
+Ctrl-C                      interrupt \u{b7} press twice to quit\n  \
+Esc                         close what is open; interrupt a running turn at the tail\n  \
+Ctrl-F                      search the transcript  \u{b7}  Ctrl-R search history\n  \
+Ctrl-B                      background output  \u{b7}  ? keys";
 
 /// Everything a slash command may touch, borrowed from the main loop for
 /// the duration of one dispatch.
@@ -518,6 +525,20 @@ impl CommandContext<'_> {
         self.app.plan_mode = plan.plan;
         self.app.omakase = plan.omakase;
         true
+    }
+
+    /// Shift+Tab. Genie walks genie → plan → omakase → genie. Sovereign and
+    /// chat are `/mode`'s, and this does not leave them.
+    pub(crate) fn cycle_mode(&mut self) {
+        if self.app.mode() != crate::config::Mode::Genie {
+            return;
+        }
+        let next = PlanState {
+            plan: self.app.plan_mode,
+            omakase: self.app.omakase,
+        }
+        .cycled();
+        self.apply_plan(next);
     }
 
     /// `/rewind`: open the turn picker (newest first). Each row shows the

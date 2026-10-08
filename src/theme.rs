@@ -13,11 +13,11 @@
 //!   table, two renderers.
 //!
 //! There is nothing to *choose* here. The palette is whichever one the active
-//! UI skin came with ([`crate::skin::Skin::companion_theme`]) — `minimal`
-//! under the default skin — because a skin owns its colors the same way it
-//! owns its frame. What this module still owns is the token vocabulary the
-//! renderers ask in, and the degradation to what the terminal can actually
-//! render.
+//! UI skin came with ([`crate::skin::Skin::companion_theme`]) — `wizard`
+//! under the house skin, `minimal` when a name does not load — because a skin
+//! owns its colors the same way it owns its frame. What this module still owns
+//! is the token vocabulary the renderers ask in, and the degradation to what
+//! the terminal can actually render.
 //!
 //! Color *depth* has its own order, and `NO_COLOR` is at the top of it: see
 //! [`ColorDepth::from_env`].
@@ -50,6 +50,7 @@ pub const DEFAULT_THEME: &str = "minimal";
 pub const ENV_COLOR: &str = "WIZARD_COLOR";
 
 const MINIMAL_TOML: &str = include_str!("../assets/themes/minimal.toml");
+const WIZARD_TOML: &str = include_str!("../assets/themes/wizard.toml");
 const CODEX_TOML: &str = include_str!("../assets/themes/codex.toml");
 const GROK_TOML: &str = include_str!("../assets/themes/grok.toml");
 
@@ -59,8 +60,9 @@ const GROK_TOML: &str = include_str!("../assets/themes/grok.toml");
 /// longer anything that picks. A skin owns its colors the same way it owns its
 /// frame ([`crate::skin::Skin::companion_theme`]), so these are reachable by
 /// name only so that a skin can name the one it came with.
-const BUILTINS: [(&str, &str); 3] = [
+const BUILTINS: [(&str, &str); 4] = [
     ("minimal", MINIMAL_TOML),
+    ("wizard", WIZARD_TOML),
     ("codex", CODEX_TOML),
     ("grok", GROK_TOML),
 ];

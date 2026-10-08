@@ -130,7 +130,9 @@ fn draw_welcome_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) 
 /// one muted `❯` row each; the first run's one line about where the config
 /// went comes last, apart from the rest.
 fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
+    let mark = crate::skin::glyphs::adapt("◆ ");
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled(mark, accent()),
         Span::styled("wizard", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(format!(" {}", env!("CARGO_PKG_VERSION")), dim()),
     ])];
@@ -143,16 +145,39 @@ fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
         lines.extend(notices);
     }
     lines.push(Line::raw(""));
-    lines.push(Line::from(vec![
-        Span::styled("type a message", muted()),
-        Span::styled(" · / lists commands", dim()),
-    ]));
-    lines.extend(starter_prompt_lines(app));
+    lines.push(Line::from(Span::styled("type a message", dim())));
+    lines.extend(welcome_pick_lines(app));
     if let Some(summary) = &app.first_run_summary {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(summary.clone(), dim())));
     }
     draw_welcome_lines(frame, area, lines);
+}
+
+/// Recent sessions when any were loaded at startup, otherwise the starter
+/// prompts. At most three. A selected row is accent text, not a filled bar.
+fn welcome_pick_lines(app: &App) -> Vec<Line<'static>> {
+    if !app.recent_sessions.is_empty() {
+        app.recent_sessions
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(index, (_, summary))| {
+                let selected = app.starter_index == Some(index);
+                let label = if summary.is_empty() {
+                    "(session)".to_string()
+                } else {
+                    summary.clone()
+                };
+                Line::from(Span::styled(
+                    format!("  {label}"),
+                    if selected { accent() } else { muted() },
+                ))
+            })
+            .collect()
+    } else {
+        starter_prompt_lines(app)
+    }
 }
 
 /// Codex's welcome: a `>_` banner over a left-aligned block.

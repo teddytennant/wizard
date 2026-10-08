@@ -1,0 +1,45 @@
+# wizard: the house palette.
+#
+# One accent, the usual status hues, and the terminal's own background.
+# `text` and every `bg.*` token stay `reset`, so a transparent, blurred,
+# light, or dark terminal shows through. The accent is a mid indigo: dark
+# enough to read on a light background, light enough to read on a dark one.
+# Meaning never rests on it — glyphs carry the state when color is gone.
+#
+# `minimal` is the monochrome fallback (and the palette a missing name falls
+# back to). This file is what the house skin draws with.
+
+name = "wizard"
+description = "one accent, status hues, the terminal's own background"
+
+border = "rounded"
+
+[tokens]
+text = "reset"
+muted = "gray"
+faint = "darkgray"
+# Mid indigo. Readable on white and on black without a filled chip behind it.
+accent = "#4C5FD6"
+code = "reset"
+heading = "reset"
+link = "darkgray"
+quote = "gray"
+border = "darkgray"
+
+error = "red"
+warning = "yellow"
+success = "green"
+
+"tool.running" = "#4C5FD6"
+"tool.done" = "gray"
+"tool.failed" = "red"
+
+"diff.add" = "green"
+"diff.del" = "red"
+"diff.meta" = "gray"
+"diff.hunk" = "darkgray"
+
+# Never a painted page. Reset means the terminal's own background.
+"bg.base" = "reset"
+"bg.raised" = "reset"
+"bg.sunken" = "reset"
