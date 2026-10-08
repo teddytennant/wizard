@@ -649,6 +649,9 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
                 context::KEEP_WHOLE_RESULTS,
                 context::MIN_RECLAIM_CHARS,
             );
+            // Same floor, same reason: a screenshot's base64 stays on the
+            // user message that carried it and is re-sent every later step.
+            context::release_old_images(host.history_mut(), context::MIN_RECLAIM_CHARS);
         }
         let notes = attach_notes(host, policy, &reading);
 

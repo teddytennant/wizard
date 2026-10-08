@@ -600,12 +600,13 @@ impl Compacted {
 ///
 /// # The free passes run first
 ///
-/// [`evict_superseded_reads`] and [`shrink_old_results`] both reclaim context
-/// with no model call at all, so both run before the boundary is chosen. That
-/// ordering is worth two things. The span the summarizer reads is smaller, so
-/// the call it is billed for is cheaper; and when the two of them alone bring
-/// the history to the low-water mark this pass was aiming for, there is
-/// nothing left for a summary to reclaim and the call is skipped outright.
+/// [`evict_superseded_reads`], [`shrink_old_results`] and
+/// [`release_old_images`] reclaim context with no model call at all, so they
+/// run before the boundary is chosen. That ordering is worth two things. The
+/// span the summarizer reads is smaller, so the call it is billed for is
+/// cheaper; and when they alone bring the history to the low-water mark this
+/// pass was aiming for, there is nothing left for a summary to reclaim and
+/// the call is skipped outright.
 pub async fn compact(
     history: &mut Vec<ChatMessage>,
     anchor: Anchor,
@@ -633,8 +634,9 @@ pub async fn compact_reporting(
     // a file's old contents.
     let evicted = evict_superseded_reads(history);
     // Then, still for free: the middles of tool results too large to be worth
-    // carrying whole.
-    let pruned = shrink_old_results(history, KEEP_WHOLE_RESULTS, 0);
+    // carrying whole, and image payloads the model is no longer looking at.
+    let pruned =
+        shrink_old_results(history, KEEP_WHOLE_RESULTS, 0) + release_old_images(history, 0);
 
     // The payoff. Pruning is gated on a per-result size and knows nothing
     // about the window, so it is perfectly capable of reclaiming more than
@@ -1018,6 +1020,92 @@ fn shrink_old_results_with(
         }
     }
     shrunk
+}
+
+/// Base64 shorter than this stays on the message. A few kilobytes is less
+/// than the reclaim floor on its own, and less than a stub is worth.
+const IMAGE_RELEASE_MIN_CHARS: usize = 4_000;
+
+/// Drop user-image payloads outside the recent window, and report how many.
+///
+/// A screenshot rides a user message as base64 (OpenAI `image_url`, Anthropic
+/// `image` blocks) and then stays there for the rest of the session. The
+/// meter prices that at a flat allowance, but the request carries the bytes.
+/// Assistant images are not sent as blocks — the wire names them in text — so
+/// they are left alone, and so is anything inside [`KEEP_RECENT`].
+///
+/// The image becomes a text stub naming the file (or its size) and pointing
+/// at `read_file`. The session file is append-only and still has the bytes;
+/// this only changes what the next request sends. A second pass finds no
+/// image blocks and does nothing.
+pub(crate) fn release_old_images(history: &mut [ChatMessage], min_reclaim: usize) -> usize {
+    let recent = history.len().saturating_sub(KEEP_RECENT);
+    let mut planned: Vec<(usize, usize, String)> = Vec::new();
+    let mut reclaimed = 0usize;
+    for (index, message) in history.iter().enumerate().take(recent) {
+        if message.role != Role::User {
+            continue;
+        }
+        for (block_index, block) in message.content.iter().enumerate() {
+            let crate::llm::ContentBlock::Image(image) = block else {
+                continue;
+            };
+            let before = image.b64.chars().count();
+            if before < IMAGE_RELEASE_MIN_CHARS {
+                continue;
+            }
+            let stub = image_stub(image);
+            let after = stub.chars().count();
+            if after >= before {
+                continue;
+            }
+            reclaimed += before - after;
+            planned.push((index, block_index, stub));
+        }
+    }
+    if reclaimed < min_reclaim {
+        return 0;
+    }
+    if min_reclaim > 0
+        && let Some((first, _, _)) = planned.first()
+    {
+        // The meter prices an image at a flat allowance. The tail this
+        // rewrite invalidates still contains the base64, so price that too
+        // or a long screenshot looks cheap to bust a cache for.
+        let invalidated = crate::llm::estimate_history_tokens(&history[*first..])
+            .saturating_add(image_wire_tokens(&history[*first..]));
+        let reclaimed_tokens = crate::llm::estimate_tokens_from_chars(reclaimed);
+        if reclaimed_tokens < invalidated / RECLAIM_TAIL_DIVISOR as u64 {
+            return 0;
+        }
+    }
+    let released = planned.len();
+    for (index, block_index, stub) in planned {
+        history[index].content[block_index] = crate::llm::ContentBlock::text(stub);
+    }
+    released
+}
+
+/// What an elided image is replaced with. Leading newline so it does not
+/// glue onto the message text in front of it.
+fn image_stub(image: &crate::llm::Image) -> String {
+    let subject = match &image.path {
+        Some(path) => path.display().to_string(),
+        None => format!("{} bytes", image.b64.len() / 4 * 3),
+    };
+    format!("\n[image {subject} elided from this old message; read_file it again if you need it]")
+}
+
+/// Base64 of user images in `history`, priced as text. Vision tile cost is
+/// what [`crate::llm::estimate_history_tokens`] already counts; this is the
+/// payload those tiles ride on.
+fn image_wire_tokens(history: &[ChatMessage]) -> u64 {
+    history
+        .iter()
+        .filter(|message| message.role == Role::User)
+        .flat_map(ChatMessage::images)
+        .map(|image| crate::llm::estimate_tokens_from_chars(image.b64.len()))
+        .fold(0, u64::saturating_add)
 }
 
 /// A string argument longer than this in an old tool call is cut down by
@@ -1850,6 +1938,110 @@ mod tests {
             );
             assert_eq!(crate::llm::estimate_history_tokens(&via_profile), after);
         }
+    }
+
+    /// User images outside the recent window stop being re-sent as base64.
+    /// The meter barely moves (it prices a flat allowance per image); the
+    /// wire cost is the base64, which is what the printed counts show.
+    /// Recent images, small ones, and assistant images stay.
+    #[test]
+    fn old_user_images_leave_the_prompt() {
+        let payload = "A".repeat(80_000);
+        let mut history = vec![ChatMessage::system("you are wizard")];
+        for step in 0..4 {
+            let mut message = ChatMessage::user(format!("shot {step}"));
+            let mut image = crate::llm::Image::new(payload.clone(), "image/png");
+            if step < 3 {
+                image = image.at_path(format!("/tmp/shot{step}.png").into());
+            }
+            message.push_image(image);
+            history.push(message);
+        }
+        let mut tiny = ChatMessage::user("icon");
+        tiny.push_image(crate::llm::Image::new("B".repeat(100), "image/png"));
+        history.push(tiny);
+        let mut drawn = ChatMessage::assistant("drew it");
+        drawn.push_image(crate::llm::Image::new(payload.clone(), "image/png"));
+        history.push(drawn);
+        for step in 0..KEEP_RECENT {
+            history.push(ChatMessage::user(format!("later {step}")));
+        }
+        let mut recent = ChatMessage::user("fresh shot");
+        recent.push_image(crate::llm::Image::new(payload.clone(), "image/png"));
+        history.push(recent);
+
+        let user_b64 = |history: &[ChatMessage]| -> usize {
+            history
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .flat_map(ChatMessage::images)
+                .map(|image| image.b64.len())
+                .sum()
+        };
+        let before_meter = crate::llm::estimate_history_tokens(&history);
+        let before_b64 = user_b64(&history);
+        let before_wire = crate::llm::estimate_tokens_from_chars(before_b64);
+
+        let released = release_old_images(&mut history, MIN_RECLAIM_CHARS);
+        assert_eq!(released, 4, "the four old screenshots");
+
+        let after_meter = crate::llm::estimate_history_tokens(&history);
+        let after_b64 = user_b64(&history);
+        let after_wire = crate::llm::estimate_tokens_from_chars(after_b64);
+        eprintln!(
+            "image release fixture: meter {before_meter} -> {after_meter} est. tokens; \
+             wire base64/4 {before_wire} -> {after_wire} ({before_b64} -> {after_b64} base64 chars)"
+        );
+        assert!(
+            after_wire * 2 < before_wire,
+            "dropping the old payloads should cut the base64 by more than half: {before_wire} -> {after_wire}"
+        );
+        // The recent screenshot and the tiny icon are the only user images left.
+        assert_eq!(after_b64, payload.len() + 100);
+        assert!(
+            history
+                .iter()
+                .filter(|message| message.role == Role::Assistant)
+                .flat_map(ChatMessage::images)
+                .any(|image| image.b64.len() == payload.len()),
+            "assistant images are not sent as base64 and are not stripped"
+        );
+        let shot0 = history
+            .iter()
+            .find(|message| message.text().contains("shot 0"))
+            .expect("shot 0");
+        assert!(
+            shot0.text().contains("\n[image /tmp/shot0.png"),
+            "the stub stays off the end of the user's text: {}",
+            shot0.text()
+        );
+        assert!(shot0.text().contains("read_file"));
+        assert!(
+            history
+                .iter()
+                .any(|message| message.text().contains("60000 bytes")),
+            "an image with no path is named by its size"
+        );
+        assert_eq!(
+            release_old_images(&mut history, 0),
+            0,
+            "a second pass finds nothing left to drop"
+        );
+    }
+
+    /// Five kilobytes of base64 is under the floor, so the pass does not
+    /// rewrite and the cached prefix stays put.
+    #[test]
+    fn a_small_image_does_not_pay_for_a_rewrite() {
+        let mut history = vec![ChatMessage::system("you are wizard")];
+        let mut message = ChatMessage::user("shot");
+        message.push_image(crate::llm::Image::new("A".repeat(5_000), "image/png"));
+        history.push(message);
+        for step in 0..KEEP_RECENT {
+            history.push(ChatMessage::user(format!("later {step}")));
+        }
+        assert_eq!(release_old_images(&mut history, MIN_RECLAIM_CHARS), 0);
+        assert_eq!(history[1].images().len(), 1);
     }
 
     /// A tool result several times the per-result budget.
