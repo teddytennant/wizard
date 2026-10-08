@@ -222,6 +222,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
     // overlay — drop the card hit map so it can't toggle a card underneath.
     if overlay_open(app) {
         app.card_hits.borrow_mut().clear();
+        app.group_hits.borrow_mut().clear();
     }
 
     // The selection highlight paints last so it reverses whatever ended up on
@@ -553,6 +554,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // Rebuilt from scratch every frame; cleared up front so the early
     // returns below can't leave stale clickable rows behind.
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
 
     // Stay on the welcome screen until the conversation actually begins (see
     // `App::welcome_visible`: early system notices alone don't dismiss it,
@@ -567,8 +569,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Two columns of air. One was the edge; two is enough that a line of
+    // prose does not touch the bezel, and a 40-column terminal still has a
+    // line worth reading.
     let inner = area.inner(Margin {
-        horizontal: 1,
+        horizontal: 2,
         vertical: 0,
     });
     if inner.width == 0 || inner.height == 0 {
@@ -604,9 +609,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // Record where card headers landed on screen for click-to-toggle.
     {
         let mut hits = app.card_hits.borrow_mut();
+        let mut groups = app.group_hits.borrow_mut();
         for (offset, tag) in row_tags[start..end].iter().enumerate() {
-            if let RowTag::Card(index) = tag {
-                hits.push((inner.y + offset as u16, *index));
+            match tag {
+                RowTag::Card(index) => hits.push((inner.y + offset as u16, *index)),
+                RowTag::Group(index) => groups.push((inner.y + offset as u16, *index)),
+                RowTag::Text | RowTag::Image { .. } => {}
             }
         }
     }
@@ -722,6 +730,9 @@ pub(super) enum RowTag {
     /// The *header* line of the tool card at this transcript index — the
     /// click-to-toggle target.
     Card(usize),
+    /// The one-line summary of a turn's work. The index is that turn's first
+    /// tool. A click or Enter opens the cards; it is not itself a card.
+    Group(usize),
     /// Row `row` of the image block at `slot` in [`Rendered::blocks`]. The row
     /// is left blank in the text and the pixels are painted into it afterwards
     /// (see [`paint_images`]), so an image scrolls and clips like any other
@@ -874,10 +885,17 @@ pub(super) fn transcript_text(
     } else if app.status.busy && !tool_running(&app.transcript) {
         // Waiting on the model with nothing to show for it yet. A running
         // tool's card is its own indicator, so this row stays away then.
+        // Compact view hides the reasoning text; the row still says that
+        // thinking is what the wait is.
         if !first {
             lines.push(Line::raw(""));
         }
-        lines.push(Line::from(busy_row(app)));
+        let mut spans = busy_row(app);
+        let (thinking, _) = app.transcript.streaming();
+        if app.transcript.compact() && !thinking.is_empty() {
+            spans.push(Span::styled(" thinking", dim().italic()));
+        }
+        lines.push(Line::from(spans));
     }
 
     tags.resize(lines.len(), RowTag::Text);
@@ -958,7 +976,10 @@ pub(super) fn items_text(
             continue;
         }
         let is_tool = matches!(item, TranscriptItem::Tool(_));
-        let is_notice = matches!(item, TranscriptItem::Notice(_));
+        let is_summary = view.compact()
+            && matches!(item, TranscriptItem::Notice(_))
+            && matches!(view.get(index), Some(TranscriptItem::Tool(_)));
+        let is_notice = matches!(item, TranscriptItem::Notice(_)) && !is_summary;
         let is_image = matches!(item, TranscriptItem::Images { .. });
         // Comfortable spacing between turns; runs of tool cards or notices
         // stay tight so they read as one group. An image is always tight: it
@@ -998,12 +1019,22 @@ pub(super) fn items_text(
             // path does with them too (see `App::record_prompt`): drawing one
             // on replay would make a resumed conversation look unlike the one
             // it resumed.
-            TranscriptItem::User { text, .. } => wrap_all(
-                text.lines()
-                    .map(|line| Line::from(Span::styled(line.to_string(), muted())))
-                    .collect(),
-                content_width,
-            ),
+            TranscriptItem::User { text, .. } => {
+                // The house voice is the terminal's own foreground, so a user
+                // message reads as text and not as a dim echo of it. The other
+                // skins keep the quieter ink they were drawn with.
+                let ink = if matches!(skin::active(), skin::Skin::Wizard) {
+                    theme::style(Token::Text)
+                } else {
+                    muted()
+                };
+                wrap_all(
+                    text.lines()
+                        .map(|line| Line::from(Span::styled(line.to_string(), ink)))
+                        .collect(),
+                    content_width,
+                )
+            }
             TranscriptItem::Text(message) => {
                 wrap_lines(render_markdown_at(message, content_width), content_width)
             }
@@ -1032,6 +1063,14 @@ pub(super) fn items_text(
                     lines.extend(image_caption(source, image));
                 }
                 Vec::new()
+            }
+            TranscriptItem::Notice(message) if is_summary => {
+                let style = if view.focused_group() == Some(index) {
+                    accent().add_modifier(Modifier::BOLD)
+                } else {
+                    dim()
+                };
+                vec![Line::from(Span::styled(message.clone(), style))]
             }
             TranscriptItem::Notice(message) => {
                 // An error leads with the same glyph a failed tool gets, so
@@ -1072,7 +1111,9 @@ pub(super) fn items_text(
         // margin and nothing should fold.
         tags.resize(lines.len(), RowTag::Text);
         let header_at = header_at + style.pad_y as usize;
-        if is_tool && header_at < lines.len() {
+        if is_summary && header_at < lines.len() {
+            tags[header_at] = RowTag::Group(index);
+        } else if is_tool && header_at < lines.len() {
             tags[header_at] = RowTag::Card(index);
         }
         for (at, slot, rows) in image_rows {
@@ -2862,6 +2903,7 @@ fn pane_second_line(activity: &str, hint: &str, width: usize) -> Line<'static> {
 pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area: Rect) {
     // The pane owns the screen, so no main-transcript card is clickable.
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
 
     let [header_area, body_area] =
         Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
@@ -4129,8 +4171,12 @@ impl MarkdownRenderer {
             MdEvent::End(tag) => self.end(tag),
             MdEvent::Text(text) => self.push_text(&text),
             MdEvent::Code(code) => {
-                self.current
-                    .push(Span::styled(code.to_string(), theme::style(Token::Code)));
+                // Weight, not a second hue: inline code has to read on a light
+                // terminal, where a bright color would vanish into the page.
+                self.current.push(Span::styled(
+                    code.to_string(),
+                    theme::style(Token::Code).add_modifier(Modifier::BOLD),
+                ));
             }
             MdEvent::InlineMath(tex) => self.push_math(&tex, false),
             MdEvent::DisplayMath(tex) => self.push_math(&tex, true),

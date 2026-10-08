@@ -76,6 +76,7 @@
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use crate::agent::AgentEvent;
@@ -241,9 +242,15 @@ pub struct TranscriptView {
     /// that changed nothing does not re-derive (and so discard) the user's
     /// folds against a stale [`Change`].
     synced: u64,
-    /// Compact view (`[ui] compact`, `/view`): the conversation without the
-    /// work. See [`TranscriptView::shown`].
+    /// Compact view (`[ui] compact`, `/view`): the conversation, with each
+    /// turn's tool work collapsed to one line. See [`TranscriptView::shown`].
     compact: bool,
+    /// Turns whose work is drawn in full. The key is the index of that turn's
+    /// first tool, shifted in [`Self::sync`] when a row is inserted above it.
+    expanded: BTreeSet<usize>,
+    /// The summary line the keyboard is on. `None` means the composer has
+    /// the keys. Same index space as [`Self::expanded`].
+    group_focus: Option<usize>,
     /// First visible line, measured from the top of the rendered content. Only
     /// consulted while [`Self::follow`] is false; when following, the live tail
     /// is always in view.
@@ -268,6 +275,8 @@ impl Default for TranscriptView {
             folded: Vec::new(),
             synced: 0,
             compact: false,
+            expanded: BTreeSet::new(),
+            group_focus: None,
             scroll: 0,
             follow: true,
             max_scroll: Cell::new(0),
@@ -365,52 +374,193 @@ impl TranscriptView {
 
     /// Switch compact view on or off. Nothing is recomputed: the renderers
     /// read [`TranscriptView::shown`] on every frame, so the next frame is
-    /// already the other view.
+    /// already the other view. Leaving compact drops the keyboard focus on a
+    /// summary line; the open/shut choices stay for the next time.
     pub fn set_compact(&mut self, compact: bool) {
         self.compact = compact;
+        if !compact {
+            self.group_focus = None;
+        }
+    }
+
+    /// The summary line the keyboard is on, if any.
+    pub fn focused_group(&self) -> Option<usize> {
+        self.group_focus
+    }
+
+    /// Whether the turn whose first tool is `anchor` is drawn in full.
+    pub fn group_open(&self, anchor: usize) -> bool {
+        self.expanded.contains(&anchor)
+    }
+
+    /// `anchor` is the first tool of a turn, so a click or Enter on its
+    /// summary line opens or shuts that turn's work.
+    pub fn is_group_anchor(&self, index: usize) -> bool {
+        self.group_anchors().contains(&index)
+    }
+
+    /// Open or shut one turn's work.
+    pub fn toggle_group(&mut self, anchor: usize) {
+        if !self.is_group_anchor(anchor) {
+            return;
+        }
+        if !self.expanded.remove(&anchor) {
+            self.expanded.insert(anchor);
+        }
+    }
+
+    /// Open every turn, or shut them all when any one is open.
+    pub fn toggle_all_groups(&mut self) {
+        let anchors = self.group_anchors();
+        if anchors.is_empty() {
+            return;
+        }
+        if anchors.iter().any(|anchor| self.expanded.contains(anchor)) {
+            self.expanded.clear();
+        } else {
+            self.expanded.extend(anchors);
+        }
+    }
+
+    /// Move the keyboard onto the next summary, and back to the composer
+    /// after the last one. `false` when there is nothing to focus or the
+    /// composer just took the keys back.
+    pub fn focus_next_group(&mut self) -> bool {
+        if !self.compact {
+            return false;
+        }
+        let anchors = self.group_anchors();
+        if anchors.is_empty() {
+            self.group_focus = None;
+            return false;
+        }
+        let next = match self.group_focus {
+            None => Some(anchors[0]),
+            Some(current) => match anchors.iter().position(|anchor| *anchor == current) {
+                Some(index) if index + 1 < anchors.len() => Some(anchors[index + 1]),
+                _ => None,
+            },
+        };
+        self.group_focus = next;
+        next.is_some()
+    }
+
+    /// The composer is being typed into, so a summary line should not keep
+    /// the keys.
+    pub fn clear_group_focus(&mut self) {
+        self.group_focus = None;
+    }
+
+    /// Indexes of each turn's first tool. A turn runs from a user message up
+    /// to the next one.
+    fn group_anchors(&self) -> Vec<usize> {
+        let mut anchors = Vec::new();
+        let mut seen = false;
+        for (index, item) in self.items().iter().enumerate() {
+            if matches!(item, TranscriptItem::User { .. }) {
+                seen = false;
+                continue;
+            }
+            if !seen && matches!(item, TranscriptItem::Tool(_)) {
+                anchors.push(index);
+                seen = true;
+            }
+        }
+        anchors
     }
 
     /// The rows a renderer draws, each with its index into [`Self::items`].
     ///
-    /// The full view is every item. The compact view is the conversation: what
-    /// the user said, what the model answered, and the notices (errors
-    /// included). Tool cards, what they returned, the images a tool produced
-    /// and the model's reasoning are left out, and each run of them becomes
-    /// one borrowed [`TranscriptItem::Notice`] saying how much work happened,
-    /// or which tool is running now. A notice rather than a new kind of row so
-    /// that every skin draws it with the notice style it already has.
+    /// The full view is every item. The compact view keeps what was said —
+    /// the user, the model's prose, notices — and folds each turn's tool
+    /// calls, their output and their images into one line,
+    /// `▸ ran 3 commands · edited 2 files`. Opening that line draws the cards
+    /// under it. Reasoning stays out either way: it is not the reply.
     pub fn shown(&self) -> Vec<(usize, Cow<'_, TranscriptItem>)> {
         let items = self.items();
         if !self.compact {
             return items.iter().map(Cow::Borrowed).enumerate().collect();
         }
         let mut shown = Vec::new();
-        let mut run: Option<(usize, Activity)> = None;
+        let mut start = 0;
         for (index, item) in items.iter().enumerate() {
-            let hidden = match item {
-                TranscriptItem::Tool(tool) => {
-                    run.get_or_insert((index, Activity::default())).1.add(tool);
-                    true
-                }
-                TranscriptItem::Thinking(_) => true,
-                TranscriptItem::Images { source, .. } => source.tool().is_some(),
-                // Turn markers draw nothing either way, so they neither end a
-                // run nor start one.
-                TranscriptItem::TurnMarker { .. } => true,
-                _ => false,
-            };
-            if hidden {
+            if !matches!(item, TranscriptItem::User { .. }) {
                 continue;
             }
-            if let Some((at, activity)) = run.take() {
-                shown.push((at, Cow::Owned(TranscriptItem::Notice(activity.line()))));
+            if start < index {
+                self.emit_turn(start, index, &mut shown);
             }
             shown.push((index, Cow::Borrowed(item)));
+            start = index + 1;
         }
-        if let Some((at, activity)) = run {
-            shown.push((at, Cow::Owned(TranscriptItem::Notice(activity.line()))));
+        if start < items.len() {
+            self.emit_turn(start, items.len(), &mut shown);
         }
         shown
+    }
+
+    /// One turn, `items[start..end]`. Work collapses to a single summary at
+    /// the first tool unless that turn is open, in which case the summary
+    /// stays as the way back and the cards follow it.
+    fn emit_turn<'a>(
+        &'a self,
+        start: usize,
+        end: usize,
+        shown: &mut Vec<(usize, Cow<'a, TranscriptItem>)>,
+    ) {
+        let items = self.items();
+        let mut activity = Activity::default();
+        let mut anchor = None;
+        for (offset, item) in items[start..end].iter().enumerate() {
+            if let TranscriptItem::Tool(tool) = item {
+                if anchor.is_none() {
+                    anchor = Some(start + offset);
+                }
+                activity.add(tool);
+            }
+        }
+        let open = anchor.is_some_and(|index| self.expanded.contains(&index));
+        let mut placed = false;
+        for (offset, item) in items[start..end].iter().enumerate() {
+            let index = start + offset;
+            match item {
+                TranscriptItem::TurnMarker { .. } | TranscriptItem::Thinking(_) => {}
+                TranscriptItem::Images { source, .. } if source.tool().is_some() && !open => {}
+                TranscriptItem::Tool(_) if !open => {
+                    self.place_summary(anchor, &activity, false, &mut placed, shown);
+                }
+                TranscriptItem::Tool(_) => {
+                    self.place_summary(anchor, &activity, true, &mut placed, shown);
+                    shown.push((index, Cow::Borrowed(item)));
+                }
+                TranscriptItem::Images { source, .. } if source.tool().is_some() => {
+                    self.place_summary(anchor, &activity, true, &mut placed, shown);
+                    shown.push((index, Cow::Borrowed(item)));
+                }
+                _ => shown.push((index, Cow::Borrowed(item))),
+            }
+        }
+    }
+
+    fn place_summary(
+        &self,
+        anchor: Option<usize>,
+        activity: &Activity,
+        open: bool,
+        placed: &mut bool,
+        shown: &mut Vec<(usize, Cow<'_, TranscriptItem>)>,
+    ) {
+        if *placed {
+            return;
+        }
+        let Some(anchor) = anchor else {
+            return;
+        };
+        shown.push((
+            anchor,
+            Cow::Owned(TranscriptItem::Notice(activity.line(open))),
+        ));
+        *placed = true;
     }
 
     /// The live tail as this view draws it: [`Self::streaming`], less the
@@ -569,7 +719,11 @@ impl TranscriptView {
         match self.model.last_change() {
             // The tail is not an item.
             Change::Streaming => {}
-            Change::Reset => self.folded = self.model.items().iter().map(Fold::new).collect(),
+            Change::Reset => {
+                self.folded = self.model.items().iter().map(Fold::new).collect();
+                self.expanded.clear();
+                self.group_focus = None;
+            }
             Change::Appended(at) => {
                 // Everything from `at` down is new, so nothing the user folded
                 // is being discarded here.
@@ -587,6 +741,7 @@ impl TranscriptView {
                     .unwrap_or_default();
                 let at = at.min(self.folded.len());
                 self.folded.insert(at, fold);
+                self.shift_groups(at);
             }
             Change::Mutated(at) => {
                 // A row whose output just grew or landed. The policy is about
@@ -601,44 +756,119 @@ impl TranscriptView {
             }
         }
     }
+
+    /// A row landed at `at`, so every group anchored at or below it moves down
+    /// one. An anchor that did not move would open the wrong turn.
+    fn shift_groups(&mut self, at: usize) {
+        self.expanded = self
+            .expanded
+            .iter()
+            .map(|index| if *index >= at { index + 1 } else { *index })
+            .collect();
+        if let Some(focus) = self.group_focus.as_mut()
+            && *focus >= at
+        {
+            *focus += 1;
+        }
+    }
 }
 
-/// A run of tool calls as the compact view reports it.
+/// One turn's tool work, as the compact line reports it.
 #[derive(Debug, Default)]
 struct Activity {
-    calls: usize,
+    commands: usize,
+    edits: usize,
+    reads: usize,
+    other: usize,
     failed: usize,
-    /// The newest call, when it has not answered yet.
+    /// A call that has not answered yet, by the thing it is doing.
     running: Option<String>,
 }
 
 impl Activity {
     fn add(&mut self, tool: &ToolItem) {
-        self.calls += 1;
-        match &tool.output {
-            Some(output) => {
-                self.failed += usize::from(output.is_error);
-                self.running = None;
-            }
-            None => self.running = Some(tool.name.clone()),
+        if tool.output.is_none() {
+            self.running = Some(subject(tool));
+            return;
         }
+        match kind(&tool.name) {
+            Work::Command => self.commands += 1,
+            Work::Edit => self.edits += 1,
+            Work::Read => self.reads += 1,
+            Work::Other => self.other += 1,
+        }
+        self.failed += usize::from(tool.output.as_ref().is_some_and(|output| output.is_error));
     }
 
-    fn line(&self) -> String {
-        let plural = |n: usize| if n == 1 { "" } else { "s" };
+    /// `▸ ran 3 commands · edited 2 files`, or `▾` once the turn is open.
+    fn line(&self, open: bool) -> String {
+        let mut parts = Vec::new();
         if let Some(name) = &self.running {
-            let done = self.calls - 1;
-            return match done {
-                0 => format!("running {name}"),
-                n => format!("running {name} ({n} tool{} done)", plural(n)),
-            };
+            parts.push(format!("running {name}"));
         }
-        let mut line = format!("ran {} tool{}", self.calls, plural(self.calls));
+        if self.commands > 0 {
+            parts.push(format!(
+                "ran {} command{}",
+                self.commands,
+                plural(self.commands)
+            ));
+        }
+        if self.edits > 0 {
+            parts.push(format!("edited {} file{}", self.edits, plural(self.edits)));
+        }
+        if self.reads > 0 {
+            parts.push(format!("read {} file{}", self.reads, plural(self.reads)));
+        }
+        if self.other > 0 {
+            parts.push(format!("used {} tool{}", self.other, plural(self.other)));
+        }
         if self.failed > 0 {
-            line.push_str(&format!(", {} failed", self.failed));
+            parts.push(format!("{} failed", self.failed));
         }
-        line
+        if parts.is_empty() {
+            parts.push("worked".to_string());
+        }
+        format!("{} {}", if open { "▾" } else { "▸" }, parts.join(" · "))
     }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+enum Work {
+    Command,
+    Edit,
+    Read,
+    Other,
+}
+
+fn kind(name: &str) -> Work {
+    match name {
+        "execute" | "bash" | "shell" | "run_command" => Work::Command,
+        "edit_file" | "write_file" | "apply_patch" | "multi_edit" => Work::Edit,
+        "read_file" | "grep" | "glob" | "list_dir" | "list_files" => Work::Read,
+        _ => Work::Other,
+    }
+}
+
+/// The short thing a running call is doing: the command's first word, a
+/// path's last component, or the tool's own name.
+fn subject(tool: &ToolItem) -> String {
+    let raw = tool
+        .args
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| tool.args.get("path").and_then(serde_json::Value::as_str))
+        .unwrap_or(tool.name.as_str());
+    let first = raw.split_whitespace().next().unwrap_or(raw);
+    let first = first.rsplit(['/', '\\']).next().unwrap_or(first);
+    let mut text = first.to_string();
+    if text.chars().count() > 24 {
+        text = text.chars().take(23).collect();
+        text.push('…');
+    }
+    text
 }
 
 /// One row's fold: what it is drawn as, and what the policy last said.

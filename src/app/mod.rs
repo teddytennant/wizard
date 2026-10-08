@@ -285,6 +285,11 @@ pub struct App {
     /// [`crate::ui::draw`] every frame (hence the interior mutability: draw
     /// takes `&App`) and emptied while an overlay covers the transcript.
     pub card_hits: std::cell::RefCell<Vec<(u16, usize)>>,
+    /// Screen rows of compact-view summary lines, as `(row, anchor)`. A click
+    /// here opens that turn's work. Separate from [`Self::card_hits`] because
+    /// the anchor is also the first tool's index, and a click on the card
+    /// must not be read as a click on the summary.
+    pub group_hits: std::cell::RefCell<Vec<(u16, usize)>>,
     /// Where the text starts on each transcript row of the last-drawn frame,
     /// as `(row, column)`. Everything left of it is gutter (margin, marker,
     /// rail), so a drag-copy skips those cells. Rebuilt every frame like
@@ -582,6 +587,7 @@ impl App {
             click_count: 0,
             last_click: None,
             card_hits: std::cell::RefCell::new(Vec::new()),
+            group_hits: std::cell::RefCell::new(Vec::new()),
             text_origins: std::cell::RefCell::new(Vec::new()),
             images: std::cell::RefCell::new(ImageCache::fallback()),
             should_quit: false,
@@ -2015,6 +2021,7 @@ impl App {
     }
 
     fn insert_char(&mut self, c: char) {
+        self.transcript.clear_group_focus();
         let index = self.byte_index();
         self.input.insert(index, c);
         self.cursor += 1;
@@ -2158,7 +2165,7 @@ impl App {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.notice(if on {
-            "compact view: tool calls show as one line per run. /view full to see them"
+            "compact view: a turn's work is one line. tab, enter or click opens it. /view full for everything"
         } else {
             "full view"
         });
@@ -2650,9 +2657,14 @@ impl App {
         self.set_input(draft);
     }
 
-    /// Toggle the expansion of the most recent finished tool card (Ctrl-T).
+    /// Toggle the expansion of the most recent finished tool card (Ctrl-T),
+    /// or every compact summary when that view is on.
     fn toggle_last_tool_card(&mut self) {
-        self.transcript.toggle_last_tool();
+        if self.transcript.compact() {
+            self.transcript.toggle_all_groups();
+        } else {
+            self.transcript.toggle_last_tool();
+        }
     }
 
     /// Copy the last block of assistant text to the clipboard (Ctrl-Y).
@@ -2701,6 +2713,16 @@ impl App {
             .map(|(_, index)| *index);
         // A still-running card has nothing folded away, so clicking it is a
         // no-op rather than a fold with no content behind it.
+        if let Some((_, index)) = self
+            .group_hits
+            .borrow()
+            .iter()
+            .find(|(y, _)| *y == row)
+            .copied()
+        {
+            self.transcript.toggle_group(index);
+            return;
+        }
         if let Some(index) = hit
             && let Some(TranscriptItem::Tool(tool)) = self.transcript.get(index)
             && tool.output.is_some()
@@ -2744,7 +2766,8 @@ impl App {
                         // A tool-card header already owns the click (toggle).
                         // Stealing the second one as a word-copy made a
                         // quick expand-then-collapse miss.
-                        let on_card = self.card_hits.borrow().iter().any(|(y, _)| *y == cell.1);
+                        let on_card = self.card_hits.borrow().iter().any(|(y, _)| *y == cell.1)
+                            || self.group_hits.borrow().iter().any(|(y, _)| *y == cell.1);
                         if !on_card {
                             match count {
                                 2 => {
@@ -2951,6 +2974,11 @@ impl App {
                 }
                 KeyCode::Char('t') => {
                     self.toggle_last_tool_card();
+                    return Ok(None);
+                }
+                // Compact or full, and remember it. The same switch as /view.
+                KeyCode::Char('o') => {
+                    self.set_compact_view(None);
                     return Ok(None);
                 }
                 // Copy the last reply. The keyboard half of the copy story,
@@ -3565,7 +3593,18 @@ impl App {
                 self.insert_newline();
                 None
             }
-            KeyCode::Enter => self.submit(),
+            KeyCode::Enter => {
+                // An empty composer with a summary line focused opens that
+                // turn instead of sending nothing.
+                if self.input.is_empty()
+                    && let Some(anchor) = self.transcript.focused_group()
+                {
+                    self.transcript.toggle_group(anchor);
+                    None
+                } else {
+                    self.submit()
+                }
+            }
             KeyCode::Backspace => {
                 self.delete_back();
                 None
@@ -3601,6 +3640,9 @@ impl App {
             KeyCode::Tab => {
                 if suggesting {
                     self.accept_suggestion();
+                } else if self.input.is_empty() && self.transcript.focus_next_group() {
+                    // The composer had nothing to complete, so Tab walks the
+                    // summary lines. After the last one it comes back here.
                 } else {
                     self.complete_at_path();
                 }

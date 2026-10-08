@@ -3242,6 +3242,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
     if super::overlay_open(app) {
         app.card_hits.borrow_mut().clear();
+        app.group_hits.borrow_mut().clear();
     }
 
     // The selection highlight paints last so it covers whatever ended up on
@@ -3258,6 +3259,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
 /// The transcript, and the scrollbar in the far-right column.
 fn draw_scrollback(frame: &mut Frame, app: &App, area: Rect) {
     app.card_hits.borrow_mut().clear();
+    app.group_hits.borrow_mut().clear();
     if app.welcome_visible() {
         if !super::overlay_open(app) {
             draw_welcome(frame, app, area);
@@ -3305,9 +3307,12 @@ fn draw_scrollback(frame: &mut Frame, app: &App, area: Rect) {
 
     {
         let mut hits = app.card_hits.borrow_mut();
+        let mut groups = app.group_hits.borrow_mut();
         for (offset, tag) in tags[start..end].iter().enumerate() {
-            if let RowTag::Card(index) = tag {
-                hits.push((area.y + offset as u16, *index));
+            match tag {
+                RowTag::Card(index) => hits.push((area.y + offset as u16, *index)),
+                RowTag::Group(index) => groups.push((area.y + offset as u16, *index)),
+                RowTag::Text | RowTag::Image { .. } => {}
             }
         }
     }

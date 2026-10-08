@@ -289,7 +289,7 @@ pub fn group_chat_warning(allowed: &[i64]) -> Option<String> {
 }
 
 /// Cosmetic TUI settings (`[ui]` in `config.toml`).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiConfig {
     /// Gerund verbs shown next to the busy spinner ("Conjuring…"). A
     /// non-empty list replaces [`UiConfig::DEFAULT_SPINNER_VERBS`]; missing
@@ -301,10 +301,11 @@ pub struct UiConfig {
     /// default; toggle live with `/vim`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub vim: bool,
-    /// Compact transcript: the conversation without tool cards, command
-    /// output, diffs, file reads or reasoning, each run of tool calls shown as
-    /// one line. Off by default; switch live with `/view`.
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Compact transcript: the conversation, with each turn's commands, edits
+    /// and other tool work collapsed to one line. On by default; switch live
+    /// with `/view` or Ctrl-O. A missing key means on, so an old config that
+    /// never set it picks up the default.
+    #[serde(default = "default_compact", skip_serializing_if = "is_true")]
     pub compact: bool,
     /// Which coding agent's terminal chrome the TUI wears: `wizard` (default),
     /// `codex`, or `grok`. See [`crate::skin`], which owns the
@@ -328,6 +329,26 @@ pub struct UiConfig {
 /// config so the file stays minimal.
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Compact view is the default, so the key is written only when it is off.
+fn default_compact() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            spinner_verbs: Vec::new(),
+            vim: false,
+            compact: true,
+            skin: None,
+        }
+    }
 }
 
 impl UiConfig {

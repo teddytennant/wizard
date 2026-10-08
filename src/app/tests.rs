@@ -1802,6 +1802,9 @@ fn failed_tool_cards_start_open_unless_long() {
 #[test]
 fn a_running_command_folds_when_its_stream_gets_long() {
     let mut app = app();
+    // Ctrl-T unfolds the last tool card in the full view. Compact mode uses
+    // the same key to open every summary, which is a different test.
+    app.transcript.set_compact(false);
     let (gate, _host) = crate::agent::ConsoleGate::open();
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "execute".to_string(),
@@ -1975,6 +1978,7 @@ fn mouse_up_after_a_word_copy_leaves_the_selection_alone() {
 #[test]
 fn clicking_a_tool_card_header_toggles_its_output() {
     let mut app = app();
+    app.transcript.set_compact(false);
     app.handle_agent_event(AgentEvent::ToolStarted {
         name: "execute".to_string(),
         args: serde_json::json!({"command": "ls"}),
@@ -2062,6 +2066,8 @@ fn an_image_from_the_model_and_one_from_a_tool_both_render_with_their_file() {
     let image = red_png(dir.path());
     let mut app = app();
     app.welcome_dismissed = true;
+    // A tool image is hidden while its turn is collapsed.
+    app.transcript.set_compact(false);
 
     app.handle_agent_event(AgentEvent::TextDelta("here it is".to_string()));
     app.handle_agent_event(AgentEvent::Images {
@@ -3779,6 +3785,10 @@ fn themed_fixture() -> App {
     use crate::llm::ChatMessage;
 
     let mut app = app();
+    // The fixture exists to paint every element. Compact view hides tools,
+    // thinking, and diffs behind one summary line, which is covered by its
+    // own tests; the snapshots stay on the full transcript.
+    app.transcript.set_compact(false);
     app.welcome_dismissed = true;
     app.tick = 0;
     // Sovereign is the mode the status bar renders as a warning.
@@ -3959,7 +3969,7 @@ fn fg_at(buf: &Buffer, needle: &str, offset: u16) -> Color {
 /// `(needle, offset, token)`. Shared by both theme snapshots so the two are
 /// the same test with a different palette behind it.
 const TOKEN_SITES: &[(&str, u16, Token)] = &[
-    ("show me the theme", 0, Token::Muted),
+    ("show me the theme", 0, Token::Text),
     ("Heading", 0, Token::Heading),
     ("Body prose.", 0, Token::Text),
     ("wizardry", 0, Token::Code),
@@ -4002,8 +4012,10 @@ fn assert_fixture_paints_tokens(name: &str) -> Buffer {
 #[test]
 fn minimal_theme_snapshot_over_the_fixture_transcript() {
     let buf = assert_fixture_paints_tokens("minimal");
-    // The default look: greys plus one white accent, hues only where a diff
-    // makes them conventional. `rgb` is the syntax highlighter's grey ramp.
+    // The default look: greys, with the accent following the terminal
+    // (`Reset`) so the same frame reads on a light background. Hues only
+    // where a diff makes them conventional. `rgb` is the syntax highlighter's
+    // grey ramp.
     assert_eq!(
         palette(&buf),
         [
@@ -4012,7 +4024,6 @@ fn minimal_theme_snapshot_over_the_fixture_transcript() {
             "Green".to_string(),
             "Red".to_string(),
             "Reset".to_string(),
-            "White".to_string(),
             "rgb".to_string(),
         ]
     );

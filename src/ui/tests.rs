@@ -1753,6 +1753,7 @@ fn a_long_tool_output_is_folded_from_the_first_frame_it_is_in() {
     for skin in crate::skin::Skin::ALL {
         let _pinned = crate::skin::pin(skin);
         let mut app = App::new(crate::config::Config::default());
+        app.transcript.set_compact(false);
         app.welcome_dismissed = true;
         let (gate, _host) = ConsoleGate::open();
 
@@ -1858,6 +1859,7 @@ fn compact_view_keeps_the_conversation_and_drops_the_work() {
     for skin in crate::skin::Skin::ALL {
         let _pinned = crate::skin::pin(skin);
         let mut app = a_busy_turn();
+        app.transcript.set_compact(false);
 
         let full = frame_text(&app);
         for shown in ["fix the parser", "Looking at it now.", "test-output-failed"] {
@@ -1874,7 +1876,7 @@ fn compact_view_keeps_the_conversation_and_drops_the_work() {
             "Looking at it now.",
             "Fixed it.",
             "provider-said-no",
-            "ran 3 tools, 1 failed",
+            "▸ ran 1 command · edited 1 file · read 1 file · 1 failed",
         ] {
             assert!(
                 compact.contains(kept),
@@ -1909,7 +1911,7 @@ fn compact_view_names_the_tool_that_is_running() {
             args: serde_json::json!({ "command": "make" }),
         });
         let frame = frame_text(&app);
-        assert!(frame.contains("running execute"), "{skin:?}\n{frame}");
+        assert!(frame.contains("▸ running make"), "{skin:?}\n{frame}");
     }
 }
 
@@ -1917,22 +1919,22 @@ fn compact_view_names_the_tool_that_is_running() {
 fn view_toggles_the_transcript_that_is_already_there() {
     let _pinned = crate::skin::pin(crate::skin::Skin::Wizard);
     let mut app = a_busy_turn();
-    assert!(!app.transcript.compact(), "off by default");
-    assert!(frame_text(&app).contains("parse-body"));
-
-    app.set_compact_view(None);
-    assert!(app.transcript.compact() && app.config.ui.compact);
+    assert!(app.transcript.compact(), "on by default");
     assert!(!frame_text(&app).contains("parse-body"));
 
-    app.set_compact_view(Some(true));
+    app.set_compact_view(None);
+    assert!(!app.transcript.compact() && !app.config.ui.compact);
+    assert!(frame_text(&app).contains("parse-body"));
+
+    app.set_compact_view(Some(false));
     assert!(
-        app.transcript.compact(),
+        !app.transcript.compact(),
         "naming the view it is in keeps it"
     );
 
-    app.set_compact_view(Some(false));
-    assert!(!app.config.ui.compact);
-    assert!(frame_text(&app).contains("parse-body"));
+    app.set_compact_view(Some(true));
+    assert!(app.config.ui.compact);
+    assert!(!frame_text(&app).contains("parse-body"));
 }
 
 #[test]
@@ -2010,6 +2012,7 @@ fn a_streaming_reply_keeps_its_caret_and_the_composer() {
 fn a_tool_call_is_a_single_header_row() {
     let _pins = pin_house();
     let mut app = App::new(crate::config::Config::default());
+    app.transcript.set_compact(false);
     app.welcome_dismissed = true;
     app.transcript.user("run the tests".to_string(), Vec::new());
     app.handle_agent_event(crate::agent::AgentEvent::ToolStarted {
@@ -2157,7 +2160,7 @@ fn a_narrow_terminal_keeps_the_summary_and_drops_nothing_essential() {
     assert!(screen.contains("running"), "{screen}");
     assert!(screen.contains("researcher"), "{screen}");
     assert!(
-        screen.contains('▍') || screen.contains("execute"),
+        screen.contains('▍') || screen.contains("execute") || screen.contains('▸'),
         "{screen}"
     );
     // Every painted row fits. A cell past the edge would have panicked;
@@ -2216,6 +2219,252 @@ fn the_frame_degrades_without_truecolor() {
                     "mono should be reset, got {color:?}"
                 );
             }
+        }
+    }
+}
+
+fn work_turn() -> App {
+    let mut app = a_busy_turn();
+    app.transcript.set_compact(true);
+    app
+}
+
+fn click_row(app: &mut App, row: u16) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_event(crate::event::Event::Mouse(MouseEvent {
+            kind,
+            column: 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+    }
+}
+
+/// Compact draws the conversation and one summary. Verbose draws the work.
+#[test]
+fn compact_and_verbose_draw_different_frames() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let (compact, _) = screen_at(&app, 80, 24);
+    let compact_text = compact.join("\n");
+    assert!(
+        compact_text.contains("▸ ran 1 command · edited 1 file · read 1 file · 1 failed"),
+        "{compact_text}"
+    );
+    assert!(
+        compact_text.contains("Looking at it now."),
+        "{compact_text}"
+    );
+    assert!(compact_text.contains("fix the parser"), "{compact_text}");
+    assert!(!compact_text.contains("parse-body"), "{compact_text}");
+    assert!(!compact_text.contains("old-diff-line"), "{compact_text}");
+
+    app.transcript.set_compact(false);
+    let (verbose, _) = screen_at(&app, 80, 24);
+    let verbose_text = verbose.join("\n");
+    assert!(verbose_text.contains("parse-body"), "{verbose_text}");
+    assert!(verbose_text.contains("execute"), "{verbose_text}");
+    assert!(!verbose_text.contains('▸'), "{verbose_text}");
+}
+
+#[test]
+fn a_click_opens_the_summary_and_a_second_click_shuts_it() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let _ = screen_at(&app, 80, 24);
+    let row = app
+        .group_hits
+        .borrow()
+        .first()
+        .map(|(row, _)| *row)
+        .expect("the summary is clickable");
+    click_row(&mut app, row);
+    let (open, _) = screen_at(&app, 80, 24);
+    let open_text = open.join("\n");
+    assert!(open_text.contains('▾'), "{open_text}");
+    assert!(open_text.contains("parse-body"), "{open_text}");
+    assert!(open_text.contains("- old-diff-line"), "{open_text}");
+    assert!(open_text.contains("+ new-diff-line"), "{open_text}");
+
+    let row = app
+        .group_hits
+        .borrow()
+        .first()
+        .map(|(row, _)| *row)
+        .expect("the open summary is still clickable");
+    click_row(&mut app, row);
+    let (shut, _) = screen_at(&app, 80, 24);
+    let shut_text = shut.join("\n");
+    assert!(shut_text.contains('▸'), "{shut_text}");
+    assert!(!shut_text.contains("parse-body"), "{shut_text}");
+}
+
+#[test]
+fn tab_and_enter_open_the_focused_summary() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    let action = app
+        .handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ))
+        .unwrap();
+    assert!(action.is_none());
+    assert!(app.transcript.focused_group().is_some());
+    let (focused, _) = screen_at(&app, 80, 24);
+    assert!(focused.join("\n").contains('▸'));
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ))
+    .unwrap();
+    let (open, _) = screen_at(&app, 80, 24);
+    let open_text = open.join("\n");
+    assert!(open_text.contains('▾'), "{open_text}");
+    assert!(open_text.contains("cargo test"), "{open_text}");
+}
+
+#[test]
+fn ctrl_t_opens_every_summary_and_ctrl_o_flips_the_saved_view() {
+    let _pins = pin_house();
+    let mut app = work_turn();
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('t'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
+    .unwrap();
+    let opened = screen_at(&app, 80, 24).0.join("\n");
+    assert!(opened.contains("parse-body"), "{opened}");
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
+    .unwrap();
+    assert!(!app.transcript.compact());
+    assert!(!app.config.ui.compact);
+    let verbose = screen_at(&app, 80, 24).0.join("\n");
+    assert!(verbose.contains("execute"), "{verbose}");
+
+    let saved = toml::to_string(&app.config).unwrap();
+    let loaded: crate::config::Config = toml::from_str(&saved).unwrap();
+    assert!(!loaded.ui.compact, "the flipped view survives a save");
+}
+
+#[test]
+fn markdown_renders_a_heading_a_list_and_inline_code() {
+    let _pins = pin_house();
+    let rendered = render_markdown_at("# Title\n\n- one item\n\nuse `parse` here\n", 60);
+    let text = rendered
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Title"), "{text}");
+    assert!(text.contains("one item"), "{text}");
+    assert!(text.contains("parse"), "{text}");
+    let code = rendered
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains("parse"));
+    let code = code.expect("inline code");
+    assert!(
+        code.style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
+fn a_summary_fits_a_narrow_terminal_and_a_wider_one() {
+    let _pins = pin_house();
+    let app = work_turn();
+    for width in [40u16, 100] {
+        let (rows, buffer) = screen_at(&app, width, 20);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▸"), "{width}: {screen}");
+        assert!(screen.contains("command"), "{width}: {screen}");
+        assert!(
+            rows.iter().all(|row| row.width() <= width as usize),
+            "{width}: {screen}"
+        );
+        assert_eq!(buffer.area.width, width);
+    }
+}
+
+/// A resize is a new frame of the same conversation: the summary survives,
+/// and the buffer's size is the size it was given.
+#[test]
+fn a_resize_redraws_the_compact_frame_at_the_new_size() {
+    let _pins = pin_house();
+    let app = work_turn();
+    let (wide, wide_buf) = screen_at(&app, 100, 30);
+    let (narrow, narrow_buf) = screen_at(&app, 44, 16);
+    assert_eq!((wide_buf.area.width, wide_buf.area.height), (100, 30));
+    assert_eq!((narrow_buf.area.width, narrow_buf.area.height), (44, 16));
+    assert_ne!(wide, narrow, "the resize painted the same frame");
+    for (label, rows, width) in [("wide", &wide, 100usize), ("narrow", &narrow, 44)] {
+        let screen = rows.join("\n");
+        assert!(screen.contains('▸'), "{label}: {screen}");
+        assert!(screen.contains("command"), "{label}: {screen}");
+        assert!(
+            rows.iter().all(|row| row.width() <= width),
+            "{label} overflowed {width}: {screen}"
+        );
+    }
+}
+
+/// White ink disappears on a light terminal. The house palette does not use it.
+#[test]
+fn the_house_palette_reads_on_a_light_terminal() {
+    let theme = theme::load("minimal").expect("minimal");
+    for token in theme::Token::ALL {
+        assert_ne!(
+            theme.declared(token),
+            Color::White,
+            "{} is white",
+            token.key()
+        );
+    }
+    let _pin = theme::pin(std::sync::Arc::new(theme));
+    let (_, buffer) = screen_at(&work_turn(), 80, 24);
+    for color in buffer_colors(&buffer) {
+        assert_ne!(color, Color::White, "a cell painted white");
+    }
+}
+
+/// On a dark terminal the same palette is grey chrome and the terminal's own
+/// foreground, with no filled background.
+#[test]
+fn the_house_palette_reads_on_a_dark_terminal() {
+    let _pins = pin_house();
+    let (_, buffer) = screen_at(&work_turn(), 80, 24);
+    let colors = buffer_colors(&buffer);
+    assert!(
+        colors.contains(&Color::Reset),
+        "body ink follows the terminal"
+    );
+    assert!(
+        colors.contains(&Color::DarkGray),
+        "chrome is grey on a dark ground"
+    );
+    assert!(!colors.contains(&Color::White));
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset);
         }
     }
 }

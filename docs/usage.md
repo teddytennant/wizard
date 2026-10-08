@@ -173,20 +173,18 @@ Implementation notes and the full attribution live in
 
 ### Compact view
 
-Compact view shows the conversation and leaves out the work: your messages,
-the model's replies and notices stay, while tool cards, command output, diffs,
-file reads and reasoning go. Each run of tool calls becomes one line, `ran 6
-tools` (with `, 1 failed` when one did), or `running execute` while a call is
-in flight. Errors are notices, so they still show.
+Compact view is the default. It shows your messages and the model's
+prose, and folds each turn's commands, edits, reads and other tool calls into
+one line: `▸ ran 3 commands · edited 2 files`. Click that line, or Tab to it
+and press Enter, to open the cards (diffs included). Ctrl-T opens or closes
+every turn. `/view full` (or Ctrl-O) shows every card; `/view compact` or
+Ctrl-O again returns. The choice is saved in `[ui] compact`. Set `compact = false`
+to start verbose. A missing key means compact.
 
-`/view compact` turns it on, `/view full` turns it off, and `/view` alone
-flips it. The transcript already on screen redraws in the new view. It is off
-by default; `/view` saves the choice, or set it yourself:
-
-```toml
-[ui]
-compact = true
-```
+Selecting text is a drag, and the drag is copied when you release. A click
+without a drag opens a `▸` line or a tool card, so it is not a selection.
+The terminal's own mouse selection is off while Wizard has the mouse; Ctrl-Y
+copies the last reply without one.
 
 It changes the screen only. The model still sees every tool result, and
 `/compact` is the unrelated command that summarises its context. A subagent's

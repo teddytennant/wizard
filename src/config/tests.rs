@@ -473,14 +473,21 @@ fn spinner_verbs_default_when_section_missing() {
 }
 
 #[test]
-fn compact_view_is_off_unless_the_ui_table_says_so() {
+fn compact_view_is_on_unless_the_ui_table_says_otherwise() {
     let config: Config = toml::from_str("").expect("valid toml");
+    assert!(
+        config.ui.compact,
+        "a missing key is the default, which is on"
+    );
+    let config: Config = toml::from_str("[ui]\ncompact = false").expect("valid toml");
     assert!(!config.ui.compact);
-    let config: Config = toml::from_str("[ui]\ncompact = true").expect("valid toml");
-    assert!(config.ui.compact);
-    // Off is the default, so a saved config does not grow the key.
+    // On is the default, so a saved config does not grow the key.
     let saved = toml::to_string_pretty(&Config::default()).expect("serializes");
     assert!(!saved.contains("compact = "), "{saved}");
+    let mut verbose = Config::default();
+    verbose.ui.compact = false;
+    let saved = toml::to_string_pretty(&verbose).expect("serializes");
+    assert!(saved.contains("compact = false"), "{saved}");
 }
 
 #[test]

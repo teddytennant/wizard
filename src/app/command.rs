@@ -239,10 +239,16 @@ Shift+Tab                   toggle plan mode\n  \
 PgUp/PgDn \u{b7} wheel           scroll the transcript (stays put while streaming)\n  \
 Esc \u{b7} Ctrl-End              jump back to the live tail\n  \
 \u{2193}                           focus subagents \u{b7} enter opens one \u{b7} esc back\n  \
-drag                        select text \u{2014} copied to the clipboard on release\n  \
+Tab                         when the composer is empty, focus the next \u{25b8} line \u{b7} enter opens it\n  \
+click a \u{25b8} line              open that turn's work \u{b7} click again to fold it\n  \
+drag                        select text \u{2014} copied on release. A click expands;\n  \
+                            a drag selects. Ctrl-Y copies the last reply\n  \
+                            (the terminal's own selection is off while the mouse is captured)\n  \
 Ctrl-Y                      copy the last reply (works over SSH, tmux, zellij)\n  \
 click a tool card           expand / collapse its output\n  \
-Ctrl-P                      model picker  \u{b7}  Ctrl-T toggle last tool card\n  \
+Ctrl-O                      compact / full view, saved\n  \
+Ctrl-P                      model picker  \u{b7}  Ctrl-T open or close every collapsed turn\n  \
+                            (in the full view, Ctrl-T toggles the last tool card)\n  \
 Ctrl-A/E Home/End \u{2190}/\u{2192}       move cursor   \u{b7} Ctrl-W/U/K kill word/to start/to end\n  \
 Ctrl-G                      edit the prompt in $EDITOR\n  \
 Ctrl-C                      interrupt \u{b7} press twice to quit";

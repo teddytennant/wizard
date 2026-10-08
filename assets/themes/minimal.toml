@@ -26,23 +26,25 @@ border = "rounded"
 text = "reset"
 muted = "gray"
 faint = "darkgray"
-accent = "white"
-code = "white"
-heading = "white"
+# Reset follows the terminal, so the accent is dark on a light screen and
+# light on a dark one. White was invisible on a light background.
+accent = "reset"
+code = "reset"
+heading = "reset"
 link = "darkgray"
 quote = "gray"
 border = "darkgray"
 
-# Semantics, monochrome: an error is the loud one, a warning is the same
-# brightness (it is bold at the call site), success stays quiet.
-error = "white"
-warning = "white"
+# Semantics. Red and green are the pass/fail hues; everything else stays a
+# brightness. Reset (not white) so a warning still shows on a light terminal.
+error = "red"
+warning = "reset"
 success = "green"
 
 # Tool / subagent / session lifecycle.
-"tool.running" = "white"
+"tool.running" = "reset"
 "tool.done" = "gray"
-"tool.failed" = "white"
+"tool.failed" = "red"
 
 # The `/diff` sidebar keeps the conventional colors: this is the one place a
 # hue carries the meaning, and inverting it would be actively confusing.
