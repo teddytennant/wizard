@@ -206,6 +206,17 @@ fn queue_visible_text(text: &str, attachments: &[String]) -> String {
     }
 }
 
+/// The row's one-line label. Commands, skills and file mentions show the same
+/// labels as the transcript; editing and delivery still read the stored text,
+/// which keeps their canonical links.
+fn queue_row_text(text: &str, attachments: &[String]) -> SharedString {
+    let visible = queue_visible_text(text, attachments);
+    let display = crate::composer::sent_mention_display(&visible)
+        .map(|(display, _)| display)
+        .unwrap_or(visible);
+    one_line(&display)
+}
+
 /// Presentation-only metadata. Never expose the observed accessibility payload.
 /// Rows show thumbnails only; these names surface as tooltips and labels.
 fn queue_attachment_labels(text: &str, paths: &[String]) -> Vec<String> {
@@ -415,7 +426,7 @@ impl Composer {
             Some(QueueDeliveryGate::ReviewRequired { .. }) if !being_edited => {
                 SharedString::from("Needs review")
             }
-            _ => one_line(&queue_visible_text(&item.text, &item.attachments)),
+            _ => queue_row_text(&item.text, &item.attachments),
         };
 
         let edit_id = item.id.clone();
@@ -1987,6 +1998,37 @@ mod tests {
         assert_eq!(super::queue_hidden_attachments_label(&labels, 3), None);
         assert_eq!(super::queue_hidden_attachments_label(&labels, 5), None);
         assert_eq!(super::queue_hidden_attachments_label(&[], 2), None);
+    }
+
+    /// Rows label references the way the transcript does, never as raw
+    /// `zeron-invoke:`/`zeron-file:` links, and still hide attachment trailers.
+    #[test]
+    fn queue_rows_label_commands_skills_and_files() {
+        use zeron_proto::invocation::Invocation;
+        let command = Invocation::Command {
+            name: "compact".into(),
+        }
+        .link();
+        let skill = Invocation::Skill {
+            name: "review-pr".into(),
+            path: "/skills/review-pr/SKILL.md".into(),
+            command: None,
+        }
+        .link();
+        let file = zeron_proto::file_mentions::local_file_link("src/queue.rs", false);
+        let text = format!("{command} then {skill}\non {file}");
+        assert_eq!(
+            super::queue_row_text(&text, &[]).as_ref(),
+            "/compact then $review-pr on @queue.rs"
+        );
+
+        let paths = vec!["/tmp/image.png".to_string()];
+        let legacy = crate::attachments::with_attachments(&command, &paths);
+        assert_eq!(super::queue_row_text(&legacy, &paths).as_ref(), "/compact");
+        assert_eq!(
+            super::queue_row_text("plain  text", &[]).as_ref(),
+            "plain text"
+        );
     }
 
     #[test]
