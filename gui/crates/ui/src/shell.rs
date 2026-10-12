@@ -3048,6 +3048,16 @@ impl Shell {
 
     /// Open or focus a session-owned editor tab. The explorer is independent.
     fn add_file_surface(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_file_surface_at(path, None, window, cx);
+    }
+
+    fn add_file_surface_at(
+        &mut self,
+        path: String,
+        location: Option<(u32, Option<u32>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.active_chat.is_empty() {
             return;
         }
@@ -3057,6 +3067,11 @@ impl Shell {
         if let Some(id) = self.file_surface_keys.get(&lookup).copied() {
             let surface = RightSurface::File(id);
             self.set_right_active(surface, cx);
+            if let Some((line, column)) = location
+                && let Some(file) = self.file_surfaces.get(&id).cloned()
+            {
+                file.update(cx, |file, cx| file.navigate_to_line(line, column, cx));
+            }
             self.focus_right_file_editor(surface, window, cx);
             return;
         }
@@ -3131,6 +3146,11 @@ impl Shell {
             RightSurface::File(id),
         );
         self.set_right_active(RightSurface::File(id), cx);
+        if let Some((line, column)) = location
+            && let Some(file) = self.file_surfaces.get(&id).cloned()
+        {
+            file.update(cx, |file, cx| file.navigate_to_line(line, column, cx));
+        }
     }
 
     fn open_workspace_file_link(
@@ -3162,7 +3182,12 @@ impl Shell {
         if !was_open {
             self.right_tween = Some(WidthTween::new(from, self.right_target(cx)));
         }
-        self.add_file_surface(link.path, window, cx);
+        self.add_file_surface_at(
+            link.path,
+            link.line.map(|line| (line, link.column)),
+            window,
+            cx,
+        );
         true
     }
 
