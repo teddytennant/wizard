@@ -6669,17 +6669,39 @@ impl Shell {
     /// Chat-mode sidebar (spaces overhaul): window-control strip, the Spaces
     /// section (folder + device rows, add-space), the global Active sessions
     /// list, the notice strip, and the UserMenu (§1.6).
-    /// The global connection line. `None` while healthy (`Connected`) or on
-    /// local profiles (`Disabled`) — and the engine's degrade grace means it
-    /// only exists during REAL outages, never join/wake blips. No surface,
+    /// Global connection health, with selected-chat queue and storage status.
+    /// Persistence failures take precedence even when the network is offline.
+    /// No surface,
     /// no border (v0.2.12 feedback): a bare spinner + faint caption while
     /// reconnecting; an amber dot only when the OS says offline. The
     /// transport error belongs in logs, not the sidebar.
     fn render_connection_pill(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use zeron_proto::ConnectivityState as S;
         let conn = self.state.read(cx).connectivity.clone();
+        let selected = self.state.read(cx).selected_chat.as_deref();
+        let chat_state = conn.chats.iter()
+            .find(|c| Some(c.chat_id.as_str()) == selected).map(|c| c.sync_state);
         let (label, glyph): (SharedString, AnyElement) = match conn.state {
-            S::Disabled | S::Connected => return None,
+            _ if chat_state == Some(zeron_proto::ChatSyncState::StorageError) => (
+                "Changes could not be saved".into(),
+                div().size(px(5.0)).rounded_full().bg(theme.warning).into_any_element(),
+            ),
+            S::Disabled => return None,
+            S::Connected => {
+                let caption = match chat_state? {
+                    zeron_proto::ChatSyncState::Waiting => "Sync queued — changes are saved",
+                    zeron_proto::ChatSyncState::Connecting => "Syncing…",
+                    zeron_proto::ChatSyncState::Offline => "Offline — changes are saved",
+                    _ => return None,
+                };
+                (
+                    caption.into(),
+                    loaders::mini_mono_spinner(
+                        "chat-sync-spinner", 2.0, theme.text_muted,
+                        self.sidebar_pane.entity_id(), cx,
+                    ).into_any_element(),
+                )
+            }
             S::Offline => (
                 "Offline — sends are saved".into(),
                 div()
