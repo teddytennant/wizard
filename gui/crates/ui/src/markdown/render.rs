@@ -1410,18 +1410,27 @@ pub fn selection_surface_reset(prefix: String) -> impl IntoElement {
 }
 
 /// `(element index, byte offset)` for a window position: the registered
-/// element whose vertical band contains it, else the nearest by vertical
-/// distance (a drag past the gutter or between blocks clamps sensibly).
+/// element whose bounds contain it, else the nearest horizontally within the
+/// closest vertical band. Vertical distance stays primary so dragging beyond
+/// a short paragraph's edge keeps selecting that line. Horizontal distance
+/// distinguishes side-by-side text such as table cells and their padding.
 fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)> {
     REGISTRY.with(|r| {
         let reg = r.borrow();
         let anchor = super::selection::anchor_key().unwrap_or_default();
-        let mut best: Option<(usize, f32)> = None;
+        let mut best: Option<(usize, f32, f32)> = None;
         for (ei, entry) in reg.iter().enumerate() {
             if selection_scope(&entry.key) != selection_scope(&anchor) {
                 continue;
             }
             let b = entry.layout.bounds();
+            let dx = if position.x < b.left() {
+                f32::from(b.left() - position.x)
+            } else if position.x > b.right() {
+                f32::from(position.x - b.right())
+            } else {
+                0.0
+            };
             let dy = if position.y < b.top() {
                 f32::from(b.top() - position.y)
             } else if position.y > b.bottom() {
@@ -1429,14 +1438,14 @@ fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)>
             } else {
                 0.0
             };
-            if best.is_none_or(|(_, d)| dy < d) {
-                best = Some((ei, dy));
+            if best.is_none_or(|(_, best_dy, best_dx)| (dy, dx) < (best_dy, best_dx)) {
+                best = Some((ei, dy, dx));
             }
-            if dy == 0.0 {
+            if dy == 0.0 && dx == 0.0 {
                 break;
             }
         }
-        let (ei, _) = best?;
+        let (ei, _, _) = best?;
         let ix = match reg[ei].layout.index_for_position(position) {
             Ok(ix) | Err(ix) => ix,
         };
@@ -2456,6 +2465,238 @@ mod tests {
                 .when(self.occluded, |root| {
                     root.child(div().absolute().inset_0().occlude())
                 })
+        }
+    }
+
+    struct MarkdownSelectionHarness;
+
+    impl Render for MarkdownSelectionHarness {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = Theme::of(cx).clone();
+            let source = "# Heading\n\nBefore **bold** and *italic* with `code`.\n\n\
+                | Agent | Branch | Target |\n\
+                | --- | --- | --- |\n\
+                | linux | `lab-linux` | Linux jobs, ten minutes or less. This long target wraps across several visual lines in its cell. |\n\
+                | macos | `lab-macos` | macOS jobs |\n\n\
+                > A **quoted** paragraph.\n\n\
+                - A list with `inline code`.\n\n\
+                After the table.";
+            div()
+                .size_full()
+                .child(selection_frame_reset())
+                .child(render_tree(
+                    &parse_full(source),
+                    &RenderOptions::settled("markdown-selection-test".into()),
+                    &theme,
+                    window,
+                    &|_| None,
+                ))
+        }
+    }
+
+    fn selection_key_for_text(text: &str) -> String {
+        REGISTRY.with(|registry| {
+            registry
+                .borrow()
+                .iter()
+                .find(|entry| entry.text.as_ref() == text)
+                .unwrap_or_else(|| panic!("missing painted text: {text}"))
+                .key
+                .to_string()
+        })
+    }
+
+    fn selection_position(key: &str, ix: usize) -> gpui::Point<gpui::Pixels> {
+        let (_, layout, _) = selection_test_snapshot(key);
+        layout.position_for_index(ix).expect("text position")
+            + point(px(0.1), layout.line_height() / 2.0)
+    }
+
+    #[gpui::test]
+    fn markdown_drag_tracks_each_table_column_and_wrapped_cell(cx: &mut TestAppContext) {
+        let _selection = super::super::selection::test_state_lock();
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (_, cx) = cx.add_window_view(|_, _| MarkdownSelectionHarness);
+        cx.simulate_resize(size(px(560.0), px(800.0)));
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+
+        let target = "Linux jobs, ten minutes or less. This long target wraps across several visual lines in its cell.";
+        let target_key = selection_key_for_text(target);
+        assert!(selection_test_bounds(&target_key).size.height > px(MD_LINE_HEIGHT));
+        // Every column must track the pointer, including later visual lines
+        // in a wrapped cell, and a drag must contract and reverse normally.
+        for text in ["linux", "lab-linux", target, "lab-macos", "macOS jobs"] {
+            let key = selection_key_for_text(text);
+            let start = selection_position(&key, 1);
+            let end = selection_position(&key, text.len() - 1);
+            cx.simulate_event(gpui::MouseDownEvent {
+                button: gpui::MouseButton::Left,
+                position: start,
+                click_count: 1,
+                ..Default::default()
+            });
+            for (position, expected) in [
+                (end, &text[1..text.len() - 1]),
+                (start, ""),
+                (selection_position(&key, 0), &text[..1]),
+            ] {
+                cx.simulate_event(gpui::MouseMoveEvent {
+                    position,
+                    pressed_button: Some(gpui::MouseButton::Left),
+                    ..Default::default()
+                });
+                assert_eq!(
+                    super::super::selection::selected_text().unwrap_or_default(),
+                    expected,
+                    "drag inside {text}"
+                );
+            }
+            cx.simulate_event(gpui::MouseUpEvent {
+                button: gpui::MouseButton::Left,
+                position: selection_position(&key, 0),
+                ..Default::default()
+            });
+            super::super::selection::clear_if_owner(&key);
+        }
+    }
+
+    #[gpui::test]
+    fn markdown_drag_clamps_in_cell_padding_and_outside_paragraphs(cx: &mut TestAppContext) {
+        let _selection = super::super::selection::test_state_lock();
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (_, cx) = cx.add_window_view(|_, _| MarkdownSelectionHarness);
+        cx.simulate_resize(size(px(560.0), px(800.0)));
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        for text in [
+            "linux",
+            "lab-linux",
+            "lab-macos",
+            "macOS jobs",
+            "A quoted paragraph.",
+        ] {
+            let key = selection_key_for_text(text);
+            let bounds = selection_test_bounds(&key);
+            // Padding belongs to the nearest cell, even if an earlier column
+            // has text at the same y. Each side clamps to that cell's endpoint.
+            for (position, expected) in [
+                (
+                    point(
+                        bounds.right() + px(4.0),
+                        selection_position(&key, text.len()).y,
+                    ),
+                    &text[1..],
+                ),
+                (
+                    point(bounds.left() - px(4.0), selection_position(&key, 0).y),
+                    &text[..1],
+                ),
+            ] {
+                cx.simulate_event(gpui::MouseDownEvent {
+                    button: gpui::MouseButton::Left,
+                    position: selection_position(&key, 1),
+                    click_count: 1,
+                    ..Default::default()
+                });
+                cx.simulate_event(gpui::MouseMoveEvent {
+                    position,
+                    pressed_button: Some(gpui::MouseButton::Left),
+                    ..Default::default()
+                });
+                let selected = super::super::selection::selected_text();
+                super::super::selection::end_active_drag();
+                super::super::selection::clear_if_owner(&key);
+                assert_eq!(selected.as_deref(), Some(expected), "padding beside {text}");
+            }
+        }
+        // A far-right drag on a short heading must stay on that line instead
+        // of jumping to a wider paragraph below (Euclidean nearest is wrong).
+        let key = selection_key_for_text("Heading");
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Left,
+            position: selection_position(&key, 0),
+            click_count: 1,
+            ..Default::default()
+        });
+        cx.simulate_event(gpui::MouseMoveEvent {
+            position: selection_position(&key, 0) + point(px(1000.0), px(0.0)),
+            pressed_button: Some(gpui::MouseButton::Left),
+            ..Default::default()
+        });
+        let selected = super::super::selection::selected_text();
+        super::super::selection::end_active_drag();
+        super::super::selection::clear_if_owner(&key);
+        assert_eq!(selected.as_deref(), Some("Heading"));
+    }
+
+    #[gpui::test]
+    fn markdown_drag_crosses_cells_and_formatted_blocks_in_document_order(cx: &mut TestAppContext) {
+        let _selection = super::super::selection::test_state_lock();
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (_, cx) = cx.add_window_view(|_, _| MarkdownSelectionHarness);
+        cx.simulate_resize(size(px(560.0), px(800.0)));
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let branch_key = selection_key_for_text("lab-linux");
+        let target = "Linux jobs, ten minutes or less. This long target wraps across several visual lines in its cell.";
+        let target_key = selection_key_for_text(target);
+        let macos_key = selection_key_for_text("lab-macos");
+        let before_key = selection_key_for_text("Before bold and italic with code.");
+        let after_key = selection_key_for_text("After the table.");
+        for (anchor_key, anchor_ix, head_key, head_ix, expected) in [
+            (
+                &branch_key,
+                4,
+                &target_key,
+                10,
+                "linux\nLinux jobs".to_string(),
+            ),
+            (
+                &target_key,
+                10,
+                &branch_key,
+                4,
+                "linux\nLinux jobs".to_string(),
+            ),
+            (
+                &branch_key,
+                4,
+                &macos_key,
+                3,
+                format!("linux\n{target}\nmacos\nlab"),
+            ),
+            (
+                &before_key,
+                0,
+                &after_key,
+                16,
+                format!(
+                    "Before bold and italic with code.\nAgent\nBranch\nTarget\nlinux\nlab-linux\n{target}\nmacos\nlab-macos\nmacOS jobs\nA quoted paragraph.\nA list with inline code.\nAfter the table."
+                ),
+            ),
+        ] {
+            cx.simulate_event(gpui::MouseDownEvent {
+                button: gpui::MouseButton::Left,
+                position: selection_position(anchor_key, anchor_ix),
+                click_count: 1,
+                ..Default::default()
+            });
+            cx.simulate_event(gpui::MouseMoveEvent {
+                position: selection_position(head_key, head_ix),
+                pressed_button: Some(gpui::MouseButton::Left),
+                ..Default::default()
+            });
+            let selected = super::super::selection::selected_text();
+            super::super::selection::end_active_drag();
+            super::super::selection::clear_if_owner(anchor_key);
+            assert_eq!(selected.as_deref(), Some(expected.as_str()));
         }
     }
 
