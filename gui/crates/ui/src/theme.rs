@@ -1009,6 +1009,17 @@ impl Theme {
             .opacity(self.contrast_checked_tint_alpha(self.input_bg, base, window))
     }
 
+    /// The composer pill's fill: the dark frosted tint on dark glass, the
+    /// input glass otherwise. Shared by controls that should read as the
+    /// same material (the titlebar's project-action button).
+    pub fn composer_surface_bg(&self) -> Hsla {
+        if self.is_frost() && matches!(self.appearance, Appearance::Dark) {
+            self.composer_sidebar_tint()
+        } else {
+            self.input_glass_bg()
+        }
+    }
+
     /// Section-card fill (settings cards and similar in-panel cards). The
     /// opaque `surface` tone read as a harsh solid slab floating on the
     /// frosted blur (user report), so glass thins it to a translucent tint;
