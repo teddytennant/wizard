@@ -1199,6 +1199,46 @@ fn native_friendly_device_name() -> Option<String> {
     None
 }
 
+#[cfg(all(test, windows))]
+mod identity_lock_retry_tests {
+    use super::*;
+
+    /// A concurrent holder of the lock file (share_mode(0)) fails the open
+    /// with ERROR_SHARING_VIOLATION, which Rust reports as
+    /// ErrorKind::Uncategorized, not PermissionDenied. acquire must retry
+    /// through that error until the holder releases; before the fix the
+    /// retry loop never matched it and startup failed outright.
+    #[test]
+    fn acquire_retries_through_sharing_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device-id.lock");
+
+        // Hold the file exclusively for 50ms, then release. The retry loop
+        // has a 200 x 5ms budget, so the timing is comfortable.
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let holder = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(&path)
+                .unwrap();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                drop(holder);
+            });
+        }
+
+        let lock = DeviceIdentityLock::acquire(dir.path());
+        assert!(
+            lock.is_ok(),
+            "acquire did not retry through the sharing violation"
+        );
+    }
+}
+
 #[cfg(test)]
 mod device_name_tests {
     use super::select_local_device_name;
@@ -1376,8 +1416,17 @@ impl DeviceIdentityLock {
             let file = loop {
                 match options.open(&path) {
                     Ok(file) => break file,
+                    // share_mode(0) means a concurrent holder fails the open
+                    // with ERROR_SHARING_VIOLATION (raw os error 32), which
+                    // Rust maps to ErrorKind::Uncategorized, not
+                    // PermissionDenied. Retry through both.
                     Err(err)
-                        if err.kind() == std::io::ErrorKind::PermissionDenied && retries > 0 =>
+                        if (err.raw_os_error()
+                            == Some(
+                                windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32,
+                            )
+                            || err.kind() == std::io::ErrorKind::PermissionDenied)
+                            && retries > 0 =>
                     {
                         retries -= 1;
                         std::thread::sleep(std::time::Duration::from_millis(5));
