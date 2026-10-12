@@ -1545,6 +1545,7 @@ fn input_bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("shift-tab", OutdentList, ctx),
         KeyBinding::new("shift-enter", Newline, ctx),
         KeyBinding::new("backspace", Backspace, ctx),
+        KeyBinding::new("shift-backspace", Backspace, ctx),
         KeyBinding::new("delete", Delete, ctx),
         KeyBinding::new("left", Left, ctx),
         KeyBinding::new("right", Right, ctx),
@@ -1664,6 +1665,7 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
     let palette = Some(PALETTE_SEARCH_CONTEXT);
     let mut palette_bindings = vec![
         KeyBinding::new("backspace", Backspace, palette),
+        KeyBinding::new("shift-backspace", Backspace, palette),
         KeyBinding::new("delete", Delete, palette),
         KeyBinding::new("home", Home, palette),
         KeyBinding::new("end", End, palette),
@@ -10388,6 +10390,54 @@ mod tests {
                     .update(cx, |input, cx| test(input, window, cx));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn shift_backspace_deletes_text_and_selection_in_all_input_contexts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            init(cx, ComposerSendBehavior::default());
+        });
+        for context in [
+            GENERIC_COMPOSER_CONTEXT,
+            MESSAGE_COMPOSER_CONTEXT,
+            PALETTE_SEARCH_CONTEXT,
+        ] {
+            let handle = cx.add_window(|window, cx| {
+                let mut input = ComposerInput::with_context("", context, cx);
+                input.set_text("café", cx);
+                window.focus(&input.focus_handle, cx);
+                input
+            });
+            cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+                .unwrap();
+            cx.simulate_keystrokes(handle.into(), "shift-backspace");
+            handle
+                .update(cx, |input, _, cx| {
+                    assert_eq!(input.text(), "caf", "{context}");
+                    input.set_text("hello world", cx);
+                    input.move_to(6, cx);
+                    input.extend_selection(11, cx);
+                })
+                .unwrap();
+            cx.simulate_keystrokes(handle.into(), "shift-backspace");
+            handle
+                .update(cx, |input, _, cx| {
+                    assert_eq!(input.text(), "hello ", "{context}");
+                    input.set_text("", cx);
+                })
+                .unwrap();
+            cx.simulate_keystrokes(handle.into(), "shift-backspace");
+            assert_eq!(
+                handle
+                    .read_with(cx, |input, _| input.text().to_owned())
+                    .unwrap(),
+                ""
+            );
+        }
     }
 
     #[gpui::test]
