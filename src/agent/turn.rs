@@ -760,12 +760,17 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             .splice(0..0, reasoning.into_iter().map(ContentBlock::Thinking));
         host.push(assistant);
 
-        if !policy.native_tools
+        // A call written out as JSON is not something the model said, so only
+        // the prose in front of it goes on to a pane or a report.
+        let content = if !policy.native_tools
             && tool_calls.is_empty()
             && let Some(call) = parse_json_tool_call(&content)
         {
             tool_calls.push(call);
-        }
+            CallGate::default().push(&content)
+        } else {
+            content
+        };
 
         if tool_calls.is_empty() {
             return Ok(Ran::ended(DoneReason::Completed, steps_used, content));
@@ -1276,6 +1281,7 @@ async fn stream(
         .context("starting chat completion")?;
 
     let mut streamed = Streamed::default();
+    let mut gate = (!policy.native_tools).then(CallGate::default);
     loop {
         let next = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next());
         let chunk = tokio::select! {
@@ -1323,7 +1329,13 @@ async fn stream(
                     sink.thinking_delta(delta).await;
                 } else {
                     streamed.content.push_str(&delta);
-                    sink.text_delta(delta).await;
+                    let shown = match gate.as_mut() {
+                        Some(gate) => gate.push(&delta),
+                        None => delta,
+                    };
+                    if !shown.is_empty() {
+                        sink.text_delta(shown).await;
+                    }
                 }
             }
             streamed.images.extend(message.take_images());
@@ -1359,7 +1371,66 @@ async fn stream(
             break;
         }
     }
+    // What the gate held turned out not to be a call, so it was prose all
+    // along.
+    if let Some(gate) = gate
+        && !gate.held.is_empty()
+        && (!streamed.tool_calls.is_empty() || parse_json_tool_call(&streamed.content).is_none())
+    {
+        sink.text_delta(gate.held).await;
+    }
     Ok(Some(streamed))
+}
+
+/// Holds back the part of a JSON-protocol reply that may be a tool call, so a
+/// surface draws the tool's row and never the JSON behind it. A `write_file`
+/// call carries the whole file, and streamed as prose it buries the transcript.
+#[derive(Default)]
+struct CallGate {
+    /// Text not shown yet. Starts at the beginning of a line.
+    held: String,
+    /// The text already shown stopped partway through a line.
+    mid_line: bool,
+}
+
+impl CallGate {
+    /// Take `delta` and return what is safe to show now.
+    fn push(&mut self, delta: &str) -> String {
+        self.held.push_str(delta);
+        let mut shown = String::new();
+        loop {
+            if self.mid_line {
+                let Some(end) = self.held.find('\n') else {
+                    shown.push_str(&std::mem::take(&mut self.held));
+                    break;
+                };
+                shown.extend(self.held.drain(..=end));
+                self.mid_line = false;
+            }
+            if self.held.is_empty() || may_open_call(&self.held) {
+                break;
+            }
+            self.mid_line = true;
+        }
+        shown
+    }
+}
+
+/// Whether `text`, which starts a line, can still turn out to be a protocol
+/// call: `{"tool"`, bare or inside a code fence, or a prefix of that.
+fn may_open_call(text: &str) -> bool {
+    let text = text.trim_start();
+    let text = match text.strip_prefix("```") {
+        Some(fenced) if "json".starts_with(fenced) => return true,
+        Some(fenced) => fenced.strip_prefix("json").unwrap_or(fenced).trim_start(),
+        None if "```".starts_with(text) => return true,
+        None => text,
+    };
+    let Some(body) = text.strip_prefix('{') else {
+        return text.is_empty();
+    };
+    let body = body.trim_start();
+    "\"tool\"".starts_with(body) || body.starts_with("\"tool\"")
 }
 
 /// What one tool call in a batch produced. Nothing here is pushed to history
@@ -3273,5 +3344,84 @@ mod tests {
             "an earlier copy that was shrunk away is not pointed at"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Feed `reply` through a gate a few characters at a time, the way a stream
+    /// delivers it, and return what was shown and what was still held.
+    fn gated(reply: &str) -> (String, String) {
+        let mut gate = CallGate::default();
+        let chars: Vec<char> = reply.chars().collect();
+        let shown = chars
+            .chunks(3)
+            .map(|chunk| gate.push(&chunk.iter().collect::<String>()))
+            .collect();
+        (shown, gate.held)
+    }
+
+    #[test]
+    fn the_gate_holds_a_protocol_call_and_lets_prose_through() {
+        let call = r#"{"tool": "write_file", "arguments": {"path": "a.md", "content": "x\ny"}}"#;
+        assert_eq!(gated(call), (String::new(), call.to_string()));
+
+        let fenced = format!("```json\n{call}\n```");
+        assert_eq!(gated(&fenced), (String::new(), fenced.clone()));
+
+        let (shown, held) = gated(&format!("Writing the notes.\n{call}"));
+        assert_eq!(shown, "Writing the notes.\n");
+        assert_eq!(held, call);
+
+        for prose in [
+            "All done. The tests pass.",
+            "Config:\n{\"name\": \"x\"}\nand that is it",
+            "```rust\nfn main() {}\n```\nDone.",
+            "```json\n[1, 2]\n```\nDone.",
+            "{ not json at all",
+        ] {
+            assert_eq!(gated(prose), (prose.to_string(), String::new()), "{prose}");
+        }
+    }
+
+    /// On the JSON tool protocol a call is text the model wrote. It used to be
+    /// streamed to the surface like any other text, file body and all.
+    #[tokio::test]
+    async fn a_protocol_call_is_never_streamed_as_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let delta = |text: &str| ChatChunk {
+            done: false,
+            done_reason: None,
+            ..final_chunk(ChatMessage::assistant(text))
+        };
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            vec![
+                delta("Running it.\n{\"to"),
+                delta("ol\": \"execute\", \"arguments\": {\"command\": \"leaked-body\"}}"),
+                final_chunk(ChatMessage::assistant("")),
+            ],
+            vec![
+                delta("{\"result\": 1} is what it printed."),
+                final_chunk(ChatMessage::assistant("")),
+            ],
+        ]));
+        let ran = Arc::new(AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(CountingTool(ran.clone())));
+        let mut agent = test_agent(dir.path(), provider, registry);
+        agent.set_model("a-small-local-model".to_string(), false);
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run_turn("run it", tx).await.expect("turn ok");
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "the call still ran");
+
+        let mut text = String::new();
+        let mut started = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::TextDelta(delta) => text.push_str(&delta),
+                AgentEvent::ToolStarted { name, .. } => started.push(name),
+                _ => {}
+            }
+        }
+        assert_eq!(started, ["execute"]);
+        assert_eq!(text, "Running it.\n{\"result\": 1} is what it printed.");
     }
 }

@@ -914,6 +914,9 @@ impl Fold {
 /// A subagent's card folds at any length. Its body opens with the instructions
 /// the run was handed, and the header already says who is working on what.
 ///
+/// An edit's body is the change it made, not the sentence the tool answered
+/// with, so it is the change that is measured. The header keeps its `+n −m`.
+///
 /// One rule, applied to a live row and a replayed one alike. The TUI used to
 /// have two: replay folded *every* answered call whatever its size, so a
 /// three-line `git status` you had just watched come back open closed itself
@@ -924,10 +927,27 @@ fn folds_by_default(item: &TranscriptItem) -> bool {
         TranscriptItem::Tool(tool) => {
             let subagent = tool.name == "spawn_subagent";
             match &tool.output {
-                Some(output) => collapse_long(&output.content) || (subagent && !output.is_error),
+                Some(output) => {
+                    collapse_long(&output.content)
+                        || (!output.is_error && (subagent || long_edit(tool)))
+                }
                 None => subagent || collapse_long(&tool.progress),
             }
         }
+        _ => false,
+    }
+}
+
+fn long_edit(tool: &ToolItem) -> bool {
+    let long = |key: &str| {
+        tool.args
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(collapse_long)
+    };
+    match tool.name.as_str() {
+        "write_file" => long("content"),
+        "edit_file" => long("old_string") || long("new_string"),
         _ => false,
     }
 }

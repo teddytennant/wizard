@@ -2363,6 +2363,46 @@ fn a_click_opens_the_summary_and_a_second_click_shuts_it() {
     assert!(!shut_text.contains("parse-body"), "{shut_text}");
 }
 
+/// A written file is a summary line, then a one-line card, and only then the
+/// file. Its tool answers with one sentence, so it is the diff that folds.
+#[test]
+fn a_long_write_stays_one_line_until_its_card_is_clicked() {
+    use crate::agent::AgentEvent;
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript
+        .user("write the notes".to_string(), Vec::new());
+    let content: String = (1..=12).map(|n| format!("notes-line-{n}\n")).collect();
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "write_file".to_string(),
+        args: serde_json::json!({ "path": "notes.md", "content": content }),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "write_file".to_string(),
+        output: crate::tools::ToolOutput::ok("Wrote notes.md"),
+    });
+
+    let (shut, _) = screen_at(&app, 80, 30);
+    let shut_text = shut.join("\n");
+    assert!(shut_text.contains("▸ edited 1 file"), "{shut_text}");
+    assert!(!shut_text.contains("notes.md"), "{shut_text}");
+
+    let row = app.group_hits.borrow()[0].0;
+    click_row(&mut app, row);
+    let (card, _) = screen_at(&app, 80, 30);
+    let card_text = card.join("\n");
+    assert!(card_text.contains("notes.md"), "{card_text}");
+    assert!(card_text.contains("+12"), "{card_text}");
+    assert!(!card_text.contains("notes-line"), "{card_text}");
+
+    let row = app.card_hits.borrow()[0].0;
+    click_row(&mut app, row);
+    let (open, _) = screen_at(&app, 80, 30);
+    let open_text = open.join("\n");
+    assert!(open_text.contains("+ notes-line-12"), "{open_text}");
+}
+
 #[test]
 fn tab_and_enter_open_the_focused_summary() {
     let _pins = pin_house();

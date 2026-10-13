@@ -6,9 +6,14 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **A long edit folds to its header.** A `write_file` or `edit_file` card whose change runs past six lines opens as one line with its `+n −m`, the way a long command's output already did. Click the card, or press Ctrl-T in the full view, for the diff.
+
 ### Fixed
 
 - **A completion review that names no verdict no longer sends the agent back to work.** It used to be reported to the agent as a failed review with nothing to fix, and the agent spent the next turn second-guessing finished work. The run now ends with the review reported as having checked nothing.
+- **A tool call written as JSON showed up as the reply.** A model on the JSON tool protocol writes `{"tool": ..., "arguments": ...}` as text, and that text was streamed into the transcript, the whole body of a `write_file` included. It is held back now, in the TUI, in `--output-format text` and in a subagent's pane. Only the tool's row is drawn.
 
 ## [3.8.7] - 2026-10-13
 
