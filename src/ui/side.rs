@@ -76,7 +76,7 @@ fn agent_rows(app: &App, pane: &crate::app::SubagentPane, inner: usize) -> Vec<L
     let (glyph, style) = match pane.status {
         PaneStatus::Running => (
             super::motion::glyph(super::motion::Kind::Subagent, app.tick),
-            theme::style(Token::ToolRunning),
+            theme::style(Token::Text),
         ),
         PaneStatus::Done => ("●".to_string(), theme::style(Token::Success)),
         PaneStatus::Failed => ("✕".to_string(), theme::style(Token::ToolFailed).bold()),
@@ -151,7 +151,7 @@ fn task_rows(
     let (glyph, style) = match task.status {
         TaskStatus::Running => (
             super::motion::glyph(super::motion::Kind::Tool, tick),
-            theme::style(Token::ToolRunning),
+            theme::style(Token::Text),
         ),
         TaskStatus::Done(0) => ("●".to_string(), theme::style(Token::Success)),
         _ => ("✕".to_string(), theme::style(Token::ToolFailed).bold()),

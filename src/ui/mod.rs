@@ -1999,7 +1999,7 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
                     "s"
                 }
             ),
-            accent(),
+            theme::style(Token::Text),
         ));
     }
     // Backgrounded subagents (`spawn_subagent` with `background: true`):
@@ -2017,7 +2017,7 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
                     "s"
                 }
             ),
-            accent(),
+            theme::style(Token::Text),
         ));
     }
     // MCP is still connecting in the background: a transient marker, shown
@@ -2943,7 +2943,7 @@ fn rail_summary(app: &App, width: usize) -> Line<'static> {
         } else {
             pane.glyph(app.tick).to_string()
         };
-        (glyph, theme::style(Token::ToolRunning))
+        (glyph, theme::style(Token::Text))
     } else if failed > 0 {
         ("✗".to_string(), theme::style(Token::ToolFailed).bold())
     } else {
@@ -2983,7 +2983,7 @@ fn rail_summary(app: &App, width: usize) -> Line<'static> {
 
     let unread: usize = app.panes.iter().map(|pane| pane.unread).sum();
     let mut spans = vec![
-        Span::styled("   ", accent()),
+        Span::styled("  ", accent()),
         Span::styled(format!("{glyph} "), glyph_style),
         Span::styled(label, muted()),
     ];
@@ -3052,7 +3052,7 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
         // failed run has to read as failed without a hue (the glyph carries
         // the rest of the meaning: ● running, ✔ done, ✗ failed).
         let dot_style = match pane.status {
-            PaneStatus::Running => theme::style(Token::ToolRunning),
+            PaneStatus::Running => theme::style(Token::Text),
             PaneStatus::Done => theme::style(Token::ToolDone),
             PaneStatus::Failed => theme::style(Token::ToolFailed).bold(),
         };
@@ -3070,14 +3070,14 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
         // rail and reads as a column, not a ragged list.
         let name = truncate_width(&pane.name, 12);
         let meta_width = clock.len() + unread.len() + 4;
-        let activity_width = (area.width as usize).saturating_sub(18 + meta_width).max(8);
+        let activity_width = (area.width as usize).saturating_sub(17 + meta_width).max(8);
         let activity = truncate_width(
             pane.activity().trim().lines().next().unwrap_or(""),
             activity_width,
         );
 
         lines.push(Line::from(vec![
-            Span::styled(format!(" {cursor} "), accent()),
+            Span::styled(format!("{cursor} "), accent()),
             Span::styled(
                 format!(
                     "{} ",
@@ -3099,7 +3099,7 @@ pub(super) fn draw_rail(frame: &mut Frame, app: &App, area: Rect) {
     if app.panes.len() > MAX_RAIL_ROWS {
         let hidden = app.panes.len() - visible;
         lines.push(Line::from(Span::styled(
-            format!("   +{hidden} more"),
+            format!("  +{hidden} more"),
             dim().italic(),
         )));
     }

@@ -2991,6 +2991,35 @@ fn contrast(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// Foreground of the first cell of `needle` on screen.
+fn fg_of(rows: &[String], buf: &ratatui::buffer::Buffer, needle: &str) -> Color {
+    let (y, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.contains(needle))
+        .unwrap_or_else(|| panic!("'{needle}' is not on screen:\n{}", rows.join("\n")));
+    let x = row[..row.find(needle).unwrap()].chars().count();
+    buf[(x as u16, y as u16)].fg
+}
+
+#[test]
+fn background_work_is_marked_in_the_text_colour() {
+    let _pins = pin_house();
+    let mut app = app_with_run();
+    app.status.background_tasks = 1;
+    app.status.background_subagents = 2;
+    let (rows, buf) = screen_at(&app, 100, 24);
+    let text = theme::color(Token::Text);
+    assert_ne!(text, theme::color(Token::Accent));
+    assert_eq!(fg_of(&rows, &buf, "1 bg task"), text);
+    assert_eq!(fg_of(&rows, &buf, "2 bg subagents"), text);
+    // The rail: two columns, then the run's dot in the same colour.
+    let rail = rows.iter().find(|row| row.contains("researcher")).unwrap();
+    assert_eq!(rail.find("researcher"), Some("  ● ".len()), "{rail}");
+    let dot = rail.trim_start().chars().next().unwrap().to_string();
+    assert_eq!(fg_of(&rows, &buf, &format!("{dot} researcher")), text);
+}
+
 fn tool_item(name: &str, args: serde_json::Value, output: &str, is_error: bool) -> ToolItem {
     ToolItem {
         name: name.to_string(),
