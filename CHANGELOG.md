@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.7] - 2026-10-13
+
 ### Added
 
 - **`self_check = true`.** A turn that ran 25 seconds or more and changed something is sent back to the agent once, in the same conversation, to compare its work with the request and the project's docs. It answers `Verified, no changes.` or says what it fixed. Off by default, and it stands aside wherever the completion review is on.
