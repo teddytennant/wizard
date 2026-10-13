@@ -182,7 +182,7 @@ pub fn terse_core_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::function(
             "read_file",
-            "Read a file, optionally a 1-based line range.",
+            "Read a file's exact text, optionally a 1-based line range.",
             json!({
                 "type": "object",
                 "properties": {

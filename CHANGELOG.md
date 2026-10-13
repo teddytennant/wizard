@@ -8,6 +8,9 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Changed
 
+- **`read_file` returns the file's own text, with no line-number gutter.** A model copying `old_string` out of a numbered listing counted the gutter's tab as indentation. On tab-indented Go, 41% of `edit_file` calls missed; a harness that returns raw text missed 4%.
+- **The sovereign prompt no longer asks for a read before every edit**, which cost a model step per edit, and says how to treat a change to an existing codebase: the names and formats a request states are the interface, and new test files stand alone. The `min` prompt asks for source in whole regions and stops inviting an opening `tool_search`.
+- **A sub-run is told when it is on its last step.** A reviewer that used all its steps returned whatever it said before its last tool call, which named no verdict. `Verdict: PASS` is read as a verdict too.
 - **A long edit folds to its header.** A `write_file` or `edit_file` card whose change runs past six lines opens as one line with its `+n −m`, the way a long command's output already did. Click the card, or press Ctrl-T in the full view, for the diff.
 
 ### Fixed

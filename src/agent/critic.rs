@@ -1125,10 +1125,7 @@ mod tests {
                 "`curl -sf localhost:8080` returned 404".to_string()
             ))
         );
-        assert_eq!(
-            parse_review("**Verdict: PASS**"),
-            Some(ReviewVerdict::Pass)
-        );
+        assert_eq!(parse_review("**Verdict: PASS**"), Some(ReviewVerdict::Pass));
         assert_eq!(
             parse_review("Verdict: FAIL: out.txt is empty"),
             Some(ReviewVerdict::Fail("out.txt is empty".to_string()))

@@ -126,11 +126,11 @@ pub fn chat_system_prompt(x_search: bool, today: &str) -> String {
 /// model does, none of the ones it would follow anyway.
 const MIN_RULES: &str = "\
 Rules:
-- Read a file before you edit it. Keep changes minimal and in the existing style.
+- Read a file before your first edit to it. Keep changes minimal and in the existing style.
 - Verify with tests or by running the code. Never claim a result you did not see.
 - Never weaken, skip or edit tests to make them pass unless the task is the tests.
 - When something fails, find out why and change approach; do not repeat it verbatim.
-- Keep tool output short (head, tail, grep, wc). Do not dump whole files or logs.
+- Keep command output short (head, tail, grep, wc). Read source in whole regions, not slivers.
 - Batch independent work: when you need several files, searches or commands, request them all in one response.
 - Be terse. No em dashes.";
 
@@ -150,7 +150,7 @@ fn min_personality(mode: Mode) -> String {
 /// `min` profile: the charter rules that govern every reply, plus where
 /// the rest lives.
 const MIN_CHARTER: &str = "\
-Deferred tools can be called by name directly; `tool_search` shows a schema when you need one.";
+Deferred tools can be called by name directly. You rarely need one; `tool_search` shows a schema when you do.";
 
 /// `min` profile context guidance.
 pub const MIN_CONTEXT_PROMPT: &str = "\

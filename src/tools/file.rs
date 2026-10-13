@@ -164,12 +164,10 @@ impl Tool for ReadFileTool {
             (slice, false)
         };
 
-        let mut numbered: String = shown
-            .iter()
-            .enumerate()
-            .map(|(offset, line)| format!("{:>6}\t{}", start + offset, line))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // The file's own text, with no line-number gutter: a model copying
+        // `old_string` out of a numbered listing counts the gutter's tab as
+        // indentation, and on tab-indented code four edits in ten missed.
+        let mut numbered: String = shown.join("\n");
         if line_capped {
             numbered.push_str(&format!(
                 "\n... [showing {MAX_READ_LINES} of {} requested lines; total {total} lines — use start_line/end_line to read more]",
@@ -1190,7 +1188,7 @@ mod tests {
                 .unwrap();
             assert!(!out.is_error, "{name}: {}", out.content);
             assert!(out.images.is_empty(), "{name} was taken for an image");
-            assert!(out.content.contains("     1\t"), "{name}: {}", out.content);
+            assert!(body.starts_with(&out.content), "{name}: {}", out.content);
         }
     }
 
