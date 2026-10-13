@@ -48,11 +48,18 @@ You are Wizard, an eager and creative local agent — your user's wish \
 is your command. You work inside their project using the provided tools.
 
 Guidelines:
-- Collaborate: explain what you are doing and why, briefly.
-- Inspect before you act: read files and search before editing.
+- Inspect before you act: read the code you will change, and any README, \
+spec or docstring that defines its behaviour, before editing.
 - Act directly: file writes, shell commands, and git operations run without \
-asking permission — just do the work and narrate briefly as you go.
-- Prefer small, verifiable steps. Run tests when they exist.
+asking permission.
+- Batch independent work: when you need several files, searches or commands, \
+request them all in one response.
+- Run tests when they exist. Passing tests are the floor, not the goal: check \
+your change against everything the task and the project's docs say, including \
+cases the visible tests do not cover.
+- Say little while working: a sentence before a step that needs one, and a \
+short final answer that states what changed and what you verified. Do not \
+restate file contents or narrate each command.
 - When the TASK itself is genuinely ambiguous, ask instead of guessing \
 (that is about intent, not permission).";
 
@@ -626,7 +633,10 @@ fn numbered_bold_items(body: &str) -> Vec<String> {
 // Environment: the facts the model cannot derive from the conversation
 // ---------------------------------------------------------------------------
 
-/// What this machine is, in three lines.
+/// What this machine is, in four lines.
+///
+/// The working directory saves the `pwd` a model otherwise opens with: the
+/// conversation does not say where it is, and every command starts there.
 ///
 /// The shell is the load-bearing one: a model that assumes `sh` writes
 /// `ls | grep` where PowerShell needs `Get-ChildItem`, and it has no way to
@@ -650,10 +660,12 @@ fn numbered_bold_items(body: &str) -> Vec<String> {
 fn environment_section() -> String {
     format!(
         "## Environment\n\n\
+         - Working directory: `{cwd}`. Commands and relative paths start there.\n\
          - Shell: `{shell}`. Command lines from `execute` and background tasks \
          are parsed by this shell, so write syntax it accepts.\n\
          - OS: {os} ({arch}).\n\
          - UI theme: `{theme}`.",
+        cwd = std::env::current_dir().unwrap_or_default().display(),
         shell = crate::platform::shell::name(),
         os = std::env::consts::OS,
         arch = std::env::consts::ARCH,
@@ -1728,7 +1740,12 @@ mod tests {
     /// environment block added: ~1170 and ~2189. The ceilings sit 5% above
     /// those so a longer OS, shell or theme name on another platform cannot
     /// trip the build.
-    const PROMPT_TOKEN_CEILING: [(Mode, u64); 2] = [(Mode::Genie, 1228), (Mode::Sovereign, 2298)];
+    ///
+    /// Genie then grew to ~1328 on purpose. The batching, brevity and
+    /// read-the-docs rules cost ~120 tokens once and took a 14-task run on
+    /// Claude Haiku from 8.3 model calls and 158k prompt tokens a task to 6.5
+    /// and 113k, with the same pass rate.
+    const PROMPT_TOKEN_CEILING: [(Mode, u64); 2] = [(Mode::Genie, 1394), (Mode::Sovereign, 2298)];
 
     /// The assembled prompt for a default configuration, as
     /// `Agent::compose_system_prompt` builds it: the composed base, plus the
@@ -1756,7 +1773,13 @@ mod tests {
     #[test]
     fn assembled_prompt_fits_the_token_ratchet() {
         for (mode, ceiling) in PROMPT_TOKEN_CEILING {
-            let prompt = assembled_default_prompt(mode);
+            // The working directory is as long as the checkout's path, which
+            // is not the prompt's doing.
+            let prompt: String = assembled_default_prompt(mode)
+                .lines()
+                .filter(|line| !line.starts_with("- Working directory:"))
+                .collect::<Vec<_>>()
+                .join("\n");
             let tokens = crate::llm::estimate_tokens_from_chars(prompt.chars().count());
             assert!(
                 tokens <= ceiling,
