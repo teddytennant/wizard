@@ -293,6 +293,9 @@ pub struct App {
     /// the anchor is also the first tool's index, and a click on the card
     /// must not be read as a click on the summary.
     pub group_hits: std::cell::RefCell<Vec<(u16, usize)>>,
+    /// The cells of the jump-to-bottom pill in the last-drawn frame, or `None`
+    /// when the transcript is at its tail. A click inside returns there.
+    pub jump_hit: std::cell::Cell<Option<ratatui::layout::Rect>>,
     /// Where the text starts on each transcript row of the last-drawn frame,
     /// as `(row, column)`. Everything left of it is gutter (margin, marker,
     /// rail), so a drag-copy skips those cells. Rebuilt every frame like
@@ -610,6 +613,7 @@ impl App {
             last_click: None,
             card_hits: std::cell::RefCell::new(Vec::new()),
             group_hits: std::cell::RefCell::new(Vec::new()),
+            jump_hit: std::cell::Cell::new(None),
             text_origins: std::cell::RefCell::new(Vec::new()),
             images: std::cell::RefCell::new(ImageCache::fallback()),
             should_quit: false,
@@ -2782,6 +2786,15 @@ impl App {
                     }
                     MouseEventKind::ScrollDown => {
                         self.scroll_transcript(-3);
+                        self.selection = None;
+                    }
+                    MouseEventKind::Down(MouseButton::Left)
+                        if self
+                            .jump_hit
+                            .get()
+                            .is_some_and(|pill| pill.contains(cell.into())) =>
+                    {
+                        self.scroll_to_bottom();
                         self.selection = None;
                     }
                     MouseEventKind::Down(MouseButton::Left) => {

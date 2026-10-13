@@ -1925,6 +1925,48 @@ fn mouse_down(app: &mut App, column: u16, row: u16) -> Option<AppAction> {
 }
 
 #[test]
+fn the_jump_pill_shows_only_when_scrolled_up_and_a_click_or_ctrl_end_returns() {
+    const PILL: &str = "↓ jump to bottom (ctrl-end)";
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = app();
+    app.welcome_dismissed = true;
+    for n in 0..60 {
+        app.transcript.assistant(format!("line {n}"));
+    }
+    let pill_row = |app: &App| {
+        let buf = screen(app, 80, 24);
+        (0..24).find(|y| row_text(&buf, *y).contains(PILL))
+    };
+    assert_eq!(pill_row(&app), None);
+    assert_eq!(app.jump_hit.get(), None);
+
+    app.scroll_transcript(5);
+    let row = pill_row(&app).expect("the pill is drawn while scrolled up");
+    let pill = app.jump_hit.get().expect("and has a hit area");
+    assert_eq!(pill.y, row);
+    assert!(
+        pill.bottom()
+            <= crate::ui::regions(&app, screen(&app, 80, 24).area)
+                .body
+                .bottom()
+    );
+
+    // A click beside it is a plain click.
+    mouse_down(&mut app, pill.x - 1, pill.y);
+    assert!(!app.transcript.follow);
+    mouse_down(&mut app, pill.x, pill.y);
+    assert!(app.transcript.follow);
+    assert_eq!(pill_row(&app), None);
+    assert_eq!(app.jump_hit.get(), None);
+
+    app.scroll_transcript(5);
+    assert!(pill_row(&app).is_some());
+    press_mod(&mut app, KeyCode::End, KeyModifiers::CONTROL);
+    assert!(app.transcript.follow);
+    assert_eq!(pill_row(&app), None);
+}
+
+#[test]
 fn double_click_asks_the_loop_to_copy_the_word() {
     let mut app = app();
     assert!(mouse_down(&mut app, 5, 3).is_none());

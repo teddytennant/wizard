@@ -256,6 +256,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
     if overlay_open(app) {
         app.card_hits.borrow_mut().clear();
         app.group_hits.borrow_mut().clear();
+        app.jump_hit.set(None);
     }
 
     // The selection highlight paints last so it reverses whatever ended up on
@@ -632,6 +633,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     // returns below can't leave stale clickable rows behind.
     app.card_hits.borrow_mut().clear();
     app.group_hits.borrow_mut().clear();
+    app.jump_hit.set(None);
 
     // Stay on the welcome screen until the conversation actually begins (see
     // `App::welcome_visible`: early system notices alone don't dismiss it,
@@ -746,6 +748,30 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(Clear, hint);
             frame.render_widget(Paragraph::new(Span::styled(label, dim())), hint);
         }
+    }
+
+    // And the way back, alone on the transcript's last row: a click on it or
+    // the key it names returns to the tail.
+    if remaining > 0 {
+        let pill = Line::from(vec![
+            Span::styled(" ↓ jump to bottom ", muted()),
+            Span::styled("(ctrl-end) ", dim()),
+        ]);
+        let width = (pill.width() as u16).min(inner.width);
+        let hit = Rect {
+            x: inner.x + (inner.width - width) / 2,
+            y: inner.bottom() - 1,
+            width,
+            height: 1,
+        };
+        let row = Rect {
+            x: inner.x,
+            width: inner.width,
+            ..hit
+        };
+        frame.render_widget(Clear, row);
+        frame.render_widget(Paragraph::new(pill), hit);
+        app.jump_hit.set(Some(hit));
     }
 
     // A whisper of a scrollbar in the right margin once content overflows.
