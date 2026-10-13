@@ -361,43 +361,54 @@ impl OpenAiProvider {
 /// grok-4.6 and later, and xAI states that a Grok model without it treats the
 /// request as `high` rather than failing — so a Grok tag gets it through
 /// whatever its version, which is what keeps this table from having to know
-/// the next model's name. OpenAI's families have no such level and would
-/// reject the request outright, so for them it is clamped to `high`, which is
-/// what the user asking for the most reasoning meant.
+/// the next model's name. OpenAI has it from gpt-5.2 on, gpt-6 included; the
+/// o-series, gpt-5 and gpt-5.1 reject the request outright, so for them it is
+/// clamped to `high`, which is what the user asking for the most reasoning
+/// meant.
 ///
 /// Checked 2026-09-13 against
-/// docs.x.ai/developers/model-capabilities/text/reasoning.
-fn reasoning_effort_for<'a>(model: &str, effort: &'a str) -> Option<&'a str> {
+/// docs.x.ai/developers/model-capabilities/text/reasoning, and 2026-10-13
+/// against `api.openai.com/v1/responses`.
+pub(crate) fn reasoning_effort_for<'a>(model: &str, effort: &'a str) -> Option<&'a str> {
     let model = model.to_ascii_lowercase();
     if model.contains("non-reasoning") {
         return None;
     }
     let grok = model.starts_with("grok-4");
-    let takes_effort = grok
-        || model.starts_with("gpt-5")
-        || model.starts_with("gpt-6")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4");
-    if !takes_effort {
+    if !grok && !openai_reasoning_family(&model) {
         return None;
     }
-    if !grok && effort.eq_ignore_ascii_case("xhigh") {
+    if !grok && !openai_takes_xhigh(&model) && effort.eq_ignore_ascii_case("xhigh") {
         return Some("high");
     }
     Some(effort)
 }
 
-/// OpenAI reasoning models (o-series, gpt-5 family) reject any non-default
-/// `temperature` with HTTP 400, so it is omitted for them. Mirrors the model
-/// families in [`context_window`].
-fn rejects_temperature(model: &str) -> bool {
+/// Whether an OpenAI reasoning model has the `xhigh` level: gpt-6, and gpt-5
+/// from 5.2 on.
+fn openai_takes_xhigh(model: &str) -> bool {
+    let gpt5_minor = model
+        .strip_prefix("gpt-5.")
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|minor| minor.parse::<u32>().ok());
+    model.starts_with("gpt-6") || gpt5_minor.is_some_and(|minor| minor >= 2)
+}
+
+/// OpenAI's reasoning families: the o-series, gpt-5 and gpt-6. Mirrors the
+/// model families in [`context_window`].
+pub(crate) fn openai_reasoning_family(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     model.starts_with("gpt-5")
         || model.starts_with("gpt-6")
         || model.starts_with("o1")
         || model.starts_with("o3")
         || model.starts_with("o4")
+}
+
+/// OpenAI reasoning models reject any non-default `temperature` with HTTP
+/// 400, so it is omitted for them.
+fn rejects_temperature(model: &str) -> bool {
+    openai_reasoning_family(model)
 }
 
 /// API roots whose Chat Completions endpoint documents `prompt_cache_key`.
@@ -422,7 +433,10 @@ fn rejects_temperature(model: &str) -> bool {
 /// Sending it to them anyway would put a field on the wire that is at best
 /// ignored and at worst rejected by a strict server, so the match is on the
 /// endpoint rather than on the wire shape.
-const CACHE_KEY_API_ROOTS: &[&str] = &["https://api.openai.com", "https://api.x.ai"];
+const CACHE_KEY_API_ROOTS: &[&str] = &[OPENAI_API_ROOT, "https://api.x.ai"];
+
+/// OpenAI's own API, as opposed to the many endpoints that speak its dialect.
+pub(crate) const OPENAI_API_ROOT: &str = "https://api.openai.com";
 
 /// Whether `base_url` is one of [`CACHE_KEY_API_ROOTS`].
 ///
@@ -432,15 +446,20 @@ const CACHE_KEY_API_ROOTS: &[&str] = &["https://api.openai.com", "https://api.x.
 /// client trims it, so a configured trailing slash cannot decide whether the
 /// key is sent.
 pub(crate) fn endpoint_takes_a_cache_key(base_url: &str) -> bool {
-    let base_url = base_url.trim_end_matches('/');
-    CACHE_KEY_API_ROOTS.iter().any(|root| {
-        match base_url.strip_prefix(root) {
-            // What follows the host has to be a boundary: a path, a port, or
-            // nothing.
-            Some(rest) => rest.is_empty() || rest.starts_with('/') || rest.starts_with(':'),
-            None => false,
-        }
-    })
+    CACHE_KEY_API_ROOTS
+        .iter()
+        .any(|root| is_under_api_root(base_url, root))
+}
+
+/// Whether `base_url` is on the host `root` names, anchored the way
+/// [`endpoint_takes_a_cache_key`] describes.
+pub(crate) fn is_under_api_root(base_url: &str, root: &str) -> bool {
+    match base_url.trim_end_matches('/').strip_prefix(root) {
+        // What follows the host has to be a boundary: a path, a port, or
+        // nothing.
+        Some(rest) => rest.is_empty() || rest.starts_with('/') || rest.starts_with(':'),
+        None => false,
+    }
 }
 
 /// The `prompt_cache_key` for one request: a short digest of the system
@@ -2134,12 +2153,12 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
     }
 
-    /// `xhigh` is xAI's fourth level and nobody else's. A Grok tag gets it
-    /// verbatim whatever its version (xAI downgrades it to `high` itself on a
-    /// model that does not have it); an OpenAI reasoning model, which would
-    /// reject the request, gets `high`.
+    /// `xhigh` is not universal. A Grok tag gets it verbatim whatever its
+    /// version (xAI downgrades it to `high` itself on a model that does not
+    /// have it), and so does an OpenAI model from gpt-5.2 on; an older OpenAI
+    /// reasoning model, which would reject the request, gets `high`.
     #[test]
-    fn xhigh_reaches_grok_and_is_clamped_for_everyone_else() {
+    fn xhigh_reaches_the_models_that_take_it_and_is_clamped_for_the_rest() {
         let body = |model: &str, effort: &str| {
             provider().build_request_body(&ChatRequest {
                 model: model.to_string(),
@@ -2154,14 +2173,26 @@ mod tests {
             })
         };
 
-        for model in ["grok-4.6", "grok-4.6-0901", "grok-4.20-multi-agent-0309"] {
+        for model in [
+            "grok-4.6",
+            "grok-4.6-0901",
+            "grok-4.20-multi-agent-0309",
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-5.6-sol",
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.4-mini",
+            "gpt-5.2",
+            "gpt-5.10",
+        ] {
             assert_eq!(
                 body(model, "xhigh")["reasoning_effort"],
                 "xhigh",
                 "{model} takes xhigh"
             );
         }
-        for model in ["gpt-5", "o3-mini", "o4-mini"] {
+        for model in ["gpt-5", "gpt-5-mini", "gpt-5.1", "o3-mini", "o4-mini"] {
             assert_eq!(
                 body(model, "xhigh")["reasoning_effort"],
                 "high",

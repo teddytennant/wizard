@@ -8,6 +8,12 @@
 //! belongs with it. What is shared with xAI is the loopback redirect the
 //! browser comes back on, and that stayed in [`crate::llm::oauth_callback`].
 //!
+//! The same client also serves `api.openai.com/v1/responses` with a plain API
+//! key ([`ChatgptProvider::with_api_key`]), which is how `kind = "openai"`
+//! reaches the models that refuse tools on Chat Completions. In that mode it
+//! sends the bearer and none of the subscription's headers, and never touches
+//! the token store.
+//!
 //! This is not the OpenAI Chat Completions API: the request is the Responses
 //! shape (`instructions` + `input` items), the stream is Responses SSE
 //! (`response.output_text.delta`, `response.output_item.done`, …), and every
@@ -187,13 +193,25 @@ impl ChatgptTokens {
     }
 }
 
-/// Client for one ChatGPT-subscription account.
+/// How a request proves who is asking.
+#[derive(Debug)]
+enum Auth {
+    /// A ChatGPT subscription: stored OAuth tokens and the Codex client
+    /// identity the subscription endpoint requires.
+    Account(Arc<ChatgptTokens>),
+    /// An OpenAI API key, for `api.openai.com/v1/responses`. Sent as the
+    /// bearer and nothing else.
+    ApiKey(String),
+}
+
+/// Client for one Responses API endpoint: a ChatGPT-subscription account, or
+/// OpenAI's own API with a key.
 #[derive(Debug)]
 pub struct ChatgptProvider {
     http: reqwest::Client,
     base_url: String,
     model: String,
-    tokens: Arc<ChatgptTokens>,
+    auth: Auth,
     /// A stable id for this process's requests (the endpoint expects one).
     session_id: String,
     /// Set once the endpoint says this account cannot use the default model,
@@ -203,37 +221,60 @@ pub struct ChatgptProvider {
 
 impl ChatgptProvider {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+        let auth = Auth::Account(Arc::new(ChatgptTokens::new()?));
+        Ok(Self::with_auth(base_url, model, auth))
+    }
+
+    /// A client for OpenAI's own Responses API, authorized by an API key.
+    pub fn with_api_key(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self::with_auth(base_url, model, Auth::ApiKey(api_key.into()))
+    }
+
+    fn with_auth(base_url: impl Into<String>, model: impl Into<String>, auth: Auth) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let http = crate::llm::chat_http_builder(crate::llm::client_read_timeout_for(&base_url))
             .build()
             .unwrap_or_default();
-        Ok(Self {
+        Self {
             http,
             base_url,
             model: model.into(),
-            tokens: Arc::new(ChatgptTokens::new()?),
+            auth,
             session_id: session_id(),
             default_unavailable: std::sync::atomic::AtomicBool::new(false),
-        })
+        }
     }
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
 
-    /// `GET /models` refuses a request without `client_version` (HTTP 400,
-    /// "Field required"), the way the Codex CLI it expects always sends one.
+    /// The subscription's `GET /models` refuses a request without
+    /// `client_version` (HTTP 400, "Field required"), the way the Codex CLI it
+    /// expects always sends one. OpenAI's own API takes no such parameter.
     fn models_url(&self) -> String {
-        format!(
-            "{}/models?client_version={}",
-            self.base_url,
-            env!("CARGO_PKG_VERSION")
-        )
+        match self.auth {
+            Auth::Account(_) => format!(
+                "{}/models?client_version={}",
+                self.base_url,
+                env!("CARGO_PKG_VERSION")
+            ),
+            Auth::ApiKey(_) => self.url("/models"),
+        }
     }
 
-    /// Attach the auth + Codex-client headers a subscription request needs.
+    /// Attach the auth + Codex-client headers a subscription request needs,
+    /// or the bearer alone for an API key.
     async fn authed(&self, builder: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
-        let (access, account) = self.tokens.credentials().await?;
+        let tokens = match &self.auth {
+            Auth::Account(tokens) => tokens,
+            Auth::ApiKey(key) => return Ok(builder.bearer_auth(key)),
+        };
+        let (access, account) = tokens.credentials().await?;
         let mut builder = builder
             .header("Authorization", format!("Bearer {access}"))
             .header("originator", oauth::API_ORIGINATOR)
@@ -279,7 +320,16 @@ impl ChatgptProvider {
         if let Some(options) = &request.options
             && let Some(effort) = &options.reasoning_effort
         {
+            // A model outside the table is sent what was asked for, as before.
+            let effort =
+                crate::llm::wire::reasoning_effort_for(&request.model, effort).unwrap_or(effort);
             body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+        }
+        // The same routing key the Chat Completions client sends this API.
+        if matches!(self.auth, Auth::ApiKey(_))
+            && let Some(key) = crate::llm::wire::prompt_cache_key(&request.model, &request.messages)
+        {
+            body["prompt_cache_key"] = json!(key);
         }
         body
     }
@@ -296,12 +346,10 @@ impl ChatgptProvider {
         };
         let mut response = send().await?;
         // One refresh-and-retry on 401, exactly as the keyed OpenAI client does.
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            && self
-                .tokens
-                .refresh_after_unauthorized()
-                .await
-                .unwrap_or(false)
+        // An API key has nothing to refresh.
+        if let Auth::Account(tokens) = &self.auth
+            && response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && tokens.refresh_after_unauthorized().await.unwrap_or(false)
         {
             response = send().await?;
         }
@@ -316,18 +364,20 @@ impl ChatgptProvider {
         let status = response.status();
         let retry_after = crate::llm::retry_after_from_headers(response.headers());
         let body = response.text().await.unwrap_or_default();
-        let hint = if status == reqwest::StatusCode::UNAUTHORIZED {
-            " — sign in again from Settings"
-        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            " — your ChatGPT plan's usage limit was reached"
-        } else {
-            ""
+        let message = match self.auth {
+            Auth::Account(_) => {
+                let hint = if status == reqwest::StatusCode::UNAUTHORIZED {
+                    " — sign in again from Settings"
+                } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    " — your ChatGPT plan's usage limit was reached"
+                } else {
+                    ""
+                };
+                format!("ChatGPT returned HTTP {status}{hint}: {body}")
+            }
+            Auth::ApiKey(_) => format!("{} returned HTTP {status}: {body}", self.base_url),
         };
-        crate::llm::http_error_with_retry_after(
-            status.as_u16(),
-            format!("ChatGPT returned HTTP {status}{hint}: {body}"),
-            retry_after,
-        )
+        crate::llm::http_error_with_retry_after(status.as_u16(), message, retry_after)
     }
 }
 
@@ -377,7 +427,10 @@ impl LlmProvider for ChatgptProvider {
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream> {
         use std::sync::atomic::Ordering;
         let mut request = request;
-        let asks_default = request.model == oauth::DEFAULT_MODEL;
+        // The rollout fallback is about what a subscription may use. A key
+        // that cannot reach a model is told so by the API.
+        let asks_default =
+            matches!(self.auth, Auth::Account(_)) && request.model == oauth::DEFAULT_MODEL;
         if asks_default && self.default_unavailable.load(Ordering::Relaxed) {
             request.model = oauth::ROLLOUT_FALLBACK_MODEL.to_string();
         }
@@ -430,7 +483,11 @@ impl LlmProvider for ChatgptProvider {
     }
 
     fn label(&self) -> String {
-        format!("chatgpt:{}", self.model)
+        let vendor = match self.auth {
+            Auth::Account(_) => "chatgpt",
+            Auth::ApiKey(_) => "openai",
+        };
+        format!("{vendor}:{}", self.model)
     }
 }
 
@@ -1173,13 +1230,134 @@ mod tests {
             http: reqwest::Client::new(),
             base_url: oauth::BASE_URL.to_string(),
             model: "gpt-5.2".to_string(),
-            tokens: Arc::new(ChatgptTokens {
+            auth: Auth::Account(Arc::new(ChatgptTokens {
                 path: PathBuf::from("/nonexistent"),
                 cache: Mutex::new(TokenCache::default()),
-            }),
+            })),
             session_id: "test".to_string(),
             default_unavailable: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn keyed() -> ChatgptProvider {
+        ChatgptProvider::with_api_key("https://api.openai.com/v1/", "gpt-6-astra", "sk-test")
+    }
+
+    /// An API key is the bearer and nothing else: the Codex client identity
+    /// belongs to the subscription endpoint, and OpenAI's own API has no use
+    /// for an account id it never issued.
+    #[tokio::test]
+    async fn an_api_key_request_carries_only_the_bearer() {
+        let provider = keyed();
+        let request = provider
+            .authed(provider.http.post(provider.url("/responses")))
+            .await
+            .expect("a key needs no token store")
+            .build()
+            .expect("request");
+        assert_eq!(
+            request.url().as_str(),
+            "https://api.openai.com/v1/responses"
+        );
+        let headers = request.headers();
+        assert_eq!(headers["authorization"], "Bearer sk-test");
+        assert_eq!(headers.len(), 1, "{headers:?}");
+
+        assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
+        assert_eq!(provider.label(), "openai:gpt-6-astra");
+    }
+
+    /// The subscription's headers, for contrast: the same builder with stored
+    /// tokens sends the whole Codex identity.
+    #[tokio::test]
+    async fn a_subscription_request_carries_the_codex_identity() {
+        let mut provider = provider();
+        provider.auth = Auth::Account(Arc::new(ChatgptTokens {
+            path: PathBuf::from("/nonexistent"),
+            cache: Mutex::new(TokenCache {
+                tokens: Some(StoredTokens {
+                    // Not a JWT, so `expires_soon` has nothing to refresh on.
+                    access_token: "access".to_string(),
+                    refresh_token: None,
+                    id_token: None,
+                    account_id: Some("acct".to_string()),
+                }),
+                refreshed_at: None,
+            }),
+        }));
+        let request = provider
+            .authed(provider.http.post(provider.url("/responses")))
+            .await
+            .expect("tokens are cached")
+            .build()
+            .expect("request");
+        let headers = request.headers();
+        assert_eq!(headers["authorization"], "Bearer access");
+        assert_eq!(headers["chatgpt-account-id"], "acct");
+        for name in ["originator", "session-id", "openai-beta"] {
+            assert!(headers.contains_key(name), "{name}");
+        }
+    }
+
+    /// The body an API key sends is the stateless one the subscription sends,
+    /// plus the cache routing key the Chat Completions client sends this API.
+    /// The key is a digest of the system prompt and the model, so it is the
+    /// same on every step and the re-sent conversation stays a cached prefix.
+    #[test]
+    fn an_api_key_request_keeps_the_stateless_shape_and_adds_a_cache_key() {
+        let mut first = request(
+            vec![
+                ChatMessage::system("You are Wizard."),
+                ChatMessage::user("hi"),
+            ],
+            Vec::new(),
+        );
+        first.model = "gpt-6-astra".to_string();
+        let mut second = first.clone();
+        second.messages.push(ChatMessage::assistant("hello"));
+        second.messages.push(ChatMessage::user("again"));
+
+        let body = keyed().build_request_body(&first);
+        assert_eq!(body["store"], false);
+        assert_eq!(body["include"][0], "reasoning.encrypted_content");
+        let key = body["prompt_cache_key"].as_str().expect("a cache key");
+        assert!(key.starts_with("wz-"), "{key}");
+        let next = keyed().build_request_body(&second);
+        assert_eq!(next["prompt_cache_key"], key);
+        assert_eq!(next["instructions"], body["instructions"]);
+        assert_eq!(next["input"][0], body["input"][0]);
+
+        assert!(
+            provider()
+                .build_request_body(&first)
+                .get("prompt_cache_key")
+                .is_none(),
+            "the subscription request is unchanged"
+        );
+    }
+
+    /// `xhigh` reaches the models that have it and is clamped to `high` for
+    /// the ones that answer it with a 400, on this API as on Chat Completions.
+    #[test]
+    fn xhigh_is_sent_only_to_the_models_that_take_it() {
+        let effort_for = |model: &str| {
+            let mut request = request(vec![ChatMessage::user("hi")], Vec::new());
+            request.model = model.to_string();
+            request.options = Some(crate::llm::ChatOptions {
+                temperature: None,
+                num_ctx: None,
+                reasoning_effort: Some("xhigh".to_string()),
+            });
+            keyed().build_request_body(&request)["reasoning"]["effort"].clone()
+        };
+        for model in ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5", "gpt-5.2"] {
+            assert_eq!(effort_for(model), "xhigh", "{model}");
+        }
+        for model in ["gpt-5", "gpt-5.1", "o3", "o4-mini"] {
+            assert_eq!(effort_for(model), "high", "{model}");
+        }
+        // A tag the table does not know is sent what was asked for.
+        assert_eq!(effort_for("codex-mini-latest"), "xhigh");
     }
 
     #[test]

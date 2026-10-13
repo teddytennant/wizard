@@ -14,6 +14,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 - **A completion review that names no verdict no longer sends the agent back to work.** It used to be reported to the agent as a failed review with nothing to fix, and the agent spent the next turn second-guessing finished work. The run now ends with the review reported as having checked nothing.
 - **A tool call written as JSON showed up as the reply.** A model on the JSON tool protocol writes `{"tool": ..., "arguments": ...}` as text, and that text was streamed into the transcript, the whole body of a `write_file` included. It is held back now, in the TUI, in `--output-format text` and in a subagent's pane. Only the tool's row is drawn.
+- **An OpenAI API key works with gpt-6 and gpt-5.5.** With a reasoning effort set, those models refuse tools on Chat Completions (`Function tools with reasoning_effort are not supported ... use /v1/responses`), so every agent step failed. A `kind = "openai"` provider at `api.openai.com` now sends the `gpt-5`, `gpt-6` and o-series models to `/v1/responses` with the same key. Other models and every other base URL stay on Chat Completions.
+- **`xhigh` reaches the OpenAI models that have it.** It was sent as `high` to every OpenAI model. gpt-5.2 and later, gpt-6 included, now get `xhigh`; gpt-5, gpt-5.1 and the o-series still get `high`, because they reject it.
 
 ## [3.8.7] - 2026-10-13
 
