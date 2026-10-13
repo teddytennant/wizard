@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.6] - 2026-10-13
+
 ### Added
 
 - **A jump-to-bottom pill.** Scrolled up from the tail, the house TUI shows `↓ jump to bottom (ctrl-end)` on the transcript's last row. A click on it or Ctrl-End returns to the live tail.
