@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **The Claude subscription provider is several times faster.** It keeps one `claude` process per conversation and hands it only what is new, where 3.8.5 started a process and resent the whole history on every model call. The model now calls Wizard's tools natively. On one bug-fix task with Claude Haiku that took 26 model calls and 151 s in 3.8.5, it takes 5 calls and about 14 s.
+- **The genie prompt asks for batched tool calls, short narration and a check against the project's docs.** Across 14 coding tasks on Claude Haiku this cut model calls per task from 8.3 to 6.5 and prompt tokens from 158k to 113k.
+- **The system prompt names the working directory**, so a session does not open with `pwd`.
+
 ## [3.8.6] - 2026-10-13
 
 ### Added

@@ -410,7 +410,7 @@ Tokens land in `~/.wizard/chatgpt_oauth.json` (mode 0600). On success Wizard add
 
 `/provider`, then **Add provider**, then **Claude (subscription)** runs Wizard on a Claude Pro or Max plan. It needs [Claude Code](https://code.claude.com/docs/en/setup) installed and signed in. If `claude` is missing, Wizard shows Anthropic's install command and asks before running it; if it is signed out, Wizard starts `claude auth login` and checks again.
 
-Every request goes through Claude Code: Wizard starts your `claude` binary for each model call and reads its output. It never reads Claude Code's credentials and never calls Anthropic itself. Wizard's own prompt, tools and permission prompts stay in charge, and `/model` takes Claude Code's aliases (`sonnet`, `opus`, `haiku`) or a full model id. The provider is stored as `kind = "claudecode"`. Without a terminal to ask on, a missing install or sign-in fails with the command to run.
+Every request goes through Claude Code: Wizard starts your `claude` binary, keeps it running for the conversation, and reads its output. It never reads Claude Code's credentials and never calls Anthropic itself. Wizard's own prompt, tools and permission prompts stay in charge. The model calls Wizard's tools natively: Claude Code is given their descriptions over a local connection only it can use, and Wizard runs each call itself. `/model` takes Claude Code's aliases (`sonnet`, `opus`, `haiku`) or a full model id. The provider is stored as `kind = "claudecode"`. Without a terminal to ask on, a missing install or sign-in fails with the command to run.
 
 ### Signing in over SSH
 

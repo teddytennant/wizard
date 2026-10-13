@@ -9,14 +9,18 @@
 //! files.
 //!
 //! Wizard keeps its own prompt and tools. The child runs with `--tools ""`
-//! and Wizard's system prompt, and the kind reports no native tool calling,
-//! so the agent loop drives its tools over the JSON tool protocol exactly as
-//! it does for a local model without function calling.
+//! and Wizard's system prompt. A call that offers tools gets them as native
+//! tool calls: the child is given Wizard's tool specs through a loopback MCP
+//! server and kept alive for the conversation, and the agent loop still runs
+//! every tool itself. See [`session`] and [`bridge`].
 //!
 //! `claude -p` answers every user line on stdin with a turn of its own and
-//! takes no assistant lines, so a conversation cannot be replayed as turns.
-//! It goes in as one user message instead: see [`encode`].
+//! takes no assistant lines, so a history that is not already inside a live
+//! child cannot be replayed as turns. It goes in as one user message
+//! instead: see [`encode`].
 
+mod bridge;
+mod session;
 pub mod setup;
 
 use std::ffi::OsStr;
@@ -164,7 +168,13 @@ impl LlmProvider for ClaudeCodeProvider {
     }
 
     async fn supports_native_tools(&self, _model: &str) -> Result<bool> {
-        Ok(false)
+        Ok(true)
+    }
+
+    /// Every model Claude Code offers has at least this much, and without a
+    /// window the loop falls back to compacting on a few dozen kilobytes.
+    async fn context_window(&self, _model: &str) -> Option<u32> {
+        Some(200_000)
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
@@ -173,6 +183,9 @@ impl LlmProvider for ClaudeCodeProvider {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream> {
         let cli = self.cli.as_ref().ok_or_else(not_installed)?;
+        if !request.tools.is_empty() {
+            return session::chat(cli, request).await;
+        }
         let (system, input) = encode(&request.messages);
 
         let mut system_file =
@@ -193,11 +206,7 @@ impl LlmProvider for ClaudeCodeProvider {
         if let Some(effort) = request.options.and_then(|options| options.reasoning_effort) {
             command.args(["--effort", &effort]);
         }
-        // An exported API key would outrank the subscription sign-in inside
-        // Claude Code and bill the turn to it instead.
-        let mut child = command
-            .env_remove("ANTHROPIC_API_KEY")
-            .env_remove("ANTHROPIC_AUTH_TOKEN")
+        let mut child = without_api_keys(&mut command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -232,6 +241,14 @@ impl LlmProvider for ClaudeCodeProvider {
     fn label(&self) -> String {
         format!("claude-code:{}", self.model)
     }
+}
+
+/// An exported API key would outrank the subscription sign-in inside Claude
+/// Code and bill the turn to it instead.
+fn without_api_keys(command: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    command
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
 }
 
 /// One `claude -p` run, alive until its stream is dropped.
@@ -273,6 +290,11 @@ impl Turn {
 /// transcript, one text block per message, so a later call repeats the earlier
 /// blocks byte for byte and the prompt cache still matches them.
 fn encode(messages: &[ChatMessage]) -> (String, Value) {
+    let (system, rest) = split_system(messages);
+    (system, user_line(rest, rest.len() > 1))
+}
+
+fn split_system(messages: &[ChatMessage]) -> (String, &[ChatMessage]) {
     let leading = messages
         .iter()
         .take_while(|message| message.role == Role::System)
@@ -283,13 +305,17 @@ fn encode(messages: &[ChatMessage]) -> (String, Value) {
         .map(ChatMessage::text)
         .collect::<Vec<_>>()
         .join("\n\n");
+    (system, rest)
+}
 
-    let transcript = rest.len() > 1;
+/// `messages` as one `stream-json` user line, labelled by speaker when it is
+/// a `transcript` of several turns.
+fn user_line(messages: &[ChatMessage], transcript: bool) -> Value {
     let mut content = Vec::new();
     if transcript {
         content.push(json!({"type": "text", "text": TRANSCRIPT_PREAMBLE}));
     }
-    for message in rest {
+    for message in messages {
         let mut text = String::new();
         if transcript {
             let who = match message.role {
@@ -323,8 +349,7 @@ fn encode(messages: &[ChatMessage]) -> (String, Value) {
         }
         push_text(&mut content, text);
     }
-    let line = json!({"type": "user", "message": {"role": "user", "content": content}});
-    (system, line)
+    json!({"type": "user", "message": {"role": "user", "content": content}})
 }
 
 fn push_text(content: &mut Vec<Value>, text: String) {
@@ -338,14 +363,7 @@ fn push_text(content: &mut Vec<Value>, text: String) {
 /// counted. Everything else on the stream is Claude Code's own bookkeeping.
 fn decode(event: &Value) -> Result<Option<ChatChunk>> {
     match event["type"].as_str() {
-        Some("stream_event") => {
-            let delta = &event["event"]["delta"];
-            Ok(match delta["type"].as_str() {
-                Some("text_delta") => delta["text"].as_str().map(|text| chunk(text, false)),
-                Some("thinking_delta") => delta["thinking"].as_str().map(|text| chunk(text, true)),
-                _ => None,
-            })
-        }
+        Some("stream_event") => Ok(delta_chunk(&event["event"])),
         Some("result") => {
             if event["is_error"].as_bool().unwrap_or(false) {
                 bail!(
@@ -353,30 +371,25 @@ fn decode(event: &Value) -> Result<Option<ChatChunk>> {
                     event["result"].as_str().unwrap_or("the turn failed")
                 );
             }
-            let usage = &event["usage"];
-            let count = |field: &str| usage[field].as_u64().unwrap_or(0);
-            let cache = CacheTokens {
-                read: count("cache_read_input_tokens"),
-                write: count("cache_creation_input_tokens"),
-            };
-            Ok(Some(ChatChunk {
-                message: None,
-                images: Vec::new(),
-                thinking: false,
-                done: true,
-                done_reason: event["stop_reason"].as_str().map(str::to_string),
-                eval_count: Some(count("output_tokens")),
-                prompt_eval_count: Some(count("input_tokens") + cache.read + cache.write),
-                cache,
-                reasoning_eval_count: usage["output_tokens_details"]["thinking_tokens"].as_u64(),
-            }))
+            Ok(Some(final_chunk(
+                &event["usage"],
+                event["stop_reason"].as_str(),
+                None,
+            )))
         }
         _ => Ok(None),
     }
 }
 
-fn chunk(text: &str, thinking: bool) -> ChatChunk {
-    ChatChunk {
+/// The text or thinking an API stream event adds, if it adds any.
+fn delta_chunk(event: &Value) -> Option<ChatChunk> {
+    let delta = &event["delta"];
+    let (text, thinking) = match delta["type"].as_str()? {
+        "text_delta" => (delta["text"].as_str()?, false),
+        "thinking_delta" => (delta["thinking"].as_str()?, true),
+        _ => return None,
+    };
+    Some(ChatChunk {
         message: Some(ChatMessage::assistant(text)),
         images: Vec::new(),
         thinking,
@@ -386,6 +399,26 @@ fn chunk(text: &str, thinking: bool) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+    })
+}
+
+/// The chunk that closes a reply, carrying the `usage` Claude Code counted.
+fn final_chunk(usage: &Value, stop: Option<&str>, message: Option<ChatMessage>) -> ChatChunk {
+    let count = |field: &str| usage[field].as_u64().unwrap_or(0);
+    let cache = CacheTokens {
+        read: count("cache_read_input_tokens"),
+        write: count("cache_creation_input_tokens"),
+    };
+    ChatChunk {
+        message,
+        images: Vec::new(),
+        thinking: false,
+        done: true,
+        done_reason: stop.map(str::to_string),
+        eval_count: Some(count("output_tokens")),
+        prompt_eval_count: Some(count("input_tokens") + cache.read + cache.write),
+        cache,
+        reasoning_eval_count: usage["output_tokens_details"]["thinking_tokens"].as_u64(),
     }
 }
 
@@ -709,10 +742,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_agent_loop_keeps_its_own_tools() {
+    async fn the_loop_is_told_the_window_so_it_does_not_compact_on_bytes() {
+        let fake = FakeClaude::signed_in();
+        assert_eq!(
+            provider(&fake).context_window("sonnet").await,
+            Some(200_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_reach_the_model_as_native_calls() {
         let fake = FakeClaude::signed_in();
         assert!(
-            !provider(&fake)
+            provider(&fake)
                 .supports_native_tools("sonnet")
                 .await
                 .unwrap()

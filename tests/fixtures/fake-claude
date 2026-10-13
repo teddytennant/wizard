@@ -15,11 +15,31 @@ case "$1 $2" in
 "auth login") [ -e "$here/login-fails" ] || touch "$here/signed-in" ;;
 *)
     printf '%s\n' "$@" >"$here/args"
+    mcp=
     while [ $# -gt 0 ]; do
         [ "$1" = --system-prompt-file ] && cp "$2" "$here/system"
+        [ "$1" = --mcp-config ] && mcp=$2
         shift
     done
-    cat >"$here/stdin"
-    cat "$here/events"
+    if [ -z "$mcp" ]; then
+        cat >"$here/stdin"
+        cat "$here/events"
+        exit
+    fi
+    # A session: stay up, answer each line. The first reply calls a tool
+    # through the bridge the config names and waits for its result.
+    url=$(sed 's/.*"url":"\([^"]*\)".*/\1/' "$mcp")
+    auth=$(sed 's/.*"Authorization":"\([^"]*\)".*/\1/' "$mcp")
+    echo started >>"$here/starts"
+    first=1
+    while IFS= read -r line; do
+        printf '%s\n' "$line" >>"$here/stdin"
+        if [ -n "$first" ]; then
+            first=
+            cat "$here/call-events"
+            curl -s -X POST -H "Authorization: $auth" -d "$(cat "$here/call")" "$url" >"$here/tool-result"
+        fi
+        cat "$here/events"
+    done
     ;;
 esac
