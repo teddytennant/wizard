@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.5] - 2026-10-12
+
+### Added
+
+- **A Claude subscription provider.** `/provider`, Add provider, **Claude (subscription)** runs Wizard on a Claude Pro or Max plan through Claude Code. Wizard starts your own `claude` for each model call and keeps its own prompt and tools. It holds no Claude credential and makes no request to Anthropic itself. Picking the row finds `claude`, asks before running Anthropic's installer if it is missing, and starts `claude auth login` if it is signed out. A headless run does not ask; it fails with the command to run.
+
 ## [3.8.4] - 2026-10-08
 
 ### Changed
