@@ -1949,19 +1949,24 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     // (`docs/design.md`). The working directory stays off this line; the
     // opening block and `/status` have the path. Plan, omakase, ultra, vim,
     // and background work appear only while they are true.
-    let mut spans = vec![Span::raw(" "), model_span(app)];
-    spans.push(sep());
-    spans.push(mode_span(app.status.mode));
+    let mut spans = vec![Span::raw(" ")];
     // Vim mode indicator: NORMAL stands out (bold accent), INSERT stays quiet.
     if let Some(label) = app.vim.label() {
-        spans.push(sep());
         let style = if app.vim.mode == VimMode::Normal {
             accent().bold()
         } else {
             dim()
         };
-        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(format!("-- {label} --"), style));
+        spans.push(sep());
     }
+    if app.active_goal.is_some() {
+        spans.push(Span::styled("◎ /goal active", accent()));
+        spans.push(sep());
+    }
+    spans.push(model_span(app));
+    spans.push(sep());
+    spans.push(mode_span(app.status.mode));
     if app.omakase {
         spans.push(sep());
         spans.push(Span::styled("OMAKASE", accent().bold()));

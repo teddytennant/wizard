@@ -3004,6 +3004,37 @@ fn fg_of(rows: &[String], buf: &ratatui::buffer::Buffer, needle: &str) -> Color 
 }
 
 #[test]
+fn the_status_line_opens_with_the_vim_mode_and_the_goal() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    app.vim.enabled = true;
+    let status = |app: &App| screen_at(app, 100, 24).0.pop().unwrap();
+    assert!(
+        status(&app).starts_with(" -- INSERT -- · "),
+        "{}",
+        status(&app)
+    );
+    app.vim.mode = VimMode::Normal;
+    assert!(
+        status(&app).starts_with(" -- NORMAL -- · "),
+        "{}",
+        status(&app)
+    );
+    app.active_goal = Some("ship it".to_string());
+    assert!(
+        status(&app).starts_with(" -- NORMAL -- · ◎ /goal active · "),
+        "{}",
+        status(&app)
+    );
+    app.vim.enabled = false;
+    assert!(
+        status(&app).starts_with(" ◎ /goal active · "),
+        "{}",
+        status(&app)
+    );
+}
+
+#[test]
 fn background_work_is_marked_in_the_text_colour() {
     let _pins = pin_house();
     let mut app = app_with_run();

@@ -64,9 +64,10 @@ and glyphs that say something.
   hint. No wordmark, no divider, no fill. Plan and omakase replace the mode
   word while they are on.
 - **Status line** (bottom row): model, mode, branch, a context meter
-  (`━━━━────── 32%`), and the session cost when a rate is known. `PLAN`,
-  `OMAKASE`, `ULTRA ×N`, vim `NORMAL`, background tasks and a failed provider
-  probe appear only while they are true. Right side: the elapsed time of a
+  (`━━━━────── 32%`), and the session cost when a rate is known. The vim mode
+  (`-- INSERT --`, `-- NORMAL --`) and `◎ /goal active` lead the row while
+  they are on. `PLAN`, `OMAKASE`, `ULTRA ×N`, background tasks and a failed
+  provider probe appear only while they are true. Right side: the elapsed time of a
   running turn, or the keys a modal state needs. Idle shows no hints. The
   working directory stays off this line; the branch names the repo and
   `/status` has the path.
