@@ -43,6 +43,7 @@ BUILD_ONLY=${1:-}
 PLUGINS=(
     provider-anthropic
     provider-chatgpt
+    provider-claude-code
     provider-cloudflare
     provider-llamacpp
     provider-ollama

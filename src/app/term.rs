@@ -209,6 +209,18 @@ pub(super) fn edit_config_file(app: &mut App, terminal: &mut Tui) {
     }
 }
 
+#[cfg(feature = "provider-claude-code")]
+fn claude_code_setup() -> Result<Option<Config>> {
+    crate::plugins::claude_code::setup::run_blocking()
+}
+
+/// Never reached: the row that asks for it is offered only when the plugin is
+/// compiled in.
+#[cfg(not(feature = "provider-claude-code"))]
+fn claude_code_setup() -> Result<Option<Config>> {
+    Ok(None)
+}
+
 /// Suspend the TUI, run one of the setup wizards on the plain terminal, then
 /// restore the TUI and take the config it wrote. Driven by the `/setup` rows
 /// that ask questions; runs from the main loop because it owns `terminal`.
@@ -225,6 +237,7 @@ pub(super) fn run_setup_suspended(
     let outcome = match section {
         SetupSection::Wizard => crate::onboarding::run_full_blocking(false),
         SetupSection::Gateway => crate::onboarding::run_gateway_setup_blocking(),
+        SetupSection::ClaudeCode => claude_code_setup(),
     };
     match setup_terminal() {
         Ok(new_terminal) => {

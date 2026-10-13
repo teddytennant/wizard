@@ -85,6 +85,7 @@ default = [
   "gateway",
   "provider-anthropic",
   "provider-chatgpt",
+  "provider-claude-code",
   "provider-cloudflare",
   "provider-llamacpp",
   "provider-ollama",
@@ -151,6 +152,11 @@ provider-anthropic = []
 # Carries its own OAuth client and token store; the loopback redirect it comes
 # back on is shared with xAI and stays in core (`llm::oauth_callback`).
 provider-chatgpt = []
+
+# Claude on a Pro or Max subscription. `kind = "claudecode"`. Every request is
+# made by the user's own `claude` binary, run as a child process; Wizard holds
+# no Claude credential. See `src/plugins/claude_code/`.
+provider-claude-code = []
 
 # Cloudflare Workers AI. `kind = "cloudflare"`.
 provider-cloudflare = []
@@ -342,6 +348,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 dirs = "6"
+tempfile = "3"
 shellexpand = "3"
 
 # CLI
@@ -515,7 +522,6 @@ libc = "0.2"
 core-graphics = { version = "0.24", features = ["highsierra"] }
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
 
 [profile.release]

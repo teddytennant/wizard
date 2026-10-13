@@ -1015,6 +1015,12 @@ name = "cf"
 kind = "cloudflare"
 base_url = "https://api.cloudflare.com/client/v4/accounts/abc/ai/v1"
 model = "@cf/zai-org/glm-5.2"
+
+[[providers]]
+name = "claude-code"
+kind = "claudecode"
+base_url = ""
+model = "sonnet"
 "#;
     let config = Config::from_toml(raw).expect("an existing config must parse");
 
@@ -1034,7 +1040,8 @@ model = "@cf/zai-org/glm-5.2"
             "xai",
             "xaioauth",
             "chatgptoauth",
-            "cloudflare"
+            "cloudflare",
+            "claudecode"
         ]
     );
 

@@ -57,6 +57,9 @@ pub(super) enum ProviderSetup {
     Cloudflare,
     OpenAi,
     Anthropic,
+    /// Claude Code's own sign-in, on the plain terminal; see
+    /// [`SetupSection::ClaudeCode`](super::SetupSection::ClaudeCode).
+    ClaudeCode,
     /// Everything prompted, starting with the name.
     Custom,
     /// One of [`crate::llm::compat::PRESETS`], by index into that table. The
@@ -135,6 +138,12 @@ pub(super) fn provider_types() -> Vec<ProviderType> {
             "api.anthropic.com",
             ProviderSetup::Anthropic,
             ProviderKind::ANTHROPIC,
+        ),
+        row(
+            "Claude (subscription)",
+            "Pro or Max · through Claude Code",
+            ProviderSetup::ClaudeCode,
+            ProviderKind::CLAUDE_CODE,
         ),
         row(
             "OpenAI-compatible — custom",
@@ -328,6 +337,10 @@ mod tests {
                 ProviderKind::ANTHROPIC,
             ),
             (
+                cfg!(feature = "provider-claude-code"),
+                ProviderKind::CLAUDE_CODE,
+            ),
+            (
                 cfg!(feature = "provider-cloudflare"),
                 ProviderKind::CLOUDFLARE,
             ),
@@ -372,16 +385,18 @@ mod tests {
                     ProviderKind::OPENAI
                 }
                 ProviderSetup::Anthropic => ProviderKind::ANTHROPIC,
+                ProviderSetup::ClaudeCode => ProviderKind::CLAUDE_CODE,
             };
             assert_eq!(row.kind, expected, "{}", row.label);
         }
     }
 
     /// A stock build's menu is the one it has always been, in the order it
-    /// was written: the seven fixed rows, then the compat presets.
+    /// was written: the eight fixed rows, then the compat presets.
     #[test]
     #[cfg(all(
         feature = "provider-anthropic",
+        feature = "provider-claude-code",
         feature = "provider-cloudflare",
         feature = "provider-openai",
         feature = "provider-xai",
@@ -395,6 +410,7 @@ mod tests {
             "Cloudflare Workers AI — API token",
             "OpenAI — API key",
             "Anthropic (Claude) — API key",
+            "Claude (subscription)",
             "OpenAI-compatible — custom",
         ];
         assert_eq!(&labels[..fixed.len()], &fixed);

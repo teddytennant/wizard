@@ -1,0 +1,25 @@
+#!/bin/sh
+# Stands in for `claude` in the claude_code plugin's tests. Tests symlink it
+# into a temp directory and it answers from the files beside that symlink.
+here=$(dirname "$0")
+case "$1 $2" in
+"--version "*) echo "9.9.9 (Claude Code)" ;;
+"auth status")
+    if [ -e "$here/signed-in" ]; then
+        echo '{"loggedIn": true, "authMethod": "claude.ai"}'
+    else
+        echo '{"loggedIn": false, "authMethod": "none"}'
+        exit 1
+    fi
+    ;;
+"auth login") [ -e "$here/login-fails" ] || touch "$here/signed-in" ;;
+*)
+    printf '%s\n' "$@" >"$here/args"
+    while [ $# -gt 0 ]; do
+        [ "$1" = --system-prompt-file ] && cp "$2" "$here/system"
+        shift
+    done
+    cat >"$here/stdin"
+    cat "$here/events"
+    ;;
+esac

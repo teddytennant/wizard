@@ -161,6 +161,14 @@ pub const CATALOGUE: &[Entry] = &[
         present: cfg!(feature = "provider-chatgpt"),
     },
     Entry {
+        feature: "provider-claude-code",
+        plugin: Some("claude-code"),
+        backend: Some(Backend::Rust),
+        summary: "Claude on a subscription, through Claude Code (kind = \"claudecode\")",
+        default_on: true,
+        present: cfg!(feature = "provider-claude-code"),
+    },
+    Entry {
         feature: "provider-cloudflare",
         plugin: Some("cloudflare"),
         backend: Some(Backend::Rust),

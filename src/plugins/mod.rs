@@ -96,6 +96,8 @@ pub mod host;
 
 #[cfg(feature = "provider-chatgpt")]
 pub mod chatgpt;
+#[cfg(feature = "provider-claude-code")]
+pub mod claude_code;
 #[cfg(feature = "provider-cloudflare")]
 pub mod cloudflare;
 #[cfg(feature = "provider-llamacpp")]
@@ -168,6 +170,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(anthropic::AnthropicPlugin::new()));
     #[cfg(feature = "provider-chatgpt")]
     plugins.push(Arc::new(chatgpt::ChatGptPlugin::new()));
+    #[cfg(feature = "provider-claude-code")]
+    plugins.push(Arc::new(claude_code::ClaudeCodePlugin::new()));
     #[cfg(feature = "provider-cloudflare")]
     plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
     #[cfg(feature = "fleet")]
@@ -534,6 +538,11 @@ mod tests {
                 cfg!(feature = "provider-chatgpt"),
                 "chatgpt",
                 &[ProviderKind::CHATGPT_OAUTH],
+            ),
+            (
+                cfg!(feature = "provider-claude-code"),
+                "claude-code",
+                &[ProviderKind::CLAUDE_CODE],
             ),
             (
                 cfg!(feature = "provider-cloudflare"),

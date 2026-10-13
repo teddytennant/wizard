@@ -723,7 +723,7 @@ still named a concrete provider type — is deleted. `llm::registry`'s process r
 build answers to is exactly the set of plugins it was compiled with, and
 nothing else can put a kind in it.
 
-### Seven features over nine kinds
+### Eight features over ten kinds
 
 | Feature | Registers | Lives in |
 | --- | --- | --- |
@@ -734,6 +734,7 @@ nothing else can put a kind in it.
 | `provider-cloudflare` | `cloudflare` | `src/plugins/cloudflare.rs` |
 | `provider-xai` | `xai`, `xaioauth` | `src/plugins/xai.rs` |
 | `provider-chatgpt` | `chatgptoauth` | `src/plugins/chatgpt/` |
+| `provider-claude-code` | `claudecode` | `src/plugins/claude_code/` |
 
 All on by default; a stock build behaves exactly as before.
 

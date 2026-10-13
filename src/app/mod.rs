@@ -199,6 +199,8 @@ pub enum SetupSection {
     Wizard,
     /// The messaging-gateway questions alone.
     Gateway,
+    /// Find, install and sign in Claude Code, then switch to it.
+    ClaudeCode,
 }
 
 /// Full TUI state. [`crate::ui::draw`] renders it; [`App::handle_event`]
@@ -3554,6 +3556,9 @@ impl App {
                                             PromptField::ApiKey,
                                         ]),
                                     });
+                                }
+                                ProviderSetup::ClaudeCode => {
+                                    self.pending_setup = Some(SetupSection::ClaudeCode);
                                 }
                                 // OpenAI-compatible custom — everything is
                                 // prompted, starting with the name.

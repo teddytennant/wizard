@@ -406,6 +406,12 @@ wizard --login chatgpt
 
 Tokens land in `~/.wizard/chatgpt_oauth.json` (mode 0600). On success Wizard adds a `chatgptoauth` provider pointed at `chatgpt.com/backend-api/codex`. The window's settings sheet accepts `chatgpt` the same way as `xai`. You still need a plan that the Codex backend accepts; a failed exchange or 403 is the usual signal that the account is not eligible.
 
+### Using a Claude subscription
+
+`/provider`, then **Add provider**, then **Claude (subscription)** runs Wizard on a Claude Pro or Max plan. It needs [Claude Code](https://code.claude.com/docs/en/setup) installed and signed in. If `claude` is missing, Wizard shows Anthropic's install command and asks before running it; if it is signed out, Wizard starts `claude auth login` and checks again.
+
+Every request goes through Claude Code: Wizard starts your `claude` binary for each model call and reads its output. It never reads Claude Code's credentials and never calls Anthropic itself. Wizard's own prompt, tools and permission prompts stay in charge, and `/model` takes Claude Code's aliases (`sonnet`, `opus`, `haiku`) or a full model id. The provider is stored as `kind = "claudecode"`. Without a terminal to ask on, a missing install or sign-in fails with the command to run.
+
 ### Signing in over SSH
 
 Both providers redirect to a fixed loopback address — `127.0.0.1:56121/callback` for xAI, `localhost:1455/auth/callback` for ChatGPT — and loopback belongs to whichever machine opens the browser. Over SSH that is your laptop, not the box running the sign-in, so the redirect never reaches the listener. `wizard --login` notices the remote session and prints both ways through:

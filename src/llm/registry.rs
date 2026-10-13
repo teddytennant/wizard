@@ -140,6 +140,8 @@ impl ProviderKind {
     pub const CHATGPT_OAUTH: Self = Self::known("chatgptoauth");
     /// Cloudflare Workers AI.
     pub const CLOUDFLARE: Self = Self::known("cloudflare");
+    /// Claude on a Pro or Max subscription, through the user's own Claude Code.
+    pub const CLAUDE_CODE: Self = Self::known("claudecode");
 }
 
 /// The on-disk strings a stock build's backends default to.
