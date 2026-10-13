@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Fixed
+
+- **A completion review that names no verdict no longer sends the agent back to work.** It used to be reported to the agent as a failed review with nothing to fix, and the agent spent the next turn second-guessing finished work. The run now ends with the review reported as having checked nothing.
+
 ## [3.8.7] - 2026-10-13
 
 ### Added

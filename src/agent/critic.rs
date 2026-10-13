@@ -645,6 +645,8 @@ pub enum ReviewVerdict {
     Pass,
     /// It is not, and this is what is wrong.
     Fail(String),
+    /// The reviewer named no verdict, so the claim stands unreviewed.
+    Unclear,
 }
 
 impl ReviewVerdict {
@@ -653,6 +655,7 @@ impl ReviewVerdict {
         match self {
             Self::Pass => "PASS — the review found the request satisfied".to_string(),
             Self::Fail(why) => format!("FAIL — {why}"),
+            Self::Unclear => "no verdict, so the claim of done was not checked".to_string(),
         }
     }
 }
@@ -700,7 +703,8 @@ pub fn plan_after_review(
     rounds_used: u32,
 ) -> ReviewAction {
     match verdict {
-        ReviewVerdict::Pass => ReviewAction::Accept,
+        // A reviewer with nothing to say has given the agent nothing to fix.
+        ReviewVerdict::Pass | ReviewVerdict::Unclear => ReviewAction::Accept,
         // Out of rounds: the run ends with the failure reported rather than
         // argued. The caller is expected to say so on its way out.
         ReviewVerdict::Fail(_) if rounds_used > REVIEW_MAX_ROUNDS => ReviewAction::Accept,
@@ -1118,10 +1122,17 @@ mod tests {
 
     #[test]
     fn a_review_that_names_no_verdict_is_unclear() {
-        // The caller turns this into a FAIL; a mumbling reviewer must never be
-        // the reason a run reports success.
         assert_eq!(parse_review("Looks good to me, mostly."), None);
         assert_eq!(parse_review("FAILURE-mode analysis follows"), None);
+    }
+
+    #[test]
+    fn an_unclear_review_is_not_a_pass_and_sends_nothing_back() {
+        assert_eq!(
+            plan_after_review(Claim::Finished("r"), &ReviewVerdict::Unclear, 1),
+            ReviewAction::Accept
+        );
+        assert!(!ReviewVerdict::Unclear.summary().contains("PASS"));
     }
 
     #[test]

@@ -126,8 +126,8 @@ impl CritiqueContext {
     /// Same independence as the critic and one more capability: the reviewer
     /// gets `execute` as well as the read-only tools, because re-running the
     /// request's own acceptance command is most of what it is for. An unclear
-    /// reply is a `Fail`, never a pass. A reviewer that mumbles must not be the
-    /// reason a run reports success.
+    /// reply is `Unclear`, never a pass and never a rework: a reviewer that
+    /// names no gap gives the agent nothing to fix.
     pub async fn review(
         &self,
         claim: critic::Claim<'_>,
@@ -137,13 +137,7 @@ impl CritiqueContext {
         let output = self
             .run(config, task, subagent::RunScope::Inspect, budget)
             .await?;
-        Ok(critic::parse_review(&output).unwrap_or_else(|| {
-            critic::ReviewVerdict::Fail(
-                "the review did not return a clear PASS/FAIL verdict, so nothing about this run \
-                 has been checked; check the request's deliverables yourself"
-                    .to_string(),
-            )
-        }))
+        Ok(critic::parse_review(&output).unwrap_or(critic::ReviewVerdict::Unclear))
     }
 
     /// Spawn one fresh judging run and hand back its final text.
