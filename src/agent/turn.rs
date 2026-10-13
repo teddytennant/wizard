@@ -333,6 +333,10 @@ pub(super) struct Policy {
     pub operator_control: bool,
     /// Whether the ephemeral context-pressure note rides each completion.
     pub pressure_signal: bool,
+    /// Whether the run is told when it reaches its last step. A sub-run's
+    /// output is its last text, so one that spends its final step on a tool
+    /// call hands its parent a half-sentence instead of an answer.
+    pub last_step_notice: bool,
 }
 
 impl Policy {
@@ -377,6 +381,7 @@ impl Policy {
             background_drain: true,
             operator_control: agent.mode == crate::config::Mode::Sovereign,
             pressure_signal: true,
+            last_step_notice: false,
         }
     }
 
@@ -457,6 +462,7 @@ impl Policy {
             // still runs on every step (see [`Host::compact`]); what a sub-run
             // does without is being *told* about the pressure it cannot act on.
             pressure_signal: false,
+            last_step_notice: true,
         }
     }
 }
@@ -597,6 +603,9 @@ impl Ran {
     }
 }
 
+const LAST_STEP_NOTICE: &str = "This is your last step. Do not call a tool. Reply now with \
+    your final answer, in the format you were asked for, from what you have already found.";
+
 /// **The loop.** Stream a completion, report it, run the tool calls it made,
 /// feed the results back, repeat.
 ///
@@ -624,6 +633,9 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             && let Some(reason) = honor_loop_control(host, policy).await
         {
             return Ok(Ran::ended(reason, steps_used, last_text));
+        }
+        if policy.last_step_notice && step == policy.max_steps && step > 1 {
+            host.push(ChatMessage::user(LAST_STEP_NOTICE));
         }
 
         // One reading of how full the next call's prompt is, and both things
@@ -3142,6 +3154,7 @@ mod tests {
             background_drain,
             operator_control,
             pressure_signal,
+            last_step_notice,
             time_budget,
         } = policy;
 
@@ -3181,6 +3194,10 @@ mod tests {
         assert!(
             !pressure_signal,
             "the note's content is advice to call `compact`, which a sub-run cannot"
+        );
+        assert!(
+            last_step_notice,
+            "a sub-run's output is its last text, so it must know which step is the last"
         );
         assert!(
             !recover_truncation,

@@ -669,6 +669,13 @@ pub fn parse_review(output: &str) -> Option<ReviewVerdict> {
             .trim()
             .trim_start_matches(|c: char| !c.is_ascii_alphabetic());
         let upper = stripped.to_ascii_uppercase();
+        let (upper, stripped) = match upper.strip_prefix("VERDICT") {
+            Some(rest) => {
+                let rest = rest.trim_start_matches(|c: char| !c.is_ascii_alphabetic());
+                (rest.to_string(), &stripped[stripped.len() - rest.len()..])
+            }
+            None => (upper, stripped),
+        };
         if starts_with_token(&upper, "PASS") {
             return Some(ReviewVerdict::Pass);
         }
@@ -1117,6 +1124,14 @@ mod tests {
             Some(ReviewVerdict::Fail(
                 "`curl -sf localhost:8080` returned 404".to_string()
             ))
+        );
+        assert_eq!(
+            parse_review("**Verdict: PASS**"),
+            Some(ReviewVerdict::Pass)
+        );
+        assert_eq!(
+            parse_review("Verdict: FAIL: out.txt is empty"),
+            Some(ReviewVerdict::Fail("out.txt is empty".to_string()))
         );
     }
 

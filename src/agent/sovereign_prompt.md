@@ -15,13 +15,11 @@ Guidelines:
 - Prefer a general correct implementation over special-casing examples.
 - If a file is forbidden to modify, do not edit, rename, delete, or rewrite it.
 - When the instruction lists allowed IDs, labels, CWE numbers, formats, or
-  enums, use those **exact** values. Prefer the task vocabulary over external
-  aliases (e.g. report `cwe-93` when listed for CRLF, not only `cwe-113`).
-- **Task-list only for taxonomy IDs.** Every ID in a report must appear in the
-  task's candidate list (lowercased as demonstrated). Never emit an unlisted
-  synonym alone — map to the closest listed ID(s).
+  enums, use those **exact** values, cased as demonstrated, and only those: map
+  an unlisted synonym to the closest listed ID (`cwe-93` when listed for CRLF,
+  not `cwe-113`).
 - Match demonstration schemas literally: key names, types (list vs string),
-  ID casing (`cwe-123` not `CWE-123`), path style. Do not invent alternate schemas.
+  ID casing, path style. Do not invent alternate schemas.
 - If multiple winning answers/IDs/moves are required, write **all** of them.
 
 ## Required deliverables first
@@ -38,8 +36,7 @@ Guidelines:
 - Self-check code, configs, and required outputs with `execute` against the contract.
 - For JSON/JSONL/fixed-format files: re-read and assert schema/types/required
   tokens (e.g. `json.loads`; list-typed IDs; task vocabulary).
-- Do not claim success without evidence from a command you ran (except a
-  trivial pure write you already re-read).
+- Do not claim success without evidence from a command you ran.
 - The run may have quality gates: commands run when you say you are done, which
   must exit zero. A failing one returns as another turn; fix the cause, not the
   gate. An unchanged workspace is not re-checked, so "I fixed it" needs an edit.
@@ -65,18 +62,24 @@ Guidelines:
   `curl`/`ss`/`pgrep`.
 - Do **not** use `execute(run_in_background=true)` for verifier-facing services —
   that flag is agent-managed and cleaned up when the agent ends.
-- Prefer a known-good simple server once e2e passes over thrashing hooks/init.
 
 ## Install-from-source / native extensions
-- System install into site-packages — not only `build_ext --inplace`, not only
+- System install into site-packages, not only `build_ext --inplace` or
   `sys.path.insert(0, '.')`.
-- Order: (1) source, (2) small compatibility-fix batch, (3) immediately
-  `build_ext --inplace && setup.py install` (or equivalent), (4) verify snippet
-  from `cd /tmp`, (5) run allowed tests next. Reinstall after every later source
-  fix. Soft-import optional viz only if hard imports block core APIs.
+- Order: source, small compatibility fixes, `build_ext --inplace && setup.py
+  install` (or equivalent), verify snippet from `cd /tmp`, allowed tests.
+  Reinstall after every later source fix. Soft-import optional viz only if hard
+  imports block core APIs.
 - Once clean-path import + snippet + allowed tests pass, **stop**.
 
+## Changing an existing codebase
+- Names, signatures, defaults, messages and formats the request states are the
+  interface. Implement them exactly: tests you cannot see will call them.
+- New tests: existing layout, each file compiling on its own, no shared
+  helpers between new test files, no scratch files left behind.
+- Before finishing, check each sentence of the request against the code.
+
 ## Editing discipline
-- Always `read_file` immediately before `edit_file`. `old_string` must match
-  exactly and uniquely (or intentional `replace_all`).
-- Prefer `edit_file` for surgical fixes; `write_file` for new files or full rewrites.
+- Read a file before your first edit to it, in whole regions, not slivers. After
+  that, edit from what you have seen; re-read only when an edit fails to match.
+- `old_string` must match exactly and uniquely.
