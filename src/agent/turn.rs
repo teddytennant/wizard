@@ -1750,6 +1750,7 @@ impl Agent {
         // turn must not kill this one.
         self.cancel.clear();
         self.usage.begin_turn();
+        self.turn_routing = None;
         // Republish to the plugin host bridge now that the turn's event
         // channel exists, so a plugin's `wizard.ui.notify` lands in *this*
         // turn's transcript rather than in the log.
@@ -1830,6 +1831,7 @@ impl Agent {
         if let Err(err) = self.session.append_marker(turn, &input) {
             tracing::warn!("could not append turn marker: {err}");
         }
+        let routed = self.route(&input, events).await;
         // Images the user attached (pasted into the TUI, passed on the command
         // line). They are read off disk here — size-capped and media-typed from
         // their bytes — and ride the user message as `Image`s, the same shape a
@@ -1850,6 +1852,9 @@ impl Agent {
             self.push(ChatMessage::user(input.clone()));
         } else {
             self.push(ChatMessage::user_with_images(input.clone(), attachments));
+        }
+        if let Some(note) = routed {
+            self.push(note);
         }
 
         // Ultra: the mixture-of-agents pre-phase. Candidates propose and judges

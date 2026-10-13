@@ -869,6 +869,57 @@ fn default_fusion_rounds() -> u32 {
     1
 }
 
+/// Decision-model settings (`[decisions]` in `config.toml`); see
+/// [`crate::decisions`] and docs/decisions.md. Absent, or present with no key
+/// for its provider, nothing is asked and every request is what it was.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DecisionsConfig {
+    /// `openai`, `subq` or `jev`.
+    pub provider: String,
+    /// Overrides the provider's model (`gpt-6-luna`, `subq-snap-preview`,
+    /// `jev-1.13.0`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Overrides the provider's base URL. OpenAI's includes `/v1`; SubQ's and
+    /// Jev's do not (`https://openrouter.ai/api` reaches Jev through
+    /// OpenRouter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Environment variable holding the key. Defaults to `OPENAI_API_KEY`,
+    /// `SUBQ_API_KEY` or `JEV_API_KEY`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// The call sits in front of the turn's first model step, so it gets this
+    /// long and no longer. Past it the turn goes ahead unrouted.
+    pub timeout_ms: u64,
+    /// A skill scored at or above this has its body loaded into the prompt.
+    pub skill_min: f64,
+    /// A conditional prompt section scored at or above this is kept. Lower
+    /// than `skill_min` because a missing rule costs more than a spare one.
+    pub section_min: f64,
+}
+
+impl Default for DecisionsConfig {
+    fn default() -> Self {
+        Self {
+            provider: "openai".to_string(),
+            model: None,
+            base_url: None,
+            api_key_env: None,
+            timeout_ms: 2000,
+            skill_min: 0.6,
+            section_min: 0.4,
+        }
+    }
+}
+
+impl DecisionsConfig {
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.timeout_ms)
+    }
+}
+
 /// Mixture-of-agents settings (`[ultra]` in `config.toml`); see `/ultra` and
 /// [`crate::agent::ultra`]. Unlike [`FusionConfig`], nothing here names a
 /// provider: ultra fans its candidates out over whatever model is *already*
@@ -1371,6 +1422,10 @@ pub struct Config {
     /// disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ultra: Option<UltraConfig>,
+    /// Decision-model routing (`[decisions]`). Absent until configured; see
+    /// [`DecisionsConfig`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decisions: Option<DecisionsConfig>,
     /// Whether the model may run Lua programs that call Wizard's own tools
     /// (`run_code`).
     ///
@@ -1444,6 +1499,7 @@ impl Default for Config {
             mesh: MeshConfig::default(),
             fusion: None,
             ultra: None,
+            decisions: None,
             code_mode: false,
             computer: ComputerConfig::default(),
         }

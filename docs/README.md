@@ -23,6 +23,7 @@ to do.
 | [Bring your own model](byom.md) | Local GGUFs, `llama-server`, custom endpoints |
 | [Fusion](fusion.md) | `/fusion`: a panel of providers that critique each other |
 | [Ultra](ultra.md) | `/ultra`: N read-only subagents, then a judge |
+| [Decision routing](decisions.md) | `[decisions]`: a classifier picks the prompt sections and skills a request needs |
 | [Web](web.md) | `web_fetch`, web search, and `x_search` |
 
 ## Extending it

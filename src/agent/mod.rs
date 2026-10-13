@@ -14,6 +14,7 @@ mod event;
 pub mod mission;
 pub mod prompts;
 mod retry;
+pub mod routing;
 pub mod session;
 pub mod subagent;
 pub(crate) mod turn;
@@ -818,6 +819,13 @@ pub struct Agent {
     /// Session state, not config: a rebuilt agent (`/model`, a provider switch,
     /// `/resume`) starts without it, so every rebuild path must re-arm it.
     ultra: Option<Arc<ultra::UltraEngine>>,
+    /// The decision model behind [`routing`], when `[decisions]` names one and
+    /// its key resolves. `None` is an agent that never asks.
+    decisions: Option<Arc<dyn crate::decisions::DecisionProvider>>,
+    /// What routing put in the system prompt at the session's first prompt.
+    routing: Option<routing::Routing>,
+    /// This turn's routing notice, for the usage log.
+    turn_routing: Option<String>,
     /// The registered `run_code` tool, stashed so a `/model` switch can take it
     /// away and give it back without rebuilding the whole registry.
     ///
@@ -1038,6 +1046,9 @@ impl Agent {
             ),
             hooks,
             mode: config.mode,
+            decisions: crate::decisions::from_config(config.decisions.as_ref()),
+            routing: None,
+            turn_routing: None,
             config,
             history: Vec::new(),
             session,
@@ -1634,6 +1645,11 @@ impl Agent {
         self.usage_log = path;
     }
 
+    /// Replace the decision model [`routing`] asks. `None` turns routing off.
+    pub fn set_decisions(&mut self, provider: Option<Arc<dyn crate::decisions::DecisionProvider>>) {
+        self.decisions = provider;
+    }
+
     /// Whether plan mode is active.
     pub fn plan_mode(&self) -> bool {
         self.plan_mode.load(std::sync::atomic::Ordering::SeqCst)
@@ -1766,12 +1782,16 @@ impl Agent {
         if self.mode == Mode::Chat {
             return self.compose_chat_prompt();
         }
-        let mut prompt = prompts::build_system_prompt(
+        let mut sections = prompts::system_prompt_sections(
             self.mode,
             &self.skills,
             self.agents_md.as_deref(),
             self.memory_index.as_deref(),
         );
+        if let Some(routing) = &self.routing {
+            routing::apply(&mut sections, &self.skills, routing);
+        }
+        let mut prompt = prompts::join_sections(&sections);
         if !self.native_tools {
             prompt.push_str("\n\n");
             prompt.push_str(&prompts::render_tool_protocol(
@@ -1888,13 +1908,16 @@ impl Agent {
     fn record_turn_usage(&self) {
         let (prompt_tokens, completion_tokens) = self.usage.turn_totals();
         let (cache_read_tokens, cache_write_tokens) = self.usage.turn_cache_totals();
-        self.append_usage_record(crate::usage::TurnTokens {
-            prompt: prompt_tokens,
-            completion: completion_tokens,
-            cache_read: cache_read_tokens,
-            cache_write: cache_write_tokens,
-            reasoning: self.usage.turn_reasoning_tokens(),
-        });
+        self.append_usage_record(
+            crate::usage::TurnTokens {
+                prompt: prompt_tokens,
+                completion: completion_tokens,
+                cache_read: cache_read_tokens,
+                cache_write: cache_write_tokens,
+                reasoning: self.usage.turn_reasoning_tokens(),
+            },
+            self.turn_routing.clone(),
+        );
     }
 
     /// Bill one compaction pass ([`context::compact`]'s summarization calls).
@@ -1919,19 +1942,22 @@ impl Agent {
             usage.cache_write,
             usage.reasoning,
         );
-        self.append_usage_record(crate::usage::TurnTokens {
-            prompt: usage.prompt,
-            completion: usage.completion,
-            cache_read: usage.cache_read,
-            cache_write: usage.cache_write,
-            reasoning: usage.reasoning,
-        });
+        self.append_usage_record(
+            crate::usage::TurnTokens {
+                prompt: usage.prompt,
+                completion: usage.completion,
+                cache_read: usage.cache_read,
+                cache_write: usage.cache_write,
+                reasoning: usage.reasoning,
+            },
+            None,
+        );
     }
 
     /// Append one priced record to the JSONL usage log (when the backend
     /// reported counts and the log is enabled). Best-effort: failures are
     /// logged, never surfaced.
-    fn append_usage_record(&self, tokens: crate::usage::TurnTokens) {
+    fn append_usage_record(&self, tokens: crate::usage::TurnTokens, routing: Option<String>) {
         if tokens.prompt == 0 && tokens.completion == 0 {
             return;
         }
@@ -1984,6 +2010,7 @@ impl Agent {
             cost_usd: Some(priced.usd),
             price_source: priced.source,
             mode: self.mode.to_string(),
+            routing,
         };
         if let Err(err) = crate::usage::append(path, &record) {
             tracing::warn!("could not append usage record: {err:#}");

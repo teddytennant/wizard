@@ -311,6 +311,10 @@ pub struct UsageRecord {
     pub price_source: PriceSource,
     /// Personality mode (`genie` / `sovereign`).
     pub mode: String,
+    /// What decision routing loaded for the turn and how long it took, when
+    /// `[decisions]` is on. See docs/decisions.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<String>,
 }
 
 /// Which rate produced a [`UsageRecord::cost_usd`].
@@ -1324,6 +1328,7 @@ mod tests {
             cost_usd: Some(0.5),
             price_source: PriceSource::Table,
             mode: "genie".to_string(),
+            routing: None,
         };
         append(&path, &record).expect("first append");
         append(&path, &record).expect("second append");
@@ -2528,6 +2533,7 @@ mod tests {
                     price_source: priced.source,
                     mode: "genie".to_string(),
                     reasoning_tokens: 0,
+                    routing: None,
                 };
                 append(&path, &record).expect("appending the fixture");
             };

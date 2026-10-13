@@ -683,7 +683,7 @@ fn environment_section() -> String {
 /// this returns, and the digest's depth is served by the `manual` tool from a
 /// compiled-in constant, so neither the charter nor its lookup can be evolved
 /// away here.
-fn base_system_prompt(mode: Mode) -> String {
+pub(super) fn base_system_prompt(mode: Mode) -> String {
     let default = match mode {
         Mode::Genie => GENIE_SYSTEM_PROMPT,
         Mode::Sovereign => SOVEREIGN_SYSTEM_PROMPT,

@@ -4331,3 +4331,324 @@ async fn switching_to_chat_and_back_restores_the_project_tools() {
             .starts_with(prompts::CHAT_SYSTEM_PROMPT)
     );
 }
+
+/// Decision model that answers from a fixed table (0.0 for anything not in
+/// it) and records what it was asked, or fails when `scores` is `None`.
+#[derive(Debug)]
+struct FakeDecisions {
+    scores: Option<Vec<(&'static str, f64)>>,
+    delay: std::time::Duration,
+    asked: Mutex<Vec<(String, Vec<crate::decisions::Question>)>>,
+}
+
+impl FakeDecisions {
+    fn new(scores: Option<Vec<(&'static str, f64)>>) -> Arc<Self> {
+        Arc::new(Self {
+            scores,
+            delay: std::time::Duration::ZERO,
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::decisions::DecisionProvider for FakeDecisions {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    async fn decide(
+        &self,
+        input: &str,
+        questions: &[crate::decisions::Question],
+    ) -> Result<crate::decisions::Scores> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((input.to_string(), questions.to_vec()));
+        tokio::time::sleep(self.delay).await;
+        let Some(scores) = &self.scores else {
+            anyhow::bail!("fake decisions: status 500");
+        };
+        Ok(questions
+            .iter()
+            .map(|q| {
+                let p = scores.iter().find(|(name, _)| *name == q.name);
+                (q.name.clone(), p.map_or(0.0, |(_, p)| *p))
+            })
+            .collect())
+    }
+}
+
+fn routing_skill(name: &str, body: &str) -> Skill {
+    Skill {
+        name: name.to_string(),
+        path: format!("/skills/{name}/SKILL.md").into(),
+        meta: crate::skills::SkillMeta {
+            description: Some(format!("{name} work.")),
+            ..Default::default()
+        },
+        body: body.to_string(),
+    }
+}
+
+/// A sovereign agent with two skills and `decisions` as its decision model,
+/// scripted for `turns` one-step turns.
+fn routed_agent(
+    tmp: &TempDir,
+    decisions: Option<Arc<FakeDecisions>>,
+    turns: usize,
+) -> (Agent, Arc<ScriptedProvider>) {
+    let responses = (0..turns)
+        .map(|_| {
+            vec![ChatChunk {
+                prompt_eval_count: Some(10),
+                eval_count: Some(5),
+                ..final_chunk("done")
+            }]
+        })
+        .collect();
+    let (mut agent, provider) = test_agent_in(tmp, responses, Vec::new(), ToolRegistry::new());
+    agent.set_mode(Mode::Sovereign);
+    agent.set_skills(vec![
+        routing_skill("frontend", "- Use the design tokens."),
+        routing_skill("release", "- Tag after the changelog."),
+    ]);
+    agent.set_decisions(decisions.map(|d| d as Arc<dyn crate::decisions::DecisionProvider>));
+    (agent, provider)
+}
+
+async fn routed_turn(agent: &mut Agent, input: &str) -> Vec<String> {
+    let (tx, mut rx) = mpsc::channel(256);
+    agent.run_turn(input, tx).await.expect("turn ok");
+    drain_events(&mut rx).2
+}
+
+#[tokio::test]
+async fn without_a_decision_model_every_request_is_what_it_was() {
+    let tmp = TempDir::new();
+    let (mut agent, provider) = routed_agent(&tmp, None, 2);
+    let unrouted = agent.history[0].text();
+    assert_eq!(
+        unrouted,
+        agent.compose_system_prompt(),
+        "composing is unchanged with routing off"
+    );
+    assert!(unrouted.starts_with(prompts::SOVEREIGN_SYSTEM_PROMPT));
+
+    let notices = routed_turn(&mut agent, "fix the off-by-one in parse()").await;
+    routed_turn(&mut agent, "now start a server").await;
+    assert!(notices.iter().all(|n| !n.contains("routed")), "{notices:?}");
+    let requests = provider.requests.lock().unwrap();
+    for request in requests.iter() {
+        assert_eq!(request.messages[0].text(), unrouted);
+        assert!(request.messages[1..].iter().all(|m| m.role != Role::System));
+    }
+    assert!(agent.routing.is_none());
+    let usage = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("usage log");
+    assert_eq!(usage.lines().count(), 2);
+    assert!(!usage.contains("routing"), "{usage}");
+}
+
+#[tokio::test]
+async fn the_first_prompt_routes_the_system_prompt_and_later_ones_only_append() {
+    let tmp = TempDir::new();
+    let decisions = FakeDecisions::new(Some(vec![
+        ("section_codebase", 0.97),
+        ("section_services", 0.1),
+        ("skill_0", 0.9),
+    ]));
+    let (mut agent, provider) = routed_agent(&tmp, Some(Arc::clone(&decisions)), 3);
+    let unrouted = agent.history[0].text();
+
+    let notices = routed_turn(&mut agent, "make the pricing page nicer on phones").await;
+    let routed = agent.history[0].text();
+    assert!(routed.len() < unrouted.len());
+    assert!(routed.contains("## Changing an existing codebase"));
+    assert!(!routed.contains("## Durable services"));
+    assert!(!routed.contains("## Install-from-source"));
+    assert!(routed.contains("## Skills for this task"));
+    assert!(routed.contains("### frontend\n\n- Use the design tokens."));
+    assert!(!routed.contains("Tag after the changelog"));
+    assert!(
+        routed.contains("### release\nrelease work."),
+        "the index stays"
+    );
+    let notice = notices
+        .iter()
+        .find(|n| n.starts_with("routed in "))
+        .unwrap();
+    assert!(
+        notice.contains(" ms: sections codebase; skills frontend; system prompt ~"),
+        "{notice}"
+    );
+    assert!(notice.ends_with(" unrouted"), "{notice}");
+    {
+        let asked = decisions.asked.lock().unwrap();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, "make the pricing page nicer on phones");
+        let names: Vec<&str> = asked[0].1.iter().map(|q| q.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "section_codebase",
+                "section_deliverables",
+                "section_services",
+                "section_native-install",
+                "section_images",
+                "skill_0",
+                "skill_1"
+            ]
+        );
+    }
+
+    // A later prompt that needs a section and a skill gets them after the
+    // user message; what is already loaded is not asked about again.
+    let later = FakeDecisions::new(Some(vec![("section_services", 0.99), ("skill_0", 0.8)]));
+    agent.set_decisions(Some(
+        Arc::clone(&later) as Arc<dyn crate::decisions::DecisionProvider>
+    ));
+    let notices = routed_turn(&mut agent, "serve it on port 8099 and leave it up").await;
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.starts_with("routed in ") && n.ends_with(" ms: added services, release")),
+        "{notices:?}"
+    );
+    {
+        let asked = later.asked.lock().unwrap();
+        let names: Vec<&str> = asked[0].1.iter().map(|q| q.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "section_deliverables",
+                "section_services",
+                "section_native-install",
+                "section_images",
+                "skill_0"
+            ]
+        );
+    }
+    // Nothing new the third time: no note, and services is not asked again.
+    let notices = routed_turn(&mut agent, "thanks").await;
+    assert!(
+        notices.iter().any(|n| n.ends_with(" ms: added none")),
+        "{notices:?}"
+    );
+    assert!(
+        later.asked.lock().unwrap()[1]
+            .1
+            .iter()
+            .all(|q| q.name != "section_services")
+    );
+    // A recomposition (here a model switch) keeps the routed prompt.
+    agent.set_model("other".to_string(), true);
+    assert_eq!(agent.history[0].text(), routed);
+
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    for request in requests.iter() {
+        assert_eq!(request.messages[0].text(), routed, "the prefix never moves");
+    }
+    let first = &requests[0].messages;
+    let second = &requests[1].messages;
+    let texts =
+        |messages: &[ChatMessage]| messages.iter().map(ChatMessage::text).collect::<Vec<_>>();
+    assert_eq!(texts(&second[..first.len()]), texts(first));
+    let note = second.last().unwrap();
+    assert_eq!(note.role, Role::System);
+    assert!(note.text().starts_with("[routing] "));
+    assert!(note.text().contains("## Durable services"));
+    assert!(
+        note.text()
+            .contains("### release\n\n- Tag after the changelog.")
+    );
+    assert_eq!(second[second.len() - 2].role, Role::User);
+    let notes = |messages: &[ChatMessage]| {
+        messages
+            .iter()
+            .filter(|m| m.text().starts_with("[routing] "))
+            .count()
+    };
+    assert_eq!(notes(&requests[2].messages), 1);
+
+    let usage = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("usage log");
+    assert_eq!(
+        usage.matches("\"routing\":\"routed in ").count(),
+        3,
+        "{usage}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_or_slow_decision_call_leaves_the_prompt_alone_for_good() {
+    for slow in [false, true] {
+        let tmp = TempDir::new();
+        let mut failing = FakeDecisions {
+            scores: None,
+            delay: std::time::Duration::ZERO,
+            asked: Mutex::new(Vec::new()),
+        };
+        if slow {
+            failing.scores = Some(Vec::new());
+            failing.delay = std::time::Duration::from_secs(30);
+        }
+        let (mut agent, provider) = routed_agent(&tmp, Some(Arc::new(failing)), 2);
+        agent.config.decisions = Some(crate::config::DecisionsConfig {
+            timeout_ms: 20,
+            ..Default::default()
+        });
+        let unrouted = agent.history[0].text();
+        let notices = routed_turn(&mut agent, "fix the bug").await;
+        assert!(notices.iter().all(|n| !n.contains("routed")), "{notices:?}");
+
+        // The model answers now, but the full prompt has already gone out:
+        // sections stay, and only a skill may still be added, as a note.
+        agent.set_decisions(Some(FakeDecisions::new(Some(vec![("skill_0", 0.9)]))));
+        let notices = routed_turn(&mut agent, "restyle the header").await;
+        assert!(
+            notices.iter().any(|n| n.ends_with(" ms: added frontend")),
+            "{notices:?}"
+        );
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests[0].messages[0].text(), unrouted);
+        assert_eq!(requests[1].messages[0].text(), unrouted);
+        assert!(
+            requests[0].messages[1..]
+                .iter()
+                .all(|m| m.role != Role::System)
+        );
+    }
+}
+
+#[tokio::test]
+async fn genie_routes_skills_only_and_chat_is_never_routed() {
+    let tmp = TempDir::new();
+    let decisions = FakeDecisions::new(Some(vec![("skill_1", 0.9)]));
+    let (mut agent, _provider) = routed_agent(&tmp, Some(Arc::clone(&decisions)), 2);
+    agent.set_mode(Mode::Chat);
+    routed_turn(&mut agent, "hello").await;
+    assert!(decisions.asked.lock().unwrap().is_empty());
+
+    agent.set_mode(Mode::Genie);
+    let notices = routed_turn(&mut agent, "cut 3.9.0").await;
+    let asked = decisions.asked.lock().unwrap();
+    let names: Vec<&str> = asked[0].1.iter().map(|q| q.name.as_str()).collect();
+    assert_eq!(names, ["skill_0", "skill_1"]);
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.contains(" ms: skills release; system prompt ~")),
+        "{notices:?}"
+    );
+    assert!(
+        agent.history[0]
+            .text()
+            .contains("- Tag after the changelog.")
+    );
+    assert!(
+        agent.history[0]
+            .text()
+            .starts_with(prompts::GENIE_SYSTEM_PROMPT)
+    );
+}

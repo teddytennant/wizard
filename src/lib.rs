@@ -14,6 +14,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod credentials;
+pub mod decisions;
 pub mod desktop_app;
 pub mod dispatch;
 pub mod doctor;

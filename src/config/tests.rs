@@ -324,6 +324,15 @@ fn full_file_round_trips() {
             timeout_secs: 120,
             max_draft_chars: 4_000,
         }),
+        decisions: Some(DecisionsConfig {
+            provider: "subq".to_string(),
+            model: Some("subq-snap-preview".to_string()),
+            base_url: Some("http://127.0.0.1:9000".to_string()),
+            api_key_env: Some("MY_SUBQ_KEY".to_string()),
+            timeout_ms: 800,
+            skill_min: 0.7,
+            section_min: 0.3,
+        }),
         code_mode: true,
         computer: ComputerConfig {
             enabled: true,
@@ -392,6 +401,24 @@ fn full_file_round_trips() {
     assert_eq!(parsed.sync, original.sync);
     assert_eq!(parsed.fusion, original.fusion);
     assert_eq!(parsed.ultra, original.ultra);
+    assert_eq!(parsed.decisions, original.decisions);
+}
+
+#[test]
+fn decisions_are_off_until_the_table_exists_and_default_when_it_is_empty() {
+    let config: Config = toml::from_str("model = \"x\"").expect("valid toml");
+    assert!(config.decisions.is_none());
+    assert!(!toml::to_string(&config).unwrap().contains("decisions"));
+
+    let config: Config = toml::from_str("[decisions]").expect("valid toml");
+    assert_eq!(config.decisions, Some(DecisionsConfig::default()));
+    let config: Config =
+        toml::from_str("[decisions]\nprovider = \"jev\"\ntimeout_ms = 500").expect("valid toml");
+    let decisions = config.decisions.expect("table present");
+    assert_eq!(decisions.provider, "jev");
+    assert_eq!(decisions.timeout(), std::time::Duration::from_millis(500));
+    assert_eq!(decisions.skill_min, 0.6);
+    assert_eq!(decisions.section_min, 0.4);
 }
 
 #[test]
