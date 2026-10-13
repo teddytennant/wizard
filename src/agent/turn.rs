@@ -603,6 +603,28 @@ impl Ran {
     }
 }
 
+const PROMISE_NUDGE: &str = "You stopped on what you are about to do, not on a result. Nobody \
+    is watching to say go on. Do it now, or if the work is finished, say what was done.";
+
+/// Whether a reply's last line announces work instead of reporting it.
+fn ends_on_a_promise(reply: &str) -> bool {
+    let last = reply.lines().rev().find(|line| !line.trim().is_empty());
+    let Some(last) = last else { return false };
+    let last = last.trim().to_ascii_lowercase().replace('\u{2019}', "'");
+    [
+        "i'll ",
+        "i will ",
+        "i'm going to ",
+        "i am going to ",
+        "let me ",
+        "next, i'll ",
+        "next i'll ",
+        "now i'll ",
+    ]
+    .iter()
+    .any(|opening| last.starts_with(opening))
+}
+
 const LAST_STEP_NOTICE: &str = "This is your last step. Do not call a tool. Reply now with \
     your final answer, in the format you were asked for, from what you have already found.";
 
@@ -615,6 +637,7 @@ const LAST_STEP_NOTICE: &str = "This is your last step. Do not call a tool. Repl
 pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> Result<Ran> {
     let mut steps_used = 0;
     let mut last_text = String::new();
+    let mut promise_nudged = false;
 
     for step in 1..=policy.max_steps {
         steps_used = step;
@@ -773,6 +796,13 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         };
 
         if tool_calls.is_empty() {
+            // Nobody is there to say "go on" to a turn that ends on what it is
+            // about to do, so the loop says it, once.
+            if policy.operator_control && !promise_nudged && ends_on_a_promise(&content) {
+                promise_nudged = true;
+                host.push(ChatMessage::user(PROMISE_NUDGE));
+                continue;
+            }
             return Ok(Ran::ended(DoneReason::Completed, steps_used, content));
         }
         if !content.trim().is_empty() {
@@ -3344,6 +3374,19 @@ mod tests {
             "an earlier copy that was shrunk away is not pointed at"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reply_that_ends_on_a_plan_is_a_promise() {
+        assert!(ends_on_a_promise(
+            "Read the spec.\n\nI\u{2019}ll branch from main and implement it."
+        ));
+        assert!(ends_on_a_promise("Let me check that path.\n"));
+        assert!(!ends_on_a_promise(
+            "I'll note one caveat.\nAll 12 tests pass and the change is committed."
+        ));
+        assert!(!ends_on_a_promise("Done. The parser handles both forms."));
+        assert!(!ends_on_a_promise(""));
     }
 
     /// Feed `reply` through a gate a few characters at a time, the way a stream
