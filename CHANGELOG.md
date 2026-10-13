@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **The house TUI borrows more of Claude Code's look.** A finished tool call gets a green `●`; a failed one keeps its `✕`. Background commands and subagents are marked in the terminal's own foreground, not the accent. A subagent's card folds to its header and opens to the instructions it was handed, then its report, and its rail row sits one column further left. The status line opens with the vim mode, written `-- INSERT --` or `-- NORMAL --`, and with `◎ /goal active` while a goal loop is running.
+
 ## [3.8.5] - 2026-10-12
 
 ### Added
