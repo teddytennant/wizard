@@ -6,11 +6,19 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **`self_check = true`.** A turn that ran 25 seconds or more and changed something is sent back to the agent once, in the same conversation, to compare its work with the request and the project's docs. It answers `Verified, no changes.` or says what it fixed. Off by default, and it stands aside wherever the completion review is on.
+
 ### Changed
 
 - **The Claude subscription provider is several times faster.** It keeps one `claude` process per conversation and hands it only what is new, where 3.8.5 started a process and resent the whole history on every model call. The model now calls Wizard's tools natively. On one bug-fix task with Claude Haiku that took 26 model calls and 151 s in 3.8.5, it takes 5 calls and about 14 s.
 - **The genie prompt asks for batched tool calls, short narration and a check against the project's docs.** Across 14 coding tasks on Claude Haiku this cut model calls per task from 8.3 to 6.5 and prompt tokens from 158k to 113k.
 - **The system prompt names the working directory**, so a session does not open with `pwd`.
+
+### Fixed
+
+- **The Claude subscription provider no longer compacts every 48 KB.** It reported no context window, so a long task was summarized again and again, about half a minute each time.
 
 ## [3.8.6] - 2026-10-13
 

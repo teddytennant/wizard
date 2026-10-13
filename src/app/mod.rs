@@ -406,6 +406,8 @@ pub struct App {
     history_browse: Option<HistoryBrowse>,
     /// When the in-flight turn started (drives the elapsed-time display).
     pub turn_started: Option<Instant>,
+    /// How long the turn that last finished ran.
+    pub turn_took: Duration,
     /// Label of an in-progress background agent rebuild (model switch,
     /// crash recovery); rendered as a spinner in the status bar. Input that
     /// needs the agent is rejected with a notice while this is `Some`.
@@ -640,6 +642,7 @@ impl App {
             history: Vec::new(),
             history_browse: None,
             turn_started: None,
+            turn_took: Duration::ZERO,
             rebuilding: None,
             spinner_verb,
             verb_rolls: 0,
@@ -4863,7 +4866,10 @@ impl App {
             }
             AgentEvent::Done { reason } => {
                 self.status.busy = false;
-                self.turn_started = None;
+                self.turn_took = self
+                    .turn_started
+                    .take()
+                    .map_or(Duration::ZERO, |t| t.elapsed());
                 // A console cannot outlive the turn that opened it. The tool
                 // closes its own on the way out, but a turn that died on a hard
                 // error never reached that line, and a composer left pointing

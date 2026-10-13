@@ -948,6 +948,7 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // the work, and a review with no turn to fix what it found is a review
     // that only slows the run down. Its own bound is `REVIEW_MAX_ROUNDS`.
     let mut review_iterations: u32 = 0;
+    let self_check_on = config.self_check && !review_on && config.mode != crate::config::Mode::Chat;
     // Reviews spent on the claim currently being judged. Reset when one lands,
     // so a continuous mission gets a review per cycle rather than one ever.
     let mut review_rounds: u32 = 0;
@@ -1082,6 +1083,7 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
         // Set by a failed cycle a perpetual run intends to survive: the prompt
         // the next cycle opens with, and how long to wait before starting it.
         let mut recovery: Option<(String, Duration)> = None;
+        let turn_began = Instant::now();
         match agent
             .run_turn_with_images(&input, turn_images, tx.clone())
             .await
@@ -1154,6 +1156,17 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
                                     review_rounds,
                                     secs_left(deadline),
                                 ) {
+                                    Err(_)
+                                        if critic::plan_self_check(
+                                            self_check_on,
+                                            agent.effects().saturating_sub(effects_mark),
+                                            review_rounds,
+                                            turn_began.elapsed().as_secs(),
+                                        ) =>
+                                    {
+                                        review_rounds = review_rounds.saturating_add(1);
+                                        Some(critic::SELF_CHECK_PROMPT.to_string())
+                                    }
                                     Err(skip) => {
                                         tracing::debug!(
                                             "completion review skipped: {}",

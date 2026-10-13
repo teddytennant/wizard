@@ -246,7 +246,13 @@ run was. A rework turn costs whatever that turn costs, and only happens on a
 |-----|---------|--------|
 | `completion_review` | unset | Review the claim of done. Unset means on for headless, sovereign, continuous and scheduled runs, off in the TUI. `true` / `false` holds everywhere |
 
+| `self_check` | `false` | Where the completion review is off, send a turn that ran 25 seconds or more and changed something back to the agent once to check its work against the request |
+
 `--completion-review` and `--no-completion-review` set it for one run.
+
+`self_check = true` is the cheaper cousin for the TUI. It is the same agent in
+the same conversation, not a fresh reviewer, so it costs one short turn on a
+warm context. It replies `Verified, no changes.` or says what it fixed.
 
 ## Continuous mode (perpetual sovereign)
 

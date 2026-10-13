@@ -542,6 +542,34 @@ pub const REVIEW_MAX_ROUNDS: u32 = 1;
 /// this, the claim is accepted as it stands.
 pub const REVIEW_MIN_SECS: u64 = 60;
 
+/// A turn shorter than this is not sent back for a self-check.
+///
+/// The check costs a model turn. Measured against a suite of quick fixes it
+/// found nothing and cost a third of the turn again; on turns past this it
+/// found a missed requirement about one time in twelve.
+pub const SELF_CHECK_MIN_SECS: u64 = 25;
+
+/// What the agent is asked when its own turn is sent back for a second look.
+///
+/// Same conversation, so the files it read are still in context and the check
+/// is a fraction of an independent review's cost. It is the builder grading
+/// itself, which is why it is told what counts as evidence.
+pub const SELF_CHECK_PROMPT: &str = "\
+Before this is final, verify it once. For each behaviour the request, the spec \
+or the README states, compare it with the code that implements it, including \
+code you did not change: passing visible tests is not evidence. Run one or two \
+quick cases the tests do not cover, in a single command. Fix whatever disagrees \
+and say in a line what you fixed. If nothing needed fixing, reply with only: \
+Verified, no changes.";
+
+/// Whether to send a finished turn back for a self-check.
+///
+/// `enabled` is the `self_check` config key. One check per request, only for a
+/// turn that changed something, and only for one long enough to be worth it.
+pub fn plan_self_check(enabled: bool, effects: u64, rounds_used: u32, turn_secs: u64) -> bool {
+    enabled && effects > 0 && rounds_used == 0 && turn_secs >= SELF_CHECK_MIN_SECS
+}
+
 /// The reviewer's system prompt.
 ///
 /// The four numbered steps are the four ways a confident "done" has been wrong
@@ -1156,6 +1184,15 @@ mod tests {
         assert_eq!(plan_review(true, 5, 0, Some(REVIEW_MIN_SECS)), Ok(()));
         // A run with no `--max-hours` has no last seconds.
         assert_eq!(plan_review(true, 5, 0, None), Ok(()));
+    }
+
+    #[test]
+    fn a_self_check_is_for_one_long_turn_that_changed_something() {
+        assert!(plan_self_check(true, 3, 0, SELF_CHECK_MIN_SECS));
+        assert!(!plan_self_check(false, 3, 0, 600));
+        assert!(!plan_self_check(true, 0, 0, 600));
+        assert!(!plan_self_check(true, 3, 1, 600));
+        assert!(!plan_self_check(true, 3, 0, SELF_CHECK_MIN_SECS - 1));
     }
 
     #[test]

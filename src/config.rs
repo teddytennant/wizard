@@ -1278,6 +1278,12 @@ pub struct Config {
     /// money. Set it to `true` or `false` and that answer holds everywhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_review: Option<bool>,
+    /// Send a turn that ran long and changed something back to the agent once,
+    /// in the same conversation, to check its work against the request (see
+    /// [`crate::agent::critic::SELF_CHECK_PROMPT`]). Off by default. Where the
+    /// completion review is on, that reviews the turn and this does not.
+    #[serde(default)]
+    pub self_check: bool,
     /// Token profile when neither `--token-profile` nor
     /// `$WIZARD_TOKEN_PROFILE` names one: `safe` (default), `stock`, `lean`
     /// or `min`. See docs/token-profiles.md.
@@ -1418,6 +1424,7 @@ impl Default for Config {
             gate_max_attempts: 3,
             gate_timeout_secs: 1_800,
             completion_review: None,
+            self_check: false,
             token_profile: None,
             compact_threshold_bytes: 48_000,
             time_wrap_up_at: default_wrap_up_at(),

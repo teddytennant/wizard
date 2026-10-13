@@ -1461,6 +1461,21 @@ fn maybe_review_completion(app: &mut App, agent: &Agent, events: &EventLoop) {
     // One judge per finished turn. A goal turn already has the critic looking
     // at it, and two independent verifiers over the same turn is the stacking
     // this design is built to avoid.
+    if !enabled
+        && !app.goal_inflight
+        && critic::plan_self_check(
+            app.config.self_check,
+            agent.effects().saturating_sub(app.review_effects_mark),
+            app.review_rounds,
+            app.turn_took.as_secs(),
+        )
+    {
+        app.review_rounds = app.review_rounds.saturating_add(1);
+        let prompt = critic::SELF_CHECK_PROMPT.to_string();
+        app.expected_review_rework = Some(prompt.clone());
+        app.queue_prompt_turn(prompt);
+        return;
+    }
     if app.review_inflight
         || app.goal_inflight
         || critic::plan_review(
