@@ -2786,6 +2786,7 @@ fn harness_boilerplate_renders_as_one_human_line() {
              context once it's done.",
         ),
     });
+    app.transcript.toggle_last_tool();
     let screen = screen_at(&app, 100, 32).0.join("\n");
     assert!(
         screen.contains("started in background · ctrl+b output"),
@@ -3050,4 +3051,44 @@ fn a_finished_tool_gets_a_green_dot_and_a_failed_one_its_own_glyph() {
     assert_eq!(done.style.fg, Some(theme::color(Token::Success)));
     assert_eq!(failed.content, "✕");
     assert_eq!(failed.style.fg, Some(theme::color(Token::ToolFailed)));
+}
+
+#[test]
+fn a_subagent_card_keeps_its_instructions_behind_the_fold() {
+    use crate::agent::AgentEvent;
+    use crate::tools::ToolOutput;
+    let _pins = pin_house();
+    let brief = "Read src/parser.rs and report every public function.";
+    let args = serde_json::json!({ "subagent": "researcher", "task": brief });
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.transcript.set_compact(false);
+    app.transcript
+        .user("find the parser".to_string(), Vec::new());
+    // What a model without native tool calling leaves in the conversation.
+    app.transcript
+        .assistant(serde_json::json!({ "tool": "spawn_subagent", "arguments": args }).to_string());
+    app.handle_agent_event(AgentEvent::ToolStarted {
+        name: "spawn_subagent".to_string(),
+        args: args.clone(),
+    });
+    app.handle_agent_event(AgentEvent::ToolFinished {
+        name: "spawn_subagent".to_string(),
+        output: ToolOutput::ok("parse and parse_file"),
+    });
+
+    let (rows, buf) = screen_at(&app, 100, 24);
+    let screen = rows.join("\n");
+    assert_eq!(screen.matches("Read src/parser.rs").count(), 1, "{screen}");
+    assert!(screen.contains("+3 lines"), "{screen}");
+    assert!(!screen.contains("parse_file"), "{screen}");
+    assert_eq!(
+        fg_of(&rows, &buf, "subagent  researcher"),
+        theme::color(Token::Text)
+    );
+
+    app.transcript.toggle_last_tool();
+    let screen = screen_at(&app, 100, 24).0.join("\n");
+    assert!(screen.contains(&format!("╰ {brief}")), "{screen}");
+    assert!(screen.contains("parse and parse_file"), "{screen}");
 }

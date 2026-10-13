@@ -911,6 +911,9 @@ impl Fold {
 /// are the reason it failed, and a reason behind Ctrl-T is a reason nobody
 /// reads.
 ///
+/// A subagent's card folds at any length. Its body opens with the instructions
+/// the run was handed, and the header already says who is working on what.
+///
 /// One rule, applied to a live row and a replayed one alike. The TUI used to
 /// have two: replay folded *every* answered call whatever its size, so a
 /// three-line `git status` you had just watched come back open closed itself
@@ -918,10 +921,13 @@ impl Fold {
 /// class of bug the shared model exists to remove, one level up.
 fn folds_by_default(item: &TranscriptItem) -> bool {
     match item {
-        TranscriptItem::Tool(tool) => match &tool.output {
-            Some(output) => collapse_long(&output.content),
-            None => collapse_long(&tool.progress),
-        },
+        TranscriptItem::Tool(tool) => {
+            let subagent = tool.name == "spawn_subagent";
+            match &tool.output {
+                Some(output) => collapse_long(&output.content) || (subagent && !output.is_error),
+                None => subagent || collapse_long(&tool.progress),
+            }
+        }
         _ => false,
     }
 }

@@ -1125,6 +1125,11 @@ pub(super) fn items_text(
         if matches!(item, TranscriptItem::TurnMarker { .. }) {
             continue;
         }
+        // A model without native tool calling writes the call out as JSON, and
+        // for a subagent that is its whole brief. The card below carries it.
+        if matches!(item, TranscriptItem::Text(text) if is_subagent_call(text)) {
+            continue;
+        }
         let is_tool = matches!(item, TranscriptItem::Tool(_));
         let is_summary = view.compact()
             && matches!(item, TranscriptItem::Notice(_))
@@ -1282,6 +1287,12 @@ pub(super) fn items_text(
     }
 }
 
+/// Whether `message` is nothing but a prompt-protocol `spawn_subagent` call.
+fn is_subagent_call(message: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(message.trim())
+        .is_ok_and(|call| call["tool"] == "spawn_subagent")
+}
+
 /// Human label + one-line summary for a tool call. `spawn_subagent` reads as
 /// "subagent <name> · <task>" so the user can see which subagent is working
 /// and on what; every other tool is its own name plus its JSON args. The
@@ -1396,6 +1407,16 @@ fn tool_card_lines(
     // background task, that a subagent will report back). The transcript
     // shows one human line instead of that boilerplate.
     let display = output.map(human_tool_text);
+    let subagent = name == "spawn_subagent";
+    let task = args
+        .get("task")
+        .and_then(|task| task.as_str())
+        .filter(|task| subagent && !task.is_empty());
+    let display = match (task, display) {
+        (Some(task), Some(report)) => Some(format!("{task}\n\n{report}").into()),
+        (Some(task), None) => Some(task.into()),
+        (None, display) => display,
+    };
 
     let chrome = skin::chrome();
     let glyph = match (running, is_error) {
@@ -1426,7 +1447,12 @@ fn tool_card_lines(
     {
         summary = format!("{summary}:{line}");
     }
-    let mut card = vec![glyph, Span::raw(" "), Span::styled(label, accent())];
+    let label_style = if subagent {
+        theme::style(Token::Text)
+    } else {
+        accent()
+    };
+    let mut card = vec![glyph, Span::raw(" "), Span::styled(label, label_style)];
     if !summary.is_empty() {
         // `Call` has already folded the arguments into the label's parentheses;
         // pushing them again would print them twice.
