@@ -1409,7 +1409,7 @@ fn tool_card_lines(
         }
         (false, false) => Span::styled(
             skin::glyphs::adapt(chrome.tool_done),
-            theme::style(Token::ToolDone),
+            theme::style(Token::Success),
         ),
         (false, true) => Span::styled(
             skin::glyphs::adapt(chrome.tool_failed),

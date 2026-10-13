@@ -78,7 +78,7 @@ fn agent_rows(app: &App, pane: &crate::app::SubagentPane, inner: usize) -> Vec<L
             super::motion::glyph(super::motion::Kind::Subagent, app.tick),
             theme::style(Token::ToolRunning),
         ),
-        PaneStatus::Done => ("●".to_string(), theme::style(Token::ToolDone)),
+        PaneStatus::Done => ("●".to_string(), theme::style(Token::Success)),
         PaneStatus::Failed => ("✕".to_string(), theme::style(Token::ToolFailed).bold()),
     };
     let focused = app
@@ -153,7 +153,7 @@ fn task_rows(
             super::motion::glyph(super::motion::Kind::Tool, tick),
             theme::style(Token::ToolRunning),
         ),
-        TaskStatus::Done(0) => ("●".to_string(), theme::style(Token::ToolDone)),
+        TaskStatus::Done(0) => ("●".to_string(), theme::style(Token::Success)),
         _ => ("✕".to_string(), theme::style(Token::ToolFailed).bold()),
     };
     let state = match task.status {

@@ -2990,3 +2990,35 @@ fn contrast(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> f64 {
     let (hi, lo) = if a > b { (a, b) } else { (b, a) };
     (hi + 0.05) / (lo + 0.05)
 }
+
+fn tool_item(name: &str, args: serde_json::Value, output: &str, is_error: bool) -> ToolItem {
+    ToolItem {
+        name: name.to_string(),
+        args,
+        call_id: String::new(),
+        output: Some(crate::transcript::ToolItemOutput {
+            content: output.to_string(),
+            is_error,
+        }),
+        progress: String::new(),
+        timing: crate::transcript::ToolTiming::default(),
+    }
+}
+
+#[test]
+fn a_finished_tool_gets_a_green_dot_and_a_failed_one_its_own_glyph() {
+    let _pins = pin_house();
+    let args = serde_json::json!({ "command": "ls" });
+    let done = tool_card_lines(
+        &tool_item("execute", args.clone(), "a.txt", false),
+        false,
+        0,
+        80,
+    );
+    let failed = tool_card_lines(&tool_item("execute", args, "no", true), false, 0, 80);
+    let (done, failed) = (&done[0].spans[0], &failed[0].spans[0]);
+    assert_eq!(done.content, "●");
+    assert_eq!(done.style.fg, Some(theme::color(Token::Success)));
+    assert_eq!(failed.content, "✕");
+    assert_eq!(failed.style.fg, Some(theme::color(Token::ToolFailed)));
+}

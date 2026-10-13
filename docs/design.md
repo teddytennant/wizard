@@ -73,7 +73,7 @@ and glyphs that say something.
 - **Streaming text** renders as markdown as it arrives, with the dim thinking
   braille at the tail.
 - **Tool call**: one header row, `● execute  ls -la  0.4s`. The glyph is the
-  state (a thin line spinner while running, `●` done, `✕` failed), the name
+  state (a thin line spinner while running, a sage `●` done, `✕` failed), the name
   is accent, the argument is dim, the elapsed time is dim and left off under
   100 ms. A non-zero exit puts `exit 2` on the header. The output hangs below
   on a `╰`, dim. A running command shows its tail, or one progress line when

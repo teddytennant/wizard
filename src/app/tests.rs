@@ -4012,7 +4012,7 @@ const TOKEN_SITES: &[(&str, u16, Token)] = &[
     ("quoted line", 0, Token::Quote),
     ("weighing options", 0, Token::Faint),
     ("│ probe", 0, Token::ToolRunning),
-    ("● inspect", 0, Token::ToolDone),
+    ("● inspect", 0, Token::Success),
     ("✕ explode", 0, Token::ToolFailed),
     ("output line", 0, Token::Muted),
     ("plain notice", 0, Token::Faint),
