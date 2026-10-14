@@ -1174,6 +1174,9 @@ impl CommandContext<'_> {
                 if self.app.plan_mode {
                     agent.set_plan_mode(true);
                 }
+                if let Some(old) = self.agent_slot.as_ref() {
+                    agent.usage().carry_session(old.usage());
+                }
                 restore_ultra(self.app, &mut agent);
                 *self.agent_slot = Some(agent);
                 self.app.status.model = model_label;

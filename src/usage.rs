@@ -250,6 +250,20 @@ impl UsageTracker {
         self.last_prompt.store(0, Ordering::Relaxed);
     }
 
+    /// Add `from`'s session totals to this one's: an agent rebuilt for a model
+    /// switch continues the session it took over.
+    pub fn carry_session(&self, from: &UsageTracker) {
+        for (to, from) in [
+            (&self.session_prompt, &from.session_prompt),
+            (&self.session_completion, &from.session_completion),
+            (&self.session_cache_read, &from.session_cache_read),
+            (&self.session_cache_write, &from.session_cache_write),
+            (&self.session_reasoning, &from.session_reasoning),
+        ] {
+            to.fetch_add(from.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+    }
+
     /// Zero every counter (session, turn, last prompt). Used by `/clear` so
     /// the TUI context meter and `/cost` do not keep totals from the wiped
     /// conversation.
@@ -1236,6 +1250,18 @@ pub fn format_tokens(count: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rebuilt_tracker_carries_the_session_totals() {
+        let old = UsageTracker::new();
+        old.record(Some(100), Some(20));
+        old.record_cache(30, 5);
+        let new = UsageTracker::new();
+        new.record(Some(10), Some(2));
+        new.carry_session(&old);
+        assert_eq!(new.session_totals(), (110, 22));
+        assert_eq!(new.session_cache_totals(), (30, 5));
+    }
 
     #[test]
     fn tracker_accumulates_turn_and_session_totals() {

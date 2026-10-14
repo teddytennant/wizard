@@ -430,7 +430,7 @@ async fn open_session(
     let unused_file = session.path().to_path_buf();
     let selection = starting_selection(&state.config());
 
-    let built = build_session_agent(state, &selection, &cwd, session.clone()).await;
+    let built = build_session_agent(state, &selection, &cwd, session.clone(), None).await;
     let (agent, cancel) = match built {
         Ok(built) => built,
         Err(err) => {
@@ -476,6 +476,7 @@ async fn build_session_agent(
     selection: &Selection,
     cwd: &Path,
     session: Session,
+    replacing: Option<&Agent>,
 ) -> Result<(Arc<Mutex<Agent>>, CancelHandle), acp::Error> {
     let mut config = selection.apply(&state.config());
     // Set up after this server started? `wizard computer setup` writes the
@@ -491,6 +492,9 @@ async fn build_session_agent(
     // model's `run_command` tool stays off, so it refuses cleanly rather than
     // queueing a command nothing on this surface drains.
     agent.set_command_dispatch(CommandDispatch::None);
+    if let Some(old) = replacing {
+        agent.usage().carry_session(old.usage());
+    }
     let cancel = agent.cancel_handle();
     Ok((Arc::new(Mutex::new(agent)), cancel))
 }
@@ -537,7 +541,9 @@ async fn set_config_option(
             if provider != selection.provider || model != selection.model {
                 selection.provider = provider;
                 selection.model = model;
-                rebuilt = Some(build_session_agent(state, &selection, &cwd, session).await?);
+                rebuilt = Some(
+                    build_session_agent(state, &selection, &cwd, session, Some(&agent)).await?,
+                );
             }
         }
         models::EFFORT_OPTION => {
@@ -605,7 +611,7 @@ async fn load_session(
     // client sets it again.
     let selection = starting_selection(&state.config());
     let (agent, cancel) =
-        build_session_agent(state, &selection, &args.cwd, session.clone()).await?;
+        build_session_agent(state, &selection, &args.cwd, session.clone(), None).await?;
     let options = state.config_options(&selection).await;
     state.sessions.lock().await.insert(
         id,
@@ -934,7 +940,7 @@ async fn run_slash_command(
         let line = if switched == next {
             format!("already on {}", next.model_id())
         } else {
-            match build_session_agent(state, &switched, &cwd, session).await {
+            match build_session_agent(state, &switched, &cwd, session, Some(&agent)).await {
                 Ok(built) => {
                     let mut line = format!("switched to model {}", switched.model_id());
                     if fusion {
