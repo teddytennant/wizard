@@ -1,14 +1,16 @@
 //! Start a full-UI skin. Those looks are separate binaries installed next to
 //! `wizard`. The look runs as a child and this process waits for it, so the
 //! update check it already started can finish and `/ui wizard` inside the look
-//! can bring the house UI back when it quits. The in-memory transcript does not
-//! carry over; the session store is the same one `wizard acp` already uses.
+//! can bring the house UI back when it quits. The conversation, model and mode
+//! go along as a [`Handoff`]; the session store is the same one `wizard acp`
+//! already uses.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 use super::Skin;
+use super::handoff::{self, Handoff};
 
 /// Env vars the full UIs read to find the wizard binary they should spawn as
 /// `wizard acp`. Set all of them so a renamed binary still finds this one.
@@ -21,11 +23,12 @@ const WIZARD_BIN_ENVS: [&str; 6] = [
     "CLAUDEW_WIZARD_BIN",
 ];
 
-/// Run the `wizard-ui-*` binary for `skin` and wait for it. Returns its exit
-/// code. `skin` must have a companion; [`Skin::Wizard`] is an error.
+/// Run the `wizard-ui-*` binary for `skin` and wait for it, carrying
+/// `handoff` into it. Returns its exit code. `skin` must have a companion;
+/// [`Skin::Wizard`] is an error.
 ///
 /// The terminal must already be restored: the look sets it up for itself.
-pub async fn run(skin: Skin) -> Result<i32> {
+pub async fn run(skin: Skin, handoff: Option<&Handoff>) -> Result<i32> {
     let Some(name) = skin.companion_bin() else {
         bail!("{} has no separate UI to start", skin.label());
     };
@@ -38,6 +41,10 @@ pub async fn run(skin: Skin) -> Result<i32> {
     // The look must not see WIZARD_SKIN: its own `wizard acp` children would
     // inherit it, and the choice it already made is the one being run.
     cmd.env_remove(super::ENV_SKIN);
+    match handoff {
+        Some(handoff) => cmd.env(handoff::ENV, handoff.to_env()),
+        None => cmd.env_remove(handoff::ENV),
+    };
     #[cfg(unix)]
     let _interrupts = IgnoreInterrupts::during(&mut cmd);
     let status = cmd
@@ -186,20 +193,45 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&look, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let _search = pin_search(dir.path());
-        assert_eq!(run(Skin::Pi).await.expect("the look runs"), 7);
+        assert_eq!(run(Skin::Pi, None).await.expect("the look runs"), 7);
+    }
+
+    #[tokio::test]
+    async fn the_handoff_reaches_the_look() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let look = dir.path().join("wizard-ui-jcode");
+        let seen = dir.path().join("seen");
+        std::fs::write(
+            &look,
+            format!("#!/bin/sh\nprintf %s \"$WIZARD_HANDOFF\" > {}\n", seen.display()),
+        )
+        .expect("write the look");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&look, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let _search = pin_search(dir.path());
+        let handoff = Handoff {
+            session: Some("s1".into()),
+            provider: "beta".into(),
+            model: "m".into(),
+            mode: crate::config::Mode::Chat,
+            effort: None,
+        };
+        run(Skin::Jcode, Some(&handoff)).await.expect("the look runs");
+        let seen = std::fs::read_to_string(&seen).expect("the look wrote it");
+        assert_eq!(serde_json::from_str::<Handoff>(&seen).ok(), Some(handoff));
     }
 
     #[tokio::test]
     async fn a_missing_look_names_where_it_should_be() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _search = pin_search(dir.path());
-        let err = run(Skin::Opencode).await.expect_err("nothing is installed");
+        let err = run(Skin::Opencode, None).await.expect_err("nothing is installed");
         assert!(format!("{err:#}").contains("wizard-ui-opencode"), "{err:#}");
         assert!(format!("{err:#}").contains("the opencode look"), "{err:#}");
         assert!(
             !format!("{err:#}").contains("wizard-ui-wizard-ui"),
             "{err:#}"
         );
-        assert!(run(Skin::Wizard).await.is_err());
+        assert!(run(Skin::Wizard, None).await.is_err());
     }
 }

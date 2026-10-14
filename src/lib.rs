@@ -586,16 +586,20 @@ async fn run_interactive(
     mut first_run: Option<onboarding::FirstRun>,
 ) -> Result<i32> {
     let mut look = startup_look(&config, &cli);
+    let mut handoff = None;
     loop {
         if let Some(skin) = look.take() {
             let saved = config.ui.skin.clone();
-            match skin::launch::run(skin).await {
+            // Only what this look leaves on its way out counts.
+            let _ = skin::handoff::Handoff::take();
+            match skin::launch::run(skin, handoff.take().as_ref()).await {
                 Ok(code) => {
                     config = Config::load()?;
                     config.apply_cli(&cli);
                     if config.ui.skin == saved {
                         return Ok(code);
                     }
+                    handoff = skin::handoff::Handoff::take();
                     look = full_look(config_skin(&config));
                     if look.is_some() {
                         continue;
@@ -609,15 +613,16 @@ async fn run_interactive(
                 }
             }
         }
-        match app::run_tui(config.clone(), cli.clone(), first_run.take()).await? {
+        match app::run_tui(config.clone(), cli.clone(), first_run.take(), handoff.take()).await? {
             app::TuiExit::Quit(code) => return Ok(code),
-            app::TuiExit::Look(skin) => {
+            app::TuiExit::Look(skin, from_tui) => {
                 // The prompt was this TUI's first message; the next house TUI
                 // starts clean rather than sending it again.
                 cli.prompt = None;
                 config = Config::load()?;
                 config.apply_cli(&cli);
                 look = Some(skin);
+                handoff = from_tui;
             }
         }
     }

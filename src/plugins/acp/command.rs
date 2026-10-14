@@ -510,7 +510,8 @@ impl CommandSurface for AcpSurface<'_> {
 
     /// `/ui [name]`: the looks, or which one `wizard` starts in. A full look
     /// is this server's client, so a switch made from inside one lands when
-    /// it quits and the `wizard` that started it reads `[ui] skin` again.
+    /// it quits and the `wizard` that started it reads `[ui] skin` again,
+    /// along with the handoff that carries this session into the next look.
     async fn set_ui(&mut self, name: Option<String>) {
         let mut config = match Config::load() {
             Ok(config) => config,
@@ -529,6 +530,17 @@ impl CommandSurface for AcpSurface<'_> {
             return self.say(format!("error: unknown skin '{name}'. /ui lists them."));
         };
         config.ui.skin = Some(skin.key().to_string());
+        let session = self.agent.session();
+        let handoff = crate::skin::handoff::Handoff {
+            session: (!super::session_file_unused(session.path())).then(|| session.id.clone()),
+            provider: self.selection.provider.clone(),
+            model: self.selection.model.clone(),
+            mode: self.selection.mode,
+            effort: self.selection.effort,
+        };
+        if let Err(err) = handoff.save() {
+            tracing::warn!("acp: saving the /ui handoff: {err:#}");
+        }
         match config.save() {
             Ok(()) => self.say(format!(
                 "saved [ui] skin = \"{}\". Quit this look to switch now; anywhere else it \

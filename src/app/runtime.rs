@@ -20,6 +20,7 @@ use crate::event::{Event, EventLoop};
 use crate::llm::provider::LlmProvider;
 use crate::mcp::{McpConfig, McpManager};
 use crate::session_registry;
+use crate::skin::handoff::Handoff;
 use crate::skills::Skill;
 
 use crate::cli::Cli;
@@ -55,6 +56,7 @@ pub async fn run_tui(
     mut config: Config,
     cli: Cli,
     first_run: Option<crate::onboarding::FirstRun>,
+    handoff: Option<Handoff>,
 ) -> Result<TuiExit> {
     // No usable terminal: run headless when a task was given, otherwise we
     // cannot do anything sensible.
@@ -65,6 +67,16 @@ pub async fn run_tui(
         anyhow::bail!("wizard needs a terminal for the TUI; pass -p \"task\" to run headless");
     }
 
+    // Back from a full look: its model and mode, and its conversation below.
+    if let Some(handoff) = &handoff {
+        handoff.apply(&mut config);
+    }
+    let resume = match handoff.and_then(|handoff| handoff.session) {
+        Some(id) => SessionTarget::Id(id),
+        None if cli.resume => SessionTarget::Latest,
+        None => SessionTarget::Fresh,
+    };
+    let resumed = matches!(resume, SessionTarget::Id(_));
     let mut client = startup_client(&mut config).await?;
     // A cloud provider's health probe was skipped at startup (it would block the
     // first paint); run_tui runs it in the background below. Local providers
@@ -117,11 +129,7 @@ pub async fn run_tui(
             &skills,
             &project_root,
             &*manager.lock().await,
-            if cli.resume {
-                SessionTarget::Latest
-            } else {
-                SessionTarget::Fresh
-            },
+            resume,
         )
         .await?,
     );
@@ -213,6 +221,9 @@ pub async fn run_tui(
     // The rail kills background subagents through this, so it must be reachable
     // while a turn holds the agent — hence a cloned Arc, not the agent itself.
     app.subagents = agent_slot.as_ref().map(|agent| agent.subagent_registry());
+    if resumed && let Some(agent) = agent_slot.as_ref() {
+        app.load_transcript(&agent.session().entries().unwrap_or_default());
+    }
     app.tasks = agent_slot.as_ref().map(|agent| agent.task_registry());
     app.session_started_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1316,16 +1327,26 @@ pub async fn run_tui(
 
     drop(_guard);
     restore_terminal_best_effort();
-    Ok(app.look.map_or(TuiExit::Quit(0), TuiExit::Look))
+    let handoff = agent_slot.as_ref().map(|agent| Handoff {
+        session: Some(agent.session().id.clone()),
+        provider: app.config.active().name,
+        model: agent.model().to_string(),
+        mode: agent.mode(),
+        effort: app.config.reasoning_effort,
+    });
+    Ok(app
+        .look
+        .map_or(TuiExit::Quit(0), |look| TuiExit::Look(look, handoff)))
 }
 
 /// How [`run_tui`] ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiExit {
     /// Exit the process with this code.
     Quit(i32),
-    /// `/ui` picked a full look. Start it now that the terminal is back.
-    Look(crate::skin::Skin),
+    /// `/ui` picked a full look. Start it now that the terminal is back, on
+    /// this conversation when the agent was not mid-turn.
+    Look(crate::skin::Skin, Option<Handoff>),
 }
 
 /// Start one agent turn from a preprocessed prompt: take the agent out of its

@@ -41,6 +41,7 @@ use crate::theme::Token;
 
 pub mod blend;
 pub mod glyphs;
+pub mod handoff;
 pub mod launch;
 pub mod layout;
 pub mod motion;

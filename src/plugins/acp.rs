@@ -428,7 +428,7 @@ async fn open_session(
     let session = Session::create_in(&sessions_dir, &cwd).map_err(internal)?;
     let session_id = session.id.clone();
     let unused_file = session.path().to_path_buf();
-    let selection = Selection::from_config(&state.config());
+    let selection = starting_selection(&state.config());
 
     let built = build_session_agent(state, &selection, &cwd, session.clone()).await;
     let (agent, cancel) = match built {
@@ -454,6 +454,19 @@ async fn open_session(
         },
     );
     Ok(NewSessionResponse::new(session_id).config_options(options))
+}
+
+/// What a new or loaded session runs on: the config's defaults, unless `/ui`
+/// started this look from another one, which hands over its model and mode.
+fn starting_selection(config: &Config) -> Selection {
+    match crate::skin::handoff::Handoff::from_env() {
+        Some(handoff) => {
+            let mut config = config.clone();
+            handoff.apply(&mut config);
+            Selection::from_config(&config)
+        }
+        None => Selection::from_config(config),
+    }
 }
 
 /// Build the agent a session runs, for its selection: the config with the
@@ -587,9 +600,10 @@ async fn load_session(
 
     // Loading a session that is already live on this connection rebuilds it;
     // a turn still holding the old agent keeps it until the turn ends. It
-    // reopens on the config's defaults: a model picked over ACP lasts as long
-    // as the connection, and the client sets it again.
-    let selection = Selection::from_config(&state.config());
+    // reopens on the config's defaults, or on what the look before this one
+    // ran: a model picked over ACP lasts as long as the connection, and the
+    // client sets it again.
+    let selection = starting_selection(&state.config());
     let (agent, cancel) =
         build_session_agent(state, &selection, &args.cwd, session.clone()).await?;
     let options = state.config_options(&selection).await;
