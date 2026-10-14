@@ -43,7 +43,10 @@ pub fn set() -> Set {
 }
 
 fn is_house() -> bool {
-    matches!(super::active(), Skin::Wizard | Skin::Opencode | Skin::Pi)
+    matches!(
+        super::active(),
+        Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode
+    )
 }
 
 /// Rewrite a house marker for the active set. Other skins get it back unchanged.

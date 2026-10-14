@@ -46,7 +46,7 @@ inline hints.
 | `/publish [branch]` | Fork Wizard to your GitHub and get a one-line installer ([market.md](market.md)) |
 | `/settings` | Open the in-app settings menu |
 | `/setup` | The same menu under the name the first-run card prints (`/setup changes it`) |
-| `/ui [name]` | List the looks, or switch to one: `wizard`, `codex`, `grok`, `opencode`, `pi` ([The interface](#the-interface)) |
+| `/ui [name]` | List the looks, or switch to one: `wizard`, `codex`, `grok`, `opencode`, `pi`, `jcode` ([The interface](#the-interface)) |
 | `/view [compact\|full]` | Show the conversation only, or everything; no argument flips it ([Compact view](#compact-view)) |
 | `/vim` | Toggle modal (vim-style) editing of the input composer |
 | `/quit` | Exit Wizard |
@@ -132,11 +132,12 @@ The TUI can wear another coding agent's chrome. `/ui` lists the looks and
 | `grok` | Grok Build's: a `┃` bar down the left of every block, colored by whose block it is, a boxed composer, and `Thinking… step 3 · 12s` |
 | `opencode` | OpenCode's layout, as its own UI (`wizard-ui-opencode`) |
 | `pi` | Pi's layout, as its own UI (`wizard-ui-pi`) |
+| `jcode` | jcode's layout, as its own UI (`wizard-ui-jcode`): numbered prompts, a header that scrolls away with the transcript, the composer right under the last line until the screen fills |
 
-**Full looks.** `opencode` and `pi` are separate programs installed next to
-`wizard`, and so are `codex` and `grok` when `wizard-ui-codex` or
+**Full looks.** `opencode`, `pi` and `jcode` are separate programs installed
+next to `wizard`, and so are `codex` and `grok` when `wizard-ui-codex` or
 `wizard-ui-grok` is there; without one, those two are drawn in the TUI as
-above. The installer puts all four next to `wizard` from the release tarball.
+above. The installer puts all five next to `wizard` from the release tarball.
 A source install, or a release from before that, builds them when `cargo` is
 available. Switching to a full look quits the TUI and starts it. Inside the
 look, `/ui wizard` saves the choice, and quitting the look brings the TUI back.
@@ -273,7 +274,7 @@ independently — picking the skin picks the palette:
 | Palette | Skin | Look |
 |---------|------|------|
 | `wizard` | `wizard` (default) | One indigo accent, status hues, no background colors. Body text and every background token are `reset`, so the terminal's own background shows through |
-| `minimal` | `opencode`, `pi`, and the fallback when a palette name does not load | Monochrome. Every value is an ANSI-16 name, so it renders the same over SSH and on a serial console |
+| `minimal` | `opencode`, `pi`, `jcode`, and the fallback when a palette name does not load | Monochrome. Every value is an ANSI-16 name, so it renders the same over SSH and on a serial console |
 | `codex` | `codex` | Near-monochrome with one cyan, all ANSI-16 names, plain borders |
 | `grok` | `grok` | Violet and steel on neutral gray |
 

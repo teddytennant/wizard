@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **`/ui jcode`: jcode's terminal UI as a fifth full look.** `wizard-ui-jcode` draws jcode's layout on Wizard: a header that scrolls away with the transcript, numbered prompts, `✓ tool` rows with the changed lines under an edit, a status line under the composer, and the composer sitting right below the last line until the screen fills. Commands and models are Wizard's. The release tarball, the installer and `wizard update` carry it next to the other looks.
+
 ### Changed
 
 - **An empty reply is asked again up to three times, not once.** Reasoning models sometimes stop after tool results with nothing visible. A second empty reply in a row ended the turn, and in a headless run that was the end of the run.

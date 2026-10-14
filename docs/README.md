@@ -44,7 +44,7 @@ to do.
 | Doc | What it covers |
 | --- | --- |
 | [Wizard GUI](../gui/README.md) | The desktop app, which `wizard gui` opens |
-| [UI skins](ui-skins.md) | `/ui wizard`, `codex`, `grok`, `opencode`, `pi` |
+| [UI skins](ui-skins.md) | `/ui wizard`, `codex`, `grok`, `opencode`, `pi`, `jcode` |
 | [Interactive commands](interactive-commands.md) | Answering a shell command that stops to ask |
 | [ACP](acp.md) | `wizard acp`: Zed, Neovim, Emacs |
 | [Gateway](gateway.md) | The Telegram bot, and the fail-closed allow-list |

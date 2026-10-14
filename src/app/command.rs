@@ -161,7 +161,8 @@ async fn git_diff_untracked(root: &Path, file: &str) -> String {
 /// writing the file. A failed write is reported and the switch still stands
 /// for this session — the user asked to see it, and they can see it.
 ///
-/// A full look (`codex`, `grok`, `opencode`, `pi`) is a different process.
+/// A full look (`codex`, `grok`, `opencode`, `pi`, `jcode`) is a different
+/// process.
 /// The binary is found before the config is written, then the TUI quits the
 /// way `/quit` does and the look starts once the terminal is restored. A
 /// missing binary is an error and the house UI stays.
