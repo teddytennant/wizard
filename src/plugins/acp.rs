@@ -732,12 +732,15 @@ fn history_updates(messages: &[ChatMessage]) -> Vec<SessionUpdate> {
                     )
                 }
                 (Role::Tool, llm::ContentBlock::ToolResult(result)) => {
-                    let fields = ToolCallUpdateFields::new()
-                        .status(ToolCallStatus::Completed)
-                        .content(vec![ToolCallContent::from(truncate(
-                            &result.content,
-                            TOOL_OUTPUT_CAP,
-                        ))]);
+                    // a failed call was stored with the prefix the turn gives it
+                    let status = if result.content.starts_with("Error: ") {
+                        ToolCallStatus::Failed
+                    } else {
+                        ToolCallStatus::Completed
+                    };
+                    let fields = ToolCallUpdateFields::new().status(status).content(vec![
+                        ToolCallContent::from(truncate(&result.content, TOOL_OUTPUT_CAP)),
+                    ]);
                     SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                         call_id(&result.tool_use_id),
                         fields,
@@ -1552,6 +1555,23 @@ mod tests {
             panic!("expected the reply last: {:?}", updates[4]);
         };
         assert_eq!(text(chunk), "It is empty.");
+    }
+
+    /// A call that failed replays as failed, not as one that worked.
+    #[test]
+    fn history_updates_keep_a_failed_call_failed() {
+        let mut call = llm::ToolCall::new("edit_file", json!({ "path": "main.rs" }));
+        call.id = "toolu_2".to_string();
+        let history = vec![
+            ChatMessage::user("edit it"),
+            ChatMessage::assistant_turn("", Vec::new(), vec![call]),
+            ChatMessage::tool_result("toolu_2", "edit_file", "Error: old_string not found"),
+        ];
+        let updates = history_updates(&history);
+        let SessionUpdate::ToolCallUpdate(result) = &updates[2] else {
+            panic!("expected the tool result: {:?}", updates[2]);
+        };
+        assert_eq!(result.fields.status, Some(ToolCallStatus::Failed));
     }
 
     fn listed(id: &str, cwd: &str, title: &str) -> ListedSession {
