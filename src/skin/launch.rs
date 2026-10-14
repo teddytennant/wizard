@@ -121,8 +121,9 @@ pub fn find_companion(wizard: &Path, name: &str) -> Result<PathBuf> {
     {
         return Ok(found);
     }
+    let look = name.strip_prefix("wizard-ui-").unwrap_or(name);
     bail!(
-        "the {name} look is not installed. Re-run the installer, or put wizard-ui-{name} next to wizard ({}) or on PATH.",
+        "the {look} look is not installed. Re-run the installer, or put {name} next to wizard ({}) or on PATH.",
         wizard
             .parent()
             .map(|dir| dir.join(name))
@@ -194,6 +195,11 @@ mod tests {
         let _search = pin_search(dir.path());
         let err = run(Skin::Opencode).await.expect_err("nothing is installed");
         assert!(format!("{err:#}").contains("wizard-ui-opencode"), "{err:#}");
+        assert!(format!("{err:#}").contains("the opencode look"), "{err:#}");
+        assert!(
+            !format!("{err:#}").contains("wizard-ui-wizard-ui"),
+            "{err:#}"
+        );
         assert!(run(Skin::Wizard).await.is_err());
     }
 }
