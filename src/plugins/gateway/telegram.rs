@@ -1859,6 +1859,11 @@ mod tests {
                     let mut buf = [0u8; 16384];
                     let read = socket.read(&mut buf).await.unwrap_or(0);
                     let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+                    // Something else on the host may probe a fresh port; only
+                    // the bot API counts.
+                    if !request.contains(" /bot") && !request.contains(" /file/") {
+                        return;
+                    }
                     let index = {
                         let mut log = seen.lock().expect("request log");
                         log.push(request.clone());
