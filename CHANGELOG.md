@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.11] - 2026-10-14
+
 ### Fixed
 
 - **The codex look says which Wizard it is.** Its header read `Wizard (v0.147.0)` and `--version` printed `codexw 0.147.0`, the Codex release it copies. Both show Wizard's version now, and the release smoke test checks it like the other looks.
