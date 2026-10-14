@@ -752,8 +752,12 @@ fn history_updates(messages: &[ChatMessage]) -> Vec<SessionUpdate> {
                     )
                 }
                 (Role::Tool, llm::ContentBlock::ToolResult(result)) => {
-                    // a failed call was stored with the prefix the turn gives it
-                    let status = if result.content.starts_with("Error: ") {
+                    // the stored flag; a record from before it existed falls back on the
+                    // prefix the turn gives a failed call's text
+                    let failed = result
+                        .is_error
+                        .unwrap_or_else(|| result.content.starts_with("Error: "));
+                    let status = if failed {
                         ToolCallStatus::Failed
                     } else {
                         ToolCallStatus::Completed
@@ -1586,6 +1590,28 @@ mod tests {
             panic!("expected the reply last: {:?}", updates[4]);
         };
         assert_eq!(text(chunk), "It is empty.");
+    }
+
+    /// A call that worked and printed `Error: ` replays as completed: the
+    /// stored flag decides, not the text.
+    #[test]
+    fn history_updates_trust_the_flag_over_the_text() {
+        let mut call = llm::ToolCall::new("execute", json!({ "command": "echo 'Error: x'" }));
+        call.id = "toolu_3".to_string();
+        let mut result = ChatMessage::tool_result("toolu_3", "execute", "Error: x");
+        if let llm::ContentBlock::ToolResult(block) = &mut result.content[0] {
+            block.is_error = Some(false);
+        }
+        let history = vec![
+            ChatMessage::user("run it"),
+            ChatMessage::assistant_turn("", Vec::new(), vec![call]),
+            result,
+        ];
+        let updates = history_updates(&history);
+        let SessionUpdate::ToolCallUpdate(update) = &updates[2] else {
+            panic!("expected the tool result: {:?}", updates[2]);
+        };
+        assert_eq!(update.fields.status, Some(ToolCallStatus::Completed));
     }
 
     /// A call that failed replays as failed, not as one that worked.

@@ -463,6 +463,7 @@ fn to_chat_messages(session: &ClaudeSession, chain: &Chain) -> Vec<ChatMessage> 
                                 tool_use_id: tool_use_id.clone(),
                                 name,
                                 content: result_text(content, *is_error),
+                                is_error: Some(*is_error),
                             }));
                         }
                         _ => {}

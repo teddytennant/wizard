@@ -918,6 +918,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
                 tool_use_id: call.id.clone(),
                 name: call.function.name.clone(),
                 content: outcome.body,
+                is_error: Some(outcome.failed),
             });
             if !outcome.images.is_empty() {
                 tool_images.push((call.function.name.clone(), outcome.images));
@@ -1564,6 +1565,8 @@ pub(super) struct CallOutcome {
     pub nudge: Option<String>,
     /// Set when the turn must end early (UI gone, circuit breaker).
     pub done: Option<DoneReason>,
+    /// The call failed or never ran; kept with the result in the session.
+    pub failed: bool,
 }
 
 impl CallOutcome {
@@ -1574,6 +1577,7 @@ impl CallOutcome {
             images: Vec::new(),
             nudge: None,
             done: Some(reason),
+            failed: false,
         }
     }
 
@@ -1582,6 +1586,7 @@ impl CallOutcome {
         match outcome.output {
             Some(output) => Self {
                 body: result_body(&output),
+                failed: output.is_error,
                 images: output.images,
                 nudge: outcome.nudge,
                 done: outcome.done,
@@ -1593,6 +1598,7 @@ impl CallOutcome {
                 images: Vec::new(),
                 nudge: outcome.nudge,
                 done: outcome.done,
+                failed: true,
             },
         }
     }
@@ -1644,6 +1650,7 @@ pub(super) fn answer_skipped_calls(
         tool_use_id: call.id.clone(),
         name: call.function.name.clone(),
         content: note.to_string(),
+        is_error: Some(true),
     }));
 }
 
@@ -2072,6 +2079,7 @@ impl Agent {
         }
         CallOutcome {
             body: result_body(&output),
+            failed: output.is_error,
             images: Vec::new(),
             nudge: None,
             done: None,

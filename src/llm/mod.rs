@@ -946,6 +946,10 @@ pub struct ToolResultBlock {
     pub name: String,
     /// The result text handed back to the model.
     pub content: String,
+    /// Whether the call failed. `None` in records written before the flag
+    /// existed; never sent to a provider, which reads the error from the text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
 }
 
 /// A [`ContentBlock::Thinking`] payload.
@@ -991,6 +995,7 @@ impl ContentBlock {
             tool_use_id: tool_use_id.into(),
             name: name.into(),
             content: content.into(),
+            is_error: None,
         })
     }
 
