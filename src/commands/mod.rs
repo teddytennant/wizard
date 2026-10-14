@@ -630,7 +630,7 @@ impl SlashCommand {
             "publish" => Ok(Self::Publish {
                 branch: args.first().map(|s| s.to_string()),
             }),
-            "provider" => parse_provider(&args),
+            "provider" | "providers" => parse_provider(&args),
             "fusion" => match args.first().copied() {
                 None => Ok(Self::Fusion(FusionAction::Toggle)),
                 Some("config") => Ok(Self::Fusion(FusionAction::Config)),
@@ -2348,6 +2348,10 @@ mod tests {
         assert_eq!(
             parse("/provider"),
             Ok(SlashCommand::Provider(ProviderAction::Menu))
+        );
+        assert_eq!(
+            parse("/providers list"),
+            Ok(SlashCommand::Provider(ProviderAction::List))
         );
         assert_eq!(
             parse("/provider add local ollama http://localhost:11434 qwen3:8b"),

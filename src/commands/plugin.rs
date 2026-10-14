@@ -239,7 +239,7 @@ impl fmt::Debug for PluginCommand {
 /// took it would shadow a built-in without [`install`] ever seeing a table row
 /// to refuse against. `a_plugin_cannot_take_a_word_the_parser_already_answers_to`
 /// holds this list to the parser.
-const PARSE_ALIASES: &[&str] = &["q"];
+const PARSE_ALIASES: &[&str] = &["q", "providers"];
 
 /// The process-wide registry every unknown `/word` resolves against.
 ///
@@ -456,7 +456,7 @@ mod tests {
     /// alone would not have refused it.
     #[test]
     fn a_plugin_cannot_take_a_word_the_parser_already_answers_to() {
-        for word in ["q", "exit", "quit", "genie", "sovereign", "chat"] {
+        for word in ["q", "exit", "quit", "genie", "sovereign", "chat", "providers"] {
             assert!(
                 is_builtin(word),
                 "/{word} is a word the parser answers to and must not be takeable"
