@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -84,7 +84,7 @@ jobs:
         run: |
           cp -R "target/package/Wizard GUI.app" /Applications/
           scripts/macos-gui-smoke.sh "/Applications/Wizard GUI.app" "$RUNNER_TEMP/shots"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: macos-smoke
@@ -108,7 +108,7 @@ jobs:
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -125,7 +125,7 @@ jobs:
           command -v node && node --version || true
           scripts/install-smoke.sh target/debug/zeron "$RUNNER_TEMP/smoke" \
             pi pi-no-shell claude-code wizard pi-no-node
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: linux-smoke
@@ -155,7 +155,7 @@ jobs:
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev \
             minisign xvfb xdotool imagemagick mesa-vulkan-drivers
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -228,7 +228,7 @@ jobs:
           export DISPLAY=:99
           sleep 2
           scripts/update-smoke-app.sh linux "$HOME/.local/bin/wizard-gui" "$FEED" "$NEW" "$RUNNER_TEMP/shots"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: linux-update
@@ -249,7 +249,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -281,7 +281,7 @@ jobs:
           scripts/update-smoke-feed.sh serve "$FEED"
       - name: The app updates itself from the banner and relaunches
         run: scripts/update-smoke-app.sh macos "/Applications/Wizard GUI.app" "$FEED" "$NEW" "$RUNNER_TEMP/shots"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: macos-update
