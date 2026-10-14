@@ -27,7 +27,7 @@ use crate::commands::surface::{
     Chooser, CommandSurface, Panel, PlanState, SessionSnapshot, Surface,
 };
 use crate::commands::{ProviderAction, ServerAction};
-use crate::config::{Config, Mode, ReasoningEffort};
+use crate::config::{Config, Mode, ProviderConfig, ReasoningEffort};
 use crate::llm::provider::{LlmProvider, probe_native_tools};
 use crate::mcp::McpManager;
 use crate::tools::tasks::Task;
@@ -78,6 +78,9 @@ pub(super) struct AcpSurface<'a> {
     pub fusion: bool,
     /// A `/model` switch waiting on a rebuild.
     pub model_change: Option<(String, String)>,
+    /// The user's config after `/provider add` or `remove`, already saved,
+    /// for the parent to serve later sessions and the model menu from.
+    pub base_change: Option<Config>,
     /// Everything the command said, in order. This is the answer.
     pub out: String,
 }
@@ -130,6 +133,28 @@ impl AcpSurface<'_> {
         }
         lines.push_str("\n(* = this session)");
         self.say(lines);
+    }
+
+    /// Apply `edit` to the providers in `config.toml` and in the config this
+    /// server runs on. False, with the reason said, when the file is not
+    /// written.
+    fn edit_providers(&mut self, edit: impl Fn(&mut Vec<ProviderConfig>)) -> bool {
+        let mut file = match Config::load() {
+            Ok(config) => config,
+            Err(err) => {
+                self.say(format!("error: could not read config: {err:#}"));
+                return false;
+            }
+        };
+        edit(&mut file.providers);
+        if let Err(err) = file.save() {
+            self.say(format!("error: could not save config: {err:#}"));
+            return false;
+        }
+        let mut base = self.base_change.take().unwrap_or_else(|| self.base.clone());
+        edit(&mut base.providers);
+        self.base_change = Some(base);
+        true
     }
 }
 
@@ -424,14 +449,62 @@ impl CommandSurface for AcpSurface<'_> {
         }
     }
 
+    /// `use` switches this session, the way the model menu does. `add` and
+    /// `remove` write `config.toml`, and `add` switches to what it added.
     async fn provider(&mut self, action: ProviderAction) {
         match action {
             ProviderAction::List | ProviderAction::Menu => self.provider_list(),
-            ProviderAction::Use(_) | ProviderAction::Add { .. } | ProviderAction::Remove(_) => self
-                .say(
-                    "over ACP /provider only lists. Switch this session with the model menu or \
-                     /model <provider>/<model>; add or remove providers in the terminal",
-                ),
+            ProviderAction::Use(name) => match self.base.providers.iter().find(|p| p.name == name) {
+                Some(provider) => self.model_change = Some((name, provider.model.clone())),
+                None => self.say(format!("no provider named '{name}', try /provider list")),
+            },
+            ProviderAction::Add {
+                name,
+                kind,
+                base_url,
+                model,
+                api_key_env,
+            } => {
+                let provider = ProviderConfig {
+                    name: name.clone(),
+                    kind,
+                    base_url,
+                    model: model.clone(),
+                    api_key_env: api_key_env.clone(),
+                    gguf_path: None,
+                    usd_per_mtok_in: None,
+                    usd_per_mtok_out: None,
+                    vision: None,
+                    model_pinned: None,
+                };
+                let saved = self.edit_providers(|providers| {
+                    providers.retain(|p| p.name != name);
+                    providers.push(provider.clone());
+                });
+                if saved {
+                    if let Some(env) = api_key_env {
+                        self.say(format!(
+                            "added provider '{name}'; remember to `export {env}=<key>` where \
+                             wizard runs"
+                        ));
+                    }
+                    self.model_change = Some((name, model));
+                }
+            }
+            ProviderAction::Remove(name) => {
+                if self.selection.provider == name {
+                    return self.say(format!(
+                        "'{name}' is this session's provider, switch with /provider use <other> \
+                         first"
+                    ));
+                }
+                if !self.base.providers.iter().any(|p| p.name == name) {
+                    return self.say(format!("no provider named '{name}'"));
+                }
+                if self.edit_providers(|providers| providers.retain(|p| p.name != name)) {
+                    self.say(format!("removed provider '{name}'"));
+                }
+            }
         }
     }
 

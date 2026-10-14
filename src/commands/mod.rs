@@ -1188,9 +1188,9 @@ pub const COMMANDS: &[CommandSpec] = &[
         // have the operator paste an API key into a Telegram chat, where it
         // stays in the message history on someone else's servers.
         gateway: Execution::Unavailable,
-        // `list` only, and bare `/provider` answers with the list. Adding a
-        // provider or switching the active one rewrites the config every
-        // surface shares; a session picks its model from the `model` option.
+        // Bare `/provider` answers with the list. `use` switches the session
+        // the way the `model` option does; `add` and `remove` write the
+        // config every surface shares.
         acp: Execution::Agent,
         agent_arg: "",
     },
@@ -1642,7 +1642,7 @@ impl CommandSpec {
         match (surface, self.name) {
             (Surface::Acp, "diff") => "show the working tree's git diff",
             (Surface::Acp, "todos") => "show the todo list",
-            (Surface::Acp, "provider") => "list configured providers",
+            (Surface::Acp, "provider") => "list, use, add or remove providers",
             (Surface::Acp, "help") => "show available commands",
             // MCP servers are connected once per `wizard acp` process and
             // shared by its sessions, so one session's reload leaves them.

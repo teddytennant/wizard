@@ -760,6 +760,54 @@ fn acp_ui_saves_the_look_wizard_starts_in() {
     );
 }
 
+/// `/provider` over ACP lists, adds, switches and removes like the terminal's,
+/// and `/providers` is the same command. An add or remove is written to
+/// `config.toml`; a switch lasts as long as the session.
+#[test]
+fn acp_provider_adds_switches_and_removes() {
+    let mut acp = AcpSession::start("provider");
+    let path = acp._home.0.join(".wizard/config.toml");
+    let config = std::fs::read_to_string(&path).expect("config.toml");
+    let base_url = config
+        .lines()
+        .find_map(|line| line.strip_prefix("base_url = "))
+        .expect("a base_url")
+        .trim_matches('"')
+        .to_string();
+
+    let (_, updates) = acp.prompt("/providers");
+    assert!(said(&updates).contains("* fake (ollama)"), "{updates:?}");
+
+    let (_, updates) = acp.prompt(&format!(
+        "/provider add other ollama {base_url} other-model:test"
+    ));
+    assert_eq!(said(&updates), "switched to model other/other-model:test");
+    let options = updates
+        .iter()
+        .find(|update| update["sessionUpdate"] == "config_option_update")
+        .map(|update| &update["configOptions"])
+        .unwrap_or_else(|| panic!("no config_option_update in {updates:?}"));
+    assert_eq!(
+        option(options, "model")["currentValue"],
+        "other/other-model:test"
+    );
+    let config = std::fs::read_to_string(&path).expect("config.toml");
+    assert!(config.contains("name = \"other\""), "{config}");
+
+    let (_, updates) = acp.prompt("/provider remove other");
+    assert!(said(&updates).contains("this session's provider"), "{updates:?}");
+    let (_, updates) = acp.prompt("/provider use fake");
+    assert_eq!(said(&updates), "switched to model fake/fake-model:test");
+    let (_, updates) = acp.prompt("/provider remove other");
+    assert_eq!(said(&updates), "removed provider 'other'");
+    let config = std::fs::read_to_string(&path).expect("config.toml");
+    assert!(!config.contains("other"), "{config}");
+    assert!(
+        acp.model_turns().is_empty(),
+        "a command is not a model turn"
+    );
+}
+
 /// `/effort high` changes the session's effort through the command path and
 /// tells the client's picker, without a model turn.
 #[test]

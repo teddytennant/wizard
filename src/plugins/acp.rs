@@ -890,9 +890,13 @@ async fn run_slash_command(
                     cwd: cwd.clone(),
                     fusion,
                     model_change: None,
+                    base_change: None,
                     out: String::new(),
                 };
                 crate::commands::surface::dispatch(parsed, &mut surface).await;
+                if let Some(config) = surface.base_change.take() {
+                    *state.config.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(config);
+                }
                 (
                     surface.out,
                     surface.selection,
@@ -911,21 +915,26 @@ async fn run_slash_command(
         let mut switched = next.clone();
         switched.provider = provider;
         switched.model = model;
-        if switched == next {
-            answer = format!("already on {}", next.model_id());
+        let line = if switched == next {
+            format!("already on {}", next.model_id())
         } else {
             match build_session_agent(state, &switched, &cwd, session).await {
                 Ok(built) => {
-                    answer = format!("switched to model {}", switched.model_id());
+                    let mut line = format!("switched to model {}", switched.model_id());
                     if fusion {
-                        answer.push_str(" (fusion off)");
+                        line.push_str(" (fusion off)");
                     }
                     rebuilt = Some(built);
                     next = switched;
+                    line
                 }
-                Err(_) => answer = format!("could not switch to {}", switched.model_id()),
+                Err(_) => format!("could not switch to {}", switched.model_id()),
             }
-        }
+        };
+        answer = match answer.is_empty() {
+            true => line,
+            false => format!("{answer}\n\n{line}"),
+        };
     }
     let fusion = fusion && rebuilt.is_none();
     {
