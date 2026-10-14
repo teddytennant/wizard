@@ -14,8 +14,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 ### Fixed
 
 - **Cancelling a turn ends a plan review nobody answers.** A client that never answered `session/request_permission` held the turn open, and `session/cancel` did not release it. Cancel now rejects the plan ("the review was cancelled") and the turn ends as cancelled.
-- **A tool the turn did not offer is refused.** A call for a tool missing from the turn's tool list, such as `read_file` in chat mode, gets a tool error instead of running.
-- **A resumed session shows failed tool calls as failed.** `wizard acp` replayed every stored tool result as completed.
+- **A tool the turn did not offer is refused.** A call for a tool missing from the turn's tool list, such as `read_file` in chat mode, gets a tool error instead of running. The refused call is announced first, so every look draws it with its name.
+- **A resumed session shows failed tool calls as failed.** `wizard acp` replayed every stored tool result as completed. Each result now keeps whether it failed, so a command that worked and printed `Error: ` replays as completed; older sessions fall back on the `Error: ` prefix.
 - **A missing look names the right binary.** The error read `put wizard-ui-wizard-ui-claude next to wizard`, for every full look.
 
 ## [3.8.12] - 2026-10-14
