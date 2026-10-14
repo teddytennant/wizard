@@ -510,6 +510,7 @@ impl Changes {
             }
         }
         changes.added.extend(nul_fields(&untracked));
+        changes.forget_where(|path| path.starts_with(".wizard/"));
         Some(changes)
     }
 
@@ -523,8 +524,12 @@ impl Changes {
     }
 
     fn forget(&mut self, paths: &BTreeSet<String>) {
+        self.forget_where(|path| paths.contains(path));
+    }
+
+    fn forget_where(&mut self, drop: impl Fn(&String) -> bool) {
         for list in [&mut self.added, &mut self.modified, &mut self.deleted] {
-            list.retain(|path| !paths.contains(path));
+            list.retain(|path| !drop(path));
         }
     }
 
@@ -1252,6 +1257,7 @@ mod tests {
         );
         git(dir.path(), &["add", "-A"]);
         git(dir.path(), &["commit", "-q", "-m", "work"]);
+        write(dir.path(), ".wizard/checkpoints/1.json", "{}");
         assert_eq!(checks.inspect().await, Some(Findings::default()));
     }
 
