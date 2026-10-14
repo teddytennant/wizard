@@ -4894,3 +4894,56 @@ fn the_vim_line_motions_respect_hard_newlines() {
 }
 
 mod skins;
+
+/// A look hands over provider B in sovereign mode; changing effort here saves
+/// the effort and leaves the user's provider A and genie mode in the file.
+#[test]
+fn a_handed_over_session_never_lands_in_config_toml() {
+    let provider = |name: &str| crate::config::ProviderConfig {
+        name: name.into(),
+        kind: ProviderKind::OPENAI,
+        base_url: format!("http://127.0.0.1:9/{name}"),
+        model: format!("{name}-model"),
+        api_key_env: None,
+        gguf_path: None,
+        usd_per_mtok_in: None,
+        usd_per_mtok_out: None,
+        vision: None,
+        model_pinned: None,
+    };
+    let mut config = Config {
+        providers: vec![provider("a"), provider("b")],
+        active_provider: Some("a".into()),
+        mode: Mode::Genie,
+        ..Config::default()
+    };
+    let handoff = crate::skin::handoff::Handoff {
+        session: Some("s1".into()),
+        provider: "b".into(),
+        model: "b-other".into(),
+        mode: Mode::Sovereign,
+        effort: None,
+    };
+    let overlay = handoff.overlay(&mut config);
+    let mut app = App::new(config);
+    app.handed_over = Some(overlay);
+    assert_eq!(app.config.active().name, "b");
+    assert_eq!(app.config.mode, Mode::Sovereign);
+
+    // what /effort high does before it saves
+    app.config.reasoning_effort = Some(ReasoningEffort::High);
+    let written = toml::to_string_pretty(&app.config_to_save()).expect("serializes");
+    let saved: Config = toml::from_str(&written).expect("parses");
+    assert_eq!(saved.active_provider.as_deref(), Some("a"));
+    assert_eq!(saved.mode, Mode::Genie);
+    assert_eq!(saved.reasoning_effort, Some(ReasoningEffort::High));
+    let b = saved.providers.iter().find(|p| p.name == "b").expect("b");
+    assert_eq!(b.model, "b-model");
+
+    // a provider the user picks here is theirs to keep
+    app.config.active_provider = Some("a".into());
+    app.config.mode = Mode::Chat;
+    let saved = app.config_to_save();
+    assert_eq!(saved.active_provider.as_deref(), Some("a"));
+    assert_eq!(saved.mode, Mode::Chat);
+}

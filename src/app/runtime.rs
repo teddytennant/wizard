@@ -68,9 +68,7 @@ pub async fn run_tui(
     }
 
     // Back from a full look: its model and mode, and its conversation below.
-    if let Some(handoff) = &handoff {
-        handoff.apply(&mut config);
-    }
+    let handed_over = handoff.as_ref().map(|handoff| handoff.overlay(&mut config));
     let resume = match handoff.and_then(|handoff| handoff.session) {
         Some(id) => SessionTarget::Id(id),
         None if cli.resume => SessionTarget::Latest,
@@ -197,6 +195,7 @@ pub async fn run_tui(
         });
 
     let mut app = App::new(config);
+    app.handed_over = handed_over;
     app.project_root = project_root.clone();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
         app.recent_sessions = crate::agent::session::summaries(&dir)
@@ -533,7 +532,7 @@ pub async fn run_tui(
                     // `/model` and the picker are a choice, so the provider
                     // stops following the newest flagship until the next one.
                     app.config.pin_active_model(&model);
-                    if let Err(err) = app.config.save() {
+                    if let Err(err) = app.save_config() {
                         app.notice(format!("could not save the model choice: {err:#}"));
                     }
                 } else {

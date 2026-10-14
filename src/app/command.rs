@@ -1107,7 +1107,7 @@ impl CommandContext<'_> {
 
     /// Persist `App.config` to disk, surfacing any error as a notice.
     fn persist_config(&mut self) {
-        if let Err(err) = self.app.config.save() {
+        if let Err(err) = self.app.save_config() {
             self.app.notice(format!("could not save config: {err:#}"));
         }
     }
@@ -1366,7 +1366,7 @@ impl CommandContext<'_> {
         };
         let label = engine.label();
         self.app.config.ultra = Some(ultra);
-        if let Err(err) = self.app.config.save() {
+        if let Err(err) = self.app.save_config() {
             self.app
                 .notice(format!("could not save ultra config: {err:#}"));
             return;

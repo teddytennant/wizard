@@ -312,6 +312,9 @@ pub struct App {
     /// The full look `/ui` asked for. Started after the TUI has quit and given
     /// the terminal back.
     pub look: Option<crate::skin::Skin>,
+    /// What a full look handed over when this TUI started from one: session
+    /// state that [`Self::save_config`] keeps out of `config.toml`.
+    pub handed_over: Option<crate::skin::handoff::Overlay>,
     /// Tick counter driving the busy spinner.
     pub tick: u64,
     /// Matching commands for the current `/input`, shown as the suggestion
@@ -620,6 +623,7 @@ impl App {
             images: std::cell::RefCell::new(ImageCache::fallback()),
             should_quit: false,
             look: None,
+            handed_over: None,
             tick: 0,
             suggestions: Vec::new(),
             suggestion_index: 0,
@@ -945,7 +949,7 @@ impl App {
         // Inline change: persist and re-open, restoring the cursor so repeated
         // toggles stay on the same row. (These flags take effect at the next
         // cycle / startup, not mid-session.)
-        if let Err(err) = self.config.save() {
+        if let Err(err) = self.save_config() {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.open_settings_picker();
@@ -1160,6 +1164,19 @@ impl App {
     /// exists: this surface dropped system notes the GUI showed, and reported
     /// every failed tool call as a success because the session file does not
     /// record the failure flag.
+    /// `config` as `config.toml` should hold it: without what a look handed over.
+    pub(crate) fn config_to_save(&self) -> Config {
+        match &self.handed_over {
+            Some(overlay) => overlay.strip(&self.config),
+            None => self.config.clone(),
+        }
+    }
+
+    /// Every save of the session's config goes through here.
+    pub(crate) fn save_config(&self) -> anyhow::Result<()> {
+        self.config_to_save().save()
+    }
+
     fn load_transcript(&mut self, entries: &[crate::agent::session::SessionEntry]) {
         self.transcript.replay(entries);
     }
@@ -1257,7 +1274,7 @@ impl App {
     /// (DuckDuckGo, or xAI once a session/key exists): persist and report.
     fn set_web_backend(&mut self, id: &str, note: &str) {
         self.config.web.search_backend = id.to_string();
-        if let Err(err) = self.config.save() {
+        if let Err(err) = self.save_config() {
             self.notice(format!("could not save config: {err:#}"));
             return;
         }
@@ -2180,7 +2197,7 @@ impl App {
             ..VimState::default()
         };
         self.config.ui.vim = on;
-        if let Err(err) = self.config.save() {
+        if let Err(err) = self.save_config() {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.notice(if on {
@@ -2199,7 +2216,7 @@ impl App {
         let on = compact.unwrap_or(!self.transcript.compact());
         self.transcript.set_compact(on);
         self.config.ui.compact = on;
-        if let Err(err) = self.config.save() {
+        if let Err(err) = self.save_config() {
             self.notice(format!("could not save config: {err:#}"));
         }
         self.notice(if on {
@@ -3375,7 +3392,7 @@ impl App {
                                 synthesizer: synthesizer.clone(),
                                 rounds,
                             });
-                            if let Err(err) = self.config.save() {
+                            if let Err(err) = self.save_config() {
                                 self.notice(format!("could not save fusion config: {err:#}"));
                                 return Ok(None);
                             }

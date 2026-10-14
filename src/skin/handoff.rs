@@ -52,6 +52,16 @@ impl Handoff {
         serde_json::to_string(self).unwrap_or_default()
     }
 
+    /// [`Self::apply`], keeping what it replaced so a save can put it back.
+    pub fn overlay(&self, config: &mut Config) -> Overlay {
+        let before = config.clone();
+        self.apply(config);
+        Overlay {
+            before,
+            after: config.clone(),
+        }
+    }
+
     /// `config` running on this provider, model, mode and effort. A provider
     /// that is no longer configured leaves `config` as it was.
     pub fn apply(&self, config: &mut Config) {
@@ -66,6 +76,46 @@ impl Handoff {
         config.active_provider = Some(self.provider.clone());
         config.mode = self.mode;
         config.reasoning_effort = self.effort;
+    }
+}
+
+/// What a handoff changed in a session's config. The handed-over provider,
+/// model, mode and effort belong to the session, not to `config.toml`: a save
+/// writes the user's own values back, except for a setting changed since.
+#[derive(Debug, Clone)]
+pub struct Overlay {
+    before: Config,
+    after: Config,
+}
+
+impl Overlay {
+    /// `config` as it should be saved.
+    pub fn strip(&self, config: &Config) -> Config {
+        let mut saved = config.clone();
+        if saved.active_provider == self.after.active_provider {
+            saved.active_provider = self.before.active_provider.clone();
+        }
+        if saved.mode == self.after.mode {
+            saved.mode = self.before.mode;
+        }
+        if saved.reasoning_effort == self.after.reasoning_effort {
+            saved.reasoning_effort = self.before.reasoning_effort;
+        }
+        for provider in &mut saved.providers {
+            let model = |config: &Config| {
+                config
+                    .providers
+                    .iter()
+                    .find(|p| p.name == provider.name)
+                    .map(|p| p.model.clone())
+            };
+            if let (Some(after), Some(before)) = (model(&self.after), model(&self.before))
+                && provider.model == after
+            {
+                provider.model = before;
+            }
+        }
+        saved
     }
 }
 

@@ -370,7 +370,11 @@ pub(super) async fn startup_client(config: &mut Config) -> Result<Arc<dyn LlmPro
             // providers) still stands, so the pick is merged in and the file
             // rewritten from the merge.
             adopt_provider(config, &picked);
-            config.save().context("saving the picked provider")?;
+            // Merged into the file as it is, not into `config`, which may be
+            // carrying what a look handed over.
+            let mut saved = Config::load().unwrap_or_else(|_| config.clone());
+            adopt_provider(&mut saved, &picked);
+            saved.save().context("saving the picked provider")?;
             return Ok(client);
         }
     }
