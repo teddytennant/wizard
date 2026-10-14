@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.8] - 2026-10-13
+
 ### Added
 
 - **`[decisions]`: a decision model picks what goes in the prompt.** With a provider and its key configured (`openai` on `gpt-6-luna`, `subq`, or `jev`), one classifier call before a session's first model step scores the prompt. The sovereign prompt keeps only the sections the request needs, out of durable services, source installs, deliverable and schema rules, images, and changing an existing codebase. Skills that match have their bodies loaded up front. A later prompt that needs more gets it as a note after the prompt, so the cached prefix does not move. The call has 2 s; on a timeout or error the full prompt goes out as before. Off, and byte-identical to before, without the table or without a key. See [docs/decisions.md](docs/decisions.md).
