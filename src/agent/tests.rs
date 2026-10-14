@@ -4340,6 +4340,36 @@ async fn a_chat_turn_sends_only_the_web_tools() {
     assert_eq!(sent, ["web_search", "web_fetch"]);
 }
 
+/// A call for a tool the turn did not offer is refused, not run: in chat mode
+/// the model was told about the web tools only, so `read_file` must not read.
+#[cfg(feature = "tool-web")]
+#[tokio::test]
+async fn a_tool_the_turn_did_not_offer_is_refused() {
+    let tmp = TempDir::new();
+    std::fs::write(tmp.0.join("secret.txt"), "SECRET CONTENTS").unwrap();
+    let provider = ScriptedProvider::new(vec![
+        vec![tool_call_chunk(
+            "read_file",
+            json!({ "path": "secret.txt" }),
+        )],
+        vec![final_chunk("done")],
+    ]);
+    let mut agent = agent_over_real_registry(
+        &tmp,
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        chat_config(crate::llm::registry::ProviderKind::OPENAI),
+    )
+    .await;
+    agent.set_plan_mode(true);
+    let (tx, _rx) = mpsc::channel(256);
+    agent.run_turn("read it", tx).await.expect("turn ok");
+
+    let requests = provider.requests.lock().unwrap();
+    let result = requests[1].messages.last().expect("the tool result").text();
+    assert!(result.contains("not available in this turn"), "{result}");
+    assert!(!result.contains("SECRET"), "{result}");
+}
+
 /// `/mode chat` and back: the project tools are set aside, not lost, and a
 /// `/reload` while chatting keeps the chat cut.
 #[cfg(feature = "tool-web")]

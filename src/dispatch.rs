@@ -253,6 +253,35 @@ impl Dispatcher {
         self.effects
     }
 
+    /// Whether a turn's request offered `name`: advertised to the model, or
+    /// deferred behind `tool_search` and so reachable without being listed.
+    pub(crate) fn offers(&self, name: &str) -> bool {
+        self.registry.is_deferred(name)
+            || self
+                .registry
+                .advertised_specs()
+                .iter()
+                .any(|spec| spec.function.name == name)
+    }
+
+    /// Answer a call for a tool the turn never offered, without running it:
+    /// chat mode's cut of the registry is what the model was told about, and a
+    /// name it invents or remembers from an earlier turn must not run anyway.
+    pub(crate) async fn refuse_unoffered(&self, name: &str, sink: &Sink) -> DispatchOutcome {
+        let output = ToolOutput::error(format!(
+            "{name} is not available in this turn; use only the tools you were given"
+        ));
+        if !sink.tool_finished(name, &output).await {
+            return DispatchOutcome::stopped();
+        }
+        DispatchOutcome {
+            grade: Grade::Fault,
+            output: Some(output),
+            nudge: None,
+            done: None,
+        }
+    }
+
     /// Run one tool call through the pipeline.
     pub(crate) async fn dispatch(
         &mut self,

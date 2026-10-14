@@ -1755,6 +1755,13 @@ impl Host for TurnHost<'_> {
     }
 
     async fn dispatch(&mut self, call: &ToolCall, sink: &Sink) -> DispatchOutcome {
+        if !self.agent.dispatcher.offers(&call.function.name) {
+            return self
+                .agent
+                .dispatcher
+                .refuse_unoffered(&call.function.name, sink)
+                .await;
+        }
         let outcome = self
             .agent
             .dispatcher
@@ -1771,7 +1778,9 @@ impl Host for TurnHost<'_> {
     /// [`Agent::compact_now`] — intercepted so it runs mid-turn on every
     /// surface. The tool's own execute path only runs outside this loop.
     async fn intercept(&mut self, call: &ToolCall, sink: &Sink) -> Option<CallOutcome> {
-        if call.function.name != crate::tools::compact::COMPACT_TOOL_NAME {
+        if call.function.name != crate::tools::compact::COMPACT_TOOL_NAME
+            || !self.agent.dispatcher.offers(&call.function.name)
+        {
             return None;
         }
         Some(self.agent.dispatch_compact(sink).await)
