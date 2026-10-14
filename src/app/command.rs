@@ -31,6 +31,7 @@ use crate::mcp::{McpConfig, McpManager};
 use crate::server;
 use crate::skills::Skill;
 use crate::skin;
+use crate::skin::handoff::Setting;
 use crate::theme;
 use crate::tools::tasks::Task;
 
@@ -850,6 +851,7 @@ impl CommandContext<'_> {
             agent.set_mode(mode);
         }
         self.app.config.mode = mode;
+        self.app.keep(Setting::Mode);
         self.app.status.mode = mode;
         match mode {
             Mode::Sovereign => {
@@ -926,6 +928,7 @@ impl CommandContext<'_> {
             agent.set_reasoning_effort(effort);
         }
         self.app.config.reasoning_effort = effort;
+        self.app.keep(Setting::Effort);
         self.persist_config();
         true
     }
@@ -1453,6 +1456,7 @@ impl CommandContext<'_> {
             return;
         }
         self.app.config.active_provider = Some(name.clone());
+        self.app.keep(Setting::Provider);
         self.persist_config();
         self.rebuild_active_provider(format!("switched to provider '{name}'"))
             .await;
@@ -1500,6 +1504,7 @@ impl CommandContext<'_> {
         self.app.config.providers.retain(|p| p.name != name);
         self.app.config.providers.push(provider);
         self.app.config.active_provider = Some(name);
+        self.app.keep(Setting::Provider);
         self.persist_config();
         self.rebuild_active_provider(summary).await;
     }

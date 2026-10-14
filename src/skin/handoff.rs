@@ -59,6 +59,7 @@ impl Handoff {
         Overlay {
             before,
             after: config.clone(),
+            kept: Vec::new(),
         }
     }
 
@@ -79,27 +80,52 @@ impl Handoff {
     }
 }
 
+/// A setting a handoff can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    /// The active provider and its model.
+    Provider,
+    Mode,
+    Effort,
+}
+
 /// What a handoff changed in a session's config. The handed-over provider,
 /// model, mode and effort belong to the session, not to `config.toml`: a save
-/// writes the user's own values back, except for a setting changed since.
+/// writes the user's own values back, except for a setting the user has set
+/// here since.
 #[derive(Debug, Clone)]
 pub struct Overlay {
     before: Config,
     after: Config,
+    kept: Vec<Setting>,
 }
 
 impl Overlay {
+    /// The user set `setting` in this session: from now on it saves as it is.
+    pub fn keep(&mut self, setting: Setting) {
+        if !self.kept.contains(&setting) {
+            self.kept.push(setting);
+        }
+    }
+
+    fn handed(&self, setting: Setting) -> bool {
+        !self.kept.contains(&setting)
+    }
+
     /// `config` as it should be saved.
     pub fn strip(&self, config: &Config) -> Config {
         let mut saved = config.clone();
-        if saved.active_provider == self.after.active_provider {
-            saved.active_provider = self.before.active_provider.clone();
-        }
-        if saved.mode == self.after.mode {
+        if self.handed(Setting::Mode) && saved.mode == self.after.mode {
             saved.mode = self.before.mode;
         }
-        if saved.reasoning_effort == self.after.reasoning_effort {
+        if self.handed(Setting::Effort) && saved.reasoning_effort == self.after.reasoning_effort {
             saved.reasoning_effort = self.before.reasoning_effort;
+        }
+        if !self.handed(Setting::Provider) {
+            return saved;
+        }
+        if saved.active_provider == self.after.active_provider {
+            saved.active_provider = self.before.active_provider.clone();
         }
         for provider in &mut saved.providers {
             let model = |config: &Config| {

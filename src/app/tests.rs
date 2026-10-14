@@ -4946,4 +4946,9 @@ fn a_handed_over_session_never_lands_in_config_toml() {
     let saved = app.config_to_save();
     assert_eq!(saved.active_provider.as_deref(), Some("a"));
     assert_eq!(saved.mode, Mode::Chat);
+
+    // and so is the handed-over mode, once the user picks it here
+    app.config.mode = Mode::Sovereign;
+    app.keep(crate::skin::handoff::Setting::Mode);
+    assert_eq!(app.config_to_save().mode, Mode::Sovereign);
 }

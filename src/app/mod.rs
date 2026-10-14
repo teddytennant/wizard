@@ -1172,6 +1172,14 @@ impl App {
         }
     }
 
+    /// The user set `setting` here: it is theirs to save, whatever a look
+    /// handed over.
+    pub(crate) fn keep(&mut self, setting: crate::skin::handoff::Setting) {
+        if let Some(overlay) = self.handed_over.as_mut() {
+            overlay.keep(setting);
+        }
+    }
+
     /// Every save of the session's config goes through here.
     pub(crate) fn save_config(&self) -> anyhow::Result<()> {
         self.config_to_save().save()
