@@ -1485,7 +1485,7 @@ impl Default for Config {
             time_wrap_up_at: default_wrap_up_at(),
             time_finish_at: default_finish_at(),
             max_context_tokens: 150_000,
-            prune_after_tokens: 32_000,
+            prune_after_tokens: 0,
             providers: Vec::new(),
             active_provider: None,
             gateway: GatewayConfig::default(),

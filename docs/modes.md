@@ -374,7 +374,7 @@ to `~/.wizard/evolution.jsonl`.
 | `max_consecutive_failures` | `5` | Failed cycles in a row before a continuous run gives up; `0` disables the bound |
 | `compact_threshold_bytes` | `48000` | History size that triggers compaction |
 | `max_context_tokens` | `150000` | Cap on the window compaction measures against; `0` uses the whole window |
-| `prune_after_tokens` | `32000` | Prompt size past which old tool results are cut down between compactions; `0` disables |
+| `prune_after_tokens` | `0` | Prompt size past which old tool results are cut down between compactions; `0`, the default, disables |
 | `time_wrap_up_at` | `0.6` | Fraction of a timed run spent before the per-step line asks for the deliverable on disk; `1.0` turns the stage off |
 | `time_finish_at` | `0.85` | Fraction spent before it asks the run to stop changing state and land; `1.0` turns the stage off |
 | `rollback_failed_cycles` | `false` | Restore a failed cycle's file checkpoints (see [checkpoints.md](checkpoints.md)) |

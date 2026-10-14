@@ -64,7 +64,7 @@ fn defaults_match_docs() {
     ));
     assert_eq!(config.compact_threshold_bytes, 48_000);
     assert_eq!(config.max_context_tokens, 150_000);
-    assert_eq!(config.prune_after_tokens, 32_000);
+    assert_eq!(config.prune_after_tokens, 0);
     assert!(!config.rollback_failed_cycles);
     assert_eq!(config.max_consecutive_failures, 5);
     assert_eq!(config.checkpoints.keep_turns, 50);

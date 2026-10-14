@@ -703,7 +703,7 @@ path (`.wizard/plan.md`).
 ### Old tool results stop being re-sent
 
 Compaction is not the first thing that shrinks a long prompt. Once the next
-call's prompt passes `prune_after_tokens` (default 32k), old tool results are
+call's prompt passes `prune_after_tokens` (off by default), old tool results are
 cut down between steps, with no model call and no summary:
 
 - the last ten messages are untouched;
