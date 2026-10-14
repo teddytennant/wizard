@@ -318,7 +318,7 @@ fn ui_command_lists_the_skins_and_marks_the_active_one() {
     let mut app = app();
     let listing = command::ui_command(&mut app, None);
     assert!(listing.contains("● wizard"), "{listing}");
-    for other in ["codex", "grok", "opencode", "pi", "jcode"] {
+    for other in ["codex", "grok", "opencode", "pi", "jcode", "claude"] {
         assert!(listing.contains(&format!("· {other}")), "{listing}");
     }
     assert!(listing.contains("restarts"), "{listing}");
@@ -375,6 +375,18 @@ fn a_full_look_quits_the_tui_and_starts_once_the_terminal_is_back() {
     assert_eq!(app.look, Some(crate::skin::Skin::Pi));
     assert_eq!(app.config.ui.skin.as_deref(), Some("pi"));
     assert_eq!(crate::skin::active(), crate::skin::Skin::Wizard);
+}
+
+#[test]
+fn the_claude_look_starts_its_own_binary() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let _looks = installed_looks(&["wizard-ui-claude"]);
+    let mut app = app();
+    let notice = command::ui_command(&mut app, Some("claude code"));
+    assert_eq!(notice, "starting wizard-ui-claude");
+    assert!(app.should_quit);
+    assert_eq!(app.look, Some(crate::skin::Skin::Claude));
+    assert_eq!(app.config.ui.skin.as_deref(), Some("claude"));
 }
 
 #[test]

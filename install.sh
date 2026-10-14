@@ -53,7 +53,8 @@
 #                                teddytennant/openw). Installed beside wizard as
 #                                wizard-ui-codex, wizard-ui-grok,
 #                                wizard-ui-jcode, wizard-ui-opencode,
-#                                wizard-ui-pi. A failed build is a warning:
+#                                wizard-ui-pi, wizard-ui-claude. A failed
+#                                build is a warning:
 #                                wizard still runs.
 #   WIZARD_LOCAL                 1 = preinstall the llama.cpp stack and a model
 #                                    (see above)               (default 0)
@@ -1966,8 +1967,8 @@ build_from_source() {
 # --- full looks ---------------------------------------------------------
 #
 # Current releases ship wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex,
-# wizard-ui-grok and wizard-ui-jcode in the same tarball as wizard. install_bundled_looks places
-# those. The clone-and-build below is only the fallback for an old release, a
+# wizard-ui-grok, wizard-ui-jcode and wizard-ui-claude in the same tarball as
+# wizard. install_bundled_looks places those. The clone-and-build below is only the fallback for an old release, a
 # source install, or a tarball that did not contain them. A missing toolchain
 # or a failed build is a warning: wizard itself is already installed, and /ui
 # says which look is missing.
@@ -1985,7 +1986,7 @@ look_bundled() {
 
 install_bundled_looks() {
     local unpack="$1" name bin
-    for name in opencode pi codex grok jcode; do
+    for name in opencode pi codex grok jcode claude; do
         bin="$(find "$unpack" -type f -name "wizard-ui-${name}" | head -n1 || true)"
         if [ -z "$bin" ]; then
             continue
@@ -2007,7 +2008,7 @@ install_looks() {
         return
     fi
     local missing=0 name
-    for name in opencode pi codex grok jcode; do
+    for name in opencode pi codex grok jcode claude; do
         look_bundled "$name" || missing=1
     done
     if [ "$missing" = 0 ]; then
@@ -2015,14 +2016,14 @@ install_looks() {
     fi
     if ! cargo_works; then
         warn "this release did not include every look, and cargo is not available to build the rest."
-        warn "wizard still runs. /ui names the missing look. Re-run the installer against a current release, or build ${WIZARD_UI_REPO} and copy wizard-ui-codex, wizard-ui-grok, wizard-ui-jcode, wizard-ui-opencode, wizard-ui-pi next to wizard."
+        warn "wizard still runs. /ui names the missing look. Re-run the installer against a current release, or build ${WIZARD_UI_REPO} and copy wizard-ui-codex, wizard-ui-grok, wizard-ui-jcode, wizard-ui-opencode, wizard-ui-pi, wizard-ui-claude next to wizard."
         return
     fi
     command -v git >/dev/null 2>&1 || {
         warn "git is not available, so the full looks were not built"
         return
     }
-    say "Building the full looks from ${WIZARD_UI_REPO} (codex, grok, jcode, opencode, pi) ..."
+    say "Building the full looks from ${WIZARD_UI_REPO} (codex, grok, jcode, opencode, pi, claude) ..."
     local src="${TMP_DIR}/openw-src"
     # A repo GitHub cannot find answers 401, and git would stop the install
     # to ask for a username on /dev/tty.
@@ -2030,12 +2031,12 @@ install_looks() {
         warn "could not clone ${WIZARD_UI_REPO}; wizard is installed, the full looks are not"
         return
     fi
-    if ! ( cd "$src" && cargo build --release -p codexw -p grokw -p jcodew -p openw -p piw ); then
+    if ! ( cd "$src" && cargo build --release -p codexw -p grokw -p jcodew -p openw -p piw -p claudew ); then
         warn "the full looks failed to build; wizard is installed without them"
         return
     fi
     local name bin
-    for name in codex grok jcode opencode pi; do
+    for name in codex grok jcode opencode pi claude; do
         if look_bundled "$name"; then
             continue
         fi

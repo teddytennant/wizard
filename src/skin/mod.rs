@@ -1,14 +1,14 @@
 //! UI skins: which interface Wizard starts in.
 //!
 //! [`crate::theme`] answers "what color is an accent". This module answers the
-//! other half: which look is on. Six ship:
+//! other half: which look is on. Seven ship:
 //!
 //! - `wizard` — the house look, drawn in this process: one rule over the
 //!   composer, `❯`/`·` gutters, a status line of facts and nothing decorative.
 //!   `docs/design.md` is its standard. It also owns the chrome tables below,
 //!   which the other looks do not use.
-//! - `codex`, `grok`, `opencode`, `pi`, `jcode` — full terminal UIs with those
-//!   layouts.
+//! - `codex`, `grok`, `opencode`, `pi`, `jcode`, `claude` — full terminal UIs
+//!   with those layouts.
 //!   `/ui` and onboarding write `[ui] skin` and start the matching
 //!   `wizard-ui-*` binary next to this one. The product name inside each is
 //!   Wizard. The look is the only thing that differs.
@@ -79,17 +79,20 @@ pub enum Skin {
     Pi,
     /// jcode's layout, as a full UI.
     Jcode,
+    /// Claude Code's layout, as a full UI.
+    Claude,
 }
 
 impl Skin {
     /// Every skin, in the order pickers and listings show them.
-    pub const ALL: [Skin; 6] = [
+    pub const ALL: [Skin; 7] = [
         Skin::Wizard,
         Skin::Codex,
         Skin::Grok,
         Skin::Opencode,
         Skin::Pi,
         Skin::Jcode,
+        Skin::Claude,
     ];
 
     /// The key written to `[ui] skin` and accepted by `/ui <name>`.
@@ -101,6 +104,7 @@ impl Skin {
             Skin::Opencode => "opencode",
             Skin::Pi => "pi",
             Skin::Jcode => "jcode",
+            Skin::Claude => "claude",
         }
     }
 
@@ -113,6 +117,7 @@ impl Skin {
             Skin::Opencode => "opencode",
             Skin::Pi => "pi",
             Skin::Jcode => "jcode",
+            Skin::Claude => "claude",
         }
     }
 
@@ -125,6 +130,7 @@ impl Skin {
             Skin::Opencode => "the opencode layout, as its own UI (restarts into it)",
             Skin::Pi => "the pi layout, as its own UI (restarts into it)",
             Skin::Jcode => "the jcode layout, as its own UI (restarts into it)",
+            Skin::Claude => "the claude code layout, as its own UI (restarts into it)",
         }
     }
 
@@ -139,6 +145,7 @@ impl Skin {
             Skin::Opencode => Some("wizard-ui-opencode"),
             Skin::Pi => Some("wizard-ui-pi"),
             Skin::Jcode => Some("wizard-ui-jcode"),
+            Skin::Claude => Some("wizard-ui-claude"),
         }
     }
 
@@ -159,6 +166,7 @@ impl Skin {
             "opencode" | "open-code" | "openw" => Some(Skin::Opencode),
             "pi" | "piw" => Some(Skin::Pi),
             "jcode" | "j-code" | "jcodew" => Some(Skin::Jcode),
+            "claude" | "claude-code" | "claudecode" | "claudew" => Some(Skin::Claude),
             _ => None,
         }
     }
@@ -176,10 +184,10 @@ impl Skin {
     pub fn companion_theme(self) -> &'static str {
         match self {
             // The house palette: one accent, status hues, no painted background.
-            // Pi, OpenCode and jcode share this frame and keep the monochrome palette,
+            // Pi, OpenCode, jcode and claude share this frame and keep the monochrome palette,
             // which is also what a name that does not load falls back to.
             Skin::Wizard => "wizard",
-            Skin::Opencode | Skin::Pi | Skin::Jcode => crate::theme::DEFAULT_THEME,
+            Skin::Opencode | Skin::Pi | Skin::Jcode | Skin::Claude => crate::theme::DEFAULT_THEME,
             Skin::Codex => "codex",
             Skin::Grok => "grok",
         }
@@ -190,7 +198,7 @@ impl Skin {
     /// exhaustive and the old chrome tests still have something to draw.
     pub fn chrome(self) -> &'static Chrome {
         match self {
-            Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode => &WIZARD,
+            Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode | Skin::Claude => &WIZARD,
             Skin::Codex => &CODEX,
             Skin::Grok => &GROK,
         }
@@ -641,6 +649,7 @@ mod tests {
             ("OpenAI Codex", Skin::Codex),
             ("grok build", Skin::Grok),
             ("grok_build", Skin::Grok),
+            ("Claude Code", Skin::Claude),
             ("default", Skin::Wizard),
         ] {
             assert_eq!(Skin::from_key(spelling), Some(expected), "{spelling}");

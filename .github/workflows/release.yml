@@ -249,8 +249,8 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # The five full looks (wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex,
-      # wizard-ui-grok, wizard-ui-jcode) ship in the same tarball as wizard. install.sh and
+      # The six full looks (wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex,
+      # wizard-ui-grok, wizard-ui-jcode, wizard-ui-claude) ship in the same tarball as wizard. install.sh and
       # wizard update place them beside it, so a machine without cargo still
       # gets /ui opencode and the rest. looks.rev pins the source; floating
       # main would make a tag unreproducible.
@@ -290,7 +290,7 @@ jobs:
           RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
           CC_x86_64_unknown_linux_musl: musl-gcc
           CC_aarch64_unknown_linux_musl: musl-gcc
-        run: cargo build --release --locked --target ${{ matrix.target }} -p openw -p piw -p codexw -p grokw -p jcodew
+        run: cargo build --release --locked --target ${{ matrix.target }} -p openw -p piw -p codexw -p grokw -p jcodew -p claudew
 
       - name: Package
         run: |
@@ -306,9 +306,10 @@ jobs:
           cp "$looks/codexw" "$stage/wizard-ui-codex"
           cp "$looks/grokw" "$stage/wizard-ui-grok"
           cp "$looks/jcodew" "$stage/wizard-ui-jcode"
+          cp "$looks/claudew" "$stage/wizard-ui-claude"
           strip "$stage"/*
           tar -C "$stage" -czf "wizard-${{ matrix.target }}.tar.gz" \
-            wizard wizard-ui-opencode wizard-ui-pi wizard-ui-codex wizard-ui-grok wizard-ui-jcode
+            wizard wizard-ui-opencode wizard-ui-pi wizard-ui-codex wizard-ui-grok wizard-ui-jcode wizard-ui-claude
 
       # Start what we are about to ship. Deliberately the unpacked tarball and
       # not target/release/wizard: strip and tar are the last two things that
@@ -335,7 +336,7 @@ jobs:
           rm -rf musl-check && mkdir musl-check
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C musl-check
           found=0
-          for bin in musl-check/wizard musl-check/wizard-ui-opencode musl-check/wizard-ui-pi musl-check/wizard-ui-codex musl-check/wizard-ui-grok musl-check/wizard-ui-jcode; do
+          for bin in musl-check/wizard musl-check/wizard-ui-opencode musl-check/wizard-ui-pi musl-check/wizard-ui-codex musl-check/wizard-ui-grok musl-check/wizard-ui-jcode musl-check/wizard-ui-claude; do
             test -f "$bin"
             found=$((found + 1))
             if readelf -l "$bin" | grep -q INTERP; then
@@ -356,7 +357,7 @@ jobs:
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/wizard --version
           version="$(grep -m1 '^version' Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
-          for look in opencode pi grok jcode codex; do
+          for look in opencode pi grok jcode codex claude; do
             ./smoke/wizard-ui-$look --version | grep -F " ${version}"
           done
           rm -rf smoke

@@ -101,7 +101,11 @@ pub(crate) fn spinner_frame(tick: u64) -> char {
 fn house_skin() -> bool {
     matches!(
         skin::active(),
-        skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi | skin::Skin::Jcode
+        skin::Skin::Wizard
+            | skin::Skin::Opencode
+            | skin::Skin::Pi
+            | skin::Skin::Jcode
+            | skin::Skin::Claude
     )
 }
 
@@ -168,11 +172,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match skin::active() {
         skin::Skin::Codex => codex::draw(frame, app),
         skin::Skin::Grok => grok::draw(frame, app),
-        // Opencode, Pi and Jcode have no in-process frame. If one is active
+        // Opencode, Pi, Jcode and Claude have no in-process frame. If one is active
         // here, the companion exec failed and the house frame is the fallback.
-        skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi | skin::Skin::Jcode => {
-            draw_house(frame, app)
-        }
+        skin::Skin::Wizard
+        | skin::Skin::Opencode
+        | skin::Skin::Pi
+        | skin::Skin::Jcode
+        | skin::Skin::Claude => draw_house(frame, app),
     }
     // A drag over an overlay copies the overlay, which has no gutter.
     if overlay_open(app) {
@@ -989,7 +995,11 @@ pub(super) fn transcript_text(
         // a wait read as the same kind of motion.
         let tail = if matches!(
             skin::active(),
-            skin::Skin::Wizard | skin::Skin::Opencode | skin::Skin::Pi | skin::Skin::Jcode
+            skin::Skin::Wizard
+                | skin::Skin::Opencode
+                | skin::Skin::Pi
+                | skin::Skin::Jcode
+                | skin::Skin::Claude
         ) {
             Span::styled(motion::glyph(motion::Kind::Thinking, app.tick), dim())
         } else {

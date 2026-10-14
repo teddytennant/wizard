@@ -185,7 +185,7 @@ pub enum SlashCommand {
     /// `/vim` — toggle modal (vim-style) editing of the input composer.
     Vim,
     /// `/ui [name]`: list the available interfaces (`wizard`, `codex`, `grok`,
-    /// `opencode`, `pi`, `jcode`), or wear one. `None` lists; `Some` switches. A full
+    /// `opencode`, `pi`, `jcode`, `claude`), or wear one. `None` lists; `Some` switches. A full
     /// look restarts into `wizard-ui-*`; `wizard` stays in this process.
     ///
     /// Separate from [`Self::Theme`] because they are separate settings: a
@@ -1412,7 +1412,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "ui",
-        args: "[wizard|codex|grok|opencode|pi|jcode]",
+        args: "[wizard|codex|grok|opencode|pi|jcode|claude]",
         description: "list the looks, or switch to one",
         takes_args: false,
         tui: Execution::Ui,

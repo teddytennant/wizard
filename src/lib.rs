@@ -649,8 +649,8 @@ fn config_skin(config: &Config) -> Option<skin::Skin> {
 }
 
 /// `skin` when it starts another process. Codex and Grok do only when their
-/// binary is installed; otherwise this process draws them. Opencode, Pi and
-/// Jcode always do, and a missing binary is the warning in [`run_interactive`].
+/// binary is installed; otherwise this process draws them. Opencode, Pi,
+/// Jcode and Claude always do, and a missing binary is the warning in [`run_interactive`].
 fn full_look(skin: Option<skin::Skin>) -> Option<skin::Skin> {
     let skin = skin?;
     let bin = skin.companion_bin()?;

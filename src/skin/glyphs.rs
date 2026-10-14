@@ -45,7 +45,7 @@ pub fn set() -> Set {
 fn is_house() -> bool {
     matches!(
         super::active(),
-        Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode
+        Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode | Skin::Claude
     )
 }
 
