@@ -141,7 +141,8 @@ impl MemoryStore {
             content.trim()
         );
         let path = self.entry_path(name);
-        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        crate::platform::secrets::replace_file(&path, body.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
         self.regenerate_index()
     }
 
@@ -243,7 +244,8 @@ impl MemoryStore {
             ));
         }
         let path = self.dir.join(INDEX_FILE);
-        std::fs::write(&path, index).with_context(|| format!("writing {}", path.display()))
+        crate::platform::secrets::replace_file(&path, index.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))
     }
 }
 
@@ -731,5 +733,61 @@ mod tests {
             project_slug(Path::new("/home/user/projects/my_app")),
             "-home-user-projects-my-app"
         );
+    }
+
+    /// Same failure as a truncating mission save: a reader holding `MEMORY.md`
+    /// must keep the previous index, not whatever a killed rewrite left.
+    #[test]
+    fn a_reader_holding_the_index_keeps_the_previous_one() {
+        use std::io::Read;
+
+        let tmp = TempStore::new();
+        let store = &tmp.store;
+        store
+            .save("alpha", MemoryType::Project, "first", "the first body")
+            .unwrap();
+        let mut held = std::fs::File::open(store.dir().join(INDEX_FILE)).expect("hold the index");
+
+        store
+            .save(
+                "beta",
+                MemoryType::Project,
+                "second",
+                &"n".repeat(64 * 1024),
+            )
+            .unwrap();
+
+        let mut raw = String::new();
+        held.read_to_string(&mut raw).expect("read the held inode");
+        assert!(
+            raw.contains("alpha") && !raw.contains("beta"),
+            "the inode a reader already had must stay the previous index: {raw}"
+        );
+        let index = store.index().unwrap().expect("index");
+        assert!(index.contains("alpha") && index.contains("beta"));
+    }
+
+    /// A symlink planted where a memory file goes names some other file.
+    /// Following it truncates that file.
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_a_memory_symlink_instead_of_truncating_its_target() {
+        let tmp = TempStore::new();
+        let store = &tmp.store;
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let victim = store.dir().join("victim.md");
+        std::fs::write(&victim, "do not clobber\n").unwrap();
+        std::os::unix::fs::symlink(&victim, store.dir().join("notes.md")).unwrap();
+
+        store
+            .save("notes", MemoryType::Project, "a note", "the body")
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "do not clobber\n",
+            "the memory file must not be followed into whatever it names"
+        );
+        assert!(store.read("notes").unwrap().contains("the body"));
     }
 }

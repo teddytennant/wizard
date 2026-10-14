@@ -267,11 +267,27 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     write_atomic_with(path, data, Visibility::Umask, STALE_SCRATCH_AGE)
 }
 
-/// Whether an atomic write produces an owner-only file or an ordinary one.
+/// Publish `data` as `path` by writing a scratch file beside it and renaming
+/// it over the destination. The parent must already exist.
+///
+/// [`write_atomic`] also tightens that parent to owner-only, which is right
+/// for `~/.wizard` and wrong for a project's `.wizard`: `mission.toml` lives
+/// next to work the user may be sharing. This leaves the directory's mode
+/// alone. A reader that already has the file open keeps the previous inode
+/// until the new one is complete, so a kill mid-write cannot leave a
+/// truncated file where a whole one was.
+pub fn replace_file(path: &Path, data: &[u8]) -> Result<()> {
+    write_atomic_with(path, data, Visibility::AsIs, STALE_SCRATCH_AGE)
+}
+
+/// Whether an atomic write produces an owner-only file or an ordinary one,
+/// and whether it may create or chmod the parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Visibility {
     Private,
     Umask,
+    /// Parent already exists. Do not create it and do not chmod it.
+    AsIs,
 }
 
 /// [`write_private_atomic`] with the scratch-file janitor's threshold
@@ -293,6 +309,14 @@ fn write_atomic_with(
     match visibility {
         Visibility::Private => create_private_dir_strict(dir)?,
         Visibility::Umask => create_private_dir(dir)?,
+        Visibility::AsIs => {
+            if !dir.is_dir() {
+                anyhow::bail!(
+                    "{} does not exist; replace_file does not create directories",
+                    dir.display()
+                );
+            }
+        }
     }
 
     // Hidden, pid-tagged and serial-tagged. The pid keeps two processes apart
@@ -324,7 +348,7 @@ fn write_atomic_with(
             Visibility::Private => create_private_file(&tmp)?,
             // `create_new`, like the private variant, so a symlink planted at
             // this name is refused rather than followed.
-            Visibility::Umask => std::fs::File::create_new(&tmp)
+            Visibility::Umask | Visibility::AsIs => std::fs::File::create_new(&tmp)
                 .with_context(|| format!("creating {}", tmp.display()))?,
         };
         file.write_all(data)
