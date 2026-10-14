@@ -158,6 +158,13 @@ fn provider_choices(installed: &[ProviderKind]) -> Vec<ProviderChoice> {
             collect: collect_xai,
         },
         ProviderChoice {
+            label: "Claude subscription",
+            detail: "Pro or Max, through Claude Code; sign in with `wizard --login claude`"
+                .to_string(),
+            kinds: vec![ProviderKind::CLAUDE_CODE],
+            collect: collect_claude_code,
+        },
+        ProviderChoice {
             label: "Local",
             detail: "one pick: llama.cpp & Ollama set up for you, model sized to this \
                      machine; private, no API key"
@@ -978,6 +985,24 @@ fn collect_xai(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     }))
 }
 
+fn collect_claude_code(_terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
+    #[cfg(feature = "provider-claude-code")]
+    {
+        let provider = crate::plugins::claude_code::provider_config();
+        Ok(Some(ProviderAnswers {
+            provider_name: provider.name,
+            kind: provider.kind,
+            base_url: provider.base_url,
+            model: provider.model,
+            api_key_env: None,
+            api_key: None,
+            gguf_path: None,
+        }))
+    }
+    #[cfg(not(feature = "provider-claude-code"))]
+    Ok(None)
+}
+
 fn collect_xai_oauth(terminal: &mut Tui) -> Result<Option<ProviderAnswers>> {
     let models: Vec<(String, String)> = XAI_MODELS
         .iter()
@@ -1477,6 +1502,7 @@ mod tests {
     #[test]
     #[cfg(all(
         feature = "provider-anthropic",
+        feature = "provider-claude-code",
         feature = "provider-cloudflare",
         feature = "provider-llamacpp",
         feature = "provider-ollama",
@@ -1493,6 +1519,7 @@ mod tests {
             [
                 "xAI account sign-in",
                 "xAI (Grok), API key",
+                "Claude subscription",
                 "Local",
                 "OpenRouter",
                 "Cloudflare Workers AI",

@@ -93,18 +93,23 @@ fn shell(command: &str) -> std::process::Command {
     shell
 }
 
-/// Run the setup on this process's terminal, then store the provider and make
-/// it the active one. `Ok(None)` when the user declined the install.
-pub fn run_blocking() -> Result<Option<Config>> {
-    let ready = Setup {
+/// Install and sign in Claude Code on this process's terminal. `Ok(false)`
+/// when the user declined the install.
+pub fn ensure_ready() -> Result<bool> {
+    Setup {
         path: std::env::var_os("PATH"),
         home: dirs::home_dir(),
         install_command: INSTALL_COMMAND,
         input: &mut std::io::stdin().lock(),
         output: &mut std::io::stdout(),
     }
-    .run()?;
-    if !ready {
+    .run()
+}
+
+/// Run the setup on this process's terminal, then store the provider and make
+/// it the active one. `Ok(None)` when the user declined the install.
+pub fn run_blocking() -> Result<Option<Config>> {
+    if !ensure_ready()? {
         return Ok(None);
     }
     let mut config = Config::load().context("loading config for Claude Code setup")?;

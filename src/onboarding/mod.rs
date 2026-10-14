@@ -441,6 +441,8 @@ enum Login {
     Xai,
     #[cfg(feature = "provider-chatgpt")]
     ChatGpt,
+    #[cfg(feature = "provider-claude-code")]
+    ClaudeCode,
 }
 
 /// One pass over the screens. `retry` carries a rejected key's reason and
@@ -468,6 +470,13 @@ fn first_run_choices(
         ),
         kinds: vec![ProviderKind::CHATGPT_OAUTH],
         collect: first_chatgpt,
+    });
+    #[cfg(feature = "provider-claude-code")]
+    all.push(ProviderChoice {
+        label: "Use your Claude subscription",
+        detail: "Pro or Max, through Claude Code".to_string(),
+        kinds: vec![ProviderKind::CLAUDE_CODE],
+        collect: first_claude_code,
     });
     all.push(ProviderChoice {
         label: "Paste an API key",
@@ -637,6 +646,24 @@ fn first_chatgpt(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
             gguf_path: None,
         },
         login: Some(Login::ChatGpt),
+        title: String::new(),
+    }))
+}
+
+#[cfg(feature = "provider-claude-code")]
+fn first_claude_code(_terminal: &mut Tui) -> Result<Option<FirstRunPick>> {
+    let provider = crate::plugins::claude_code::provider_config();
+    Ok(Some(FirstRunPick {
+        answers: ProviderAnswers {
+            provider_name: provider.name,
+            kind: provider.kind,
+            base_url: provider.base_url,
+            model: provider.model,
+            api_key_env: None,
+            api_key: None,
+            gguf_path: None,
+        },
+        login: Some(Login::ClaudeCode),
         title: String::new(),
     }))
 }
@@ -1051,6 +1078,15 @@ async fn sign_in(login: Login) -> Result<()> {
     };
     let report = |line: &str| println!("{line}");
     let (name, outcome) = match login {
+        #[cfg(feature = "provider-claude-code")]
+        Login::ClaudeCode => (
+            "claude",
+            tokio::task::spawn_blocking(crate::plugins::claude_code::setup::ensure_ready)
+                .await
+                .context("Claude Code setup panicked")
+                .and_then(|ready| ready)
+                .and_then(|ready| ready.then_some(()).context("Claude Code was not installed")),
+        ),
         Login::Xai => (
             "xai",
             crate::llm::xai_oauth::login(report, paste, false).await,
@@ -2013,6 +2049,7 @@ mod tests {
         vec![
             ProviderKind::ANTHROPIC,
             ProviderKind::CHATGPT_OAUTH,
+            ProviderKind::CLAUDE_CODE,
             ProviderKind::CLOUDFLARE,
             ProviderKind::LLAMACPP,
             ProviderKind::OLLAMA,
@@ -2059,6 +2096,9 @@ mod tests {
         let mut expected = vec!["Sign in with xAI"];
         if cfg!(feature = "provider-chatgpt") {
             expected.push("Sign in with ChatGPT");
+        }
+        if cfg!(feature = "provider-claude-code") {
+            expected.push("Use your Claude subscription");
         }
         expected.extend(["Paste an API key", "Run a model locally"]);
         assert_eq!(labels(&all_shipped_kinds()), expected);
