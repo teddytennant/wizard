@@ -21,8 +21,9 @@
 //! ACP 2.0's request handlers run inside the connection's dispatch loop, so a
 //! long `session/prompt` is spawned off the loop (see [`ConnectionTo::spawn`])
 //! so `session/cancel` can still be delivered mid-turn. Wizard runs tools
-//! without a per-action approval gate, so the server never needs to call the
-//! client back for permission; it advertises no client-side capabilities and
+//! without a per-action approval gate; the one thing it asks about is a
+//! finished plan (`exit_plan` in plan mode), which goes to the client as
+//! `session/request_permission`. It advertises no client-side capabilities and
 //! does its own file and shell I/O.
 //!
 //! # As a plugin
@@ -44,8 +45,9 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
     LoadSessionRequest, LoadSessionResponse, Meta, NewSessionRequest, NewSessionResponse,
-    PromptRequest, PromptResponse, SessionCapabilities, SessionConfigOption, SessionId,
-    SessionInfo, SessionListCapabilities, SessionNotification, SessionUpdate,
+    PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionConfigOption,
+    SessionId, SessionInfo, SessionListCapabilities, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, ToolCall,
     ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
@@ -57,7 +59,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::agent::session::{self, Session};
-use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanVerdict};
+use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanGate, PlanVerdict};
 use crate::config::Config;
 use crate::entrypoint::{self, Entrypoint};
 use crate::kernel::{Capability, Ctx, Plugin, PluginManifest, Service};
@@ -783,16 +785,33 @@ async fn run_prompt(
         updates: update_tx,
         next_call_id: Arc::clone(&state.next_call_id),
         open_calls: HashMap::new(),
+        ask: true,
     };
 
     // Pump session updates out while the turn runs, then respond. Closing the
     // translator (and its channel) ends the pump so the PromptResponse stays
     // ordered after every update.
     let pump = async {
-        while let Some(notification) = update_rx.recv().await {
-            if let Err(err) = connection.send_notification(notification) {
-                tracing::warn!("acp: session update failed: {err}");
-                break;
+        while let Some(out) = update_rx.recv().await {
+            match out {
+                Outgoing::Update(notification) => {
+                    if let Err(err) = connection.send_notification(notification) {
+                        tracing::warn!("acp: session update failed: {err}");
+                        break;
+                    }
+                }
+                // Sent from here so it lands after the tool call it is about; the
+                // answer is awaited off the dispatch loop.
+                Outgoing::Ask(request, gate) => {
+                    let sent = connection.send_request(request);
+                    let spawned = connection.spawn(async move {
+                        let _ = gate.answer(plan_verdict(sent.block_task().await));
+                        Ok(())
+                    });
+                    if let Err(err) = spawned {
+                        tracing::warn!("acp: plan review request failed: {err}");
+                    }
+                }
             }
         }
     };
@@ -961,22 +980,92 @@ fn prompt_text(blocks: &[ContentBlock]) -> String {
     parts.join("\n")
 }
 
+/// What a turn sends the client, in the order it happened.
+enum Outgoing {
+    Update(SessionNotification),
+    /// A plan waiting for review, and the gate its verdict goes back through.
+    Ask(RequestPermissionRequest, PlanGate),
+}
+
+const APPROVE_PLAN: &str = "approve";
+const KEEP_PLANNING: &str = "keep-planning";
+
+/// The client's answer to a plan review. A client that cannot ask (an error
+/// back) gets what it had before the question existed: the plan goes ahead.
+fn plan_verdict(
+    answer: Result<agent_client_protocol::schema::v1::RequestPermissionResponse, acp::Error>,
+) -> PlanVerdict {
+    match answer {
+        Ok(response) => match response.outcome {
+            RequestPermissionOutcome::Selected(picked)
+                if picked.option_id.0.as_ref() == APPROVE_PLAN =>
+            {
+                PlanVerdict::approve()
+            }
+            RequestPermissionOutcome::Selected(_) => {
+                PlanVerdict::reject("the user wants to keep planning")
+            }
+            _ => PlanVerdict::reject("the review was cancelled"),
+        },
+        Err(_) => PlanVerdict::approve(),
+    }
+}
+
 /// Translates one turn's [`AgentEvent`] stream into ACP `session/update`
 /// notifications, synthesizing stable tool-call ids.
 struct Translator {
     session_id: SessionId,
-    updates: mpsc::UnboundedSender<SessionNotification>,
+    updates: mpsc::UnboundedSender<Outgoing>,
     next_call_id: Arc<AtomicU64>,
     /// Per tool name: a FIFO of (call id, args) from starts awaiting their
     /// finishes — the event stream carries no id tying the two together.
     open_calls: HashMap<String, VecDeque<(String, Value)>>,
+    /// A finished plan is put to the client; off, it is approved here.
+    ask: bool,
 }
 
 impl Translator {
     fn send(&self, update: SessionUpdate) {
-        let _ = self
-            .updates
-            .send(SessionNotification::new(self.session_id.clone(), update));
+        let _ = self.updates.send(Outgoing::Update(SessionNotification::new(
+            self.session_id.clone(),
+            update,
+        )));
+    }
+
+    /// Put a finished plan to the client as a permission request on the
+    /// `exit_plan` call that produced it.
+    fn ask_about_plan(&mut self, plan: String, gate: PlanGate) {
+        let id = self
+            .open_calls
+            .get(crate::tools::plan::EXIT_PLAN_TOOL_NAME)
+            .and_then(|calls| calls.back())
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| self.alloc_call_id());
+        let call = ToolCallUpdate::new(
+            ToolCallId::new(id),
+            ToolCallUpdateFields::new()
+                .title("Ready to code?".to_string())
+                .kind(ToolKind::SwitchMode)
+                .raw_input(serde_json::json!({ "plan": plan })),
+        );
+        let options = vec![
+            PermissionOption::new(
+                APPROVE_PLAN,
+                "Yes, proceed",
+                PermissionOptionKind::AllowOnce,
+            ),
+            PermissionOption::new(
+                KEEP_PLANNING,
+                "No, keep planning",
+                PermissionOptionKind::RejectOnce,
+            ),
+        ];
+        let request = RequestPermissionRequest::new(self.session_id.clone(), call, options);
+        if let Err(mpsc::error::SendError(Outgoing::Ask(_, gate))) =
+            self.updates.send(Outgoing::Ask(request, gate))
+        {
+            let _ = gate.answer(PlanVerdict::approve());
+        }
     }
 
     fn alloc_call_id(&self) -> String {
@@ -1050,11 +1139,10 @@ impl Translator {
                     ),
                 )));
             }
-            // Wizard runs in the default non-plan mode over ACP, so these should
-            // not fire — but the exit_plan/interview tools are always
-            // registered, and an unanswered gate parks the turn inside the tool.
-            // Auto-approve a plan and decline an interview so a turn can never
-            // wedge.
+            // `/plan` turns plan mode on over ACP too, and a finished plan waits
+            // for a verdict: the client is asked. The interview tool has no
+            // ACP shape, so it is declined and the turn cannot wedge on it.
+            AgentEvent::PlanReady { plan, gate } if self.ask => self.ask_about_plan(plan, gate),
             AgentEvent::PlanReady { gate, .. } => {
                 gate.answer(PlanVerdict::approve());
             }
@@ -1328,9 +1416,12 @@ mod tests {
             updates,
             next_call_id: Arc::new(AtomicU64::new(1)),
             open_calls: HashMap::new(),
+            ask: true,
         };
         translator.handle(AgentEvent::StreamRetrying);
-        let notification = rx.try_recv().expect("one update");
+        let Ok(Outgoing::Update(notification)) = rx.try_recv() else {
+            panic!("expected one update");
+        };
 
         let SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
             panic!("expected an assistant message chunk");
@@ -1339,6 +1430,72 @@ mod tests {
             panic!("expected text content");
         };
         assert!(text.text.contains("restarts below"), "{}", text.text);
+    }
+
+    /// A finished plan goes to the client as a permission request on the
+    /// exit_plan call, after the call itself, and nothing answers it here.
+    #[test]
+    fn a_finished_plan_is_put_to_the_client() {
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        let mut translator = Translator {
+            session_id: SessionId::new("session-1"),
+            updates,
+            next_call_id: Arc::new(AtomicU64::new(1)),
+            open_calls: HashMap::new(),
+            ask: true,
+        };
+        translator.handle(AgentEvent::ToolStarted {
+            name: crate::tools::plan::EXIT_PLAN_TOOL_NAME.to_string(),
+            args: serde_json::json!({ "plan": "1. edit main.rs" }),
+        });
+        let (gate, mut verdict) = PlanGate::open();
+        translator.handle(AgentEvent::PlanReady {
+            plan: "1. edit main.rs".to_string(),
+            gate,
+        });
+        let Ok(Outgoing::Update(started)) = rx.try_recv() else {
+            panic!("the tool call goes first");
+        };
+        let SessionUpdate::ToolCall(call) = started.update else {
+            panic!("expected the exit_plan call");
+        };
+        let Ok(Outgoing::Ask(request, gate)) = rx.try_recv() else {
+            panic!("then the question");
+        };
+        assert_eq!(request.tool_call.tool_call_id, call.tool_call_id);
+        let ids: Vec<_> = request
+            .options
+            .iter()
+            .map(|o| o.option_id.0.to_string())
+            .collect();
+        assert_eq!(ids, [APPROVE_PLAN, KEEP_PLANNING]);
+        assert!(verdict.try_recv().is_err(), "nobody answered yet");
+        assert!(gate.answer(PlanVerdict::reject("no")));
+        assert!(!verdict.try_recv().expect("the verdict").approved);
+    }
+
+    #[test]
+    fn plan_review_answers_map_to_verdicts() {
+        use agent_client_protocol::schema::v1::{
+            RequestPermissionResponse, SelectedPermissionOutcome,
+        };
+        let pick = |id: &str| {
+            Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id.to_string())),
+            ))
+        };
+        assert!(plan_verdict(pick(APPROVE_PLAN)).approved);
+        assert!(!plan_verdict(pick(KEEP_PLANNING)).approved);
+        assert!(
+            !plan_verdict(Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled
+            )))
+            .approved
+        );
+        assert!(
+            plan_verdict(Err(acp::Error::method_not_found())).approved,
+            "a client that cannot ask keeps the old behaviour"
+        );
     }
 
     /// A loaded session replays in order: the user's words, the model's
