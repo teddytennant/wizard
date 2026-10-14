@@ -93,7 +93,10 @@ mod tests {
     #[test]
     fn it_round_trips_through_the_environment_value() {
         let value = handoff().to_env();
-        assert_eq!(serde_json::from_str::<Handoff>(&value).ok(), Some(handoff()));
+        assert_eq!(
+            serde_json::from_str::<Handoff>(&value).ok(),
+            Some(handoff())
+        );
     }
 
     #[test]
@@ -117,7 +120,10 @@ mod tests {
         };
         handoff().apply(&mut config);
         let active = config.active();
-        assert_eq!((active.name.as_str(), active.model.as_str()), ("beta", "beta-other"));
+        assert_eq!(
+            (active.name.as_str(), active.model.as_str()),
+            ("beta", "beta-other")
+        );
         assert_eq!(config.mode, Mode::Sovereign);
         assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
 

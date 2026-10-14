@@ -795,7 +795,10 @@ fn acp_provider_adds_switches_and_removes() {
     assert!(config.contains("name = \"other\""), "{config}");
 
     let (_, updates) = acp.prompt("/provider remove other");
-    assert!(said(&updates).contains("this session's provider"), "{updates:?}");
+    assert!(
+        said(&updates).contains("this session's provider"),
+        "{updates:?}"
+    );
     let (_, updates) = acp.prompt("/provider use fake");
     assert_eq!(said(&updates), "switched to model fake/fake-model:test");
     let (_, updates) = acp.prompt("/provider remove other");

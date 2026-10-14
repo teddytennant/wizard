@@ -454,10 +454,12 @@ impl CommandSurface for AcpSurface<'_> {
     async fn provider(&mut self, action: ProviderAction) {
         match action {
             ProviderAction::List | ProviderAction::Menu => self.provider_list(),
-            ProviderAction::Use(name) => match self.base.providers.iter().find(|p| p.name == name) {
-                Some(provider) => self.model_change = Some((name, provider.model.clone())),
-                None => self.say(format!("no provider named '{name}', try /provider list")),
-            },
+            ProviderAction::Use(name) => {
+                match self.base.providers.iter().find(|p| p.name == name) {
+                    Some(provider) => self.model_change = Some((name, provider.model.clone())),
+                    None => self.say(format!("no provider named '{name}', try /provider list")),
+                }
+            }
             ProviderAction::Add {
                 name,
                 kind,

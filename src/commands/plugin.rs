@@ -456,7 +456,15 @@ mod tests {
     /// alone would not have refused it.
     #[test]
     fn a_plugin_cannot_take_a_word_the_parser_already_answers_to() {
-        for word in ["q", "exit", "quit", "genie", "sovereign", "chat", "providers"] {
+        for word in [
+            "q",
+            "exit",
+            "quit",
+            "genie",
+            "sovereign",
+            "chat",
+            "providers",
+        ] {
             assert!(
                 is_builtin(word),
                 "/{word} is a word the parser answers to and must not be takeable"

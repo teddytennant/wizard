@@ -203,7 +203,10 @@ mod tests {
         let seen = dir.path().join("seen");
         std::fs::write(
             &look,
-            format!("#!/bin/sh\nprintf %s \"$WIZARD_HANDOFF\" > {}\n", seen.display()),
+            format!(
+                "#!/bin/sh\nprintf %s \"$WIZARD_HANDOFF\" > {}\n",
+                seen.display()
+            ),
         )
         .expect("write the look");
         use std::os::unix::fs::PermissionsExt;
@@ -216,7 +219,9 @@ mod tests {
             mode: crate::config::Mode::Chat,
             effort: None,
         };
-        run(Skin::Jcode, Some(&handoff)).await.expect("the look runs");
+        run(Skin::Jcode, Some(&handoff))
+            .await
+            .expect("the look runs");
         let seen = std::fs::read_to_string(&seen).expect("the look wrote it");
         assert_eq!(serde_json::from_str::<Handoff>(&seen).ok(), Some(handoff));
     }
@@ -225,7 +230,9 @@ mod tests {
     async fn a_missing_look_names_where_it_should_be() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _search = pin_search(dir.path());
-        let err = run(Skin::Opencode, None).await.expect_err("nothing is installed");
+        let err = run(Skin::Opencode, None)
+            .await
+            .expect_err("nothing is installed");
         assert!(format!("{err:#}").contains("wizard-ui-opencode"), "{err:#}");
         assert!(format!("{err:#}").contains("the opencode look"), "{err:#}");
         assert!(

@@ -20,8 +20,8 @@ use crate::event::{Event, EventLoop};
 use crate::llm::provider::LlmProvider;
 use crate::mcp::{McpConfig, McpManager};
 use crate::session_registry;
-use crate::skin::handoff::Handoff;
 use crate::skills::Skill;
+use crate::skin::handoff::Handoff;
 
 use crate::cli::Cli;
 

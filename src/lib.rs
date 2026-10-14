@@ -613,7 +613,14 @@ async fn run_interactive(
                 }
             }
         }
-        match app::run_tui(config.clone(), cli.clone(), first_run.take(), handoff.take()).await? {
+        match app::run_tui(
+            config.clone(),
+            cli.clone(),
+            first_run.take(),
+            handoff.take(),
+        )
+        .await?
+        {
             app::TuiExit::Quit(code) => return Ok(code),
             app::TuiExit::Look(skin, from_tui) => {
                 // The prompt was this TUI's first message; the next house TUI
