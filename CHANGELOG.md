@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.12] - 2026-10-14
+
+### Added
+
+- **First run and `wizard setup` offer a Claude subscription.** "Use your Claude subscription" in the first-run screen and "Claude subscription" in the full setup put Wizard on a Pro or Max plan through Claude Code. It installs `claude` after asking and runs `claude auth login` when signed out, the same as `/provider`. `wizard --login claude` does that step on its own.
+
 ## [3.8.11] - 2026-10-14
 
 ### Fixed
