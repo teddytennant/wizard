@@ -6,9 +6,11 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.8.9] - 2026-10-14
+
 ### Added
 
-- **`apply_patch` edits several places, in several files, in one call.** It takes the patch format Codex uses: `*** Update File: <path>`, then hunks of context, `-` and `+` lines, each optionally opened by `@@ <a line above it>`. A context line is sent once where `edit_file` sends it in both strings, and a model that does not send parallel calls no longer pays a round trip per hunk. Hunks are matched against the file as it was. One that fits two places is refused with their line numbers, one that is an indent off still lands, and a file is written only if all its hunks apply. `/rewind`, the edit card and stale-read eviction all cover it.
+- **`apply_patch` edits several places, in several files, in one call.** It takes the patch format Codex uses: `*** Update File: <path>`, then hunks of context, `-` and `+` lines, each optionally opened by `@@ <a line above it>`. A context line is sent once where `edit_file` sends it in both strings, and a model that does not send parallel calls no longer pays a round trip per hunk. Hunks are matched against the file as it was. One that fits two places is refused with their line numbers, one that is an indent off still lands, and a file is written only if all its hunks apply. `/rewind`, the edit card and stale-read eviction all cover it. On three feature tasks on Grok 4.7, 7 of 9 runs passed with it against 3 of 12 without.
 
 ### Changed
 
