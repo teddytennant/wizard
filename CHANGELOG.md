@@ -12,7 +12,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ### Changed
 
-- **An unattended turn that stops on a promise is told to go on, once.** A sovereign run sometimes ended on "I'll implement it now" with nothing written, and with nobody there to answer, that was the end of the run.
+- **An unattended turn that stops on a promise is told to go on.** A sovereign run sometimes ended on "I'll implement it now" with nothing written, and with nobody there to answer, that was the end of the run.
 - **`read_file` returns the file's own text, with no line-number gutter.** A model copying `old_string` out of a numbered listing counted the gutter's tab as indentation. On tab-indented Go, 41% of `edit_file` calls missed; a harness that returns raw text missed 4%.
 - **The sovereign prompt no longer asks for a read before every edit**, which cost a model step per edit, and says how to treat a change to an existing codebase: the names and formats a request states are the interface, and new test files stand alone. The `min` prompt asks for source in whole regions and stops inviting an opening `tool_search`.
 - **A sub-run is told when it is on its last step.** A reviewer that used all its steps returned whatever it said before its last tool call, which named no verdict. `Verdict: PASS` is read as a verdict too.

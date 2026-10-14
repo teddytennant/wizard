@@ -3940,11 +3940,10 @@ impl App {
                     self.overlay_index = 0;
                 }
                 KeyCode::Up => self.overlay_index = self.overlay_index.saturating_sub(1),
-                KeyCode::Down => {
-                    if self.overlay_index + 1 < matches.len() {
-                        self.overlay_index += 1;
-                    }
+                KeyCode::Down if self.overlay_index + 1 < matches.len() => {
+                    self.overlay_index += 1;
                 }
+                KeyCode::Down => {}
                 KeyCode::Enter => {
                     if let Some(line) = matches.get(self.overlay_index) {
                         self.set_input(line.clone());

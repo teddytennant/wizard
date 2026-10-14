@@ -606,11 +606,15 @@ impl Ran {
 const PROMISE_NUDGE: &str = "You stopped on what you are about to do, not on a result. Nobody \
     is watching to say go on. Do it now, or if the work is finished, say what was done.";
 
-/// Whether a reply's last line announces work instead of reporting it.
+/// Times one turn is told to go on after stopping on a promise.
+const PROMISE_NUDGE_LIMIT: u32 = 3;
+
+/// Whether a reply's last sentence announces work instead of reporting it.
 fn ends_on_a_promise(reply: &str) -> bool {
     let last = reply.lines().rev().find(|line| !line.trim().is_empty());
     let Some(last) = last else { return false };
     let last = last.trim().to_ascii_lowercase().replace('\u{2019}', "'");
+    let last = last.rsplit(". ").next().unwrap_or(&last).trim_start();
     [
         "i'll ",
         "i will ",
@@ -637,7 +641,7 @@ const LAST_STEP_NOTICE: &str = "This is your last step. Do not call a tool. Repl
 pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> Result<Ran> {
     let mut steps_used = 0;
     let mut last_text = String::new();
-    let mut promise_nudged = false;
+    let mut promise_nudges = 0;
 
     for step in 1..=policy.max_steps {
         steps_used = step;
@@ -798,8 +802,11 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         if tool_calls.is_empty() {
             // Nobody is there to say "go on" to a turn that ends on what it is
             // about to do, so the loop says it, once.
-            if policy.operator_control && !promise_nudged && ends_on_a_promise(&content) {
-                promise_nudged = true;
+            if policy.operator_control
+                && promise_nudges < PROMISE_NUDGE_LIMIT
+                && ends_on_a_promise(&content)
+            {
+                promise_nudges += 1;
                 host.push(ChatMessage::user(PROMISE_NUDGE));
                 continue;
             }
@@ -3387,6 +3394,9 @@ mod tests {
             "Read the spec.\n\nI\u{2019}ll branch from main and implement it."
         ));
         assert!(ends_on_a_promise("Let me check that path.\n"));
+        assert!(ends_on_a_promise(
+            "The public API lives in `v1/rego`. I'll look at Result and the eval options."
+        ));
         assert!(!ends_on_a_promise(
             "I'll note one caveat.\nAll 12 tests pass and the change is committed."
         ));
