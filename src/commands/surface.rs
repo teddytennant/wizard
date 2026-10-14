@@ -931,7 +931,7 @@ fn status_report(session: &SessionSnapshot) -> String {
         .map(|effort| effort.to_string())
         .unwrap_or_else(|| "default".to_string());
     let mut text = format!(
-        "model: {}\nprovider: {} ({:?} @ {})\nmode: {}\neffort: {effort}",
+        "model: {}\nprovider: {} ({} @ {})\nmode: {}\neffort: {effort}",
         session.model,
         session.provider_name,
         session.provider_kind,
@@ -1662,6 +1662,7 @@ mod tests {
         let snapshot = Recorder::default().snapshot();
         let status = status_report(&snapshot);
         assert!(status.contains("model: m"));
+        assert!(status.contains("provider: p (ollama @ u)"), "{status}");
         assert!(status.contains("effort: default"));
         assert!(status.contains("session: (turn running)"));
         assert!(status.contains("todos: none"));
