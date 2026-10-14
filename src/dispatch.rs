@@ -267,11 +267,17 @@ impl Dispatcher {
     /// Answer a call for a tool the turn never offered, without running it:
     /// chat mode's cut of the registry is what the model was told about, and a
     /// name it invents or remembers from an earlier turn must not run anyway.
-    pub(crate) async fn refuse_unoffered(&self, name: &str, sink: &Sink) -> DispatchOutcome {
+    pub(crate) async fn refuse_unoffered(
+        &self,
+        name: &str,
+        args: &Value,
+        sink: &Sink,
+    ) -> DispatchOutcome {
         let output = ToolOutput::error(format!(
             "{name} is not available in this turn; use only the tools you were given"
         ));
-        if !sink.tool_finished(name, &output).await {
+        // announced first, so a surface pairs the result with a call it has drawn
+        if !sink.tool_started(name, args).await || !sink.tool_finished(name, &output).await {
             return DispatchOutcome::stopped();
         }
         DispatchOutcome {

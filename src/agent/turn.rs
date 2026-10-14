@@ -1759,7 +1759,11 @@ impl Host for TurnHost<'_> {
             return self
                 .agent
                 .dispatcher
-                .refuse_unoffered(&call.function.name, sink)
+                .refuse_unoffered(
+                    &call.function.name,
+                    &crate::agent::normalize_args(&call.function.arguments),
+                    sink,
+                )
                 .await;
         }
         let outcome = self

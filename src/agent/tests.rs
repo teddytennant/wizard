@@ -4414,8 +4414,19 @@ async fn a_tool_the_turn_did_not_offer_is_refused() {
     )
     .await;
     agent.set_plan_mode(true);
-    let (tx, _rx) = mpsc::channel(256);
+    let (tx, mut rx) = mpsc::channel(256);
     agent.run_turn("read it", tx).await.expect("turn ok");
+
+    // the refused call is announced before its result, so a surface can draw it
+    let mut seen = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AgentEvent::ToolStarted { name, .. } => seen.push(format!("start {name}")),
+            AgentEvent::ToolFinished { name, .. } => seen.push(format!("finish {name}")),
+            _ => {}
+        }
+    }
+    assert_eq!(seen, ["start read_file", "finish read_file"]);
 
     let requests = provider.requests.lock().unwrap();
     let result = requests[1].messages.last().expect("the tool result").text();
