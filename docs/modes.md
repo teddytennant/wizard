@@ -468,7 +468,7 @@ The last presented plan is always available at `<project>/.wizard/plan.md`.
 /chat              # shorthand for /mode chat
 ```
 
-Mode changes affect prompting, interaction style, the tool set (chat only), and, if `max_steps` is capped, the step budget. Switching writes the new mode to `~/.wizard/config.toml`, so it survives a restart.
+Mode changes affect prompting, interaction style, the tool set (chat only), and, if `max_steps` is capped, the step budget. Switching writes the new mode to `~/.wizard/config.toml`, so it survives a restart. A saved sovereign mode brings plain `wizard` back to the TUI in sovereign mode; it runs headless only with `--mode sovereign`, `-p`, `--continuous` or no terminal.
 
 ## System prompts
 

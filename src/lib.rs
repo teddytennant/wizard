@@ -563,6 +563,21 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             update::maybe_check_on_startup(&config.update).await;
             run_interactive(config, cli, first_run).await
         }
+        // `/sovereign` in the TUI saves the mode, so a saved sovereign is not a
+        // request to run headless: plain `wizard` at a terminal still opens the
+        // TUI, in sovereign mode. `--mode sovereign`, `-p`, continuous and
+        // anything without a terminal run headless as they always did.
+        Mode::Sovereign
+            if saved_sovereign_opens_the_tui(
+                &config,
+                &cli,
+                std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            ) =>
+        {
+            update::print_startup_notice(&config.update);
+            update::maybe_check_on_startup(&config.update).await;
+            run_interactive(config, cli, first_run).await
+        }
         Mode::Sovereign => headless::run(config, cli).await,
         // `wizard --mode chat -p "question"` answers once and exits, which is
         // what a script or a quick question from a shell wants. Without `-p`
@@ -574,6 +589,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             run_interactive(config, cli, first_run).await
         }
     }
+}
+
+/// Whether a sovereign mode that came from `config.toml` rather than this
+/// command line opens the TUI.
+fn saved_sovereign_opens_the_tui(config: &Config, cli: &cli::Cli, terminal: bool) -> bool {
+    terminal && cli.mode.is_none() && cli.prompt.is_none() && !cli.continuous && !config.continuous
 }
 
 /// The house TUI, or the full look `[ui] skin` names, until one of them quits
@@ -774,6 +795,40 @@ mod tests {
         ] {
             assert_eq!(startup_look(&config, &parse(args)), None, "{args:?}");
         }
+    }
+
+    #[test]
+    fn a_saved_sovereign_mode_still_opens_the_tui() {
+        let mut config = Config {
+            mode: Mode::Sovereign,
+            ..Config::default()
+        };
+        assert!(saved_sovereign_opens_the_tui(
+            &config,
+            &parse(&["wizard"]),
+            true
+        ));
+        assert!(!saved_sovereign_opens_the_tui(
+            &config,
+            &parse(&["wizard"]),
+            false
+        ));
+        for args in [
+            &["wizard", "--mode", "sovereign"][..],
+            &["wizard", "-p", "fix the build"],
+            &["wizard", "--continuous"],
+        ] {
+            assert!(
+                !saved_sovereign_opens_the_tui(&config, &parse(args), true),
+                "{args:?}"
+            );
+        }
+        config.continuous = true;
+        assert!(!saved_sovereign_opens_the_tui(
+            &config,
+            &parse(&["wizard"]),
+            true
+        ));
     }
 
     #[test]
