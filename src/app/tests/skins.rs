@@ -318,7 +318,7 @@ fn ui_command_lists_the_skins_and_marks_the_active_one() {
     let mut app = app();
     let listing = command::ui_command(&mut app, None);
     assert!(listing.contains("● wizard"), "{listing}");
-    for other in ["codex", "grok", "opencode", "pi"] {
+    for other in ["codex", "grok", "opencode", "pi", "jcode"] {
         assert!(listing.contains(&format!("· {other}")), "{listing}");
     }
     assert!(listing.contains("restarts"), "{listing}");

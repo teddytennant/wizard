@@ -1,13 +1,14 @@
 //! UI skins: which interface Wizard starts in.
 //!
 //! [`crate::theme`] answers "what color is an accent". This module answers the
-//! other half: which look is on. Five ship:
+//! other half: which look is on. Six ship:
 //!
 //! - `wizard` — the house look, drawn in this process: one rule over the
 //!   composer, `❯`/`·` gutters, a status line of facts and nothing decorative.
 //!   `docs/design.md` is its standard. It also owns the chrome tables below,
 //!   which the other looks do not use.
-//! - `codex`, `grok`, `opencode`, `pi` — full terminal UIs with those layouts.
+//! - `codex`, `grok`, `opencode`, `pi`, `jcode` — full terminal UIs with those
+//!   layouts.
 //!   `/ui` and onboarding write `[ui] skin` and start the matching
 //!   `wizard-ui-*` binary next to this one. The product name inside each is
 //!   Wizard. The look is the only thing that differs.
@@ -76,16 +77,19 @@ pub enum Skin {
     Opencode,
     /// Pi's layout, as a full UI.
     Pi,
+    /// jcode's layout, as a full UI.
+    Jcode,
 }
 
 impl Skin {
     /// Every skin, in the order pickers and listings show them.
-    pub const ALL: [Skin; 5] = [
+    pub const ALL: [Skin; 6] = [
         Skin::Wizard,
         Skin::Codex,
         Skin::Grok,
         Skin::Opencode,
         Skin::Pi,
+        Skin::Jcode,
     ];
 
     /// The key written to `[ui] skin` and accepted by `/ui <name>`.
@@ -96,6 +100,7 @@ impl Skin {
             Skin::Grok => "grok",
             Skin::Opencode => "opencode",
             Skin::Pi => "pi",
+            Skin::Jcode => "jcode",
         }
     }
 
@@ -107,6 +112,7 @@ impl Skin {
             Skin::Grok => "grok",
             Skin::Opencode => "opencode",
             Skin::Pi => "pi",
+            Skin::Jcode => "jcode",
         }
     }
 
@@ -118,6 +124,7 @@ impl Skin {
             Skin::Grok => "the grok layout: a colored bar down every block, boxed composer",
             Skin::Opencode => "the opencode layout, as its own UI (restarts into it)",
             Skin::Pi => "the pi layout, as its own UI (restarts into it)",
+            Skin::Jcode => "the jcode layout, as its own UI (restarts into it)",
         }
     }
 
@@ -131,6 +138,7 @@ impl Skin {
             Skin::Grok => Some("wizard-ui-grok"),
             Skin::Opencode => Some("wizard-ui-opencode"),
             Skin::Pi => Some("wizard-ui-pi"),
+            Skin::Jcode => Some("wizard-ui-jcode"),
         }
     }
 
@@ -150,6 +158,7 @@ impl Skin {
             "grok" | "grok-build" | "grokbuild" | "xai" => Some(Skin::Grok),
             "opencode" | "open-code" | "openw" => Some(Skin::Opencode),
             "pi" | "piw" => Some(Skin::Pi),
+            "jcode" | "j-code" | "jcodew" => Some(Skin::Jcode),
             _ => None,
         }
     }
@@ -167,10 +176,10 @@ impl Skin {
     pub fn companion_theme(self) -> &'static str {
         match self {
             // The house palette: one accent, status hues, no painted background.
-            // Pi and OpenCode share this frame and keep the monochrome palette,
+            // Pi, OpenCode and jcode share this frame and keep the monochrome palette,
             // which is also what a name that does not load falls back to.
             Skin::Wizard => "wizard",
-            Skin::Opencode | Skin::Pi => crate::theme::DEFAULT_THEME,
+            Skin::Opencode | Skin::Pi | Skin::Jcode => crate::theme::DEFAULT_THEME,
             Skin::Codex => "codex",
             Skin::Grok => "grok",
         }
@@ -181,7 +190,7 @@ impl Skin {
     /// exhaustive and the old chrome tests still have something to draw.
     pub fn chrome(self) -> &'static Chrome {
         match self {
-            Skin::Wizard | Skin::Opencode | Skin::Pi => &WIZARD,
+            Skin::Wizard | Skin::Opencode | Skin::Pi | Skin::Jcode => &WIZARD,
             Skin::Codex => &CODEX,
             Skin::Grok => &GROK,
         }

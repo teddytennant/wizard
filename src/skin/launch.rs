@@ -12,11 +12,12 @@ use super::Skin;
 
 /// Env vars the full UIs read to find the wizard binary they should spawn as
 /// `wizard acp`. Set all of them so a renamed binary still finds this one.
-const WIZARD_BIN_ENVS: [&str; 4] = [
+const WIZARD_BIN_ENVS: [&str; 5] = [
     "OPENW_WIZARD_BIN",
     "PIW_WIZARD_BIN",
     "GROKW_WIZARD_BIN",
     "CODEXW_WIZARD_BIN",
+    "JCODEW_WIZARD_BIN",
 ];
 
 /// Run the `wizard-ui-*` binary for `skin` and wait for it. Returns its exit

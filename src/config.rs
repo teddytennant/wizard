@@ -320,7 +320,7 @@ pub struct UiConfig {
     #[serde(default = "default_compact", skip_serializing_if = "is_true")]
     pub compact: bool,
     /// Which coding agent's terminal chrome the TUI wears: `wizard` (default),
-    /// `codex`, or `grok`. See [`crate::skin`], which owns the
+    /// `codex`, `grok`, `opencode`, `pi`, or `jcode`. See [`crate::skin`], which owns the
     /// glyphs, and `/ui` to change it live.
     ///
     /// A skin brings its own palette ([`crate::skin::Skin::companion_theme`]),

@@ -1089,6 +1089,7 @@ const LOOK_BINS: &[&str] = &[
     "wizard-ui-pi",
     "wizard-ui-codex",
     "wizard-ui-grok",
+    "wizard-ui-jcode",
 ];
 
 fn is_look_name(name: &str) -> bool {
