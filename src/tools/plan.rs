@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::agent::{AgentEvent, PlanGate};
+use crate::agent::{AgentEvent, PlanGate, PlanVerdict};
 
 use super::{Tool, ToolContext, ToolError, ToolOutput, parse_args};
 
@@ -152,11 +152,17 @@ impl Tool for ExitPlanTool {
         // releases this call by dropping the sender with it. A closed event
         // channel is the same news arriving one step earlier: there is nobody
         // left to review anything.
+        // A cancelled turn ends the review too: a surface that never answers
+        // must not hold the turn open past Esc or `session/cancel`.
         let verdict = tokio::select! {
             answer = verdict => answer.ok(),
             () = events.closed() => {
                 gate.cancel();
                 None
+            }
+            () = crate::agent::cancelled(ctx.cancel.as_ref()) => {
+                gate.cancel();
+                Some(PlanVerdict::reject("the review was cancelled"))
             }
         };
 
@@ -188,7 +194,6 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::agent::PlanVerdict;
 
     /// Temp project dir removed on drop.
     struct TempDir(PathBuf);
@@ -312,6 +317,40 @@ mod tests {
         let (out, ()) = tokio::join!(tool.execute(json!({ "plan": "# p" }), &ctx), reviewer);
         let out = out.expect("executes");
         assert!(out.is_error);
+        assert!(plan_mode.load(Ordering::SeqCst), "plan mode stays on");
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_turn_ends_an_unanswered_review() {
+        let tmp = TempDir::new();
+        let plan_mode = flag(true);
+        let tool = ExitPlanTool::new(Arc::clone(&plan_mode), flag(false));
+        let (tx, mut rx) = mpsc::channel(8);
+        let cancel = crate::agent::CancelHandle::default();
+        let ctx = ToolContext::new(&tmp.0)
+            .with_events(tx)
+            .with_cancel(cancel.clone());
+
+        // the surface takes the question and never answers it
+        let silent = async {
+            let Some(AgentEvent::PlanReady { gate, .. }) = rx.recv().await else {
+                panic!("expected PlanReady");
+            };
+            cancel.cancel();
+            gate
+        };
+        let (out, _gate) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(tool.execute(json!({ "plan": "# p" }), &ctx), silent)
+        })
+        .await
+        .expect("the review ends when the turn is cancelled");
+        let out = out.expect("executes");
+        assert!(out.is_error);
+        assert!(
+            out.content.contains("the review was cancelled"),
+            "{}",
+            out.content
+        );
         assert!(plan_mode.load(Ordering::SeqCst), "plan mode stays on");
     }
 

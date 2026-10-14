@@ -804,8 +804,14 @@ async fn run_prompt(
                 // answer is awaited off the dispatch loop.
                 Outgoing::Ask(request, gate) => {
                     let sent = connection.send_request(request);
+                    let cancel = cancel.clone();
+                    // a client that never answers is let go of when the turn is cancelled
                     let spawned = connection.spawn(async move {
-                        let _ = gate.answer(plan_verdict(sent.block_task().await));
+                        let verdict = tokio::select! {
+                            answer = sent.block_task() => plan_verdict(answer),
+                            () = cancel.cancelled() => PlanVerdict::reject("the review was cancelled"),
+                        };
+                        let _ = gate.answer(verdict);
                         Ok(())
                     });
                     if let Err(err) = spawned {
