@@ -355,13 +355,10 @@ jobs:
           rm -rf smoke && mkdir smoke
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/wizard --version
-          # codex is not in the list: it prints the Codex version it copies,
-          # from a constant in openw.
           version="$(grep -m1 '^version' Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
-          for look in opencode pi grok jcode; do
+          for look in opencode pi grok jcode codex; do
             ./smoke/wizard-ui-$look --version | grep -F " ${version}"
           done
-          ./smoke/wizard-ui-codex --version
           rm -rf smoke
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
