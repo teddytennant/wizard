@@ -17,6 +17,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 - **A missed edit answers with the lines that are there.** `old_string not found` now ends with the closest text in the file and the first line that differs, and a patch hunk that misses says the same, so the retry needs no re-read.
 - **The failure breaker counts a tool once per model response.** Eight `edit_file` calls sent together that all missed ended the run on the spot, before the model had read one error.
 - **The `min` schemas stop listing `replace_all` and `run_in_background`.** Listed, GPT-6 sent `"replace_all":false` on every edit and `"run_in_background":false` on nine commands in ten. Both still work and are named in the descriptions.
+- **Quoted numbers and booleans match the schema.** `"limit": "5"` and `"all": "true"` reach the tool as `5` and `true` when its schema asks for an integer, number or boolean, where the call used to fail on the type. String properties are left alone.
 
 ## [3.8.8] - 2026-10-13
 

@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::subagent::SPAWN_SUBAGENT_TOOL_NAME;
 use crate::agent::turn::Sink;
-use crate::agent::{AgentEvent, DoneReason, normalize_args};
+use crate::agent::{AgentEvent, DoneReason, coerce_scalars, normalize_args};
 use crate::config::Mode;
 use crate::hooks::{HookEngine, PreToolUse};
 use crate::llm::ToolCall;
@@ -262,6 +262,9 @@ impl Dispatcher {
     ) -> DispatchOutcome {
         let name = call.function.name.clone();
         let mut args = normalize_args(&call.function.arguments);
+        if let Some(tool) = self.registry.get(&name) {
+            coerce_scalars(&mut args, || tool.parameters());
+        }
 
         // Plan-mode gate, first stage: while planning, only read-only tools
         // and exit_plan may run. The block feeds back to the model as an
@@ -753,6 +756,73 @@ mod tests {
         dispatcher.dispatch(&call("write"), &ctx, &sink).await;
         dispatcher.dispatch(&call("run"), &ctx, &sink).await;
         assert_eq!(dispatcher.effects(), 2);
+    }
+
+    struct TypedTool;
+
+    #[derive(serde::Deserialize)]
+    struct TypedArgs {
+        limit: u32,
+        ratio: f64,
+        all: bool,
+        path: String,
+    }
+
+    #[async_trait]
+    impl Tool for TypedTool {
+        fn name(&self) -> &str {
+            "typed"
+        }
+
+        fn description(&self) -> &str {
+            "takes a number, a boolean and a string"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({ "type": "object", "properties": {
+                "limit": { "type": "integer" },
+                "ratio": { "type": ["number", "null"] },
+                "all": { "type": "boolean" },
+                "path": { "type": "string" },
+            } })
+        }
+
+        async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            let args: TypedArgs = crate::tools::parse_args("typed", args)?;
+            Ok(ToolOutput::ok(format!(
+                "{} {} {} {}",
+                args.limit, args.ratio, args.all, args.path
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn quoted_numbers_and_booleans_are_coerced_to_the_schema() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(TypedTool));
+        let mut dispatcher = Dispatcher::sub_run(
+            registry,
+            Arc::new(HookEngine::new(
+                Vec::new(),
+                dir_for_hooks(),
+                "dispatch-test".to_string(),
+            )),
+        );
+        let dir = std::env::temp_dir();
+        let ctx = ToolContext::new(&dir);
+        let sink = Sink::Run {
+            name: "test".to_string(),
+            run: 0,
+            events: None,
+        };
+        let mut call = call("typed");
+        call.function.arguments =
+            json!({ "limit": "5", "ratio": "0.5", "all": "true", "path": "7" });
+
+        let outcome = dispatcher.dispatch(&call, &ctx, &sink).await;
+        let output = outcome.output.expect("the call ran");
+        assert!(!output.is_error, "{}", output.content);
+        assert_eq!(output.content, "5 0.5 true 7");
     }
 
     #[test]

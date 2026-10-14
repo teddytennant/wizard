@@ -920,6 +920,26 @@ fn plain_text_and_non_tool_json_are_not_calls() {
 }
 
 #[test]
+fn coerce_scalars_leaves_strings_and_skips_the_schema_when_nothing_is_quoted() {
+    let mut args = json!({ "path": "src/lib.rs", "limit": 5 });
+    coerce_scalars(&mut args, || panic!("no quoted scalar, so no schema"));
+    assert_eq!(args, json!({ "path": "src/lib.rs", "limit": 5 }));
+
+    let schema = json!({ "properties": {
+        "command": { "type": "string" },
+        "count": { "type": "integer" },
+        "dry": { "type": "boolean" },
+    } });
+    let mut args = json!({ "command": "true", "count": "2.5", "dry": "yes", "other": "1" });
+    coerce_scalars(&mut args, || schema.clone());
+    assert_eq!(
+        args,
+        json!({ "command": "true", "count": "2.5", "dry": "yes", "other": "1" }),
+        "a string property, a fraction for an integer, and a word that is not a boolean stay"
+    );
+}
+
+#[test]
 fn normalize_args_handles_null_and_double_encoding() {
     assert_eq!(normalize_args(&Value::Null), json!({}));
     // Some models double-encode arguments as a JSON string.

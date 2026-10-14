@@ -542,6 +542,58 @@ pub(crate) fn normalize_args(args: &Value) -> Value {
     }
 }
 
+/// Turn a quoted scalar (`"5"`, `"true"`) into the number or boolean the tool's
+/// schema asks for. `schema` is only built when some argument could be one.
+pub(crate) fn coerce_scalars(args: &mut Value, schema: impl FnOnce() -> Value) {
+    let Some(object) = args.as_object_mut() else {
+        return;
+    };
+    let quoted = |text: &str| text.parse::<bool>().is_ok() || text.trim().parse::<f64>().is_ok();
+    if !object
+        .values()
+        .any(|value| value.as_str().is_some_and(quoted))
+    {
+        return;
+    }
+    let schema = schema();
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return;
+    };
+    for (key, value) in object.iter_mut() {
+        if let (Some(text), Some(property)) = (value.as_str(), properties.get(key))
+            && let Some(coerced) = coerce_scalar(text, property)
+        {
+            *value = coerced;
+        }
+    }
+}
+
+fn coerce_scalar(text: &str, property: &Value) -> Option<Value> {
+    let allows = |kind: &str| match property.get("type") {
+        Some(Value::String(only)) => only == kind,
+        Some(Value::Array(kinds)) => kinds.iter().any(|one| one == kind),
+        _ => false,
+    };
+    if allows("string") {
+        return None;
+    }
+    let text = text.trim();
+    if allows("boolean")
+        && let Ok(flag) = text.parse::<bool>()
+    {
+        return Some(Value::Bool(flag));
+    }
+    if (allows("integer") || allows("number"))
+        && let Ok(whole) = text.parse::<i64>()
+    {
+        return Some(whole.into());
+    }
+    if allows("number") {
+        return serde_json::Number::from_f64(text.parse().ok()?).map(Value::Number);
+    }
+    None
+}
+
 /// Send an event, reporting whether the receiver is still listening.
 pub(crate) async fn emit(events: &mpsc::Sender<AgentEvent>, event: AgentEvent) -> bool {
     events.send(event).await.is_ok()
