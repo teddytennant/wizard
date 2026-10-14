@@ -394,6 +394,27 @@ fn adopt_provider(config: &mut Config, picked: &Config) {
     config.providers.push(provider);
 }
 
+/// Why `/model <tag>` did not switch, and what would. Only Ollama pulls.
+fn unknown_model(tag: &str, config: &Config) -> String {
+    let active = config.active();
+    if let Some((provider, _)) = tag.split_once('/')
+        && provider != active.name
+        && config.providers.iter().any(|p| p.name == provider)
+    {
+        return format!(
+            "'{provider}' is another provider: /provider use {provider} switches to it, then \
+             /model picks its model"
+        );
+    }
+    match active.kind == ProviderKind::OLLAMA {
+        true => format!("model '{tag}' is not installed (try `ollama pull {tag}`)"),
+        false => format!(
+            "model '{tag}' is not offered by provider '{}' (/model lists what it has)",
+            active.name
+        ),
+    }
+}
+
 /// Background half of `/model <tag>`: validate the tag against the
 /// installed models, probe native tool support, then either retag the live
 /// agent (context preserved) or build a fresh one.
@@ -416,7 +437,7 @@ pub(super) async fn switch_model_task(
                 agent,
                 model: None,
                 pin_model: false,
-                notice: format!("model '{tag}' is not installed (try `ollama pull {tag}`)"),
+                notice: unknown_model(&tag, &config),
             };
         }
     }
@@ -523,5 +544,28 @@ mod tests {
         adopt_provider(&mut config, &picked);
         assert_eq!(config.providers.len(), 1);
         assert_eq!(config.active().model, "grok-5");
+    }
+
+    #[test]
+    fn an_unknown_model_names_what_would_switch_to_it() {
+        let config = Config {
+            providers: vec![
+                provider("alpha", ProviderKind::OPENAI),
+                provider("beta", ProviderKind::OPENAI),
+            ],
+            active_provider: Some("alpha".into()),
+            ..Config::default()
+        };
+        assert!(unknown_model("beta/m", &config).contains("/provider use beta"));
+        let other = unknown_model("gpt-9", &config);
+        assert!(other.contains("not offered by provider 'alpha'"), "{other}");
+        assert!(!other.contains("ollama"), "{other}");
+
+        let config = Config {
+            providers: vec![provider("local", ProviderKind::OLLAMA)],
+            active_provider: Some("local".into()),
+            ..Config::default()
+        };
+        assert!(unknown_model("qwen3:8b", &config).contains("ollama pull qwen3:8b"));
     }
 }
