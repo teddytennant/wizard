@@ -633,6 +633,10 @@ fn ends_on_a_promise(reply: &str) -> bool {
     .any(|opening| last.starts_with(opening))
 }
 
+/// Times one step re-asks after an empty completion. With one, a second empty
+/// reply in a row ended the turn, and a headless run with it.
+const EMPTY_RETRY_LIMIT: u32 = 3;
+
 const LAST_STEP_NOTICE: &str = "This is your last step. Do not call a tool. Reply now with \
     your final answer, in the format you were asked for, from what you have already found.";
 
@@ -726,22 +730,24 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         };
 
         // Some reasoning models (xAI grok-4.3 after tool results) emit only
-        // reasoning and stop, leaving the visible message empty. Nudge once;
-        // if it stays empty, say so rather than ending silently. A reply that
-        // produced an image but no text is not empty — it said what it had to
-        // say in pixels.
-        let streamed = if streamed.images.is_empty()
+        // reasoning and stop, leaving the visible message empty. Nudge up to
+        // EMPTY_RETRY_LIMIT times; if it stays empty, say so rather than
+        // ending silently. A reply that produced an image but no text is not
+        // empty: it said what it had to say in pixels.
+        let mut streamed = streamed;
+        let mut empty_retries = 0;
+        while empty_retries < EMPTY_RETRY_LIMIT
+            && streamed.images.is_empty()
             && completion_is_empty(&streamed.content, &streamed.tool_calls)
         {
+            empty_retries += 1;
             match nudge_once(host, policy, sink).await? {
-                Some(retried) => retried,
+                Some(retried) => streamed = retried,
                 None => {
                     return Ok(Ran::ended(cancelled_reason(policy), steps_used, last_text));
                 }
             }
-        } else {
-            streamed
-        };
+        }
 
         let Streamed {
             content,
@@ -1120,7 +1126,7 @@ fn cancelled_reason(policy: &Policy) -> DoneReason {
     }
 }
 
-/// Re-ask once after a completion came back with nothing in it, in memory only
+/// Re-ask after a completion came back with nothing in it, in memory only
 /// so neither the nudge nor the discarded reply reaches the record. `None` when
 /// the retry was cancelled.
 async fn nudge_once(

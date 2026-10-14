@@ -846,9 +846,35 @@ async fn empty_completion_retries_with_nudge_then_succeeds() {
 }
 
 #[tokio::test]
-async fn double_empty_completion_surfaces_a_notice() {
-    let (mut agent, provider, _tmp) =
-        test_agent(vec![vec![final_chunk("")], vec![final_chunk("")]]);
+async fn empty_completions_are_retried_three_times() {
+    let (mut agent, provider, _tmp) = test_agent(vec![
+        vec![final_chunk("")],
+        vec![final_chunk("")],
+        vec![final_chunk("")],
+        vec![final_chunk("Here are my findings.")],
+    ]);
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let reason = agent.run_turn("hi", tx).await.expect("turn ok");
+    assert_eq!(reason, DoneReason::Completed);
+
+    let (text, errors, _notices) = drain_events(&mut rx);
+    assert_eq!(text, "Here are my findings.");
+    assert!(
+        errors.is_empty(),
+        "no notice on a successful retry: {errors:?}"
+    );
+    assert_eq!(provider.requests.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn an_empty_completion_that_stays_empty_surfaces_a_notice() {
+    let (mut agent, provider, _tmp) = test_agent(vec![
+        vec![final_chunk("")],
+        vec![final_chunk("")],
+        vec![final_chunk("")],
+        vec![final_chunk("")],
+    ]);
 
     let (tx, mut rx) = mpsc::channel(64);
     let reason = agent.run_turn("hi", tx).await.expect("turn ok");
@@ -861,7 +887,11 @@ async fn double_empty_completion_surfaces_a_notice() {
         "visible notice emitted: {errors:?}"
     );
 
-    assert_eq!(provider.requests.lock().unwrap().len(), 2, "retried once");
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        4,
+        "retried three times"
+    );
     // No empty assistant message is recorded.
     assert!(
         agent
