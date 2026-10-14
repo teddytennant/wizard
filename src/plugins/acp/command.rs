@@ -538,6 +538,9 @@ impl CommandSurface for AcpSurface<'_> {
         let Some(skin) = crate::skin::Skin::from_key(&name) else {
             return self.say(format!("error: unknown skin '{name}'. /ui lists them."));
         };
+        if config.ui.skin.is_some() && skin == saved {
+            return self.say(format!("already on the {} look", skin.label()));
+        }
         config.ui.skin = Some(skin.key().to_string());
         let session = self.agent.session();
         let handoff = crate::skin::handoff::Handoff {

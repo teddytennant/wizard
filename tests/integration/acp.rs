@@ -751,6 +751,9 @@ fn acp_ui_saves_the_look_wizard_starts_in() {
         .expect("the config is still there");
     assert!(config.contains("skin = \"pi\""), "{config}");
 
+    let (_, updates) = acp.prompt("/ui pi");
+    assert_eq!(said(&updates), "already on the pi look");
+
     let (_, updates) = acp.prompt("/ui");
     let listing = said(&updates);
     assert!(listing.contains("● pi"), "{listing}");
