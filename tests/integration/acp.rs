@@ -806,6 +806,12 @@ fn acp_provider_adds_switches_and_removes() {
     assert_eq!(said(&updates), "switched to model fake/fake-model:test");
     let (_, updates) = acp.prompt("/provider remove other");
     assert_eq!(said(&updates), "removed provider 'other'");
+    let menu = updates
+        .iter()
+        .find(|update| update["sessionUpdate"] == "config_option_update")
+        .map(|update| option(&update["configOptions"], "model").to_string())
+        .unwrap_or_else(|| panic!("the model menu was not refreshed: {updates:?}"));
+    assert!(!menu.contains("other/"), "{menu}");
     let config = std::fs::read_to_string(&path).expect("config.toml");
     assert!(!config.contains("other"), "{config}");
     assert!(

@@ -892,6 +892,7 @@ async fn run_slash_command(
     })?;
 
     let base = state.config();
+    let mut providers_changed = false;
     let (mut answer, mut next, fusion, model_change) =
         match crate::commands::SlashCommand::parse(line) {
             Some(Ok(parsed)) => {
@@ -910,6 +911,7 @@ async fn run_slash_command(
                 crate::commands::surface::dispatch(parsed, &mut surface).await;
                 if let Some(config) = surface.base_change.take() {
                     *state.config.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(config);
+                    providers_changed = true;
                 }
                 (
                     surface.out,
@@ -970,7 +972,7 @@ async fn run_slash_command(
             SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(answer))),
         ))?;
     }
-    if next != selection {
+    if next != selection || providers_changed {
         let options = state.config_options(&next).await;
         connection.send_notification(SessionNotification::new(
             session_id.clone(),
