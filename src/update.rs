@@ -1984,6 +1984,39 @@ mod tests {
         assert!(!is_newer("v0.5.1", "not-a-version"));
     }
 
+    /// The GUI ships under Wizard's tag and its updater compares that tag
+    /// with its own version, so its workspace carries this crate's version
+    /// and every member inherits it.
+    #[test]
+    fn the_gui_workspace_carries_this_version() {
+        let gui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gui");
+        let workspace = std::fs::read_to_string(gui.join("Cargo.toml")).unwrap();
+        let versions: Vec<&str> = workspace
+            .lines()
+            .filter(|line| line.starts_with("version = "))
+            .collect();
+        assert_eq!(
+            versions,
+            [format!("version = \"{}\"", current_version())],
+            "gui/Cargo.toml"
+        );
+
+        let mut members = 0;
+        for group in ["apps", "crates"] {
+            for entry in std::fs::read_dir(gui.join(group)).unwrap() {
+                let manifest = entry.unwrap().path().join("Cargo.toml");
+                let text = std::fs::read_to_string(&manifest).unwrap();
+                assert!(
+                    text.lines().any(|line| line == "version.workspace = true"),
+                    "{} sets its own version",
+                    manifest.display()
+                );
+                members += 1;
+            }
+        }
+        assert!(members > 10, "found {members} GUI crates");
+    }
+
     #[test]
     fn display_version_drops_a_trailing_zero_patch_only() {
         assert_eq!(short_version("0.7.0"), "0.7");

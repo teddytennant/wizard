@@ -270,6 +270,20 @@ jobs:
           path: openw
           persist-credentials: false
 
+      # The looks print their own crate version in the header, the footer and
+      # --version, and openw's is not Wizard's. They ship as Wizard, so they
+      # are built as this release. `cargo update --workspace` rewrites only the
+      # members' own lockfile entries, which keeps --locked honest below.
+      - name: Give the looks this release's version
+        working-directory: openw
+        run: |
+          set -eu
+          version="$(grep -m1 '^version' ../Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+          sed -i.bak -E "s/^version = \".*\"/version = \"${version}\"/" Cargo.toml
+          rm Cargo.toml.bak
+          grep -qx "version = \"${version}\"" Cargo.toml
+          cargo update --workspace
+
       - name: Build look UIs
         working-directory: openw
         env:
@@ -340,10 +354,13 @@ jobs:
           rm -rf smoke && mkdir smoke
           tar -xzf "wizard-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/wizard --version
-          ./smoke/wizard-ui-opencode --version
-          ./smoke/wizard-ui-pi --version
+          # codex is not in the list: it prints the Codex version it copies,
+          # from a constant in openw.
+          version="$(grep -m1 '^version' Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+          for look in opencode pi grok; do
+            ./smoke/wizard-ui-$look --version | grep -F " ${version}"
+          done
           ./smoke/wizard-ui-codex --version
-          ./smoke/wizard-ui-grok --version
           rm -rf smoke
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
