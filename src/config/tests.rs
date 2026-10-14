@@ -246,6 +246,7 @@ fn full_file_round_trips() {
         gate_timeout_secs: 600,
         completion_review: Some(false),
         self_check: true,
+        finish_checks: false,
         token_profile: Some("lean".into()),
         compact_threshold_bytes: 96_000,
         max_context_tokens: 200_000,
@@ -366,6 +367,7 @@ fn full_file_round_trips() {
     assert_eq!(parsed.gates, original.gates);
     assert_eq!(parsed.gate_max_attempts, original.gate_max_attempts);
     assert_eq!(parsed.gate_timeout_secs, original.gate_timeout_secs);
+    assert_eq!(parsed.finish_checks, original.finish_checks);
     assert_eq!(
         parsed.compact_threshold_bytes,
         original.compact_threshold_bytes

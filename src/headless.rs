@@ -773,6 +773,10 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // default and must cost nothing. See [`crate::gates`] for why a run that
     // finishes is not the same thing as a run that succeeded.
     let mut gates = crate::gates::Gates::for_run(&config, &cli, &project_root);
+    // The built-in checks that need no command and no model: the starting
+    // commit is read here, before the first turn can move it.
+    let mut finish_checks =
+        crate::finish_checks::FinishChecks::for_run(&config, &cli, &project_root, &goal).await;
     // `--plan` / `plan_first = true`: the first turn starts in plan mode.
     // The model investigates read-only, presents a plan via exit_plan, the
     // printer below auto-approves it, and the same turn proceeds to execute
@@ -934,7 +938,8 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // could report a failure and never be given a turn to have it fixed, which
     // is a gate that does nothing but slow the run down. The remediation turns
     // have their own bound (`gate_max_attempts`) and the same wall clock as
-    // everything else.
+    // everything else. A turn a finish check asks for is counted here too; its
+    // bound is that each of the four checks fires once.
     let mut gate_iterations: u32 = 0;
     // Is the claim of done reviewed before the loop acts on it? Headless is
     // never the interactive surface, so this is the config key or the default
@@ -1109,9 +1114,26 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
                         // loop is allowed to act on it, in continuous mode
                         // too, where acting on it means recording a completed
                         // cycle and moving the mission on.
-                        let decision = match gates.as_mut() {
-                            Some(gates) => gates.check(deadline, &tx).await,
-                            None => crate::gates::GateDecision::Finish,
+                        //
+                        // The finish checks go first: they cost a few `git`
+                        // calls where a gate can cost a test suite, and the
+                        // turn they ask for is one the gates then judge. Not
+                        // past the deadline, where the turn could not run.
+                        let found = match finish_checks.as_mut() {
+                            Some(checks) if !deadline_passed(deadline, Instant::now()) => {
+                                checks.check(&tx).await
+                            }
+                            _ => None,
+                        };
+                        let sent_back_by = if found.is_some() {
+                            "a finish check found something"
+                        } else {
+                            "a quality gate failed"
+                        };
+                        let decision = match (found, gates.as_mut()) {
+                            (Some(prompt), _) => crate::gates::GateDecision::Retry(prompt),
+                            (None, Some(gates)) => gates.check(deadline, &tx).await,
+                            (None, None) => crate::gates::GateDecision::Finish,
                         };
                         match decision {
                             crate::gates::GateDecision::Retry(prompt) => {
@@ -1119,7 +1141,7 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
                                 stamp(
                                     mission_state.as_mut(),
                                     &project_root,
-                                    format!("cycle {iteration}: a quality gate failed"),
+                                    format!("cycle {iteration}: {sent_back_by}"),
                                 );
                                 input = prompt;
                             }
@@ -1708,6 +1730,10 @@ mod tests {
         assert!(
             production.contains("Gates::for_run("),
             "the run has to build its gate set"
+        );
+        assert!(
+            production.contains("checks.check(&tx).await"),
+            "the finish checks must run when a turn claims to be done"
         );
         assert!(
             production.contains("gates.check(deadline, &tx)"),

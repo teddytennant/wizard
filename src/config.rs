@@ -1335,6 +1335,11 @@ pub struct Config {
     /// completion review is on, that reviews the turn and this does not.
     #[serde(default)]
     pub self_check: bool,
+    /// Before a headless sovereign run is allowed to finish, compare the tree
+    /// with the request and the starting commit using `git` alone, and send
+    /// what is found back as one more turn (see [`crate::finish_checks`]). On
+    /// by default; no model call, and nothing at all on a clean run.
+    pub finish_checks: bool,
     /// Token profile when neither `--token-profile` nor
     /// `$WIZARD_TOKEN_PROFILE` names one: `safe` (default), `stock`, `lean`
     /// or `min`. See docs/token-profiles.md.
@@ -1480,6 +1485,7 @@ impl Default for Config {
             gate_timeout_secs: 1_800,
             completion_review: None,
             self_check: false,
+            finish_checks: true,
             token_profile: None,
             compact_threshold_bytes: 48_000,
             time_wrap_up_at: default_wrap_up_at(),

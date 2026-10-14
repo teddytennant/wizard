@@ -179,6 +179,39 @@ they have their own bound, and they obey `--max-hours` like everything else.
 | `gate_max_attempts` | `3` | Consecutive failing gate checks before the run gives up and reports failure; `0` is unlimited |
 | `gate_timeout_secs` | `1800` | Wall clock for one gate, additionally clamped to what is left of `--max-hours` |
 
+### Finish checks
+
+Four checks run when a headless sovereign run says it is done, before any gate
+and before the review. They use `git` and nothing else: no command to configure
+and no model call, so a clean run pays for a few `git` invocations.
+
+1. **Stated names.** A `snake_case`, `camelCase` or `PascalCase` name or a
+   `--long-flag` the request states that appears nowhere in the tree, in any
+   file's contents or path, in any case style. Only a name that was also absent
+   at the starting commit counts, so "remove `old_name`" is never a finding. One
+   backticked name is enough; names in running prose need two.
+2. **Vanished tests.** A test that existed at the starting commit and is gone
+   from every changed file: Go `func TestX`, Python `def test_x` and
+   `class TestX`, JS/TS `it` / `test` / `describe` titles, Rust `#[test]`
+   functions. A file in another language says nothing.
+3. **Commit.** The request asks for a commit and `HEAD` has not moved, or files
+   are left uncommitted. Also a request that opens with a change verb and ends
+   with the tree untouched.
+4. **Duplicate Go test declarations.** A new `_test.go` file that declares a
+   top-level name another test file of the same package declares.
+
+What they find goes back to the agent as one message: fix it, or say why it is
+intended. Each check fires at most once per run, so a deliberate deviation is
+not asked about twice. The turn does not consume `--loop`.
+
+They are off in the TUI, in `--continuous` runs, outside a git repository, and
+for a run resumed without `-p`. Files that were already modified or untracked
+when the run started are left out of every check.
+
+| Key (`~/.wizard/config.toml`) | Default | Effect |
+|-----|---------|--------|
+| `finish_checks` | `true` | Run the four checks on a headless sovereign run |
+
 ### Completion review
 
 The most common complaint about a coding agent is not that it fails. It is that

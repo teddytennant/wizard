@@ -76,6 +76,13 @@ shows up in every output format: `~ review: PASS ...` under `text`, a
 so does `completion_review = false`. See
 [modes.md](modes.md#completion-review).
 
+Before the review, a sovereign run in a git repository gets four mechanical
+checks that cost no model call: names the request states that appear nowhere in
+the tree, tests that existed at the start and are gone, a commit the request
+asked for and did not get, and a new Go test file that redeclares another's
+names. A finding arrives as a `~ finish check: ...` notice and one more turn.
+`finish_checks = false` turns them off. See [modes.md](modes.md#finish-checks).
+
 ## Exit codes
 
 The process exit code encodes why the run ended:

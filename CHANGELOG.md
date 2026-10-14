@@ -9,6 +9,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 ### Added
 
 - **`apply_patch` edits several places, in several files, in one call.** It takes the patch format Codex uses: `*** Update File: <path>`, then hunks of context, `-` and `+` lines, each optionally opened by `@@ <a line above it>`. A context line is sent once where `edit_file` sends it in both strings, and a model that does not send parallel calls no longer pays a round trip per hunk. Hunks are matched against the file as it was. One that fits two places is refused with their line numbers, one that is an indent off still lands, and a file is written only if all its hunks apply. `/rewind`, the edit card and stale-read eviction all cover it.
+- **Finish checks.** When a headless sovereign run says it is done, four checks compare the tree with the request and the starting commit using `git` alone, before any gate or review: names the request states that appear nowhere, tests that existed at the start and are gone, a commit the request asked for and did not get, and a new Go test file that redeclares another's names. What they find goes back as one message, each check at most once. No model call. `finish_checks = false` turns them off.
 
 ### Changed
 
