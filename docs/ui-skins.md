@@ -1,7 +1,11 @@
 # UI skins
 
-Wizard's TUI can wear another coding agent's terminal chrome. Three ship:
-`wizard` (the house look), `codex` and `grok`. Pick one at
+Wizard's TUI can wear another coding agent's terminal chrome. Seven ship:
+`wizard` (the house look), `codex`, `grok`, `opencode`, `pi`, `jcode` and
+`claude`. `wizard`, `codex` and `grok` draw inside this process; `codex` and
+`grok` also have a full look, and the other four exist only as one. A full look
+is its own binary (`wizard-ui-<name>`, built from the openw repo pinned in
+`looks.rev`) that `/ui` restarts into, talking to `wizard acp`. Pick one at
 onboarding, change it live with `/ui`, or cycle the **Interface** row in
 `/settings`. See [usage.md](usage.md#the-interface) for the user-facing half.
 
@@ -114,12 +118,11 @@ readable at 16 colors and under `NO_COLOR`:
 
 ### A note on closed-source agents
 
-Only open-source TUIs are borrowed from here. A skin imitating a closed-source
-agent would have to be built either from its observable behaviour alone or from
-a redistributed copy of its source; the second is not an option for a crate
-published to crates.io under MIT, and the first is a lot of guesswork for a
-worse result. If that changes, the block model above is the place to add one —
-nothing in it is specific to the two that ship.
+No code from a closed-source TUI is copied here or in openw. The `claude` look
+is built from its observable screen alone: openw's `crates/claudew` drives the
+real program and the look through the same keys in a private tmux server and
+diffs the two cell by cell (`crates/claudew/tools/compare.sh`). Nothing from
+that program's install is read, copied or redistributed.
 
 Product names and trademarks belong to their owners. The skins are an homage,
 and each one says whose look it wears on its own home screen.
