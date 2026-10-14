@@ -633,6 +633,32 @@ fn ends_on_a_promise(reply: &str) -> bool {
     .any(|opening| last.starts_with(opening))
 }
 
+const CUT_OFF_NUDGE: &str = "Your reply hit the output-token limit and was cut off. Go on \
+    from where it stopped without repeating it. If it stopped inside a tool call, send that call \
+    again whole.";
+
+const NO_CALL_NUDGE: &str = "Your reply ended to call a tool, but no tool call arrived, so \
+    nothing ran. Send the call again.";
+
+/// Times one turn is told to go on after a reply that stopped unfinished.
+const CONTINUE_LIMIT: u32 = 3;
+
+/// The nudge for a reply with no tool call whose finish reason says it was not
+/// done: cut off at the output ceiling, or stopped to call a tool that never
+/// arrived. A context overflow is left out, since asking again sends the same
+/// history that did not fit.
+fn unfinished_nudge(done_reason: Option<&str>) -> Option<&'static str> {
+    let reason = done_reason?;
+    if is_length_cutoff(reason) && !crate::llm::is_context_overflow(reason) {
+        return Some(CUT_OFF_NUDGE);
+    }
+    matches!(
+        reason.trim().to_ascii_lowercase().as_str(),
+        "tool_calls" | "tool_use"
+    )
+    .then_some(NO_CALL_NUDGE)
+}
+
 /// Times one step re-asks after an empty completion. With one, a second empty
 /// reply in a row ended the turn, and a headless run with it.
 const EMPTY_RETRY_LIMIT: u32 = 3;
@@ -650,6 +676,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
     let mut steps_used = 0;
     let mut last_text = String::new();
     let mut promise_nudges = 0;
+    let mut continuations = 0;
 
     for step in 1..=policy.max_steps {
         steps_used = step;
@@ -754,6 +781,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             mut tool_calls,
             images,
             reasoning,
+            done_reason,
             ..
         } = streamed;
         if images.is_empty() && completion_is_empty(&content, &tool_calls) {
@@ -810,6 +838,14 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         };
 
         if tool_calls.is_empty() {
+            if policy.operator_control
+                && continuations < CONTINUE_LIMIT
+                && let Some(nudge) = unfinished_nudge(done_reason.as_deref())
+            {
+                continuations += 1;
+                host.push(ChatMessage::user(nudge));
+                continue;
+            }
             // Nobody is there to say "go on" to a turn that ends on what it is
             // about to do, so the loop says it, once.
             if policy.operator_control
@@ -2565,6 +2601,93 @@ mod tests {
             errors.iter().any(|message| message.contains("execute")),
             "the user is told which call was cut off: {errors:?}"
         );
+    }
+
+    #[test]
+    fn only_an_unfinished_reply_is_told_to_go_on() {
+        assert_eq!(unfinished_nudge(Some("length")), Some(CUT_OFF_NUDGE));
+        assert_eq!(unfinished_nudge(Some("max_tokens")), Some(CUT_OFF_NUDGE));
+        assert_eq!(unfinished_nudge(Some("tool_calls")), Some(NO_CALL_NUDGE));
+        assert_eq!(unfinished_nudge(Some("tool_use")), Some(NO_CALL_NUDGE));
+        for reason in [
+            Some("stop"),
+            Some("end_turn"),
+            Some("context_length_exceeded"),
+            None,
+        ] {
+            assert_eq!(unfinished_nudge(reason), None, "{reason:?}");
+        }
+    }
+
+    fn stopped_with(text: &str, reason: &str) -> Vec<ChatChunk> {
+        vec![ChatChunk {
+            done_reason: Some(reason.to_string()),
+            ..final_chunk(ChatMessage::assistant(text))
+        }]
+    }
+
+    fn sovereign_agent(
+        root: &std::path::Path,
+        provider: Arc<ScriptedProvider>,
+        registry: ToolRegistry,
+    ) -> Agent {
+        let mut agent = test_agent(root, provider, registry);
+        agent.set_mode(crate::config::Mode::Sovereign);
+        agent
+    }
+
+    #[tokio::test]
+    async fn a_sovereign_reply_cut_off_by_length_is_told_to_go_on() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            stopped_with("The cause is", "length"),
+            vec![final_chunk(ChatMessage::assistant(
+                "the null check. Fixed.",
+            ))],
+        ]));
+        let mut agent = sovereign_agent(dir.path(), Arc::clone(&provider), ToolRegistry::new());
+
+        let (tx, _rx) = mpsc::channel(256);
+        let reason = agent.run_turn("fix it", tx).await.expect("turn ok");
+        assert_eq!(reason, DoneReason::Completed);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2, "cut off, then continued");
+        assert_eq!(requests[1].messages.last().unwrap().text(), CUT_OFF_NUDGE);
+    }
+
+    #[tokio::test]
+    async fn a_sovereign_tool_stop_with_no_call_is_asked_for_the_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            stopped_with("Deleting the temp file.", "tool_calls"),
+            whole_call_chunk(),
+            vec![final_chunk(ChatMessage::assistant("deleted it"))],
+        ]));
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(CountingTool(Arc::clone(&dispatches))));
+        let mut agent = sovereign_agent(dir.path(), Arc::clone(&provider), registry);
+
+        let (tx, _rx) = mpsc::channel(256);
+        let reason = agent.run_turn("delete it", tx).await.expect("turn ok");
+        assert_eq!(reason, DoneReason::Completed);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1].messages.last().unwrap().text(), NO_CALL_NUDGE);
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_keeps_getting_cut_off_ends_at_the_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cut = || stopped_with("and then", "length");
+        let provider = Arc::new(ScriptedProvider::new(vec![cut(), cut(), cut(), cut()]));
+        let mut agent = sovereign_agent(dir.path(), Arc::clone(&provider), ToolRegistry::new());
+
+        let (tx, _rx) = mpsc::channel(256);
+        let reason = agent.run_turn("go", tx).await.expect("turn ok");
+        assert_eq!(reason, DoneReason::Completed);
+        assert_eq!(provider.requests().len(), 1 + CONTINUE_LIMIT as usize);
     }
 
     /// The cached-prefix invariant, stated against two real requests.
