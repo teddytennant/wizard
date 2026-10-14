@@ -38,8 +38,9 @@ const ANSWER_CAP: usize = super::TOOL_OUTPUT_CAP * 4;
 
 /// The commands an ACP session advertises: every row of the table and every
 /// plugin command this surface runs, with the argument hint as the input hint.
+/// `/providers` is listed too, so a client treats it as the command it is.
 pub(super) fn available_commands() -> Vec<AvailableCommand> {
-    crate::commands::available(Surface::Acp)
+    let mut commands: Vec<AvailableCommand> = crate::commands::available(Surface::Acp)
         .into_iter()
         .map(|row| {
             let command = AvailableCommand::new(row.name, row.description);
@@ -50,7 +51,13 @@ pub(super) fn available_commands() -> Vec<AvailableCommand> {
                 )),
             }
         })
-        .collect()
+        .collect();
+    if let Some(provider) = commands.iter().find(|c| c.name == "provider") {
+        let mut alias = provider.clone();
+        alias.name = "providers".into();
+        commands.push(alias);
+    }
+    commands
 }
 
 /// The command line in a prompt, when the prompt is one: a `/` followed by a
@@ -595,7 +602,17 @@ mod tests {
     fn the_advertised_commands_are_what_acp_runs() {
         let names: Vec<String> = available_commands().into_iter().map(|c| c.name).collect();
         for name in [
-            "model", "effort", "mode", "plan", "compact", "usage", "help", "diff", "ui",
+            "model",
+            "effort",
+            "mode",
+            "plan",
+            "compact",
+            "usage",
+            "help",
+            "diff",
+            "ui",
+            "provider",
+            "providers",
         ] {
             assert!(
                 names.iter().any(|n| n == name),
