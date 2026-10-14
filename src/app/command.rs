@@ -1146,6 +1146,10 @@ impl CommandContext<'_> {
     /// Shared by [`rebuild_active_provider`](Self::rebuild_active_provider) and
     /// the `/fusion` toggle. `context` names the action in the failure notice.
     async fn rebuild_agent_with(&mut self, model_label: String, summary: String, context: &str) {
+        let session = match self.agent_slot.as_ref() {
+            Some(agent) => SessionTarget::Id(agent.session().id.clone()),
+            None => SessionTarget::Fresh,
+        };
         let manager = self.manager.lock().await;
         match build_agent(
             self.client,
@@ -1153,7 +1157,7 @@ impl CommandContext<'_> {
             self.skills,
             self.project_root,
             &manager,
-            SessionTarget::Fresh,
+            session,
         )
         .await
         {
@@ -1180,7 +1184,7 @@ impl CommandContext<'_> {
     /// Toggle `/fusion`: swap the active client to a
     /// [`FusionProvider`](crate::llm::fusion) (panel debate → synthesizer) when
     /// off, or back to the underlying single provider when on. Like a provider
-    /// switch, this resets the session.
+    /// switch, this rebuilds the agent over the same session.
     ///
     /// It no longer refuses to stack with `/ultra`. The two used to be mutually
     /// exclusive because each owned its own fan-out, so stacking them meant
