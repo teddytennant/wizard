@@ -364,6 +364,10 @@ return {
       execute = function(args)
         args = args or {}
         local branch = args.branch
+        -- JSON null, what `/publish` with no branch sends, is a userdata here.
+        if type(branch) == "userdata" then
+          branch = nil
+        end
         if branch ~= nil and type(branch) ~= "string" then
           error("publish: 'branch' must be a string", 0)
         end

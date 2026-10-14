@@ -377,6 +377,14 @@ async fn an_empty_branch_is_main() {
         ran.contains(&format!("git -C {source} push fork HEAD:main")),
         "{ran:?}"
     );
+
+    let host = ScriptHost::happy("carol").arc();
+    let (is_error, content, ran) = publish(&dir.path, host, json!({ "branch": null })).await;
+    assert!(!is_error, "{content}");
+    assert!(
+        ran.contains(&format!("git -C {source} push fork HEAD:main")),
+        "{ran:?}"
+    );
 }
 
 /// An argument the schema rules out is refused before anything runs, as
