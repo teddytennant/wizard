@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::llm::ToolSpec;
+use crate::tools::patch::ApplyPatchTool;
 use crate::tools::registry::Deferral;
 use crate::tools::{Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args};
 
@@ -147,6 +148,7 @@ pub const LEAN_CORE: &[&str] = &[
     "execute",
     "read_file",
     "edit_file",
+    "apply_patch",
     "write_file",
     "search_files",
     "todo",
@@ -159,23 +161,27 @@ pub const MIN_CORE: &[&str] = &[
     "execute",
     "read_file",
     "edit_file",
+    "apply_patch",
     "write_file",
     TOOL_SEARCH_TOOL_NAME,
 ];
 
 /// Short specs for the `min` profile's core tools. Same argument names as
 /// the real tools, most of the prose dropped.
+///
+/// A boolean that defaults to false is named in the description and left out
+/// of the schema. Listed there, GPT-6 sent `"replace_all":false` on every
+/// `edit_file` and `"run_in_background":false` on nine `execute` calls in ten.
 pub fn terse_core_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec::function(
             "execute",
-            "Run a shell command in the project root (sh -c, pipefail). Returns stdout, stderr and exit code. A command still running after timeout_secs (default 30) becomes a background task; read it with task_output.",
+            "Run a shell command in the project root (sh -c, pipefail). Returns stdout, stderr and exit code. A command still running after 30s becomes a background task; read it with task_output. run_in_background:true starts it as one.",
             json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string" },
-                    "timeout_secs": { "type": "integer", "description": "max 600" },
-                    "run_in_background": { "type": "boolean" }
+                    "timeout_secs": { "type": "integer", "description": "only to wait longer than 30, max 600" }
                 },
                 "required": ["command"]
             }),
@@ -195,18 +201,18 @@ pub fn terse_core_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::function(
             "edit_file",
-            "Replace old_string with new_string. old_string must match exactly once unless replace_all.",
+            "Replace old_string with new_string. old_string must match exactly once, or pass replace_all:true.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
                     "old_string": { "type": "string" },
-                    "new_string": { "type": "string" },
-                    "replace_all": { "type": "boolean" }
+                    "new_string": { "type": "string" }
                 },
                 "required": ["path", "old_string", "new_string"]
             }),
         ),
+        ApplyPatchTool.spec(),
         ToolSpec::function(
             "write_file",
             "Create or overwrite a file.",

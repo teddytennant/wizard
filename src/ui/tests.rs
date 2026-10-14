@@ -1603,6 +1603,35 @@ fn a_finished_tool_card_carries_its_exit_code_and_elapsed_time() {
 }
 
 #[test]
+fn a_patch_card_shows_its_hunks_as_a_diff() {
+    use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
+    let tool = ToolItem {
+        name: "apply_patch".to_string(),
+        args: serde_json::json!({
+            "path": "src/x.rs",
+            "patch": "*** Update File: src/x.rs\n@@ fn a() {\n let a = 1;\n-let b = 2;\n+let b = 3;\n",
+        }),
+        call_id: String::new(),
+        output: Some(ToolItemOutput {
+            content: "Edited src/x.rs: 1 hunk (line 12)".to_string(),
+            is_error: false,
+        }),
+        progress: String::new(),
+        timing: ToolTiming::default(),
+    };
+    let rows = card(&tool);
+    assert_eq!(
+        rows,
+        [
+            "● apply_patch  src/x.rs:12 +1 \u{2212}1",
+            "╰ 12   let a = 1;",
+            "  13 - let b = 2;",
+            "  13 + let b = 3;",
+        ]
+    );
+}
+
+#[test]
 fn an_edit_card_shows_the_change_as_a_diff() {
     use crate::transcript::{ToolItem, ToolItemOutput, ToolTiming};
     let tool = ToolItem {

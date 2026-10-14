@@ -6,6 +6,16 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **`apply_patch` edits several places, in several files, in one call.** It takes the patch format Codex uses: `*** Update File: <path>`, then hunks of context, `-` and `+` lines, each optionally opened by `@@ <a line above it>`. A context line is sent once where `edit_file` sends it in both strings, and a model that does not send parallel calls no longer pays a round trip per hunk. Hunks are matched against the file as it was. One that fits two places is refused with their line numbers, one that is an indent off still lands, and a file is written only if all its hunks apply. `/rewind`, the edit card and stale-read eviction all cover it.
+
+### Changed
+
+- **A missed edit answers with the lines that are there.** `old_string not found` now ends with the closest text in the file and the first line that differs, and a patch hunk that misses says the same, so the retry needs no re-read.
+- **The failure breaker counts a tool once per model response.** Eight `edit_file` calls sent together that all missed ended the run on the spot, before the model had read one error.
+- **The `min` schemas stop listing `replace_all` and `run_in_background`.** Listed, GPT-6 sent `"replace_all":false` on every edit and `"run_in_background":false` on nine commands in ten. Both still work and are named in the descriptions.
+
 ## [3.8.8] - 2026-10-13
 
 ### Added

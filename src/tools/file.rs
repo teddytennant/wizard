@@ -541,9 +541,12 @@ impl Tool for EditFileTool {
 
         let count = content.matches(&args.old_string).count();
         if count == 0 {
+            let lines: Vec<&str> = content.lines().collect();
+            let old: Vec<&str> = args.old_string.lines().collect();
             return Ok(ToolOutput::error(format!(
-                "old_string not found in {}",
-                path.display()
+                "old_string not found in {}. {}",
+                path.display(),
+                super::patch::closest(&lines, &old, 0)
             )));
         }
         if count > 1 && !args.replace_all {
@@ -1035,6 +1038,28 @@ mod tests {
             .unwrap();
         assert!(out.is_error);
         assert!(out.content.contains("not found"));
+    }
+
+    /// A miss answers with the text that is there, so the retry needs no read.
+    #[tokio::test]
+    async fn edit_file_miss_quotes_the_closest_lines() {
+        let tmp = TempDir::new();
+        std::fs::write(tmp.0.join("f.go"), "a\n\tif x {\n\t\treturn 0\n\t}\n").unwrap();
+        let out = EditFileTool
+            .execute(
+                json!({ "path": "f.go", "old_string": "\tif x {\n\t\treturn nil\n", "new_string": "x" }),
+                &tmp.ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert!(
+            out.content.ends_with(
+                "Closest is line 2. Line 3 is not your \"return nil\". The file has, lines 1-3:\na\n\tif x {\n\t\treturn 0"
+            ),
+            "{}",
+            out.content
+        );
     }
 
     #[tokio::test]

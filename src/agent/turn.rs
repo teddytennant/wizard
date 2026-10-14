@@ -570,6 +570,10 @@ pub(super) trait Host: Send {
     /// with.
     async fn dispatch(&mut self, call: &ToolCall, sink: &Sink) -> DispatchOutcome;
 
+    /// The calls of one model response are about to be dispatched. The
+    /// failure breaker counts a tool once per response.
+    fn begin_step(&mut self) {}
+
     /// A call the owner answers itself instead of dispatching, or `None` to
     /// dispatch it. Exactly one tool needs this: `compact`, which mutates the
     /// history the loop is standing on.
@@ -839,6 +843,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             .collect();
         let mut ended: Option<DoneReason> = None;
 
+        host.begin_step();
         for (index, call) in tool_calls.iter().enumerate() {
             // Cancellation is honored between tool calls: pending calls are
             // answered so the persisted assistant message never carries
@@ -1701,6 +1706,10 @@ impl Host for TurnHost<'_> {
             tokens: self.agent.context_tokens(),
         })
         .await;
+    }
+
+    fn begin_step(&mut self) {
+        self.agent.dispatcher.begin_step();
     }
 
     async fn dispatch(&mut self, call: &ToolCall, sink: &Sink) -> DispatchOutcome {

@@ -948,6 +948,7 @@ fn long_edit(tool: &ToolItem) -> bool {
     match tool.name.as_str() {
         "write_file" => long("content"),
         "edit_file" => long("old_string") || long("new_string"),
+        "apply_patch" => long("patch"),
         _ => false,
     }
 }

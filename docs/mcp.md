@@ -41,7 +41,7 @@ wizard mcp-serve
 Runs a Model Context Protocol server on stdin/stdout, advertising Wizard's
 native tools:
 
-`read_file`, `write_file`, `edit_file`, `list_files`, `search_files`, `execute`,
+`read_file`, `write_file`, `edit_file`, `apply_patch`, `list_files`, `search_files`, `execute`,
 `git_status`, `git_diff`, `memory`, `turing`, `todo`, `manual`, `web_fetch`, `web_search`,
 `x_search`, `generate_image`, `task_output`, `task_kill`, `subagent_status`,
 `subagent_kill`, `run_command`, `compact`, and `computer`.

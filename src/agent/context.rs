@@ -768,9 +768,9 @@ fn cut_boundary(history: &[ChatMessage], anchor: Anchor, low_water: u64) -> Opti
 /// Deliberately conservative, because the cost of guessing wrong is deleting
 /// context the model is relying on:
 ///
-/// * only `read_file`, and only against `write_file` / `edit_file` on the
-///   same path string. A shell command that rewrote the file is invisible
-///   here and stays that way.
+/// * only `read_file`, and only against `write_file` / `edit_file` /
+///   `apply_patch` on the same path string. A shell command that rewrote the
+///   file is invisible here and stays that way.
 /// * only when the edit came in a *later* message than the read. Two calls in
 ///   one assistant turn are not ordered against each other.
 /// * only for results big enough to be worth the cache invalidation
@@ -784,13 +784,8 @@ fn evict_superseded_reads(history: &mut [ChatMessage]) -> usize {
     /// `src/x.rs` compare equal. Anything cleverer (canonicalizing, resolving
     /// against the project root) would start matching paths that only look
     /// alike, which is the direction that loses context.
-    fn call_path(call: &ToolCall) -> Option<String> {
-        let path = call
-            .function
-            .arguments
-            .get("path")
-            .and_then(Value::as_str)?;
-        Some(path.trim().trim_start_matches("./").to_string())
+    fn normal(path: &str) -> String {
+        path.trim().trim_start_matches("./").to_string()
     }
 
     // Last message index that wrote each path, and every read that might be
@@ -799,14 +794,18 @@ fn evict_superseded_reads(history: &mut [ChatMessage]) -> usize {
     let mut reads: Vec<(usize, String, String)> = Vec::new();
     for (index, message) in history.iter().enumerate() {
         for call in message.tool_calls() {
-            let Some(path) = call_path(call) else {
-                continue;
-            };
-            match call.function.name.as_str() {
-                "write_file" | "edit_file" => {
+            let args = &call.function.arguments;
+            let path = args.get("path").and_then(Value::as_str).map(normal);
+            match (call.function.name.as_str(), path) {
+                ("write_file" | "edit_file", Some(path)) => {
                     edited.insert(path, index);
                 }
-                "read_file" => reads.push((index, call.id.clone(), path)),
+                ("apply_patch", _) => {
+                    for path in crate::tools::patch::targets(args) {
+                        edited.insert(normal(&path), index);
+                    }
+                }
+                ("read_file", Some(path)) => reads.push((index, call.id.clone(), path)),
                 _ => {}
             }
         }
@@ -1566,6 +1565,32 @@ mod tests {
             0,
             "a second sweep finds nothing: the stub is already below the size floor"
         );
+    }
+
+    #[test]
+    fn a_patch_supersedes_reads_of_the_files_it_names() {
+        let read = ToolCall::new("read_file", json!({ "path": "src/x.rs" }));
+        let patch = ToolCall::new(
+            "apply_patch",
+            json!({ "patch": "*** Update File: ./src/x.rs\n-a\n+b\n" }),
+        );
+        let (read_id, patch_id) = (read.id.clone(), patch.id.clone());
+        let mut history = vec![ChatMessage::system("you are wizard")];
+        for (call, id, result) in [
+            (read, &read_id, "line\n".repeat(200)),
+            (
+                patch,
+                &patch_id,
+                "Edited src/x.rs: 1 hunk (line 1)".to_string(),
+            ),
+        ] {
+            let mut message = ChatMessage::assistant("");
+            let name = call.function.name.clone();
+            message.push_tool_call(call);
+            history.push(message);
+            history.push(ChatMessage::tool_result(id, &name, &result));
+        }
+        assert_eq!(evict_superseded_reads(&mut history), 1);
     }
 
     /// The mark is half the trigger whichever measure is in play, so the

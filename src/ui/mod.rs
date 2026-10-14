@@ -1653,9 +1653,14 @@ fn edit_diff_lines(
     output: Option<&str>,
 ) -> Option<diff::Rendered> {
     let arg = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
+    let patch = (name == "apply_patch").then(|| crate::tools::patch::sides(args));
     let (old, new) = match name {
         "edit_file" => (arg("old_string")?, arg("new_string")?),
         "write_file" => ("", arg("content")?),
+        "apply_patch" => {
+            let (old, new) = patch.as_ref()?.as_ref()?;
+            (old.as_str(), new.as_str())
+        }
         _ => return None,
     };
     output?;

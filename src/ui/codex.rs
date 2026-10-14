@@ -870,7 +870,7 @@ impl Shape {
             },
             "task_output" | "task_kill" => Shape::Background,
             "read_file" | "list_files" | "search_files" => Shape::Explore,
-            "write_file" | "edit_file" => Shape::Patch,
+            "write_file" | "edit_file" | "apply_patch" => Shape::Patch,
             "spawn_subagent" => Shape::Agent,
             _ => Shape::Call,
         }

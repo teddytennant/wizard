@@ -127,6 +127,7 @@ pub fn chat_system_prompt(x_search: bool, today: &str) -> String {
 const MIN_RULES: &str = "\
 Rules:
 - Read a file before your first edit to it. Keep changes minimal and in the existing style.
+- Make a change with one apply_patch call that carries every hunk in every file.
 - Verify with tests or by running the code. Never claim a result you did not see.
 - Never weaken, skip or edit tests to make them pass unless the task is the tests.
 - When something fails, find out why and change approach; do not repeat it verbatim.

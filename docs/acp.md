@@ -50,7 +50,7 @@ Per turn, Wizard streams back as it works:
 - **Tool calls** (`tool_call` / `tool_call_update`) — every tool shows up in the
   editor's tool view with a title and a running → completed/failed status. Five
   kinds are mapped by name: read (`read_file`, `list_files`, `git_status`,
-  `git_diff`), edit (`write_file`, `edit_file`), search (`search_files`,
+  `git_diff`), edit (`write_file`, `edit_file`, `apply_patch`), search (`search_files`,
   `web_search`, `x_search`), execute (`execute`), fetch (`web_fetch`).
   Everything else — `memory`, `todo`, `generate_image`, every MCP tool — is
   reported as `other`, which is in practice the most common kind.

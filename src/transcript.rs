@@ -131,7 +131,8 @@ pub enum TranscriptItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolItem {
     pub name: String,
-    /// Arguments as the model sent them. [`Value::Null`] when the call itself
+    /// Arguments as the model sent them, plus a `path` naming the files of an
+    /// `apply_patch`. [`Value::Null`] when the call itself
     /// was never seen (an orphan result read out of a truncated session file),
     /// which is not the same as a call that took no arguments.
     pub args: Value,
@@ -778,7 +779,15 @@ impl TranscriptModel {
     }
 
     /// Open a tool row and remember it as awaiting a result.
-    fn start_tool(&mut self, name: String, args: Value, call_id: String) {
+    fn start_tool(&mut self, name: String, mut args: Value, call_id: String) {
+        // A patch names its files in its body, and every surface titles an
+        // edit from `path`, so the name goes where they look.
+        if name == "apply_patch"
+            && let Some(label) = crate::tools::patch::label(&args)
+            && let Some(object) = args.as_object_mut()
+        {
+            object.insert("path".to_string(), label.into());
+        }
         self.open.push_back(self.items.len());
         self.push(TranscriptItem::Tool(ToolItem {
             name,
@@ -1024,6 +1033,7 @@ pub fn summarize_tool(name: &str, args: &Value, output: &str) -> String {
             arg("path").map(|path| format!("{path} ({})", count(lines, "line", "lines")))
         }
         "write_file" | "edit_file" => arg("path").map(str::to_string),
+        "apply_patch" => crate::tools::patch::label(args),
         "list_files" | "search_files" => {
             let counted = if name == "list_files" {
                 count(lines, "file", "files")
@@ -1135,6 +1145,18 @@ mod tests {
             Some(TranscriptItem::Tool(tool)) => tool,
             other => panic!("expected one tool row, got {other:?}"),
         }
+    }
+
+    /// A patch's files are in its body. The row gets them as `path`, which is
+    /// where every surface reads an edit's title from.
+    #[test]
+    fn a_patch_row_is_titled_with_its_files() {
+        let mut model = TranscriptModel::default();
+        model.apply(&AgentEvent::ToolStarted {
+            name: "apply_patch".to_string(),
+            args: json!({ "patch": "*** Update File: a.go\n-x\n+y\n*** Add File: b.go\n+z\n" }),
+        });
+        assert_eq!(only_tool(&model).args["path"], "a.go +1");
     }
 
     /// A prompt has to be readable *while* the call is still open — that is
@@ -1669,6 +1691,14 @@ mod tests {
 
     #[test]
     fn summaries_name_the_subject_and_count_output() {
+        assert_eq!(
+            summarize_tool(
+                "apply_patch",
+                &json!({ "patch": "*** Update File: src/app.rs\n-a\n+b\n" }),
+                "Edited src/app.rs: 1 hunk (line 1)"
+            ),
+            "src/app.rs"
+        );
         assert_eq!(
             summarize_tool("read_file", &json!({ "path": "src/app.rs" }), "a\nb\nc"),
             "src/app.rs (3 lines)"

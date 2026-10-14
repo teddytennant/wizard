@@ -997,7 +997,7 @@ impl ToolKind {
     fn of(name: &str) -> ToolKind {
         match name {
             "read_file" => ToolKind::Read,
-            "write_file" | "edit_file" => ToolKind::Edit,
+            "write_file" | "edit_file" | "apply_patch" => ToolKind::Edit,
             "execute" => ToolKind::Execute,
             "search_files" => ToolKind::Search,
             "list_files" => ToolKind::ListDir,
@@ -2522,6 +2522,20 @@ fn edit_body(tool: &ToolItem, text: &str, width: u16) -> Vec<Row> {
         return rows;
     }
     let arg = |key: &str| tool.args.get(key).and_then(serde_json::Value::as_str);
+    if tool.name == "apply_patch" {
+        for line in arg("patch").unwrap_or("").lines() {
+            let token = match line.as_bytes().first() {
+                Some(b'+') => Token::DiffAdd,
+                Some(b'-') => Token::DiffDel,
+                _ => continue,
+            };
+            rows.push(Row::plain(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(line.to_string(), theme::style(token)),
+            ])));
+        }
+        return rows;
+    }
     let (old, new) = match tool.name.as_str() {
         "edit_file" => match (arg("old_string"), arg("new_string")) {
             (Some(old), Some(new)) => (old, new),

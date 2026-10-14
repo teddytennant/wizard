@@ -22,6 +22,7 @@ pub mod interview;
 pub mod lua;
 pub mod manual;
 pub mod memory;
+pub mod patch;
 pub mod plan;
 pub mod registry;
 pub mod scripted;

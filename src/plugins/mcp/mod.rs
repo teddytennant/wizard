@@ -122,6 +122,7 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
     "edit_file",
+    "apply_patch",
     "list_files",
     "search_files",
     "execute",

@@ -1105,7 +1105,7 @@ impl Translator {
 fn tool_kind(name: &str) -> ToolKind {
     match name {
         "read_file" | "list_files" | "git_status" | "git_diff" => ToolKind::Read,
-        "write_file" | "edit_file" => ToolKind::Edit,
+        "write_file" | "edit_file" | "apply_patch" => ToolKind::Edit,
         "search_files" | "web_search" | "x_search" => ToolKind::Search,
         "execute" => ToolKind::Execute,
         "web_fetch" => ToolKind::Fetch,

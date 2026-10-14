@@ -21,6 +21,7 @@ use super::file::{EditFileTool, ListFilesTool, ReadFileTool, SearchFilesTool, Wr
 use super::image::GenerateImageTool;
 use super::manual::ManualTool;
 use super::memory::MemoryTool;
+use super::patch::ApplyPatchTool;
 use super::shell::ExecuteTool;
 use super::subagent_tasks::{SubagentKillTool, SubagentStatusTool};
 use super::tasks::{TaskKillTool, TaskOutputTool};
@@ -146,7 +147,7 @@ impl ToolRegistry {
     }
 
     /// Registry pre-populated with all native tools
-    /// (`read_file`, `write_file`, `edit_file`, `list_files`,
+    /// (`read_file`, `write_file`, `edit_file`, `apply_patch`, `list_files`,
     /// `search_files`, `execute`, `memory`,
     /// `todo`, `manual`, `generate_image`,
     /// `task_output`, `task_kill`, `subagent_status`, `subagent_kill`,
@@ -165,6 +166,7 @@ impl ToolRegistry {
         registry.register(Arc::new(ReadFileTool));
         registry.register(Arc::new(WriteFileTool));
         registry.register(Arc::new(EditFileTool));
+        registry.register(Arc::new(ApplyPatchTool));
         registry.register(Arc::new(ListFilesTool));
         registry.register(Arc::new(SearchFilesTool));
         registry.register(Arc::new(ExecuteTool));
@@ -611,6 +613,7 @@ mod tests {
                 "read_file",
                 "write_file",
                 "edit_file",
+                "apply_patch",
                 "list_files",
                 "search_files",
                 "execute",
@@ -628,7 +631,7 @@ mod tests {
                 "computer",
             ]
         );
-        assert_eq!(registry.len(), 18);
+        assert_eq!(registry.len(), 19);
         assert!(!registry.is_empty());
 
         for spec in registry.specs() {
@@ -659,7 +662,7 @@ mod tests {
         ] {
             assert_eq!(access(read_only), ToolAccess::ReadOnly, "{read_only}");
         }
-        for edit in ["write_file", "edit_file"] {
+        for edit in ["write_file", "edit_file", "apply_patch"] {
             assert_eq!(access(edit), ToolAccess::Edit, "{edit}");
         }
         // `execute` runs arbitrary commands; `memory` mutates its store;
@@ -813,7 +816,7 @@ mod tests {
             registry.apply_description_overrides(&tmp.0.join("absent")),
             0
         );
-        assert_eq!(registry.len(), 18);
+        assert_eq!(registry.len(), 19);
     }
 
     /// A scripted tool cannot take a built-in's name.

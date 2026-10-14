@@ -7,8 +7,8 @@ request. The default is `safe`.
 |---|---|
 | `stock` | Nothing. The harness as it was through 3.2.5. |
 | `safe` | Skill frontmatter is read as YAML (a nested `always: true` no longer puts a skill's whole body in every prompt). Subagents are listed one line each. A continuous run's cycle prompt points at the pinned mission instead of repeating it. An identical re-read of an unchanged file returns a short stub. `subagent_status` stops repeating a report the completion note already delivered. MCP tools are listed by name and loaded on first call. Old tool-call arguments are digested along with old results. |
-| `lean` | `safe`, plus every tool outside the everyday set (`execute`, `read_file`, `edit_file`, `write_file`, `search_files`, `todo`, `spawn_subagent`) is deferred, and `execute` output is capped at 12 KB with the rest spilled to a file. |
-| `min` | `lean`, plus a short system prompt and terse schemas for four core tools. |
+| `lean` | `safe`, plus every tool outside the everyday set (`execute`, `read_file`, `edit_file`, `apply_patch`, `write_file`, `search_files`, `todo`, `spawn_subagent`) is deferred, and `execute` output is capped at 12 KB with the rest spilled to a file. |
+| `min` | `lean`, plus a short system prompt and terse schemas for five core tools. |
 
 Deferred tools run when the model calls them by name. `tool_search` returns a
 schema when the model wants one first.

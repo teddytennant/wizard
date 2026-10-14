@@ -15,6 +15,7 @@
 //! a repeatedly failing tool was, and how each fix to this file had to be
 //! remembered twice.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -122,6 +123,9 @@ pub struct Dispatcher {
     failure_streak: Option<(String, u32)>,
     /// Per-tool consecutive-failure counts (args ignored).
     tool_failures: ToolFailureCounter,
+    /// Tools whose failure this model step has already been counted. Eight
+    /// edits sent in one response that miss the same way are one mistake.
+    failed_this_step: HashSet<String>,
     /// Calls that wrote a file or ran a command and actually happened. See
     /// [`Self::effects`].
     effects: u64,
@@ -180,6 +184,7 @@ impl Dispatcher {
             plan_mode,
             failure_streak: None,
             tool_failures: ToolFailureCounter::default(),
+            failed_this_step: HashSet::new(),
             effects: 0,
         }
     }
@@ -202,6 +207,7 @@ impl Dispatcher {
             plan_mode: Arc::new(AtomicBool::new(false)),
             failure_streak: None,
             tool_failures: ToolFailureCounter::default(),
+            failed_this_step: HashSet::new(),
             effects: 0,
         }
     }
@@ -219,6 +225,12 @@ impl Dispatcher {
     /// Track a mode switch (the identical-failure breaker is sovereign-only).
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
+    }
+
+    /// Mark a model step: the calls dispatched until the next one came from
+    /// one response, and count as at most one failure per tool.
+    pub fn begin_step(&mut self) {
+        self.failed_this_step.clear();
     }
 
     /// Forget all failure state (`/clear`).
@@ -436,7 +448,11 @@ impl Dispatcher {
         // Both are updated on every call, whichever one has something to say:
         // the streaks they keep are only meaningful if every result feeds them.
         let identical = self.track_identical(name, args, &output, grade);
-        let per_tool = self.tool_failures.record(name, grade);
+        let per_tool = if grade != Grade::Fine && !self.failed_this_step.insert(name.to_string()) {
+            FailureAction::Continue
+        } else {
+            self.tool_failures.record(name, grade)
+        };
 
         // A trip from either breaker ends the turn. The identical-call one is
         // asked first because its message names the specific call to stop
@@ -916,6 +932,7 @@ mod tests {
 
         let mut seen = Vec::new();
         for _ in 0..rounds {
+            dispatcher.begin_step();
             let outcome = dispatcher.dispatch(&call, &ctx, &sink).await;
             let done = outcome.done;
             seen.push((outcome.nudge, done));
@@ -962,6 +979,41 @@ mod tests {
             seen.last().expect("rounds").1,
             Some(DoneReason::CircuitBreaker)
         );
+    }
+
+    /// Eight edits in one response that all miss are one mistake, made once.
+    /// They used to trip the breaker on the spot, before the model had read a
+    /// single one of the errors.
+    #[tokio::test]
+    async fn a_step_of_parallel_failures_counts_once() {
+        let dir = std::env::temp_dir().join(format!("wizard-breaker-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let hooks = Arc::new(HookEngine::new(Vec::new(), dir.clone(), "test".to_string()));
+        let ctx = ToolContext::new(&dir);
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Always(true)));
+        let mut dispatcher = Dispatcher::new(
+            registry,
+            Mode::Sovereign,
+            hooks,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (tx, _rx) = mpsc::channel(256);
+        let sink = Sink::Turn(tx);
+
+        let mut ended_at = None;
+        'steps: for step in 1..=TOOL_FAILURE_TRIP {
+            dispatcher.begin_step();
+            for hunk in 0..TOOL_FAILURE_TRIP {
+                let call = ToolCall::new("execute", json!({ "command": format!("{step} {hunk}") }));
+                if dispatcher.dispatch(&call, &ctx, &sink).await.done.is_some() {
+                    ended_at = Some(step);
+                    break 'steps;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ended_at, Some(TOOL_FAILURE_TRIP));
     }
 
     /// A call that could not be *made* is the other animal. Repeating one
@@ -1064,6 +1116,7 @@ mod tests {
             };
             let mut ended = None;
             for _ in 0..TOOL_FAILURE_TRIP {
+                dispatcher.begin_step();
                 let outcome = dispatcher.dispatch(&call, &ctx, &sink).await;
                 assert!(outcome.output.expect("a result either way").is_error);
                 if let Some(reason) = outcome.done {

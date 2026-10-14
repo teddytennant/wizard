@@ -1,19 +1,19 @@
 # Checkpoints and /rewind
 
-Wizard snapshots the file behind every `write_file` and `edit_file` call, per turn, so a
+Wizard snapshots the files behind every `write_file`, `edit_file` and `apply_patch` call, per turn, so a
 turn (or a run of turns) can be rewound: files restored to their before-state and the
 conversation truncated to match. There are no approval prompts anywhere in this: every
 tool call still executes directly; checkpoints are the undo, not a gate.
 
-**What this does not cover.** Only those two tools are snapshotted. A file changed by a
+**What this does not cover.** Only those three tools are snapshotted. A file changed by a
 shell command through `execute`, by an MCP or scripted tool, by `generate_image`, or by
 `/evolve` is not recorded, and a rewind will not put it back. Wizard's own edits are
 undoable; everything Wizard *ran* is not.
 
 ## How it works
 
-Before an edit-class tool (`write_file`, `edit_file` — the only two that declare edit
-access) runs, and after pre-tool hooks have
+Before an edit-class tool (`write_file`, `edit_file`, `apply_patch` — the only three that
+declare edit access) runs, and after pre-tool hooks have
 had their chance to rewrite the arguments, the dispatcher copies the target file's
 current content into the project's checkpoint store. Subagent edits go through the same
 seam, snapshotted under the parent's current turn. The first snapshot of a path within a

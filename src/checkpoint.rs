@@ -342,9 +342,9 @@ fn read_index(index: &Path) -> Vec<SnapshotRecord> {
 
 /// Checkpoint seam shared by the dispatcher and the subagent loop: when
 /// `name` is an `Edit`-class tool, snapshot its target file (resolved from
-/// the `path` argument, after pre-hooks have had their chance to rewrite it)
-/// under the store's current turn. Never fails the tool call — snapshot
-/// errors are logged and execution proceeds.
+/// the `path` argument, or every file an `apply_patch` names, after pre-hooks
+/// have had their chance to rewrite it) under the store's current turn. Never
+/// fails the tool call — snapshot errors are logged and execution proceeds.
 pub fn snapshot_edit_target(registry: &ToolRegistry, name: &str, args: &Value, ctx: &ToolContext) {
     let Some(store) = &ctx.checkpoints else {
         return;
@@ -355,15 +355,18 @@ pub fn snapshot_edit_target(registry: &ToolRegistry, name: &str, args: &Value, c
     {
         return;
     }
-    let Some(path) = args.get("path").and_then(Value::as_str) else {
-        return;
+    let paths = match args.get("path").and_then(Value::as_str) {
+        Some(path) => vec![path.to_string()],
+        None => crate::tools::patch::targets(args),
     };
-    let target = crate::tools::resolve_path(ctx, path);
-    if let Err(err) = store.snapshot(store.current_turn(), name, &target) {
-        tracing::warn!(
-            "checkpoint snapshot of {} failed: {err:#}",
-            target.display()
-        );
+    for path in paths {
+        let target = crate::tools::resolve_path(ctx, &path);
+        if let Err(err) = store.snapshot(store.current_turn(), name, &target) {
+            tracing::warn!(
+                "checkpoint snapshot of {} failed: {err:#}",
+                target.display()
+            );
+        }
     }
 }
 
@@ -425,6 +428,31 @@ mod tests {
 
         store.restore_turns_from(turn).unwrap();
         assert!(!file.exists(), "rewind deletes a file that did not exist");
+    }
+
+    #[test]
+    fn a_patch_snapshots_every_file_it_names() {
+        let tmp = TempDir::new();
+        let store = std::sync::Arc::new(CheckpointStore::open(&tmp.0, 50));
+        let ctx = ToolContext::new(&tmp.0).with_checkpoints(store.clone());
+        write(&tmp.0.join("a.txt"), "a1");
+        write(&tmp.0.join("b.txt"), "b1");
+
+        let turn = store.begin_turn();
+        snapshot_edit_target(
+            &ToolRegistry::with_native_tools(),
+            "apply_patch",
+            &serde_json::json!({ "patch": "*** Update File: a.txt\n-a1\n+a2\n*** Update File: b.txt\n-b1\n+b2\n*** Add File: c.txt\n+c\n" }),
+            &ctx,
+        );
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            write(&tmp.0.join(name), "changed");
+        }
+
+        store.restore_turns_from(turn).unwrap();
+        assert_eq!(read(&tmp.0.join("a.txt")), "a1");
+        assert_eq!(read(&tmp.0.join("b.txt")), "b1");
+        assert!(!tmp.0.join("c.txt").exists());
     }
 
     #[test]

@@ -172,6 +172,7 @@ Base64 stays on the `ChatMessage` in history for vision models. A tool's images 
 | `read_file` | Read file contents with optional line range; an image file comes back as the image |
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Search-and-replace edit |
+| `apply_patch` | Several hunks, in one or more files, in one call |
 | `list_files` | Directory listing with glob filter |
 | `search_files` | Ripgrep/grep content search |
 | `execute` | Run shell command with timeout; `run_in_background` detaches ([tasks.md](tasks.md)) |
