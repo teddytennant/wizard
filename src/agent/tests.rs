@@ -1522,6 +1522,59 @@ fn exit_plan_is_always_registered() {
 }
 
 #[tokio::test]
+async fn a_rebuilt_agent_numbers_turns_after_its_session() {
+    let tmp = TempDir::new();
+    let (mut first, _provider) = test_agent_in(
+        &tmp,
+        vec![vec![final_chunk("one")]],
+        Vec::new(),
+        ToolRegistry::new(),
+    );
+    let (tx, mut rx) = mpsc::channel(256);
+    first.run_turn("first", tx).await.unwrap();
+    drain_events(&mut rx);
+
+    // A model switch rebuilds the agent over the same session file.
+    let session = first.session().clone();
+    let provider = ScriptedProvider::new(vec![vec![final_chunk("two")]]);
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+    let mut second = Agent::new(
+        provider,
+        ToolRegistry::new(),
+        Config::default(),
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        true,
+        hooks,
+    )
+    .expect("build agent");
+    second.set_usage_log(Some(tmp.0.join("usage.jsonl")));
+    let (tx, mut rx) = mpsc::channel(256);
+    second.run_turn("second", tx).await.unwrap();
+    drain_events(&mut rx);
+
+    let turns: Vec<u64> = second
+        .session()
+        .turn_markers()
+        .unwrap()
+        .iter()
+        .map(|m| m.turn)
+        .collect();
+    assert_eq!(turns, vec![1, 2]);
+    second.rewind_to(2).unwrap();
+    let messages = second.session().load_messages().unwrap();
+    assert_eq!(
+        messages.first().map(|m| m.text()),
+        Some("first".to_string())
+    );
+}
+
+#[tokio::test]
 async fn rewind_restores_an_overwritten_file_and_truncates_history() {
     let tmp = TempDir::new();
     let file = tmp.0.join("notes.txt");

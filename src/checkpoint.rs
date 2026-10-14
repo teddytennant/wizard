@@ -88,6 +88,11 @@ impl CheckpointStore {
         }
     }
 
+    /// Number the next turn after `turn` at least.
+    pub fn continue_after(&self, turn: u64) {
+        self.current_turn.fetch_max(turn, Ordering::SeqCst);
+    }
+
     /// The turn currently executing (0 before the first
     /// [`begin_turn`](Self::begin_turn)).
     pub fn current_turn(&self) -> u64 {

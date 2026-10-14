@@ -1034,6 +1034,16 @@ impl Agent {
             &project_root,
             config.checkpoints.keep_turns,
         ));
+        // A turn that edited nothing leaves no index entry, only its marker
+        // here. Numbering on from the index alone would repeat a turn id in
+        // this file, and a rewind to it would cut at the older one.
+        if let Some(last) = session
+            .turn_markers()
+            .ok()
+            .and_then(|markers| markers.iter().map(|m| m.turn).max())
+        {
+            checkpoints.continue_after(last);
+        }
         match checkpoints.gc() {
             Ok(dropped) if dropped > 0 => {
                 tracing::debug!("checkpoint gc dropped {dropped} old turn(s)");
