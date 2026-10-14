@@ -193,8 +193,7 @@ pub(super) fn ui_command(app: &mut App, name: Option<&str>) -> String {
         if let Err(err) = skin::launch::find_companion(&wizard, bin) {
             return format!("error: {err:#}");
         }
-        app.config.ui.skin = Some(switched.key().to_string());
-        if let Err(err) = app.config.save() {
+        if let Err(err) = save_skin(app, switched) {
             return format!("error: could not save config: {err:#}");
         }
         app.look = Some(switched);
@@ -222,11 +221,19 @@ pub(super) fn wear(app: &mut App, switched: skin::Skin) -> String {
         text.push_str(&format!("\npalette: {} (came with the skin)", theme.name));
     }
 
-    app.config.ui.skin = Some(switched.key().to_string());
-    if let Err(err) = app.config.save() {
+    if let Err(err) = save_skin(app, switched) {
         text.push_str(&format!("\ncould not save config: {err:#}"));
     }
     text
+}
+
+/// Write `[ui] skin` and nothing else: what this session runs on, which a
+/// look may have handed over, stays out of the file.
+fn save_skin(app: &mut App, skin: skin::Skin) -> Result<()> {
+    app.config.ui.skin = Some(skin.key().to_string());
+    let mut saved = Config::load()?;
+    saved.ui.skin = app.config.ui.skin.clone();
+    saved.save()
 }
 
 /// The key bindings appended to `/help` here. The *commands* half of that
