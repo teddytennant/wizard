@@ -779,7 +779,10 @@ fn acp_provider_adds_switches_and_removes() {
         .to_string();
 
     let (_, updates) = acp.prompt("/providers");
-    assert!(said(&updates).contains("* fake (ollama)"), "{updates:?}");
+    assert!(
+        said(&updates).contains("fake (ollama)") && said(&updates).contains("(this session)"),
+        "{updates:?}"
+    );
 
     let (_, updates) = acp.prompt(&format!(
         "/provider add other ollama {base_url} other-model:test"
