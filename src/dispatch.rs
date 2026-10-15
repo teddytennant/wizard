@@ -325,7 +325,9 @@ impl Dispatcher {
                     "blocked by plan mode: only read-only tools are allowed; finish your plan \
                      and call exit_plan",
                 );
-                if !sink.tool_finished(&name, &output).await {
+                if !sink.tool_started(&name, &args).await
+                    || !sink.tool_finished(&name, &output).await
+                {
                     return DispatchOutcome::stopped();
                 }
                 return DispatchOutcome {
@@ -354,6 +356,9 @@ impl Dispatcher {
             }
             PreToolUse::Block(reason) => {
                 let output = ToolOutput::error(format!("blocked by pre_tool_use hook: {reason}"));
+                if !sink.tool_started(&name, &args).await {
+                    return DispatchOutcome::stopped();
+                }
                 // A fault: the call did not happen, so nothing in the machine's
                 // state changed and nothing the model reads in this result is
                 // news about the world. A model that keeps making a call policy
@@ -724,6 +729,112 @@ mod tests {
 
     fn dir_for_hooks() -> std::path::PathBuf {
         std::env::temp_dir()
+    }
+
+    /// What a turn's surface saw of one call, in order.
+    fn started_and_finished(rx: &mut mpsc::Receiver<AgentEvent>) -> Vec<String> {
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::ToolStarted { name, .. } => seen.push(format!("start {name}")),
+                AgentEvent::ToolFinished { name, .. } => seen.push(format!("finish {name}")),
+                _ => {}
+            }
+        }
+        seen
+    }
+
+    /// A write blocked by plan mode is announced before its refusal, so a surface draws the
+    /// call it refused instead of a result with no call.
+    #[tokio::test]
+    async fn a_call_plan_mode_blocks_is_announced_first() {
+        use crate::agent::turn::Sink;
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(FakeTool {
+            name: "write_file",
+            access: ToolAccess::Edit,
+            fails: false,
+        }));
+        let hooks = Arc::new(HookEngine::new(
+            Vec::new(),
+            dir_for_hooks(),
+            "test".to_string(),
+        ));
+        let mut dispatcher = Dispatcher::new(
+            registry,
+            Mode::Sovereign,
+            hooks,
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (tx, mut rx) = mpsc::channel(64);
+        let outcome = dispatcher
+            .dispatch(
+                &call("write_file"),
+                &ToolContext::new(dir_for_hooks()),
+                &Sink::Turn(tx),
+            )
+            .await;
+        let output = outcome.output.expect("a refusal");
+        assert!(
+            output.content.contains("blocked by plan mode"),
+            "{}",
+            output.content
+        );
+        assert_eq!(
+            started_and_finished(&mut rx),
+            ["start write_file", "finish write_file"]
+        );
+    }
+
+    /// The same for a call a pre_tool_use hook vetoes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_call_a_hook_blocks_is_announced_first() {
+        use crate::agent::turn::Sink;
+        use crate::hooks::{HookDef, HookEvent};
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(FakeTool {
+            name: "write_file",
+            access: ToolAccess::Edit,
+            fails: false,
+        }));
+        let veto = HookDef {
+            event: HookEvent::PreToolUse,
+            matcher: None,
+            command: "echo no writes >&2; exit 2".to_string(),
+            timeout_secs: None,
+        };
+        let hooks = Arc::new(HookEngine::new(
+            vec![veto],
+            dir_for_hooks(),
+            "test".to_string(),
+        ));
+        let mut dispatcher = Dispatcher::new(
+            registry,
+            Mode::Sovereign,
+            hooks,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (tx, mut rx) = mpsc::channel(64);
+        let outcome = dispatcher
+            .dispatch(
+                &call("write_file"),
+                &ToolContext::new(dir_for_hooks()),
+                &Sink::Turn(tx),
+            )
+            .await;
+        let output = outcome.output.expect("a refusal");
+        assert!(
+            output.content.contains("blocked by pre_tool_use hook"),
+            "{}",
+            output.content
+        );
+        assert_eq!(
+            started_and_finished(&mut rx),
+            ["start write_file", "finish write_file"]
+        );
     }
 
     fn call(name: &str) -> ToolCall {
