@@ -216,6 +216,7 @@ impl CommandSurface for AcpSurface<'_> {
 
     fn plan(&self) -> PlanState {
         PlanState {
+            plan: self.agent.plan_mode(),
             omakase: self.agent.omakase(),
         }
     }

@@ -218,6 +218,7 @@ mod tests {
             model: "m".into(),
             mode: crate::config::Mode::Chat,
             effort: None,
+            plan: false,
         };
         run(Skin::Jcode, Some(&handoff))
             .await

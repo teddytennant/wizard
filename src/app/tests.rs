@@ -4923,6 +4923,7 @@ fn a_handed_over_session_never_lands_in_config_toml() {
         model: "b-other".into(),
         mode: Mode::Sovereign,
         effort: None,
+        plan: false,
     };
     let overlay = handoff.overlay(&mut config);
     let mut app = App::new(config);

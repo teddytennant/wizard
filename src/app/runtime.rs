@@ -67,8 +67,9 @@ pub async fn run_tui(
         anyhow::bail!("wizard needs a terminal for the TUI; pass -p \"task\" to run headless");
     }
 
-    // Back from a full look: its model and mode, and its conversation below.
+    // Back from a full look: its model and mode, plan mode, and its conversation below.
     let handed_over = handoff.as_ref().map(|handoff| handoff.overlay(&mut config));
+    let handed_plan = handoff.as_ref().is_some_and(|handoff| handoff.plan);
     let resume = match handoff.and_then(|handoff| handoff.session) {
         Some(id) => SessionTarget::Id(id),
         None if cli.resume => SessionTarget::Latest,
@@ -144,7 +145,7 @@ pub async fn run_tui(
     let mut idle_fork_tx: Option<mpsc::Sender<AgentEvent>> = None;
     // `--plan` / `plan_first = true`: the session starts in plan mode (the
     // App mirror is set from the same config in App::new below).
-    if config.plan_first
+    if (config.plan_first || handed_plan)
         && let Some(agent) = agent_slot.as_mut()
     {
         agent.set_plan_mode(true);
@@ -195,6 +196,7 @@ pub async fn run_tui(
         });
 
     let mut app = App::new(config);
+    app.plan_mode |= handed_plan;
     app.handed_over = handed_over;
     app.project_root = project_root.clone();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
@@ -1332,6 +1334,7 @@ pub async fn run_tui(
         model: agent.model().to_string(),
         mode: agent.mode(),
         effort: app.config.reasoning_effort,
+        plan: agent.plan_mode(),
     });
     Ok(app
         .look

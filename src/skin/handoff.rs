@@ -23,6 +23,9 @@ pub struct Handoff {
     pub mode: Mode,
     #[serde(default)]
     pub effort: Option<ReasoningEffort>,
+    /// Plan mode was on: the next look starts in it too.
+    #[serde(default)]
+    pub plan: bool,
 }
 
 impl Handoff {
@@ -156,6 +159,7 @@ mod tests {
             model: "beta-other".into(),
             mode: Mode::Sovereign,
             effort: Some(ReasoningEffort::High),
+            plan: true,
         }
     }
 
