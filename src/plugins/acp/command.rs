@@ -39,7 +39,7 @@ const ANSWER_CAP: usize = super::TOOL_OUTPUT_CAP * 4;
 /// The commands an ACP session advertises: every row of the table and every
 /// plugin command this surface runs, with the argument hint as the input hint.
 /// `/providers` is listed too, so a client treats it as the command it is.
-pub(super) fn available_commands() -> Vec<AvailableCommand> {
+pub(super) fn available_commands(cwd: &std::path::Path) -> Vec<AvailableCommand> {
     let mut commands: Vec<AvailableCommand> = crate::commands::available(Surface::Acp)
         .into_iter()
         .map(|row| {
@@ -57,7 +57,45 @@ pub(super) fn available_commands() -> Vec<AvailableCommand> {
         alias.name = "providers".into();
         commands.push(alias);
     }
+    // The user's own `/commands` (global, then the project's), marked in `_meta` because a
+    // prompt naming one is expanded and goes to the model, where a built-in is answered here.
+    let mut custom = serde_json::Map::new();
+    custom.insert("custom".into(), serde_json::Value::Bool(true));
+    for command in crate::commands::load(cwd) {
+        if commands.iter().any(|c| c.name == command.name) {
+            continue;
+        }
+        let mut row = AvailableCommand::new(
+            command.name.clone(),
+            command.description.clone().unwrap_or_default(),
+        )
+        .meta(custom.clone());
+        if command.expects_args() {
+            row = row.input(AvailableCommandInput::Unstructured(
+                UnstructuredCommandInput::new("[args]"),
+            ));
+        }
+        commands.push(row);
+    }
     commands
+}
+
+/// The name in a `/name ...` prompt that nothing runs: not a command of this build, not one of
+/// the user's, and not a path on this machine (`/tmp what is here` is a prompt). Answered as
+/// unknown rather than sent to the model as text it was never meant to read.
+pub(super) fn unknown_command<'a>(
+    text: &'a str,
+    custom: &[crate::commands::CustomCommand],
+) -> Option<&'a str> {
+    let name = text.trim().strip_prefix('/')?.split_whitespace().next()?;
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+    (plain
+        && !crate::commands::is_known(name)
+        && !custom.iter().any(|c| c.name == name)
+        && !std::path::Path::new("/").join(name).exists())
+    .then_some(name)
 }
 
 /// The command line in a prompt, when the prompt is one: a `/` followed by a
@@ -606,9 +644,39 @@ mod tests {
         assert_eq!(command_line("/"), None);
     }
 
+    /// A `/name` no command, custom command or path answers to is unknown; the rest are not.
+    #[test]
+    fn unknown_commands_are_the_ones_nothing_runs() {
+        let custom = vec![crate::commands::CustomCommand {
+            name: "deploy".into(),
+            description: None,
+            template: "deploy $ARGUMENTS".into(),
+            path: std::path::PathBuf::from("deploy.md"),
+            pi_syntax: false,
+        }];
+        assert_eq!(unknown_command("/zzzfoo", &custom), Some("zzzfoo"));
+        assert_eq!(unknown_command("/context please", &custom), Some("context"));
+        assert_eq!(unknown_command("/deploy prod", &custom), None);
+        assert_eq!(
+            unknown_command("/login xai", &custom),
+            None,
+            "known, refused by name later"
+        );
+        assert_eq!(
+            unknown_command("/tmp what is here", &custom),
+            None,
+            "a path"
+        );
+        assert_eq!(unknown_command("/etc/hosts is wrong", &custom), None);
+        assert_eq!(unknown_command("what does /zzz do", &custom), None);
+    }
+
     #[test]
     fn the_advertised_commands_are_what_acp_runs() {
-        let names: Vec<String> = available_commands().into_iter().map(|c| c.name).collect();
+        let names: Vec<String> = available_commands(std::path::Path::new("/nonexistent"))
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
         for name in [
             "model",
             "effort",
@@ -635,7 +703,7 @@ mod tests {
                 "/{name} advertised: {names:?}"
             );
         }
-        let effort = available_commands()
+        let effort = available_commands(std::path::Path::new("/nonexistent"))
             .into_iter()
             .find(|c| c.name == "effort")
             .expect("effort");

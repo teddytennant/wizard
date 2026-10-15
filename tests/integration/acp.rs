@@ -892,18 +892,18 @@ fn acp_help_and_usage_answer_without_a_model_call() {
     );
 }
 
-/// A slash word this build does not know is an ordinary prompt.
+/// A path is an ordinary prompt, slash and all.
 #[test]
-fn acp_unknown_slash_command_goes_to_the_model() {
+fn acp_a_path_goes_to_the_model() {
     let mut acp = AcpSession::start("unknown");
-    let (stop, updates) = acp.prompt("/frobnicate the widget");
+    let (stop, updates) = acp.prompt("/etc/hosts is wrong");
     assert_eq!(stop, "end_turn");
     assert!(said(&updates).contains("the model answered"), "{updates:?}");
     let turns = acp.model_turns();
     assert!(
         turns
             .iter()
-            .any(|body| body.contains("/frobnicate the widget")),
+            .any(|body| body.contains("/etc/hosts is wrong")),
         "the prompt reached the model as typed: {turns:?}"
     );
 }
@@ -953,4 +953,29 @@ fn acp_api_key_sign_in_makes_its_provider_active() {
         serde_json::json!({ "methodId": "no-such-method" }),
     );
     assert!(reply.get("error").is_some(), "{reply}");
+}
+
+/// A project's own `/command` expands over ACP as it does in `-p`, and so does an `@file`
+/// reference; a `/name` nothing runs is answered without a model call.
+#[test]
+fn acp_expands_custom_commands_and_answers_unknown_ones() {
+    let mut acp = AcpSession::start("custom");
+    let commands = acp._home.0.join(".wizard/commands");
+    std::fs::create_dir_all(&commands).expect("commands dir");
+    std::fs::write(commands.join("greet.md"), "Say hello to $ARGUMENTS warmly.").expect("write");
+    std::fs::write(acp._home.0.join("notes.txt"), "the secret word is plum").expect("write");
+
+    let (_, updates) = acp.prompt("/zzzfoo now");
+    assert_eq!(said(&updates), "Unknown slash command: zzzfoo");
+    assert!(acp.model_turns().is_empty(), "no model call for it");
+
+    acp.prompt("/greet bob");
+    let turns = acp.model_turns();
+    let sent = turns.last().expect("a model turn");
+    assert!(sent.contains("Say hello to bob warmly."), "{sent}");
+    assert!(!sent.contains("/greet bob"), "{sent}");
+
+    acp.prompt("what is in @notes.txt");
+    let turns = acp.model_turns();
+    assert!(turns.last().expect("a model turn").contains("plum"));
 }

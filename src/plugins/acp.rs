@@ -176,11 +176,12 @@ pub async fn run(config: Config) -> Result<()> {
             async move |args: NewSessionRequest,
                         responder: Responder<NewSessionResponse>,
                         cx: ConnectionTo<Client>| {
+                let cwd = args.cwd.clone();
                 match open_session(&new_session_state, args).await {
                     Ok(response) => {
                         let id = response.session_id.clone();
                         responder.respond(response)?;
-                        advertise_commands(&cx, id)
+                        advertise_commands(&cx, id, &cwd)
                     }
                     Err(err) => responder.respond_with_error(err),
                 }
@@ -207,10 +208,11 @@ pub async fn run(config: Config) -> Result<()> {
                         responder: Responder<LoadSessionResponse>,
                         cx: ConnectionTo<Client>| {
                 let id = args.session_id.clone();
+                let cwd = args.cwd.clone();
                 match load_session(&load_session_state, args, &cx).await {
                     Ok(response) => {
                         responder.respond(response)?;
-                        advertise_commands(&cx, id)
+                        advertise_commands(&cx, id, &cwd)
                     }
                     Err(err) => responder.respond_with_error(err),
                 }
@@ -411,8 +413,12 @@ struct SessionEntry {
 /// Tell the client which slash commands a session runs. Sent after the
 /// `session/new` or `session/load` answer, so the client knows the session id
 /// it belongs to.
-fn advertise_commands(connection: &ConnectionTo<Client>, id: SessionId) -> Result<(), acp::Error> {
-    let update = AvailableCommandsUpdate::new(command::available_commands());
+fn advertise_commands(
+    connection: &ConnectionTo<Client>,
+    id: SessionId,
+    cwd: &Path,
+) -> Result<(), acp::Error> {
+    let update = AvailableCommandsUpdate::new(command::available_commands(cwd));
     connection.send_notification(SessionNotification::new(
         id,
         SessionUpdate::AvailableCommandsUpdate(update),
@@ -796,6 +802,27 @@ async fn run_prompt(
 
     // Short borrow of the sessions map: clone out the agent cell and cancel
     // handle, then release it so `cancel` can run during the turn.
+    let cwd = {
+        let sessions = state.sessions.lock().await;
+        let entry = sessions
+            .get(session_id.0.as_ref())
+            .ok_or_else(acp::Error::invalid_params)?;
+        entry.cwd.clone()
+    };
+    // The user's `/commands` expand here as they do in the terminal and in `-p`, and so do
+    // `@file` references; a `/name` nothing runs is answered without a model call.
+    let custom = crate::commands::load(&cwd);
+    if let Some(name) = command::unknown_command(&text, &custom) {
+        connection.send_notification(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(format!(
+                "Unknown slash command: {name}"
+            )))),
+        ))?;
+        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+    }
+    let prepared = crate::commands::preprocess(&text, &custom, &cwd);
+
     let (agent_cell, cancel) = {
         let mut sessions = state.sessions.lock().await;
         let entry = sessions
@@ -862,7 +889,10 @@ async fn run_prompt(
         };
         // Stream while the turn runs — the bounded channel back-pressures, so
         // draining concurrently is required, not optional.
-        let (result, ()) = tokio::join!(agent.run_turn(&text, events_tx), collector);
+        let (result, ()) = tokio::join!(
+            agent.run_turn_with_images(&prepared.text, prepared.images, events_tx),
+            collector
+        );
         drop(translator);
         result
     };
