@@ -131,14 +131,18 @@ impl AcpSurface<'_> {
             ));
         }
         let mut lines = String::from("configured providers:");
+        // marked in words: a client renders the answer as markdown, and `* ` is a bullet there
         for provider in &self.base.providers {
-            let marker = if &provider.name == active { "* " } else { "  " };
+            let here = if &provider.name == active {
+                " (this session)"
+            } else {
+                ""
+            };
             lines.push_str(&format!(
-                "\n{marker}{} ({}) {} @ {}",
+                "\n  {} ({}) {} @ {}{here}",
                 provider.name, provider.kind, provider.model, provider.base_url
             ));
         }
-        lines.push_str("\n(* = this session)");
         self.say(lines);
     }
 
@@ -212,7 +216,6 @@ impl CommandSurface for AcpSurface<'_> {
 
     fn plan(&self) -> PlanState {
         PlanState {
-            plan: self.agent.plan_mode(),
             omakase: self.agent.omakase(),
         }
     }
@@ -549,6 +552,7 @@ impl CommandSurface for AcpSurface<'_> {
             model: self.selection.model.clone(),
             mode: self.selection.mode,
             effort: self.selection.effort,
+            plan: self.agent.plan_mode(),
         };
         if let Err(err) = handoff.save() {
             tracing::warn!("acp: saving the /ui handoff: {err:#}");
