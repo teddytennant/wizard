@@ -346,7 +346,7 @@ jobs:
             fi
             echo "$bin has no PT_INTERP: genuinely static."
           done
-          test "$found" -eq 6
+          test "$found" -eq 7
 
       - name: Smoke test the packaged binary
         if: matrix.native
