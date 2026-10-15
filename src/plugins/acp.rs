@@ -1164,6 +1164,14 @@ impl Translator {
                     ToolCallId::new(id),
                     fields,
                 )));
+                // exit_plan only succeeds by leaving plan mode, approved or by omakase. Say so
+                // the way `/plan` does, or a client that tracks plan mode from those notices
+                // keeps showing it while the agent writes.
+                if name == crate::tools::plan::EXIT_PLAN_TOOL_NAME && !output.is_error {
+                    self.send(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                        ContentBlock::from("[wizard] plan mode off".to_string()),
+                    )));
+                }
             }
             AgentEvent::Error(message) | AgentEvent::Notice(message) => {
                 self.send(SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -1516,6 +1524,46 @@ mod tests {
         assert!(verdict.try_recv().is_err(), "nobody answered yet");
         assert!(gate.answer(PlanVerdict::reject("no")));
         assert!(!verdict.try_recv().expect("the verdict").approved);
+    }
+
+    /// Leaving plan mode through exit_plan is announced like `/plan off`; a plan that was
+    /// sent back leaves plan mode on and says nothing.
+    #[test]
+    fn an_approved_plan_says_plan_mode_is_off() {
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        let mut translator = Translator {
+            session_id: SessionId::new("session-1"),
+            updates,
+            next_call_id: Arc::new(AtomicU64::new(1)),
+            open_calls: HashMap::new(),
+            ask: true,
+        };
+        let mut texts = |output: crate::tools::ToolOutput| {
+            translator.handle(AgentEvent::ToolStarted {
+                name: crate::tools::plan::EXIT_PLAN_TOOL_NAME.to_string(),
+                args: serde_json::json!({ "plan": "1. edit main.rs" }),
+            });
+            translator.handle(AgentEvent::ToolFinished {
+                name: crate::tools::plan::EXIT_PLAN_TOOL_NAME.to_string(),
+                output,
+            });
+            let mut texts = Vec::new();
+            while let Ok(Outgoing::Update(n)) = rx.try_recv() {
+                if let SessionUpdate::AgentMessageChunk(chunk) = n.update {
+                    if let ContentBlock::Text(t) = chunk.content {
+                        texts.push(t.text);
+                    }
+                }
+            }
+            texts
+        };
+        assert_eq!(
+            texts(crate::tools::ToolOutput::ok(
+                "Plan approved — proceed to execute it."
+            )),
+            ["[wizard] plan mode off"]
+        );
+        assert!(texts(crate::tools::ToolOutput::error("the plan was not accepted")).is_empty());
     }
 
     #[test]
