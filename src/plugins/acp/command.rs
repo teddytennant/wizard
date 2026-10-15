@@ -57,25 +57,50 @@ pub(super) fn available_commands(cwd: &std::path::Path) -> Vec<AvailableCommand>
         alias.name = "providers".into();
         commands.push(alias);
     }
-    // The user's own `/commands` (global, then the project's), marked in `_meta` because a
-    // prompt naming one is expanded and goes to the model, where a built-in is answered here.
+    // The user's own `/commands` (global, then the project's) and the skills, marked in
+    // `_meta` because a prompt naming one goes to the model, where a built-in is answered here.
     let mut custom = serde_json::Map::new();
     custom.insert("custom".into(), serde_json::Value::Bool(true));
+    let home = Config::wizard_dir().ok().map(|dir| dir.join("commands"));
     for command in crate::commands::load(cwd) {
         if commands.iter().any(|c| c.name == command.name) {
             continue;
         }
-        let mut row = AvailableCommand::new(
-            command.name.clone(),
-            command.description.clone().unwrap_or_default(),
-        )
-        .meta(custom.clone());
+        let first_line = || {
+            command
+                .template
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .trim_start_matches('#')
+                .trim()
+                .to_string()
+        };
+        let whose = match &home {
+            Some(home) if command.path.starts_with(home) => "user",
+            _ => "project",
+        };
+        let description = format!(
+            "{} ({whose})",
+            command.description.clone().unwrap_or_else(first_line)
+        );
+        let mut row = AvailableCommand::new(command.name.clone(), description).meta(custom.clone());
         if command.expects_args() {
             row = row.input(AvailableCommandInput::Unstructured(
                 UnstructuredCommandInput::new("[args]"),
             ));
         }
         commands.push(row);
+    }
+    let mut skill = custom.clone();
+    skill.insert("skill".into(), serde_json::Value::Bool(true));
+    for loaded in crate::agent::load_skills() {
+        if commands.iter().any(|c| c.name == loaded.name) {
+            continue;
+        }
+        let description = loaded.meta.description.clone().unwrap_or_default();
+        commands.push(AvailableCommand::new(loaded.name, description).meta(skill.clone()));
     }
     commands
 }
@@ -94,6 +119,7 @@ pub(super) fn unknown_command<'a>(
     (plain
         && !crate::commands::is_known(name)
         && !custom.iter().any(|c| c.name == name)
+        && !crate::agent::load_skills().iter().any(|s| s.name == name)
         && !std::path::Path::new("/").join(name).exists())
     .then_some(name)
 }
