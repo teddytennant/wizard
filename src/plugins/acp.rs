@@ -105,6 +105,7 @@ pub async fn run(config: Config) -> Result<()> {
         next_call_id: Arc::new(AtomicU64::new(0)),
         catalog: std::sync::Mutex::new(catalog),
         catalog_ready,
+        answer_unknown: std::sync::atomic::AtomicBool::new(false),
     });
     if refresh_due {
         let state = Arc::clone(&state);
@@ -126,12 +127,21 @@ pub async fn run(config: Config) -> Result<()> {
     let cancel_state = Arc::clone(&state);
     let exit_state = Arc::clone(&state);
     let auth_state = Arc::clone(&state);
+    let init_state = Arc::clone(&state);
 
     let serve = AcpRole
         .builder()
         .name("wizard")
         .on_receive_request(
             async move |args: InitializeRequest, responder: Responder<InitializeResponse>, _cx| {
+                let unknown = args
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("wizard"))
+                    .and_then(|wizard| wizard.get("unknownCommands"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                init_state.answer_unknown.store(unknown, Ordering::Relaxed);
                 // Echo the client's protocol version; advertise Wizard with
                 // text prompts, the sign-ins `auth` can run, no client-side
                 // fs/terminal needed (Wizard does its own I/O), `session/load`,
@@ -365,6 +375,9 @@ struct State {
     /// Flips to true once a startup refresh of `catalog` is done (or was not
     /// needed).
     catalog_ready: watch::Receiver<bool>,
+    /// The client asked, in `initialize`'s `_meta` (`wizard.unknownCommands`), for a `/name`
+    /// nothing runs to be answered as unknown. Other clients send it to the model as before.
+    answer_unknown: std::sync::atomic::AtomicBool,
 }
 
 impl State {
@@ -812,7 +825,8 @@ async fn run_prompt(
     // The user's `/commands` expand here as they do in the terminal and in `-p`, and so do
     // `@file` references; a `/name` nothing runs is answered without a model call.
     let custom = crate::commands::load(&cwd);
-    if let Some(name) = command::unknown_command(&text, &custom) {
+    let answer_unknown = state.answer_unknown.load(Ordering::Relaxed);
+    if let Some(name) = command::unknown_command(&text, &custom).filter(|_| answer_unknown) {
         connection.send_notification(SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(format!(

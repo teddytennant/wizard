@@ -142,9 +142,19 @@ Not run over ACP, and refused by name if typed: `/clear` (start a new thread
 instead; the client owns the session id), `/resume` and `/resume-claude` (use
 the client's thread history), `/login`, `/settings`, `/dashboard`, `/vim`,
 `/ui`, `/view`, `/quit`, `/exit`. Plugin commands are advertised unless the
-plugin restricts them to other surfaces. Any other `/word`, including custom
-commands from `.wizard/commands/` and paths like `/etc/hosts`, goes to the model
-as typed.
+plugin restricts them to other surfaces.
+
+Custom commands from `~/.wizard/commands/` and the project's `.wizard/commands/`
+are expanded before the prompt goes to the model, and so are `@file`
+references, as in the terminal and `wizard -p`. Custom commands and skills are
+advertised with `_meta.custom: true` (skills also `_meta.skill: true`), since a
+prompt naming one is a model turn rather than a command answered here.
+
+Any other `/word`, and paths like `/etc/hosts`, go to the model as typed. A
+client can ask for the other behavior: with `"_meta": {"wizard":
+{"unknownCommands": true}}` in `initialize`, a `/word` that is not a command,
+custom command, skill or path gets `Unknown slash command: <word>` as the
+answer, with no model call.
 
 ## Protocol and scope
 

@@ -562,6 +562,11 @@ struct AcpSession {
 
 impl AcpSession {
     fn start(tag: &str) -> Self {
+        Self::start_with(tag, serde_json::Value::Null)
+    }
+
+    /// [`Self::start`] with `meta` as `initialize`'s `_meta`.
+    fn start_with(tag: &str, meta: serde_json::Value) -> Self {
         let home = TempDir(
             std::env::temp_dir().join(format!("wizard-acp-itest-{tag}-{}", std::process::id())),
         );
@@ -609,7 +614,7 @@ impl AcpSession {
         acp.initialized = acp
             .call(
                 "initialize",
-                serde_json::json!({"protocolVersion": 1, "clientCapabilities": {}}),
+                serde_json::json!({"protocolVersion": 1, "clientCapabilities": {}, "_meta": meta}),
             )
             .0;
         let cwd = acp._home.0.display().to_string();
@@ -892,6 +897,20 @@ fn acp_help_and_usage_answer_without_a_model_call() {
     );
 }
 
+/// A client that did not ask for unknown commands to be answered gets the old behavior: the
+/// prompt goes to the model as typed.
+#[test]
+fn acp_unknown_slash_command_goes_to_the_model_unless_asked() {
+    let mut acp = AcpSession::start("unknown-default");
+    let (_, updates) = acp.prompt("/frobnicate the widget");
+    assert!(said(&updates).contains("the model answered"), "{updates:?}");
+    assert!(
+        acp.model_turns()
+            .iter()
+            .any(|body| body.contains("/frobnicate the widget"))
+    );
+}
+
 /// A path is an ordinary prompt, slash and all.
 #[test]
 fn acp_a_path_goes_to_the_model() {
@@ -959,7 +978,10 @@ fn acp_api_key_sign_in_makes_its_provider_active() {
 /// reference; a `/name` nothing runs is answered without a model call.
 #[test]
 fn acp_expands_custom_commands_and_answers_unknown_ones() {
-    let mut acp = AcpSession::start("custom");
+    let mut acp = AcpSession::start_with(
+        "custom",
+        serde_json::json!({"wizard": {"unknownCommands": true}}),
+    );
     let commands = acp._home.0.join(".wizard/commands");
     std::fs::create_dir_all(&commands).expect("commands dir");
     std::fs::write(commands.join("greet.md"), "Say hello to $ARGUMENTS warmly.").expect("write");
