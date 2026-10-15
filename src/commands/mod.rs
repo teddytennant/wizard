@@ -1705,6 +1705,9 @@ impl CustomCommand {
     pub fn expand(&self, args: &str) -> String {
         if self.pi_syntax {
             expand_pi_template(&self.template, args)
+        } else if !self.expects_args() && !args.trim().is_empty() {
+            // a template with no placeholder still gets what was typed after it
+            format!("{}\n\nARGUMENTS: {}", self.template.trim_end(), args.trim())
         } else {
             expand_template(&self.template, args)
         }
@@ -2710,13 +2713,31 @@ mod tests {
         assert_eq!(expand_custom("/pi", &commands).as_deref(), Some("Go home "));
         assert_eq!(
             expand_custom("/plain now", &commands).as_deref(),
-            Some("Go ${1:-home} $@")
+            Some("Go ${1:-home} $@\n\nARGUMENTS: now")
         );
         let pi = commands.iter().find(|c| c.name == "pi").unwrap();
         assert!(pi.pi_syntax && pi.expects_args());
         let plain = commands.iter().find(|c| c.name == "plain").unwrap();
         assert!(!plain.pi_syntax && !plain.expects_args());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Arguments typed after a command whose template has no placeholder are appended, so
+    /// they are not lost.
+    #[test]
+    fn arguments_without_a_placeholder_are_appended() {
+        let command = CustomCommand {
+            name: "review".into(),
+            description: None,
+            template: "Review the staged diff.\n".into(),
+            path: PathBuf::from("review.md"),
+            pi_syntax: false,
+        };
+        assert_eq!(command.expand(""), "Review the staged diff.\n");
+        assert_eq!(
+            command.expand("focus on errors"),
+            "Review the staged diff.\n\nARGUMENTS: focus on errors"
+        );
     }
 
     #[test]
