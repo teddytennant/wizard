@@ -494,6 +494,10 @@ async fn build_session_agent(
     agent.set_command_dispatch(CommandDispatch::None);
     if let Some(old) = replacing {
         agent.usage().carry_session(old.usage());
+        // plan mode and omakase live in the agent, not the selection: a model switch must not
+        // drop them while the client still shows them
+        agent.set_plan_mode(old.plan_mode());
+        agent.set_omakase(old.omakase());
     }
     let cancel = agent.cancel_handle();
     Ok((Arc::new(Mutex::new(agent)), cancel))
