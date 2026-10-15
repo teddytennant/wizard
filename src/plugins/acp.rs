@@ -1553,10 +1553,10 @@ mod tests {
             });
             let mut texts = Vec::new();
             while let Ok(Outgoing::Update(n)) = rx.try_recv() {
-                if let SessionUpdate::AgentMessageChunk(chunk) = n.update {
-                    if let ContentBlock::Text(t) = chunk.content {
-                        texts.push(t.text);
-                    }
+                if let SessionUpdate::AgentMessageChunk(chunk) = n.update
+                    && let ContentBlock::Text(t) = chunk.content
+                {
+                    texts.push(t.text);
                 }
             }
             texts
