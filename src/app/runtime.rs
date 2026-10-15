@@ -70,6 +70,7 @@ pub async fn run_tui(
     // Back from a full look: its model and mode, plan mode, and its conversation below.
     let handed_over = handoff.as_ref().map(|handoff| handoff.overlay(&mut config));
     let handed_plan = handoff.as_ref().is_some_and(|handoff| handoff.plan);
+    let handed_omakase = handoff.as_ref().is_some_and(|handoff| handoff.omakase);
     let resume = match handoff.and_then(|handoff| handoff.session) {
         Some(id) => SessionTarget::Id(id),
         None if cli.resume => SessionTarget::Latest,
@@ -157,7 +158,7 @@ pub async fn run_tui(
     // human review modal. `set_omakase(true)` turns plan mode on by itself,
     // which is what makes `omakase = true` in config.toml — with no `--plan`
     // and no `plan_first` — land the agent in the mode the badge advertises.
-    if config.omakase
+    if (config.omakase || handed_omakase)
         && let Some(agent) = agent_slot.as_mut()
     {
         agent.set_omakase(true);
@@ -196,7 +197,8 @@ pub async fn run_tui(
         });
 
     let mut app = App::new(config);
-    app.plan_mode |= handed_plan;
+    app.plan_mode |= handed_plan || handed_omakase;
+    app.omakase |= handed_omakase;
     app.handed_over = handed_over;
     app.project_root = project_root.clone();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
@@ -1335,6 +1337,7 @@ pub async fn run_tui(
         mode: agent.mode(),
         effort: app.config.reasoning_effort,
         plan: agent.plan_mode(),
+        omakase: agent.omakase(),
     });
     Ok(app
         .look

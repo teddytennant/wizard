@@ -4924,6 +4924,7 @@ fn a_handed_over_session_never_lands_in_config_toml() {
         mode: Mode::Sovereign,
         effort: None,
         plan: false,
+        omakase: false,
     };
     let overlay = handoff.overlay(&mut config);
     let mut app = App::new(config);

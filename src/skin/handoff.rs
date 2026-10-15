@@ -26,6 +26,9 @@ pub struct Handoff {
     /// Plan mode was on: the next look starts in it too.
     #[serde(default)]
     pub plan: bool,
+    /// Omakase was on, plan mode's chef's-choice flavor.
+    #[serde(default)]
+    pub omakase: bool,
 }
 
 impl Handoff {
@@ -160,6 +163,7 @@ mod tests {
             mode: Mode::Sovereign,
             effort: Some(ReasoningEffort::High),
             plan: true,
+            omakase: false,
         }
     }
 

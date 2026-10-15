@@ -219,6 +219,7 @@ mod tests {
             mode: crate::config::Mode::Chat,
             effort: None,
             plan: false,
+            omakase: false,
         };
         run(Skin::Jcode, Some(&handoff))
             .await

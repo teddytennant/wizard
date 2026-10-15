@@ -592,6 +592,7 @@ impl CommandSurface for AcpSurface<'_> {
             mode: self.selection.mode,
             effort: self.selection.effort,
             plan: self.agent.plan_mode(),
+            omakase: self.agent.omakase(),
         };
         if let Err(err) = handoff.save() {
             tracing::warn!("acp: saving the /ui handoff: {err:#}");
