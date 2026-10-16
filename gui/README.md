@@ -35,6 +35,10 @@ Settings, General, Keyboard has two switches, both off by default and independen
 
 Screenshots are in [docs/screenshots/power-user](docs/screenshots/power-user).
 
+## Upstream sources
+
+gui/ follows Zeron upstream as a whole, including the parts Wizard does not ship: the iOS app (`apps/ios`) and its Rust core (`crates/mobile`, `crates/client`, `crates/text`, built by `scripts/ios`), the zeron.sh landing and redirect sites (`apps/landing`, `apps/www-redirect`), the Cloudflare edge worker (`edge`), Zeron's own CI workflows (`gui/.github`, which GitHub does not run from here), the translated READMEs, and the doc screenshots and media. They stay as upstream wrote them, so each sync is a plain merge. Wizard's releases build only the desktop app.
+
 ## Voice
 
 When Wizard is signed in to xAI on this machine (`wizard --login xai`), the microphone button in the sidebar footer starts a call with Grok Voice 3.0. You talk; it answers out loud and works your chats for you: it lists and reads them, starts new ones (Wizard unless you name another agent), sends them messages and checks back on them. Esc hides the call screen without ending the call, M mutes, and the red button hangs up. Settings, Voice picks its voice (Eve, Ara, Rex, Sal or Leo).
