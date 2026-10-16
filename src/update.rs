@@ -2007,6 +2007,10 @@ mod tests {
         for group in ["apps", "crates"] {
             for entry in std::fs::read_dir(gui.join(group)).unwrap() {
                 let manifest = entry.unwrap().path().join("Cargo.toml");
+                // apps/ also holds upstream's iOS app and web sites.
+                if !manifest.is_file() {
+                    continue;
+                }
                 let text = std::fs::read_to_string(&manifest).unwrap();
                 assert!(
                     text.lines().any(|line| line == "version.workspace = true"),
