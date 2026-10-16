@@ -2000,6 +2000,76 @@ async fn reasoning_tokens_reach_the_usage_record() {
     );
 }
 
+/// grok-4.7 is not in the price table, so without xAI's own bill the turn
+/// lands on the fallback rate. With it, the record carries the bill.
+#[tokio::test]
+async fn a_billed_cost_wins_over_the_estimate_in_the_usage_record() {
+    let tmp = TempDir::new();
+    let mut config = Config::default();
+    config.providers = vec![crate::config::ProviderConfig {
+        name: "xai".to_string(),
+        kind: crate::config::ProviderKind::XAI,
+        base_url: "https://api.x.ai/v1".to_string(),
+        model: "grok-4.7".to_string(),
+        api_key_env: None,
+        gguf_path: None,
+        usd_per_mtok_in: None,
+        usd_per_mtok_out: None,
+        vision: None,
+        model_pinned: None,
+    }];
+    config.active_provider = Some("xai".to_string());
+
+    let provider = ScriptedProvider::new(vec![
+        vec![ChatChunk {
+            billed_ticks: Some(24_976_400),
+            ..usage_chunk("billed", 2_521, 672)
+        }],
+        vec![usage_chunk("estimated", 2_521, 672)],
+    ]);
+    let session = Session::create(&tmp.0).expect("create session");
+    let hooks = Arc::new(HookEngine::new(
+        Vec::new(),
+        tmp.0.clone(),
+        session.id.clone(),
+    ));
+    let mut agent = Agent::new(
+        provider,
+        ToolRegistry::new(),
+        config,
+        Vec::new(),
+        tmp.0.clone(),
+        session,
+        true,
+        hooks,
+    )
+    .expect("build agent");
+    agent.set_usage_log(Some(tmp.0.join("usage.jsonl")));
+
+    let (tx, _rx) = mpsc::channel(64);
+    agent.run_turn("go", tx).await.expect("turn ok");
+    let (tx, _rx) = mpsc::channel(64);
+    agent.run_turn("again", tx).await.expect("turn ok");
+
+    let raw = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("log written");
+    let records: Vec<crate::usage::UsageRecord> = raw
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("valid json"))
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].price_source, crate::usage::PriceSource::Billed);
+    let billed = records[0].cost_usd.expect("a priced record");
+    assert!((billed - 0.002_497_64).abs() < 1e-12, "{billed}");
+    assert!(
+        raw.lines()
+            .next()
+            .unwrap()
+            .contains(r#""price_source":"billed""#)
+    );
+    assert_eq!(records[1].price_source, crate::usage::PriceSource::Fallback);
+    assert!(records[1].cost_usd.expect("a priced record") > billed);
+}
+
 #[tokio::test]
 async fn turns_without_reported_counts_write_no_usage_records() {
     let (mut agent, _provider, tmp) = test_agent(vec![vec![final_chunk("plain")]]);
@@ -2147,6 +2217,25 @@ async fn a_compaction_pass_bills_itself_to_the_usage_log() {
         None,
         "the summarizer's prompt is not this conversation's"
     );
+}
+
+#[tokio::test]
+async fn a_compaction_pass_records_the_providers_bill() {
+    let (mut agent, _provider, tmp) = test_agent(vec![vec![ChatChunk {
+        billed_ticks: Some(12_500_000),
+        ..usage_chunk("a terse progress note", 4_000, 120)
+    }]]);
+    for i in 0..(KEEP_RECENT + 5) {
+        agent.history.push(ChatMessage::user(format!("msg {i}")));
+    }
+
+    agent.compact_now().await;
+
+    let log = std::fs::read_to_string(tmp.0.join("usage.jsonl")).expect("usage log written");
+    let record: crate::usage::UsageRecord =
+        serde_json::from_str(log.lines().next().expect("one record")).expect("valid json");
+    assert_eq!(record.price_source, crate::usage::PriceSource::Billed);
+    assert!((record.cost_usd.expect("priced") - 0.001_25).abs() < 1e-12);
 }
 
 #[tokio::test]

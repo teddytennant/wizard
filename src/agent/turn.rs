@@ -510,6 +510,9 @@ pub(super) struct StepUsage {
     /// How much of `completion` the model spent reasoning. Also a subset, for
     /// the same reason.
     pub reasoning: Option<u64>,
+    /// What the provider billed for the call, when it says. See
+    /// [`crate::llm::ChatChunk::billed_ticks`].
+    pub billed_ticks: Option<u64>,
 }
 
 impl StepUsage {
@@ -1451,6 +1454,9 @@ async fn stream(
         if !chunk.cache.is_empty() {
             streamed.usage.cache = chunk.cache;
         }
+        if chunk.billed_ticks.is_some() {
+            streamed.usage.billed_ticks = chunk.billed_ticks;
+        }
         if chunk.done {
             break;
         }
@@ -1729,6 +1735,9 @@ impl Host for TurnHost<'_> {
         self.agent
             .usage
             .record_reasoning(usage.reasoning.unwrap_or(0));
+        if let Some(ticks) = usage.billed_ticks {
+            self.agent.usage.record_billed(ticks);
+        }
         sink.usage(usage.prompt.unwrap_or(0), usage.completion.unwrap_or(0))
             .await;
     }

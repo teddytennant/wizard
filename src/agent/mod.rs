@@ -1968,6 +1968,7 @@ impl Agent {
                 cache_write: cache_write_tokens,
                 reasoning: self.usage.turn_reasoning_tokens(),
             },
+            self.usage.turn_billed_usd(),
             self.turn_routing.clone(),
         );
     }
@@ -2002,14 +2003,23 @@ impl Agent {
                 cache_write: usage.cache_write,
                 reasoning: usage.reasoning,
             },
+            usage
+                .billed_ticks()
+                .map(|ticks| ticks as f64 * crate::llm::USD_PER_TICK),
             None,
         );
     }
 
     /// Append one priced record to the JSONL usage log (when the backend
-    /// reported counts and the log is enabled). Best-effort: failures are
-    /// logged, never surfaced.
-    fn append_usage_record(&self, tokens: crate::usage::TurnTokens, routing: Option<String>) {
+    /// reported counts and the log is enabled). `billed_usd` is the
+    /// provider's own bill, when it sent one, and is recorded in place of an
+    /// estimate. Best-effort: failures are logged, never surfaced.
+    fn append_usage_record(
+        &self,
+        tokens: crate::usage::TurnTokens,
+        billed_usd: Option<f64>,
+        routing: Option<String>,
+    ) {
         if tokens.prompt == 0 && tokens.completion == 0 {
             return;
         }
@@ -2049,6 +2059,10 @@ impl Agent {
                 self_hosted: crate::usage::self_hosted(&provider.kind),
             },
         );
+        let priced = billed_usd.map_or(priced, |usd| crate::usage::PricedTurn {
+            usd,
+            source: crate::usage::PriceSource::Billed,
+        });
         let record = crate::usage::UsageRecord {
             ts: crate::usage::unix_now(),
             project: self.ctx.cwd.display().to_string(),

@@ -1024,6 +1024,9 @@ pub(crate) async fn collect_text_billed(
             if let Some(reasoning) = chunk.reasoning_eval_count {
                 tracker.record_reasoning(reasoning);
             }
+            if let Some(ticks) = chunk.billed_ticks {
+                tracker.record_billed(ticks);
+            }
         }
         if chunk.thinking {
             continue;

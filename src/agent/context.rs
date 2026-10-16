@@ -524,12 +524,22 @@ pub struct CompactUsage {
     /// Completion tokens the summarizer spent reasoning, a subset of
     /// [`Self::completion`].
     pub reasoning: u64,
+    /// What the provider billed for the calls that reported a bill.
+    billed: u64,
+    /// Calls that reported counts but no bill. Any at all and `billed` is not
+    /// the whole pass.
+    unbilled_calls: u32,
 }
 
 impl CompactUsage {
     /// Whether any backend reported anything at all.
     pub fn reported(&self) -> bool {
         self.prompt > 0 || self.completion > 0
+    }
+
+    /// The provider's bill for the whole pass, when every call reported one.
+    pub fn billed_ticks(&self) -> Option<u64> {
+        (self.reported() && self.unbilled_calls == 0).then_some(self.billed)
     }
 
     /// Fold in one model call's final chunk.
@@ -539,7 +549,13 @@ impl CompactUsage {
         completion: Option<u64>,
         cache: CacheTokens,
         reasoning: Option<u64>,
+        billed_ticks: Option<u64>,
     ) {
+        match billed_ticks {
+            Some(ticks) => self.billed = self.billed.saturating_add(ticks),
+            None if prompt.is_some() || completion.is_some() => self.unbilled_calls += 1,
+            None => {}
+        }
         self.prompt = self.prompt.saturating_add(prompt.unwrap_or(0));
         self.completion = self.completion.saturating_add(completion.unwrap_or(0));
         self.cache_read = self.cache_read.saturating_add(cache.read);
@@ -1293,6 +1309,7 @@ async fn summarize_transcript(
             chunk.eval_count,
             chunk.cache,
             chunk.reasoning_eval_count,
+            chunk.billed_ticks,
         );
         if let Some(message) = chunk.message
             && !chunk.thinking
