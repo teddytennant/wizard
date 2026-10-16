@@ -12,6 +12,23 @@ const MAX_RING_SAMPLES: usize = 38_400;
 fn ring_samples(rate: u32) -> usize {
     (rate as usize / 5).min(MAX_RING_SAMPLES)
 }
+/// Capture and echo-reference rings hold half a second: a server that
+/// delivers in bursts, or a late poll, must not overflow them.
+fn burst_ring_samples(rate: u32) -> usize {
+    (rate as usize / 2).min(MAX_RING_SAMPLES * 3)
+}
+/// A short device buffer when the device takes one. Without it a sound
+/// server may pick its own (PulseAudio's capture default is seconds), which
+/// both delays the audio and arrives in bursts larger than the rings.
+fn small_buffer(config: &cpal::SupportedStreamConfig, ms: u32) -> cpal::BufferSize {
+    let frames = config.sample_rate() * ms / 1000;
+    match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&frames) => {
+            cpal::BufferSize::Fixed(frames)
+        }
+        _ => cpal::BufferSize::Default,
+    }
+}
 #[derive(Clone, Copy)]
 struct OutputSample {
     generation: u64,
@@ -57,8 +74,8 @@ impl AudioIo {
             .map_err(|_| AudioError::Device)?;
         let input_rate = input_config.sample_rate();
         let output_rate = output_config.sample_rate();
-        let capture = Arc::new(ArrayQueue::new(ring_samples(input_rate)));
-        let reference = Arc::new(ArrayQueue::new(ring_samples(output_rate)));
+        let capture = Arc::new(ArrayQueue::new(burst_ring_samples(input_rate)));
+        let reference = Arc::new(ArrayQueue::new(burst_ring_samples(output_rate)));
         let playout = Arc::new(ArrayQueue::new(ring_samples(output_rate)));
         let failed = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
@@ -66,6 +83,14 @@ impl AudioIo {
         let generation = Arc::new(AtomicU64::new(generation));
         let ic: StreamConfig = input_config.clone().into();
         let oc: StreamConfig = output_config.clone().into();
+        let ic_small = StreamConfig {
+            buffer_size: small_buffer(&input_config, 10),
+            ..ic
+        };
+        let oc_small = StreamConfig {
+            buffer_size: small_buffer(&output_config, 20),
+            ..oc
+        };
         if ic.channels == 0 || oc.channels == 0 || ic.channels > 8 || oc.channels > 8 {
             return Err(AudioError::Device);
         }
@@ -74,51 +99,54 @@ impl AudioIo {
             return Err(AudioError::Device);
         }
         macro_rules! input {
-            ($t:ty) => {
+            ($t:ty, $config:expr) => {
                 input_stream::<$t>(
                     input_device,
-                    ic,
+                    $config,
                     capture.clone(),
                     failed.clone(),
                     muted.clone(),
-                )?
+                )
             };
         }
         macro_rules! output {
-            ($t:ty) => {
+            ($t:ty, $config:expr) => {
                 output_stream::<$t>(
                     output_device,
-                    oc,
+                    $config,
                     playout.clone(),
                     reference.clone(),
                     failed.clone(),
                     generation.clone(),
                     gain.clone(),
-                )?
+                )
             };
         }
-        let input = match input_config.sample_format() {
-            SampleFormat::F32 => input!(f32),
-            SampleFormat::F64 => input!(f64),
-            SampleFormat::I16 => input!(i16),
-            SampleFormat::U16 => input!(u16),
-            SampleFormat::I32 => input!(i32),
-            SampleFormat::U32 => input!(u32),
-            SampleFormat::I8 => input!(i8),
-            SampleFormat::U8 => input!(u8),
-            _ => return Err(AudioError::Device),
+        let build_input = |config: StreamConfig| match input_config.sample_format() {
+            SampleFormat::F32 => input!(f32, config),
+            SampleFormat::F64 => input!(f64, config),
+            SampleFormat::I16 => input!(i16, config),
+            SampleFormat::U16 => input!(u16, config),
+            SampleFormat::I32 => input!(i32, config),
+            SampleFormat::U32 => input!(u32, config),
+            SampleFormat::I8 => input!(i8, config),
+            SampleFormat::U8 => input!(u8, config),
+            _ => Err(AudioError::Device),
         };
-        let output = match output_config.sample_format() {
-            SampleFormat::F32 => output!(f32),
-            SampleFormat::F64 => output!(f64),
-            SampleFormat::I16 => output!(i16),
-            SampleFormat::U16 => output!(u16),
-            SampleFormat::I32 => output!(i32),
-            SampleFormat::U32 => output!(u32),
-            SampleFormat::I8 => output!(i8),
-            SampleFormat::U8 => output!(u8),
-            _ => return Err(AudioError::Device),
+        let build_output = |config: StreamConfig| match output_config.sample_format() {
+            SampleFormat::F32 => output!(f32, config),
+            SampleFormat::F64 => output!(f64, config),
+            SampleFormat::I16 => output!(i16, config),
+            SampleFormat::U16 => output!(u16, config),
+            SampleFormat::I32 => output!(i32, config),
+            SampleFormat::U32 => output!(u32, config),
+            SampleFormat::I8 => output!(i8, config),
+            SampleFormat::U8 => output!(u8, config),
+            _ => Err(AudioError::Device),
         };
+        // A device that refuses the short buffer still opens with its own.
+        let input = build_input(ic_small).or_else(|_| build_input(ic))?;
+        let output = build_output(oc_small).or_else(|_| build_output(oc))?;
         Ok(Self {
             input,
             output,
@@ -132,7 +160,7 @@ impl AudioIo {
             input_rate,
             output_rate,
             output_resampler,
-            scratch: Vec::with_capacity(MAX_RING_SAMPLES),
+            scratch: Vec::with_capacity(MAX_RING_SAMPLES * 3),
         })
     }
     pub fn start(&self) -> Result<(), AudioError> {

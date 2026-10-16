@@ -102,11 +102,7 @@ impl EchoGate {
                 Vec::new()
             };
             out.push(frame.to_vec());
-            self.hold = if speech {
-                HOLD_FRAMES
-            } else {
-                self.hold - 1
-            };
+            self.hold = if speech { HOLD_FRAMES } else { self.hold - 1 };
             return GateOutput::Pass(out);
         }
         // Gate shut: this is (mostly) echo. Learn how much comes back, never
@@ -118,7 +114,12 @@ impl EchoGate {
         }
         self.ratios.push_back(ratio);
         if self.ratios.len() >= COUPLING_MIN {
-            self.coupling = self.ratios.iter().copied().fold(0.0, f32::max).clamp(0.0, 2.0);
+            self.coupling = self
+                .ratios
+                .iter()
+                .copied()
+                .fold(0.0, f32::max)
+                .clamp(0.0, 2.0);
         }
         if self.preroll.len() == PREROLL_FRAMES {
             self.preroll.pop_front();

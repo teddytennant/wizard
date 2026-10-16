@@ -80,10 +80,7 @@ mod pulse {
             .filter(|s| real(s))
             // A headset's own microphone, then the highest-priority input.
             .max_by_key(|s| {
-                let bluetooth = s
-                    .name
-                    .to_str()
-                    .is_ok_and(|n| n.starts_with("bluez_input."));
+                let bluetooth = s.name.to_str().is_ok_and(|n| n.starts_with("bluez_input."));
                 (bluetooth, priority(s))
             })
             .and_then(name)
@@ -95,7 +92,12 @@ mod pulse {
         use pulseaudio::protocol::port_info::{PortDirection, PortInfo};
         use std::ffi::CString;
 
-        fn source(name: &str, monitor: bool, available: PortAvailable, priority: u32) -> SourceInfo {
+        fn source(
+            name: &str,
+            monitor: bool,
+            available: PortAvailable,
+            priority: u32,
+        ) -> SourceInfo {
             SourceInfo {
                 name: CString::new(name).unwrap(),
                 monitor_of_sink_index: monitor.then_some(1),
@@ -117,8 +119,18 @@ mod pulse {
         fn a_monitor_default_falls_to_the_plugged_in_microphone() {
             let sources = [
                 source("bluez_output.AA.1.monitor", true, PortAvailable::Unknown, 0),
-                source("alsa_input.HiFi__Mic2__source", false, PortAvailable::No, 200),
-                source("alsa_input.HiFi__Mic1__source", false, PortAvailable::Unknown, 100),
+                source(
+                    "alsa_input.HiFi__Mic2__source",
+                    false,
+                    PortAvailable::No,
+                    200,
+                ),
+                source(
+                    "alsa_input.HiFi__Mic1__source",
+                    false,
+                    PortAvailable::Unknown,
+                    100,
+                ),
             ];
             assert_eq!(
                 choose(&sources, Some("bluez_output.AA.1.monitor")).as_deref(),
@@ -129,7 +141,12 @@ mod pulse {
         #[test]
         fn a_real_default_wins_and_a_headset_beats_the_laptop() {
             let sources = [
-                source("alsa_input.HiFi__Mic1__source", false, PortAvailable::Unknown, 100),
+                source(
+                    "alsa_input.HiFi__Mic1__source",
+                    false,
+                    PortAvailable::Unknown,
+                    100,
+                ),
                 source("bluez_input.AA.0", false, PortAvailable::Unknown, 10),
             ];
             assert_eq!(

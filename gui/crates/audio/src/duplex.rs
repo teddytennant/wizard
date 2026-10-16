@@ -28,6 +28,9 @@ const PREBUFFER_WAIT: Duration = Duration::from_millis(60);
 const DUCK_GAIN: f32 = 0.25;
 const DUCK_HOLD: Duration = Duration::from_millis(900);
 const TICK: Duration = Duration::from_millis(5);
+/// Frames dropped right after the microphone opens: digital microphones pop
+/// as they power up, which would read as speech.
+const WARMUP_FRAMES: usize = 5;
 
 enum Command {
     Play(Vec<f32>),
@@ -144,12 +147,19 @@ impl Drop for Duplex {
 
 /// One-pole DC blocker: some built-in microphones sit far off zero, which
 /// would read as constant loudness.
+#[derive(Default)]
 struct DcBlock {
+    primed: bool,
     previous_in: f32,
     previous_out: f32,
 }
 impl DcBlock {
     fn process(&mut self, sample: f32) -> f32 {
+        // Start from the first sample, so the offset never reads as a click.
+        if !self.primed {
+            self.primed = true;
+            self.previous_in = sample;
+        }
         let out = sample - self.previous_in + 0.995 * self.previous_out;
         self.previous_in = sample;
         self.previous_out = out;
@@ -183,10 +193,7 @@ fn run(
     };
     let reference_chunk = (io.output_rate / 100).max(1) as usize;
     let mut generation = 1;
-    let mut dc = DcBlock {
-        previous_in: 0.0,
-        previous_out: 0.0,
-    };
+    let mut dc = DcBlock::default();
     let mut gate = EchoGate::default();
     let mut queue: VecDeque<f32> = VecDeque::new();
     let mut microphone: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
@@ -197,6 +204,7 @@ fn run(
     let mut waiting_since: Option<Instant> = None;
     let mut ducked_until: Option<Instant> = None;
     let mut speaker_level = 0.0f32;
+    let mut warmup = WARMUP_FRAMES;
     loop {
         loop {
             match commands.try_recv() {
@@ -274,6 +282,10 @@ fn run(
         }
         while microphone.len() >= FRAME_SAMPLES {
             let frame: Vec<f32> = microphone.drain(..FRAME_SAMPLES).collect();
+            if warmup > 0 {
+                warmup -= 1;
+                continue;
+            }
             let heard = level(&frame);
             shared.microphone.store(
                 if muted { 0.0f32 } else { heard }.to_bits(),
