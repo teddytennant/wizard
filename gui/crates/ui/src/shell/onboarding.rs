@@ -128,7 +128,9 @@ impl Onboarding {
 impl Shell {
     /// Mount onboarding the first time the app is ready on this install.
     pub(super) fn ensure_onboarding(&mut self, cx: &mut Context<Self>) {
-        if self.onboarding.is_some() || settings::current(cx).onboarding_completed {
+        // Test shells start past first run: the overlay would take every
+        // click and key the shell's own tests send.
+        if cfg!(test) || self.onboarding.is_some() || settings::current(cx).onboarding_completed {
             return;
         }
         self.onboarding = Some(Onboarding::new());

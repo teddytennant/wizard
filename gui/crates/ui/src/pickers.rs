@@ -862,6 +862,9 @@ pub struct Pickers {
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     models: HashMap<HarnessId, Loadable<Vec<Model>>>,
     model_refresh_errors: HashMap<HarnessId, String>,
+    /// This draft's model per provider, so flipping providers comes back to
+    /// the pick. Never saved: new chats start on the pinned or newest model.
+    draft_models: HashMap<HarnessId, String>,
     /// Pi answered auth_required: sign-ins on this machine it can reuse
     /// (read once per failure), and the one-click import's progress.
     pi_sign_in: Option<PiSignIn>,
@@ -1156,6 +1159,7 @@ impl Pickers {
             harnesses: Loadable::Idle,
             models: HashMap::new(),
             model_refresh_errors: HashMap::new(),
+            draft_models: HashMap::new(),
             pi_sign_in: None,
             harnesses_stale: false,
             harnesses_revalidating: false,
@@ -2203,9 +2207,10 @@ impl Pickers {
             });
         }
         if self.config.harness != Some(harness) {
-            // The harness's pinned model, or its newest, takes over via the
-            // defaults fallback; a foreign pick must not linger.
-            self.config.model = None;
+            // This draft's earlier pick on that provider, else its pinned
+            // model or its newest via the defaults fallback; a foreign pick
+            // must not linger.
+            self.config.model = self.draft_models.get(&harness).cloned();
             self.config.reasoning = None;
         }
         self.config.harness = Some(harness);
@@ -2244,6 +2249,9 @@ impl Pickers {
             // New chat: this chat only. Later chats keep starting on the
             // pinned model, or the newest one; the row's pin changes that.
             // Effort follows the model: its own remembered level, if any.
+            if let Some(harness) = self.effective_harness(cx) {
+                self.draft_models.insert(harness, model_id.clone());
+            }
             self.config.model = Some(model_id);
             self.config.reasoning = None;
         }

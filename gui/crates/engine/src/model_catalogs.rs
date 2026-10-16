@@ -316,7 +316,9 @@ mod tests {
         probe.delay.store(true, SeqCst);
         let gate = Arc::new(tokio::sync::RwLock::new(()));
         let lease = Arc::new(gate.clone().read_owned().await);
-        list_with_lease(dir.path(), probe, true, Some(lease))
+        // A plain load answers from disk and keeps probing in the background
+        // (a forced one waits for the probe instead).
+        list_with_lease(dir.path(), probe, false, Some(lease))
             .await
             .unwrap();
         assert!(

@@ -177,12 +177,19 @@ pub(crate) fn usage_resets(
 
 /// The providers Wizard GUI can sign into, in display order: (harness, name,
 /// CLI command — named in the empty-state copy, zeron settings.agents.tsx
-/// `PROVIDERS`). Wizard keeps its own sign-ins (Settings → Wizard, and
-/// onboarding imports Codex/Grok logins), so it is not listed here; what
-/// each one supports is documented engine-side (`agent_accounts` module docs).
-pub const PROVIDERS: [(HarnessId, &str, &str); 2] = [
+/// `PROVIDERS`). Only agents this build registers get a row to show them;
+/// Wizard keeps its own sign-ins (Settings → Wizard). What each one supports
+/// is documented engine-side (`agent_accounts` module docs).
+pub const PROVIDERS: [(HarnessId, &str, &str); 9] = [
     (HarnessId::ClaudeCode, "Claude Code", "claude"),
+    (HarnessId::Codex, "Codex", "codex"),
+    (HarnessId::Cursor, "Cursor", "cursor-agent"),
+    (HarnessId::Antigravity, "Antigravity", "Antigravity"),
+    (HarnessId::Grok, "Grok", "grok login"),
+    (HarnessId::Devin, "Devin", "devin auth login"),
+    (HarnessId::Opencode, "OpenCode", "opencode auth login"),
     (HarnessId::Pi, "Pi", "pi"),
+    (HarnessId::Hermes, "Hermes", "hermes auth add"),
 ];
 
 /// Whether `harness` has an Accounts section (and sign-in flow). Pure.

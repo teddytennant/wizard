@@ -9844,12 +9844,17 @@ impl Shell {
             .w_full()
             .flex()
             .items_center()
+            // Settings in the corner with Pull requests and voice beside it,
+            // where the account menu's actions sit upstream.
+            .justify_end()
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
                     .gap(px(2.0))
+                    .children(voice_trigger)
+                    .child(pull_requests)
                     .child(
                         div()
                             .id("settings-trigger")
@@ -9900,9 +9905,7 @@ impl Shell {
                                     )
                                 },
                             )),
-                    )
-                    .child(pull_requests)
-                    .children(voice_trigger),
+                    ),
             )
             .into_any_element()
     }
@@ -16235,7 +16238,8 @@ mod exit_regressions {
         let shell = host.read_with(cx, |host, _| host.0.clone());
         for expect_open in [true, false] {
             cx.update(|window, cx| window.draw(cx).clear());
-            assert!(cx.debug_bounds("user-menu-label").is_some());
+            // No account pill: sync and sign-out live in the Settings sidebar.
+            assert!(cx.debug_bounds("user-menu-label").is_none());
             let trigger = cx.debug_bounds("settings-trigger").unwrap().center();
             cx.simulate_click(trigger, gpui::Modifiers::default());
             shell.read_with(cx, |shell, _| {
