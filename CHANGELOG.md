@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-10-15
+
 ### Added
 
 - **`/ui claude`: a Claude Code look.** `wizard-ui-claude` draws Claude Code's fullscreen terminal UI on Wizard: the three-line header, the prompt box held at the bottom with its mode line, the `/` and `@` menus, the `?` shortcuts, the spinner, folded tool rows and coloured diffs, and the help, model, status and resume panels. Wizard's commands, models and sessions fill them, and anything Wizard has no data for is left out rather than drawn empty. The release builds it with the other looks and checks the version it prints. A `wizard update` from 3.8.12 or older installs the new `wizard` but not `wizard-ui-claude`, because the old binary picks the looks out of the tarball by a list that predates it, and a second plain `wizard update` stops at "already up to date". Run `wizard update --force` once afterwards, or the installer, to get it.
@@ -25,6 +27,7 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 - **`/provider` over ACP marks the session's provider in words.** The `* ` marker became a bullet in any client that renders the answer as markdown, and the `(* = this session)` legend pointed at nothing.
 - **The release counts the claude look.** The musl static check expected six binaries in a tarball that now holds seven, so both musl builds failed and nothing published.
 - **A resumed session shows failed tool calls as failed.** `wizard acp` replayed every stored tool result as completed. Each result now keeps whether it failed, so a command that worked and printed `Error: ` replays as completed; older sessions fall back on the `Error: ` prefix.
+- **Usage records what xAI actually billed.** grok-4.7 has no price in the table, so every turn on it was priced at the fallback rate and logged about ten times too high. xAI reports each call's cost in `cost_in_usd_ticks`; when every call in a turn carries it, `usage.jsonl` records that sum with `price_source: "billed"`, and `wizard usage` no longer marks the row as estimated. OpenRouter's `usage.cost` counts the same way. The in-session `/cost` still uses the table.
 - **A missing look names the right binary.** The error read `put wizard-ui-wizard-ui-claude next to wizard`, for every full look.
 
 ## [3.8.12] - 2026-10-14
