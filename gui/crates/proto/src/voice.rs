@@ -42,6 +42,8 @@ pub enum VoiceRejection {
     MicrophoneMetadataMissing,
     Protocol,
     NativeRuntimeUnavailable,
+    /// The voice provider needs a sign-in this device does not have.
+    SignInRequired,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

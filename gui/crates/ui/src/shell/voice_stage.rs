@@ -30,10 +30,23 @@ pub(super) fn stage_reveal(open: bool, elapsed_ms: f32, reduced: bool) -> f32 {
 }
 
 impl Shell {
-    /// The footer microphone: a new orchestrator in a projectless Codex chat
-    /// on this device. The chat's model follows the composer when it already
+    /// The footer microphone: a Grok Voice call when Wizard is signed in to
+    /// xAI here, else a new orchestrator in a projectless Codex chat on this
+    /// device. That chat's model follows the composer when it already
     /// targets Codex; otherwise Codex's own default model runs the delegations.
     pub(super) fn start_voice(&mut self, cx: &mut Context<Self>) {
+        if self.voice.read(cx).grok() {
+            let Some(engine) = self.state.read(cx).engine().cloned() else {
+                return;
+            };
+            let voice = settings::current(cx).grok_voice;
+            self.voice.update(cx, |controller, cx| {
+                controller.start_grok(engine, voice, cx);
+                controller.host_name = Some("Grok Voice".into());
+                controller.set_stage_open(true, cx);
+            });
+            return;
+        }
         let state = self.state.read(cx);
         let (Some(engine), Some(device)) = (state.engine().cloned(), state.local_device_id.clone())
         else {
@@ -75,8 +88,10 @@ impl Shell {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        self.voice
-            .update(cx, |voice, cx| voice.check_codex(&engine, force, cx));
+        self.voice.update(cx, |voice, cx| {
+            voice.check_grok(force, cx);
+            voice.check_codex(&engine, force, cx);
+        });
     }
 
     pub(super) fn end_voice(&mut self, cx: &mut Context<Self>) {
@@ -133,6 +148,7 @@ impl Shell {
             return None;
         }
         let live = voice.is_live();
+        let grok = voice.grok();
         let stage_open = voice.stage_open;
         let failure = (voice.phase == VoicePhase::Failed)
             .then(|| voice.reason_text())
@@ -193,7 +209,13 @@ impl Shell {
 
         let tooltip: SharedString = failure
             .map(SharedString::from)
-            .unwrap_or_else(|| "Start voice · Codex orchestrator".into());
+            .unwrap_or_else(|| {
+                if grok {
+                    "Start voice · Grok Voice".into()
+                } else {
+                    "Start voice · Codex orchestrator".into()
+                }
+            });
         let button = button
             .aria_label("Start voice")
             .tooltip(move |_, cx| {
@@ -631,15 +653,18 @@ impl Shell {
                 .text_color(if muted { popup.on_solid } else { popup.text }),
             );
 
-        let transcript = chat_id.map(|chat_id| {
+        // A Grok Voice call keeps no transcript chat of its own.
+        let transcript = chat_id
+            .filter(|id| self.state.read(cx).chats.iter().any(|chat| &chat.id == id))
+            .map(|chat_id| {
             round_control("voice-bar-transcript", &popup, false)
                 .aria_label(if awaiting {
-                    "Answer Codex in the transcript"
+                    "Answer the agent in the transcript"
                 } else {
                     "Open the voice transcript"
                 })
                 .tooltip(stage_tooltip(if awaiting {
-                    "Codex is asking you something"
+                    "The agent is asking you something"
                 } else {
                     "Transcript"
                 }))

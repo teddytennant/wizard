@@ -1,7 +1,7 @@
-//! Window-owned voice orchestrator. Each session runs in the host's own
-//! projectless Codex chat, resumed across calls, and survives navigation
-//! between threads; only an explicit end, an engine change or a provider
-//! failure closes it. No automatic reconnect or microphone resume.
+//! Window-owned voice orchestrator. A session runs on Grok Voice when this
+//! device's Wizard is signed in to xAI ([`xai`]), otherwise in the host's
+//! own projectless Codex chat. It survives navigation between threads; only
+//! an explicit end, an engine change or a provider failure closes it.
 use crate::orb::OrbState;
 use crate::state::EngineHandle;
 use gpui::{Context, Task};
@@ -9,6 +9,10 @@ use gpui_tokio::Tokio;
 use zeron_proto::voice::*;
 mod permissions;
 mod remote;
+mod xai;
+
+/// Grok Voice's built-in voices, offered in Settings → Voice.
+pub use xai::VOICES as GROK_VOICES;
 
 pub enum VoiceControl {
     Mute(bool),
@@ -40,6 +44,10 @@ pub struct VoiceController {
     /// The connection `codex_ready` was read from, and its read in flight.
     codex_engine: Option<EngineHandle>,
     codex_check: Option<Task<()>>,
+    /// Whether this device's Wizard is signed in to xAI, so calls run on
+    /// Grok Voice. `None` until read.
+    grok_ready: Option<bool>,
+    grok_check: Option<Task<()>>,
     /// This call played its start sound and owes its end sound.
     cued: bool,
 }
@@ -65,6 +73,8 @@ impl Default for VoiceController {
             codex_ready: None,
             codex_engine: None,
             codex_check: None,
+            grok_ready: None,
+            grok_check: None,
             cued: false,
         }
     }
@@ -73,7 +83,35 @@ impl VoiceController {
     /// Voice can be offered here. An unread catalog counts as yes, so a slow
     /// or failed read never hides it; a live call or its failure stays.
     pub fn offered(&self) -> bool {
-        self.codex_ready != Some(false) || self.is_live() || self.reason.is_some()
+        self.grok_ready == Some(true)
+            || self.codex_ready != Some(false)
+            || self.is_live()
+            || self.reason.is_some()
+    }
+
+    /// Calls run on Grok Voice with Wizard's xAI sign-in.
+    pub fn grok(&self) -> bool {
+        self.grok_ready == Some(true)
+    }
+
+    /// Read whether Wizard is signed in to xAI on this device; `force`
+    /// re-reads after a sign-in may have happened.
+    pub fn check_grok(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.grok_check.is_some() || (self.grok_ready.is_some() && !force) {
+            return;
+        }
+        let read = cx.background_executor().spawn(async { xai::signed_in() });
+        self.grok_check = Some(cx.spawn(async move |this, cx| {
+            let ready = read.await;
+            this.update(cx, |voice, cx| {
+                voice.grok_check = None;
+                if voice.grok_ready != Some(ready) {
+                    voice.grok_ready = Some(ready);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Read whether `engine`'s device can take a call: installed and enabled
@@ -197,6 +235,68 @@ impl VoiceController {
             });
         }));
         cx.notify();
+    }
+
+    /// Start a Grok Voice call on this device: audio here, the model at
+    /// api.x.ai, and the engine's chats as its tools.
+    pub fn start_grok(&mut self, engine: EngineHandle, voice: Option<String>, cx: &mut Context<Self>) {
+        self.cancel(cx);
+        crate::sound::play_voice(true);
+        self.cued = true;
+        self.engine = Some(engine.clone());
+        self.phase = VoicePhase::Checking;
+        self.chat_id = None;
+        self.reason = None;
+        let epoch = self.epoch;
+        let cancellation = self.cancellation.clone();
+        let (controls, control_rx) = tokio::sync::mpsc::channel(8);
+        self.controls = Some(controls);
+        let (events, event_rx) = tokio::sync::mpsc::channel(64);
+        let call = Tokio::spawn(cx, async move {
+            xai::run(engine, voice, None, cancellation, events, control_rx).await
+        });
+        self.follow(epoch, call, event_rx, cx);
+        cx.notify();
+    }
+
+    /// Reduce a running call's events until it ends, then settle its phase.
+    fn follow(
+        &mut self,
+        epoch: u64,
+        call: Task<Result<Result<(), VoiceRejection>, gpui_tokio::JoinError>>,
+        mut event_rx: tokio::sync::mpsc::Receiver<VoiceEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        self.task = Some(cx.spawn(async move |this, cx| {
+            while let Some(event) = event_rx.recv().await {
+                if this
+                    .update(cx, |controller, cx| {
+                        if controller.epoch == epoch {
+                            controller.reduce(event, cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            let result = call.await.unwrap_or(Err(VoiceRejection::Protocol));
+            let _ = this.update(cx, |controller, cx| {
+                if controller.epoch != epoch {
+                    return;
+                }
+                match result {
+                    Ok(()) if controller.phase == VoicePhase::Failed => {}
+                    Ok(()) => controller.phase = VoicePhase::Closed,
+                    Err(reason) => {
+                        controller.phase = VoicePhase::Failed;
+                        controller.reason = Some(reason);
+                    }
+                }
+                controller.reset_session();
+                cx.notify();
+            });
+        }));
     }
 
     /// Ending now sounds: a hang-up or a connected call ending. A failure to
@@ -407,6 +507,9 @@ impl VoiceController {
             Some(VoiceRejection::DeviceUnavailable) => {
                 "Check microphone permission and your audio devices."
             }
+            Some(VoiceRejection::Protocol) if self.grok_ready == Some(true) => {
+                "Grok Voice could not connect. Check your connection and try again."
+            }
             Some(VoiceRejection::MicrophonePermissionDenied) => {
                 "Allow Wizard GUI to use the microphone in System Settings → Privacy & Security → Microphone."
             }
@@ -414,6 +517,9 @@ impl VoiceController {
                 "Microphone setup is missing. Rebuild or reinstall Wizard GUI, then restart it."
             }
             Some(VoiceRejection::Busy) => "Another window already owns the voice session.",
+            Some(VoiceRejection::SignInRequired) => {
+                "Sign in to xAI in Wizard to use voice: run `wizard --login xai`."
+            }
             Some(_) => "Voice could not connect. Try again in a moment.",
             None => "",
         }

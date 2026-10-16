@@ -13,10 +13,11 @@ What the fork changes:
 - SSH devices: Settings, Devices, Add SSH device. It uses your SSH keys, installs the engine and Wizard on the remote, can share this machine's Wizard sign-in, and starts the engine there. The machine then shows up in the device menu above the message box.
 - Plugins: Settings, Plugins browses the Pi package gallery and installs a package for Pi, for Wizard, or both. Wizard support is in beta: skills and prompts work, extensions don't yet. Before installing, the page shows which parts of the package work in Wizard. It runs `wizard plugins` on the device, so remote devices work too (see [docs/pi-plugins.md](../docs/pi-plugins.md)).
 - No update check against Zeron's release feed, since that would replace this build with upstream Zeron.
+- Voice calls run on Grok Voice with Wizard's xAI sign-in (see [Voice](#voice)).
 
 ## Keyboard
 
-Settings, Shortcuts has two switches, both off by default and independent of each other.
+Settings, General, Keyboard has two switches, both off by default and independent of each other.
 
 **Power user mode** drives the whole app from the keyboard with vim-style keys. Esc leaves the message box (or a settings page) for navigation, a NAV tag in the corner says which pane has the cursor, and a ring marks the pane and the row. `i` goes back to typing. Keys never fire inside a text field. `?` lists every key, and after a prefix like Space or `g` a hint shows what can follow. The slash menu also gains the app's own commands (`/agent`, `/effort`, `/device`, `/archive`, `/export`, `/theme`, `/keys`, `/sidebar`, `/panel`, `/next`, `/prev`, `/vim`), argument hints, and fuzzy matching, next to whatever the agent advertises.
 
@@ -33,6 +34,14 @@ Settings, Shortcuts has two switches, both off by default and independent of eac
 **Vim editing in the message box** gives the composer normal, insert, visual and visual-line modes: motions, counts, operators with text objects (`ciw`, `da(`, `yi"`), `p`, `u`, `Ctrl-r`, `.` and `>>`. A tag above the box shows the mode and any pending keys. In insert mode Enter works as before; in normal mode Enter sends. With both switches on, Esc in normal mode leaves the box for navigation.
 
 Screenshots are in [docs/screenshots/power-user](docs/screenshots/power-user).
+
+## Voice
+
+When Wizard is signed in to xAI on this machine (`wizard --login xai`), the microphone button in the sidebar footer starts a call with Grok Voice 3.0. You talk; it answers out loud and works your chats for you: it lists and reads them, starts new ones (Wizard unless you name another agent), sends them messages and checks back on them. Esc hides the call screen without ending the call, M mutes, and the red button hangs up. Settings, Voice picks its voice (Eve, Ara, Rex, Sal or Leo).
+
+Audio stays on this machine: only the call itself goes to api.x.ai, with the token `wizard xai-token` hands out (Wizard keeps refreshing it, so the GUI never touches the refresh token). Talk over an answer and it stops at once. While it speaks, the microphone only sends sound clearly louder than the echo it measures from your speakers, so it doesn't interrupt itself; with headphones there is no echo and any speech gets through. On Linux it skips a monitor source if that is the default input and records from your real microphone. A dropped connection resumes the same conversation.
+
+Dictation (the on-device Parakeet model) is separate and lives on the same settings page.
 
 ## Install
 

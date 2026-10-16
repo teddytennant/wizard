@@ -60,6 +60,11 @@ required-features = ["compact-picker-fixture"]
 
 [dependencies]
 zeron-voice-media.workspace = true
+# Grok Voice calls: this device's audio, the realtime socket to api.x.ai, and
+# the engine's MCP tools as the model's functions.
+zeron-audio.workspace = true
+zeron-mcp.workspace = true
+tokio-tungstenite.workspace = true
 zeron-voice-session.workspace = true
 zeron-orb.workspace = true
 zeron-veil.workspace = true

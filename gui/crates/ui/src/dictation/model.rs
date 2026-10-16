@@ -38,6 +38,8 @@ pub(crate) fn init(root: PathBuf, cx: &mut App) {
             .iter()
             .map(|voice| (*voice).to_owned())
             .collect(),
+        grok: false,
+        grok_select: widgets::SelectState::default(),
         shortcut: None,
     });
     cx.set_global(VoiceGlobal { card, directory });
@@ -74,6 +76,9 @@ pub(crate) struct VoiceCard {
     call_live: bool,
     /// Native voice styles, refreshed with the live session's reported catalog.
     voices: Vec<String>,
+    /// Calls run on Grok Voice (Wizard's xAI sign-in) rather than Codex.
+    grok: bool,
+    grok_select: widgets::SelectState,
     /// Created on first render (it needs this card's context).
     shortcut: Option<Entity<settings::shortcuts::ShortcutField>>,
 }
@@ -99,6 +104,67 @@ impl VoiceCard {
             self.call_live = live;
             cx.notify();
         }
+    }
+
+    pub(crate) fn set_grok(&mut self, grok: bool, cx: &mut Context<Self>) {
+        if self.grok != grok {
+            self.grok = grok;
+            cx.notify();
+        }
+    }
+
+    /// The call settings when calls run on Grok Voice: which voice speaks.
+    /// It runs on this device; there is no host to pick.
+    fn grok_card(&self, theme: &crate::theme::Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let saved = settings::current(cx).grok_voice;
+        let voices = crate::voice::GROK_VOICES;
+        let selected = saved
+            .as_deref()
+            .and_then(|saved| voices.iter().position(|v| *v == saved))
+            .unwrap_or(0);
+        let options = voices.iter().map(|voice| {
+            let mut chars = voice.chars();
+            let label: String = chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_default();
+            widgets::SelectOption::new(label)
+        });
+        let control = widgets::select("grok-voice", "Voice", theme, |card: &mut Self| {
+            &mut card.grok_select
+        })
+        .options(options, selected)
+        .width(200.0)
+        .on_select(move |_, ix, _, cx| {
+            let voice = voices.get(ix).map(|v| (*v).to_owned());
+            settings::update(settings::SavePolicy::Immediate, cx, |s| s.grok_voice = voice);
+            cx.refresh_windows();
+            cx.notify();
+        })
+        .render(&self.grok_select, cx);
+        widgets::section_card(theme).child(
+            widgets::card_row(theme, true)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(160.0))
+                        .flex()
+                        .flex_col()
+                        .child(widgets::row_title(theme, "Voice"))
+                        .child(widgets::meta_line(
+                            theme,
+                            vec![
+                                if self.call_live {
+                                    "Grok Voice 3.0 · applies to your next call"
+                                } else {
+                                    "Grok Voice 3.0 with Wizard's xAI sign-in; audio stays on this device"
+                                }
+                                .into_any_element(),
+                            ],
+                        )),
+                )
+                .child(control),
+        )
     }
 
     pub(crate) fn set_voices(&mut self, voices: &[String], cx: &mut Context<Self>) {
@@ -407,7 +473,10 @@ impl Render for VoiceCard {
                 )
                 .child(control)
         };
-        let conversation_card = widgets::section_card(&theme).child(host_row).child(
+        let conversation_card = if self.grok {
+            self.grok_card(&theme, cx)
+        } else {
+            widgets::section_card(&theme).child(host_row).child(
             widgets::card_row(&theme, true)
                 .child(
                     div()
@@ -422,7 +491,8 @@ impl Render for VoiceCard {
                         )),
                 )
                 .child(voice_control),
-        );
+            )
+        };
         let enabled = settings::current(cx).dictation_enabled;
         let downloading = self.cancel.is_some();
         let on = downloading || (enabled && self.ready);
