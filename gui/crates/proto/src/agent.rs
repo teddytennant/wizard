@@ -14,7 +14,7 @@ pub enum HarnessId {
     Grok,
     /// Nous Research's Hermes Agent, driven over ACP (`hermes acp`).
     Hermes,
-    /// The pi coding agent (pi.dev), driven over ACP via the `pi-acp` adapter.
+    /// The Pi coding agent (pi.dev), driven over its native JSONL RPC protocol.
     Pi,
     /// SST's opencode agent, driven natively over its own HTTP/SSE server
     /// protocol (`opencode serve` — the same wire the opencode desktop app
@@ -27,6 +27,123 @@ pub enum HarnessId {
     Wizard,
     /// Test harness; never shown in production pickers.
     Mock,
+}
+
+/// Durable user preference for one agent's independently-installed CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessUpdatePolicy {
+    /// Check and surface an update, but never mutate the installation without
+    /// an explicit action.
+    #[default]
+    Notify,
+    /// Apply a discovered update after the harness execution gate becomes idle.
+    AutoWhenIdle,
+    /// Do not probe or update this harness.
+    Off,
+}
+
+/// Best-effort classification of the installation that owns an agent CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessInstallSource {
+    Npm,
+    Homebrew,
+    Cargo,
+    Vendor,
+    ManagedByZeron,
+    #[default]
+    Unknown,
+}
+
+/// The externally visible harness-update state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessUpdatePhase {
+    Dormant,
+    Checking,
+    Current,
+    Available,
+    WaitingForIdle,
+    Preparing,
+    Downloading,
+    Installing,
+    Verifying,
+    Updated,
+    ManualActionRequired,
+    Failed,
+}
+
+/// Real provider progress only. An absent value means the UI must render an
+/// indeterminate activity indicator rather than inventing a percentage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessUpdateProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessUpdateFailure {
+    pub message: String,
+    #[serde(default)]
+    pub retryable: bool,
+}
+
+/// One row in the device-local harness-update stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessUpdateStatus {
+    pub harness: HarnessId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub source: HarnessInstallSource,
+    #[serde(default)]
+    pub policy: HarnessUpdatePolicy,
+    pub phase: HarnessUpdatePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<HarnessUpdateProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<HarnessUpdateFailure>,
+    /// Whether this device can safely apply the update without guessing which
+    /// package manager owns the installation. Older engines omit this field,
+    /// so clients must default to the conservative read-only behavior.
+    #[serde(default)]
+    pub can_apply: bool,
+    /// Provider command shown when mutation cannot be safely automated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_command: Option<String>,
+}
+
+impl HarnessUpdateStatus {
+    /// Home notices describe discovered releases or an update in progress.
+    /// Manual checks remain available in Settings without implying that a
+    /// newer release exists.
+    pub fn show_update_notice(&self) -> bool {
+        matches!(
+            self.phase,
+            HarnessUpdatePhase::Available
+                | HarnessUpdatePhase::WaitingForIdle
+                | HarnessUpdatePhase::Preparing
+                | HarnessUpdatePhase::Downloading
+                | HarnessUpdatePhase::Installing
+                | HarnessUpdatePhase::Verifying
+                | HarnessUpdatePhase::Updated
+                | HarnessUpdatePhase::Failed
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -128,6 +245,29 @@ pub struct RunRequest {
     /// host ignores it and runs in `cwd` (the repo's main checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSpec>,
+    /// Zeron's own MCP server, injected by the HOST engine as it starts the
+    /// run: the `zeron mcp` subcommand of this same binary, pointed at the
+    /// engine's loopback IPC and stamped with the originating chat so the
+    /// agent can spawn, read, and message side chats. Additive +
+    /// serde-defaulted — an old host leaves it unset and the agent simply has
+    /// no Zeron tools; title runs never carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpServer>,
+}
+
+/// A stdio MCP server the harness should add to the agent's session, on top
+/// of whatever the user configured. Each driver spells it in its own dialect
+/// (Claude `--mcp-config`, ACP `session/new` `mcpServers`, Codex
+/// `mcp_servers.*` config overrides).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// Isolated-worktree directive riding [`RunRequest`]. The worktree is created
@@ -277,11 +417,104 @@ pub const SUBAGENT_INPUT_KEEP: [&str; 5] = [
     "subagent_type",
 ];
 
+/// Bounds on an agent's inline visual ([`AgentEvent::Visual`]): a Luau
+/// script Zeron runs in a sandbox and renders natively.
+pub const VISUAL_MAX_BYTES: usize = 256 * 1024;
+pub const VISUAL_MAX_TITLE_CHARS: usize = 200;
+/// Files a visual may ship with (models, textures, environment maps).
+pub const VISUAL_MAX_ASSETS: usize = 16;
+pub const VISUAL_MAX_ASSET_BYTES: usize = 8 * 1024 * 1024;
+pub const VISUAL_MAX_TOTAL_ASSET_BYTES: usize = 10 * 1024 * 1024;
+
+// The MCP server sends a visual to the engine in one WebSocket message, its
+// assets base64-encoded; that message must fit the engine's 16 MiB frame
+// (tungstenite's default), with room for the script escaped as JSON.
+const _: () = assert!(
+    VISUAL_MAX_TOTAL_ASSET_BYTES.div_ceil(3) * 4 + VISUAL_MAX_BYTES * 6 + 64 * 1024 < 16 * 1024 * 1024
+);
+
+/// Whether `name` can name a visual's asset: a plain file name.
+pub fn valid_visual_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// Where one checklist item stands. Claude's TodoWrite, OpenCode and ACP plans
+/// distinguish the item being worked on from those still waiting; Codex and
+/// Cursor only report done / not done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TodoStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl TodoStatus {
+    /// Decode a harness status string. Anything unrecognised (including
+    /// `cancelled`) is `Pending`: not finished, not being worked on.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "completed" | "complete" | "done" => Self::Completed,
+            "in_progress" | "inProgress" | "in-progress" | "active" => Self::InProgress,
+            _ => Self::Pending,
+        }
+    }
+}
+
+/// One checklist entry.
+///
+/// `done` is the original wire field and stays authoritative for completion,
+/// so docs written before `status` existed (and readers that ignore it) keep
+/// working. `status` is additive and written only when it adds information —
+/// i.e. for an in-progress item; a missing or unreadable value derives from
+/// `done`. Build items with [`TodoItem::new`] to keep the two consistent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItem {
     pub text: String,
     pub done: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_todo_status"
+    )]
+    pub status: Option<TodoStatus>,
+}
+
+impl TodoItem {
+    pub fn new(text: impl Into<String>, status: TodoStatus) -> Self {
+        Self {
+            text: text.into(),
+            done: status == TodoStatus::Completed,
+            status: (status == TodoStatus::InProgress).then_some(status),
+        }
+    }
+
+    /// Effective status: `done` wins, then the explicit status, else pending.
+    pub fn status(&self) -> TodoStatus {
+        if self.done {
+            TodoStatus::Completed
+        } else {
+            self.status.unwrap_or_default()
+        }
+    }
+}
+
+/// A status this build does not know (a future `blocked`, say) must not fail
+/// the whole tool call — the part would vanish from the transcript. Treat it
+/// as absent so the item falls back to `done`.
+fn lenient_todo_status<'de, D>(deserializer: D) -> Result<Option<TodoStatus>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 /// A slash command advertised by the agent (ACP `availableCommands`): typed as
@@ -317,6 +550,10 @@ pub struct UserInputQuestion {
     pub options: Vec<String>,
     #[serde(default)]
     pub multi_select: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<String>,
+    #[serde(default)]
+    pub multiline: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -361,6 +598,15 @@ pub enum AgentEvent {
         path: String,
         name: String,
         mime_type: String,
+    },
+    /// An agent-authored visual shown inline in the reply: a Luau script
+    /// that builds native UI (`zeron-visual`). The engine emits it when the
+    /// agent calls Zeron's `show_visual` MCP tool; `path` is the stored
+    /// script on the host device.
+    Visual {
+        id: String,
+        path: String,
+        title: String,
     },
     ReasoningDelta {
         text: String,
@@ -580,6 +826,61 @@ mod tests {
             "\"claude-code\""
         );
     }
+
+    #[test]
+    fn harness_update_status_uses_stable_wire_names() {
+        let status = HarnessUpdateStatus {
+            harness: HarnessId::ClaudeCode,
+            installed_version: Some("1.0.0".into()),
+            latest_version: Some("1.1.0".into()),
+            channel: Some("stable".into()),
+            source: HarnessInstallSource::Npm,
+            policy: HarnessUpdatePolicy::AutoWhenIdle,
+            phase: HarnessUpdatePhase::WaitingForIdle,
+            progress: None,
+            checked_at: Some(42),
+            error: None,
+            can_apply: true,
+            manual_command: Some("claude update".into()),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["harness"], "claude-code");
+        assert_eq!(json["installedVersion"], "1.0.0");
+        assert_eq!(json["policy"], "auto-when-idle");
+        assert_eq!(json["phase"], "waiting-for-idle");
+        assert_eq!(json["canApply"], true);
+        assert_eq!(
+            serde_json::from_value::<HarnessUpdateStatus>(json.clone()).unwrap(),
+            status
+        );
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("canApply");
+        assert!(
+            !serde_json::from_value::<HarnessUpdateStatus>(legacy)
+                .unwrap()
+                .can_apply
+        );
+    }
+
+    #[test]
+    fn manual_checks_do_not_claim_an_available_update() {
+        let mut status: HarnessUpdateStatus = serde_json::from_value(serde_json::json!({
+            "harness": "cursor",
+            "phase": "manual-action-required",
+            "canApply": true,
+        }))
+        .unwrap();
+        assert!(!status.show_update_notice());
+        status.phase = HarnessUpdatePhase::Available;
+        status.latest_version = Some("2.0.0".into());
+        status.can_apply = false;
+        assert!(
+            status.show_update_notice(),
+            "known manual releases still need attention"
+        );
+        status.phase = HarnessUpdatePhase::Installing;
+        assert!(status.show_update_notice());
+    }
 }
 
 /// Host-owned context snapshot, replicated with the chat document.
@@ -612,5 +913,70 @@ mod generated_image_tests {
         assert_eq!(value["type"], "generatedImage");
         assert_eq!(value["mimeType"], "image/png");
         assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
+    }
+}
+
+#[cfg(test)]
+mod todo_item_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_items_without_status_derive_from_done() {
+        let done: TodoItem = serde_json::from_value(json!({ "text": "a", "done": true })).unwrap();
+        let open: TodoItem = serde_json::from_value(json!({ "text": "b", "done": false })).unwrap();
+        assert_eq!(done.status(), TodoStatus::Completed);
+        assert_eq!(open.status(), TodoStatus::Pending);
+        assert_eq!(open.status, None);
+    }
+
+    #[test]
+    fn only_in_progress_adds_a_field_so_other_docs_are_unchanged() {
+        let pending = serde_json::to_value(TodoItem::new("a", TodoStatus::Pending)).unwrap();
+        let done = serde_json::to_value(TodoItem::new("b", TodoStatus::Completed)).unwrap();
+        let active = serde_json::to_value(TodoItem::new("c", TodoStatus::InProgress)).unwrap();
+        assert_eq!(pending, json!({ "text": "a", "done": false }));
+        assert_eq!(done, json!({ "text": "b", "done": true }));
+        assert_eq!(
+            active,
+            json!({ "text": "c", "done": false, "status": "inProgress" })
+        );
+    }
+
+    #[test]
+    fn unknown_status_falls_back_to_done_instead_of_failing_the_call() {
+        let call: ToolCall = serde_json::from_value(json!({
+            "kind": "todo",
+            "items": [
+                { "text": "a", "done": false, "status": "blocked" },
+                { "text": "b", "done": true, "status": 7 },
+            ]
+        }))
+        .unwrap();
+        let ToolCall::Todo { items } = call else {
+            panic!("expected a todo call");
+        };
+        assert_eq!(items[0].status(), TodoStatus::Pending);
+        assert_eq!(items[1].status(), TodoStatus::Completed);
+    }
+
+    #[test]
+    fn done_outranks_a_stale_status() {
+        let item = TodoItem {
+            text: "a".into(),
+            done: true,
+            status: Some(TodoStatus::InProgress),
+        };
+        assert_eq!(item.status(), TodoStatus::Completed);
+    }
+
+    #[test]
+    fn harness_status_strings_decode() {
+        assert_eq!(TodoStatus::parse("completed"), TodoStatus::Completed);
+        assert_eq!(TodoStatus::parse("in_progress"), TodoStatus::InProgress);
+        assert_eq!(TodoStatus::parse("inProgress"), TodoStatus::InProgress);
+        assert_eq!(TodoStatus::parse("pending"), TodoStatus::Pending);
+        assert_eq!(TodoStatus::parse("cancelled"), TodoStatus::Pending);
+        assert_eq!(TodoStatus::parse(""), TodoStatus::Pending);
     }
 }

@@ -25,6 +25,8 @@ async fn main() {
     std::fs::create_dir_all(&cwd).unwrap();
     let (_steer_tx, steering) = mpsc::channel(8);
     let controls = RunControls {
+        realtime: None,
+        execution_lease: None,
         request_input: Box::new(move |questions| {
             let (tx, rx) = oneshot::channel();
             let answers: Vec<UserInputAnswer> = questions
@@ -39,6 +41,7 @@ async fn main() {
         }),
         steering,
         interrupt: CancellationToken::new(),
+        turn: Default::default(),
     };
     // Optional second arg overrides the prompt (e.g. the mock rig's
     // "TWO subagents" variant exercising concurrent binding).
@@ -49,6 +52,7 @@ async fn main() {
             .into()
     });
     let request = RunRequest {
+        mcp: None,
         prompt,
         harness: None,
         model: None,

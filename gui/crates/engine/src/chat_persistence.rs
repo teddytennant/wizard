@@ -62,6 +62,14 @@ impl ChatPersistence {
         this
     }
 
+    pub(crate) fn cursor(&self) -> u64 {
+        self.cursor.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn is_clean(&self) -> bool {
+        self.saved.load(Ordering::Acquire) == self.generation.load(Ordering::Acquire)
+    }
+
     pub(crate) fn snapshot_bytes(&self) -> usize {
         self.snapshot_bytes.load(Ordering::Relaxed)
     }
@@ -286,7 +294,16 @@ mod tests {
             0,
             "no per-row writes"
         );
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        // The debounce schedules a blocking SQLite write; a loaded CI runner
+        // may not finish that write within 200 ms of the debounce deadline.
+        // Wait for completion, then still require the entire burst to coalesce.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while persistence.writes.load(Ordering::Relaxed) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("debounced snapshot should finish");
         assert_eq!(persistence.writes.load(Ordering::Relaxed), 1);
         let (bytes, cursor, _) = store.load_snapshot_with_cursor("whale").unwrap().unwrap();
         assert_eq!(cursor, 1000);

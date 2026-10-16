@@ -244,7 +244,7 @@ impl Render for AboutPage {
                     } else {
                         gpui::Toggled::False
                     })
-                    .child(widgets::toggle_switch(&theme, auto))
+                    .child(widgets::toggle_switch(&theme, auto, "auto-install-updates"))
                     .when(can_update, |el| {
                         el.cursor_pointer().on_click(move |_, _, cx| {
                             handle.update(cx, |u, cx| u.set_auto_install(!auto, cx))

@@ -18,7 +18,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use base64::Engine as _;
@@ -31,8 +31,8 @@ use tokio_util::task::TaskTracker;
 use zeron_doc::{
     COMMAND_DEFAULT_TTL_MS, CommandBasedOn, CommandDisposition, DocError, EvaluationContext,
     MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionCommandEntry,
-    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
-    join_continuation_entries,
+    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, SubagentStatus,
+    evaluate_command, join_continuation_entries,
 };
 use zeron_proto::{ConversationSourceContext, HarnessId, UserInputAnswer, UserInputQuestion};
 use zeron_sync::DocsStore;
@@ -68,11 +68,24 @@ const RESIDENT_BYTES_PER_SNAPSHOT_BYTE: usize = 6;
 /// Floor per open doc (room socket buffers, tasks) regardless of content size.
 const DOC_RESIDENT_FLOOR_BYTES: usize = 512 * 1024;
 
-/// Docs touched this recently are never evicted. Closes the open→attach race:
-/// `open()` returns a handle, and until the caller's `watch_messages` lands
-/// the doc is unwatched and unpinned — a concurrent eviction would orphan the
-/// watcher on a roomless doc that renders once and never updates again.
-const EVICT_MIN_IDLE_MS: i64 = 30_000;
+/// Connection reuse grace is independent of document eviction. Caller-owned
+/// handles and explicit writers protect the open-to-subscribe handoff.
+const SYNC_IDLE_MS: i64 = 10_000;
+const SYNC_QUANTUM_MS: i64 = 30_000;
+const ACTIVE_SYNC_CAP: usize = 28;
+const SYNC_ADMISSION_BATCH: usize = 4;
+const SYNC_CATCH_UP_QUANTUM_MS: i64 = 300_000;
+
+// All live-transport scenarios share the process budget, including tests in
+// sibling modules. Hold through shutdown so one fixture cannot rotate another.
+#[cfg(test)]
+static SYNC_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncAdmission {
+    Join,
+    Seed,
+}
 
 /// Queued-attachment transfer pacing: chunk pushes are bounded per call (a
 /// stalled-but-open relay link never fails on its own) and a timeout marks
@@ -173,11 +186,20 @@ impl EdgeConfig {
     /// the bearer is re-fetched before every connect, so reconnects after a
     /// token expiry present a fresh `?token=` instead of the boot-time one.
     pub fn room_url(&self, path: impl Into<String>) -> Arc<dyn zeron_sync::UrlProvider> {
+        self.room_url_with_host(path, None)
+    }
+
+    fn room_url_with_host(
+        &self,
+        path: impl Into<String>,
+        host_device: Option<String>,
+    ) -> Arc<dyn zeron_sync::UrlProvider> {
         let ws_base = self.url.replacen("http", "ws", 1);
         Arc::new(EdgeRoomUrl {
             base: format!("{}{}", ws_base.trim_end_matches('/'), path.into()),
             token: self.token.clone(),
             device_id: self.device_id.clone(),
+            host_device,
         })
     }
 }
@@ -186,6 +208,7 @@ struct EdgeRoomUrl {
     base: String,
     token: Arc<dyn zeron_rpc::TokenSource>,
     device_id: String,
+    host_device: Option<String>,
 }
 
 impl zeron_sync::UrlProvider for EdgeRoomUrl {
@@ -193,11 +216,18 @@ impl zeron_sync::UrlProvider for EdgeRoomUrl {
         let token = self.token.clone();
         let base = self.base.clone();
         let device = self.device_id.clone();
+        let host = self.host_device.clone();
         Box::pin(async move {
             let token = token.token().await.map_err(zeron_sync::SyncError::from)?;
             let mut url = format!("{base}?token={token}");
             if !device.is_empty() {
                 url.push_str(&format!("&device={device}"));
+            }
+            if let Some(host) = host {
+                let mut parsed = reqwest::Url::parse(&url)
+                    .map_err(|e| zeron_sync::SyncError::Protocol(e.to_string()))?;
+                parsed.query_pairs_mut().append_pair("hostDevice", &host);
+                url = parsed.into();
             }
             Ok(url)
         })
@@ -234,6 +264,8 @@ struct DocHostInner {
     /// Tracks every spawned worker so `shutdown_workers` can await them.
     tasks: TaskTracker,
     handles: Mutex<HashMap<String, Arc<ChatDocHandle>>>,
+    document_loads: AtomicU64,
+    focus_clock: AtomicU64,
     /// Serialize cold opens without blocking access to already-live handles.
     opening: Mutex<()>,
     /// chat2 seeds in flight (one per chat — reopen storms must not race
@@ -375,6 +407,34 @@ impl DegradeGrace {
     }
 }
 
+/// One read of an open chat's admission flags and client. Connectivity and
+/// sync-state reporting share it so a tick does not re-fetch each handle.
+struct ChatConnectionSnapshot {
+    sync_started: bool,
+    sync_requested: bool,
+    stats: Option<zeron_sync::ChatStatsSnapshot>,
+    delivery_live: bool,
+}
+
+impl ChatConnectionSnapshot {
+    fn read(handle: &ChatDocHandle) -> Self {
+        let sync_started = handle.sync_started.load(Ordering::Acquire);
+        let sync_requested = handle.sync_requested.load(Ordering::Acquire);
+        let client = lock(&handle.chat2);
+        Self {
+            sync_started,
+            sync_requested,
+            stats: client.as_ref().map(|client| client.stats()),
+            delivery_live: sync_started
+                && client.as_ref().is_some_and(|client| client.delivery_live()),
+        }
+    }
+
+    fn sync_expected(&self) -> bool {
+        self.sync_started || self.sync_requested
+    }
+}
+
 #[derive(Clone)]
 pub struct DocHost {
     inner: Arc<DocHostInner>,
@@ -512,6 +572,19 @@ pub struct ChatDocHandle {
     /// the turn and starting its own the chat reads Idle, and an idle chat with
     /// a queue is exactly what the flush drains.
     drain_lock: tokio::sync::Mutex<()>,
+    /// Serialize prompt commands while still allowing interrupt/input controls.
+    command_drain_lock: tokio::sync::Mutex<()>,
+    /// Queue rows held as explicit steers for a turn-boundary agent. They
+    /// lead ordinary queued rows, in the order they were steered.
+    steered_rows: Mutex<Vec<String>>,
+    /// Sends held for a turn-boundary agent's turn end (rather than queued
+    /// by the user), with the run configuration each was sent with: the row
+    /// carries only its text and images.
+    held_sends: Mutex<HashMap<String, zeron_proto::RunRequest>>,
+    /// The latest Stop command that has acted. A prompt sent before it that
+    /// only executes now (a loaded host, a slow agent) was cancelled by it:
+    /// running it would start the stopped work again in a fresh runtime.
+    stopped_by: Mutex<Option<String>>,
     /// An explicit user interrupt freezes automatic queue delivery. The next
     /// explicit prompt or queue send resumes it; incidental doc/status changes
     /// must not turn Cancel into "send the next row".
@@ -521,6 +594,9 @@ pub struct ChatDocHandle {
     mirror_dirty: AtomicBool,
     /// Epoch ms of the last open/watch touch — the LRU eviction key.
     last_access: AtomicI64,
+    /// User navigation only. Opens, watches, writes and reconnects never bump it.
+    last_focus: AtomicU64,
+    sync_focus_served: AtomicU64,
     /// Last known snapshot blob size — the eviction budget estimate's input.
     snapshot_bytes: AtomicUsize,
     /// The sync generation this handle was BUILT for (1 = legacy s2,
@@ -544,6 +620,17 @@ pub struct ChatDocHandle {
     /// chat2 relay client (docs/chat2-sync.md C3) — populated once the
     /// registry names roomGen 2 for this chat and the join resolves.
     chat2: Mutex<Option<zeron_sync::ChatClient>>,
+    sync_started: AtomicBool,
+    sync_requested: AtomicBool,
+    sync_background: AtomicBool,
+    sync_last_started: AtomicI64,
+    sync_wait_since: AtomicI64,
+    /// A fairness admission gets a full turn, even under repeated navigation.
+    sync_service_until: AtomicI64,
+    sync_wake_version: AtomicI64,
+    sync_wake_ticket: AtomicU64,
+    sync_cancel: Mutex<CancellationToken>,
+    writers: Arc<AtomicUsize>,
     pub(crate) persistence: Option<Arc<crate::chat_persistence::ChatPersistence>>,
     /// Local commits made before the relay connects (the dial can take up
     /// to a minute; offline, forever): buffered here by the subscription
@@ -557,13 +644,114 @@ pub struct ChatDocHandle {
     _sub: loro::Subscription,
 }
 
+/// A running agent explicitly owns a writer lease until its final cleanup.
+/// Reference counting remains a conservative compatibility guard for read APIs.
+struct ResetFlag(Arc<AtomicBool>);
+impl Drop for ResetFlag {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+pub struct DocWriter {
+    doc: Arc<SessionDoc>,
+    writers: Arc<AtomicUsize>,
+}
+impl std::ops::Deref for DocWriter {
+    type Target = SessionDoc;
+    fn deref(&self) -> &Self::Target {
+        &self.doc
+    }
+}
+impl Drop for DocWriter {
+    fn drop(&mut self) {
+        self.writers.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+impl Drop for ChatDocHandle {
+    fn drop(&mut self) {
+        lock(&self.sync_cancel).cancel();
+    }
+}
+
 impl ChatDocHandle {
+    /// The turn ending now is followed at once by a message the user has
+    /// already sent: one still on its way through the command log (a burst
+    /// the agent outran), or one held for a turn-boundary agent's turn end.
+    /// The work goes on, so the end is not a completion to notify.
+    pub(crate) fn continues_with_sent_message(&self) -> bool {
+        // Not yet in the transcript: delivery writes the user's message
+        // before dispatching it, so the command that started the turn now
+        // ending (still marked pending a moment longer) never counts.
+        let in_flight = self.doc.read_commands().is_ok_and(|commands| {
+            let pending: Vec<&str> = commands
+                .iter()
+                .filter(|c| c.status == SessionCommandStatus::Pending)
+                .filter_map(|c| match &c.payload {
+                    SessionCommandPayload::Run { message_id, .. } => Some(message_id.as_str()),
+                    SessionCommandPayload::Steer { message_id, .. } => {
+                        Some(message_id.as_deref().unwrap_or(c.id.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            !pending.is_empty()
+                && self.doc.read_entries().is_ok_and(|entries| {
+                    pending
+                        .iter()
+                        .any(|id| !entries.iter().any(|e| e.id == *id))
+                })
+        });
+        if in_flight {
+            return true;
+        }
+        if self.queue_paused.load(Ordering::Acquire) {
+            return false;
+        }
+        let Ok(Some(head)) = self.doc.read_queue().map(|q| q.into_iter().next()) else {
+            return false;
+        };
+        head.delivery_gate.is_none()
+            && (lock(&self.held_sends).contains_key(&head.id)
+                || lock(&self.steered_rows).contains(&head.id))
+    }
+
+    /// Live views and agents retain their documents and resist idle retirement.
+    /// At capacity their transports can yield without dropping these leases.
+    fn sync_protected(&self) -> bool {
+        self.messages_tx.receiver_count() > 0
+            || self.queue_tx.receiver_count() > 0
+            || self.writers.load(Ordering::Acquire) > 0
+    }
+
     pub fn chat_id(&self) -> &str {
         &self.chat_id
     }
 
+    pub(crate) fn commit_voice(
+        &self,
+        transcript: &zeron_proto::voice::VoiceTranscript,
+    ) -> Result<Option<String>, EngineError> {
+        let _owner = lock(&self.transcript_import);
+        zeron_doc::voice::commit_voice_transcript(
+            &self.doc,
+            transcript,
+            &self.device_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .map_err(EngineError::from)
+    }
+
     pub fn doc(&self) -> &SessionDoc {
         &self.doc
+    }
+
+    pub fn writer(&self) -> DocWriter {
+        self.writers.fetch_add(1, Ordering::AcqRel);
+        DocWriter {
+            doc: self.doc.clone(),
+            writers: self.writers.clone(),
+        }
     }
 
     pub fn doc_arc(&self) -> Arc<SessionDoc> {
@@ -608,6 +796,20 @@ impl ChatDocHandle {
         let rx = self.queue_tx.subscribe();
         self.publish_queue();
         rx
+    }
+
+    /// Where a newly steered row goes: after the rows already steered, ahead
+    /// of every ordinary row. Records `id` as steered.
+    fn steer_slot(&self, id: &str) -> Result<usize, DocError> {
+        let mut steered = lock(&self.steered_rows);
+        let queue = self.doc.read_queue()?;
+        steered.retain(|row| queue.iter().any(|q| &q.id == row));
+        let slot = queue
+            .iter()
+            .take_while(|row| steered.contains(&row.id))
+            .count();
+        steered.push(id.to_string());
+        Ok(slot)
     }
 
     fn publish_queue(&self) {
@@ -662,17 +864,33 @@ impl ChatDocHandle {
         })
     }
 
-    /// Recovery sweep: stamp this device's abandoned `streaming` entries `aborted`, appending
+    /// Recovery sweep: settle this device's running subagent chips (including
+    /// chips in completed parent turns), then stamp abandoned `streaming`
+    /// entries `aborted`, appending
     /// `note` as a visible error part so the transcript says WHY the turn
     /// ended (zeron folded "Run interrupted by backend restart" the same
     /// way). Returns the stamped entries' `(id, created_at)` — recovery uses
     /// them for the resume-freshness check.
     pub fn mark_abandoned_streams(&self, note: &str) -> Result<Vec<(String, i64)>, DocError> {
         let mut stamped = Vec::new();
+        let mut chips_changed = false;
         for entry in self.doc.read_entries()? {
-            if entry.role == MessageRole::Assistant
-                && entry.status == Some(MessageStatus::Streaming)
-                && entry.device_id == self.device_id
+            if entry.role != MessageRole::Assistant || entry.device_id != self.device_id {
+                continue;
+            }
+            for part in &entry.parts {
+                if let MessagePart::Tool {
+                    id,
+                    subagent_status: Some(SubagentStatus::Running),
+                    ..
+                } = part
+                {
+                    chips_changed |=
+                        self.doc
+                            .update_subagent_chip(id, None, Some("failed"), None)?;
+                }
+            }
+            if entry.status == Some(MessageStatus::Streaming)
                 && self
                     .doc
                     .set_message_status(&entry.id, MessageStatus::Aborted)?
@@ -684,7 +902,7 @@ impl ChatDocHandle {
                 stamped.push((entry.id.clone(), entry.created_at));
             }
         }
-        if !stamped.is_empty() {
+        if chips_changed || !stamped.is_empty() {
             self.publish_messages();
         }
         Ok(stamped)
@@ -750,7 +968,7 @@ impl ChatDocHandle {
 
 impl DocHost {
     pub fn new(store: Arc<DocsStore>, config: DocHostConfig) -> Self {
-        Self {
+        let host = Self {
             inner: Arc::new(DocHostInner {
                 store,
                 config,
@@ -762,6 +980,8 @@ impl DocHost {
                 edge_disconnected: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
                 handles: Mutex::new(HashMap::new()),
+                document_loads: AtomicU64::new(0),
+                focus_clock: AtomicU64::new(0),
                 opening: Mutex::new(()),
                 seeding: Mutex::new(HashSet::new()),
                 seed_waiting: Mutex::new(HashSet::new()),
@@ -774,13 +994,20 @@ impl DocHost {
                 executing: Mutex::new(HashSet::new()),
                 links: OnceLock::new(),
                 http: reqwest::Client::builder()
+                    .pool_max_idle_per_host(2)
+                    .pool_idle_timeout(std::time::Duration::from_secs(10))
                     .connect_timeout(std::time::Duration::from_secs(15))
                     .read_timeout(std::time::Duration::from_secs(30))
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
                     .unwrap_or_else(|_| reqwest::Client::new()),
             }),
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            host.spawn_sync_scheduler();
+            host.spawn_remote_wake_delivery();
         }
+        host
     }
 
     /// Every background task rides the tracker, raced against the shutdown
@@ -937,16 +1164,19 @@ impl DocHost {
         let _ = self.inner.links.set(links);
     }
 
-    /// Re-evaluate every open chat's command queue NOW. Called after an
-    /// upload commit lands bytes on this device: a Run deferred on those
-    /// bytes (`pending://` refs not yet on disk) becomes executable the
-    /// moment its transfer completes — event-driven, not timer luck.
+    /// Re-evaluate every open chat's commands and queue NOW. Called after an
+    /// upload commit lands bytes on this device: a Run or queued row deferred
+    /// on those bytes (`pending://` refs not yet on disk) becomes executable
+    /// the moment its transfer completes — event-driven, not timer luck.
     pub fn kick_drains(&self) {
         let handles: Vec<Arc<ChatDocHandle>> =
             lock(&self.inner.handles).values().cloned().collect();
         for handle in handles {
             let host = self.clone();
-            self.spawn_worker(async move { host.drain_commands(&handle).await });
+            self.spawn_worker(async move {
+                host.drain_commands(&handle).await;
+                host.drain_queue(&handle).await;
+            });
         }
     }
 
@@ -1114,8 +1344,26 @@ impl DocHost {
     }
 
     /// Open (or return) the chat's doc handle: load the local snapshot (or init fresh),
-    /// start the change-driven task, and join the edge room when configured.
+    /// start the change-driven task, and request budgeted sync when configured.
     pub fn open(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
+        let handle = self.open_local(chat_id)?;
+        self.activate_sync(&handle);
+        Ok(handle)
+    }
+
+    /// Explicit viewport navigation; automatic watch retries and MCP reads use
+    /// `open` instead. The sequence also orders focuses in the same millisecond.
+    pub fn focus_chat(&self, chat_id: &str) -> Result<(), EngineError> {
+        let handle = self.open_local(chat_id)?;
+        let focus = self.inner.focus_clock.fetch_add(1, Ordering::AcqRel) + 1;
+        handle.last_focus.fetch_max(focus, Ordering::AcqRel);
+        self.activate_sync(&handle);
+        Ok(())
+    }
+
+    /// Materialize one authoritative local document without acquiring a network
+    /// connection. Durable publication is installed before exposing any writer.
+    pub fn open_local(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
         // The registry names the sync room generation (docs/chat2-sync.md
         // M2): absent row / absent field = legacy s2. Read it BEFORE the
         // cached-handle check — a cached s2-mode handle for a chat another
@@ -1171,6 +1419,7 @@ impl DocHost {
         // room's fat doc would merge into the unrelated thin lineage and
         // duplicate every message. Local epoch >= 2 forces the chat2 branch
         // and best-effort completes the flip.
+        self.inner.document_loads.fetch_add(1, Ordering::Relaxed);
         let stored = self.inner.store.load_snapshot_with_cursor(chat_id)?;
         let stored_epoch = stored.as_ref().map(|(_, _, e)| *e).unwrap_or(0);
         let room_gen = if stored_epoch >= crate::chat2_host::CHAT2_DOC_EPOCH {
@@ -1345,14 +1594,30 @@ impl DocHost {
             transcript_history,
             queue_tx,
             drain_lock: tokio::sync::Mutex::new(()),
+            command_drain_lock: tokio::sync::Mutex::new(()),
+            steered_rows: Mutex::new(Vec::new()),
+            held_sends: Mutex::new(HashMap::new()),
+            stopped_by: Mutex::new(None),
             queue_paused: AtomicBool::new(recovered_queue_pending),
             mirror_dirty: AtomicBool::new(true),
             last_access: AtomicI64::new(now_ms()),
+            last_focus: AtomicU64::new(0),
+            sync_focus_served: AtomicU64::new(0),
             snapshot_bytes: AtomicUsize::new(snapshot_len),
             room_gen,
             retired: AtomicBool::new(false),
             checkpointing: Arc::new(AtomicBool::new(false)),
             chat2: Mutex::new(None),
+            sync_started: AtomicBool::new(false),
+            sync_requested: AtomicBool::new(false),
+            sync_background: AtomicBool::new(false),
+            sync_last_started: AtomicI64::new(0),
+            sync_wait_since: AtomicI64::new(0),
+            sync_service_until: AtomicI64::new(0),
+            sync_wake_version: AtomicI64::new(0),
+            sync_wake_ticket: AtomicU64::new(0),
+            sync_cancel: Mutex::new(CancellationToken::new()),
+            writers: Arc::new(AtomicUsize::new(0)),
             persistence,
             chat2_pending_local: Mutex::new(Vec::new()),
             publication_failed: AtomicBool::new(false),
@@ -1374,7 +1639,7 @@ impl DocHost {
         // retried: the exact "transcript frozen until restart" report.
         // Retry on the workspace host's capped, jittered backoff; a system
         // wake redials immediately; eviction/purge ends the loop via `weak`.
-        if let Some(edge) = &self.inner.config.edge {
+        if self.inner.config.edge.is_some() {
             if room_gen >= 2 {
                 // Subscription BEFORE the dial (review B3): every local
                 // commit lands in the client when connected, else in the
@@ -1399,14 +1664,14 @@ impl DocHost {
                             // check and the push let the join's store+drain
                             // slip between, orphaning the update forever).
                             let batch_id = uuid::Uuid::new_v4().to_string();
+                            let client_guard = lock(&handle.chat2);
                             if let Err(err) = publication_store.enqueue_chat_update(&publication_chat, &batch_id, bytes) {
                                 handle.publication_failed.store(true, Ordering::Release);
+                                lock(&handle.chat2_pending_local).push((batch_id.clone(), bytes.clone()));
                                 tracing::error!(chat = %publication_chat, %err, "chat2: durable outbox write failed");
                             }
-                            let client_guard = lock(&handle.chat2);
-                            match &*client_guard {
-                                Some(client) => client.enqueue_batch(batch_id, bytes.clone()),
-                                None => lock(&handle.chat2_pending_local).push((batch_id, bytes.clone())),
+                            if let Some(client) = &*client_guard {
+                                client.enqueue_batch(batch_id, bytes.clone());
                             }
                         }
                         true
@@ -1422,23 +1687,6 @@ impl DocHost {
                 for command in &requeue_commands {
                     let _ = doc.queue_command(command);
                 }
-                if !self.inner.edge_disconnected.load(Ordering::Acquire) {
-                    self.spawn_chat2_join(edge.clone(), &handle, chat2_cursor);
-                }
-            } else {
-                // Straggler gen-1 chat (the s2 client is gone — post-cutover,
-                // no device reads or writes an s2 room). The local fat doc
-                // serves reads as-is; if we host the chat, seed it onto chat2
-                // in the background and the flip converges every device.
-                let is_host = chat_row
-                    .as_ref()
-                    .is_some_and(|c| c.device_id == self.inner.config.device_id);
-                if is_host && chat_row.is_some() {
-                    // Quiescent-only (review B1): a seed under a live run or
-                    // watched transcript would strand everything written
-                    // after the rebuild instant in a retired fat lineage.
-                    self.spawn_chat2_seed_when_quiet(edge.clone(), chat_id, &handle);
-                }
             }
         }
         // Publish only after the durable subscription and bootstrap are installed.
@@ -1449,11 +1697,515 @@ impl DocHost {
         Ok(handle)
     }
 
-    /// chat2 relay join (docs/chat2-sync.md C3): deadline on every dial,
-    /// capped jittered backoff, wake redial — and the client resolves only
-    /// after full catch-up (checkpoint + rows), so "joined" here means
-    /// "transcript converged".
+    /// Connection lifetime is independent of the document and its outbox.
+    /// Concurrent callers activate at most one supervisor for this handle.
+    /// Called on the device control link. Acceptance never cold-opens a chat.
+    pub fn enqueue_wakeup(&self, chat_id: &str) -> Result<(), EngineError> {
+        self.inner
+            .store
+            .schedule_sync_job(chat_id, if chat_id == "*" { "reconcile" } else { "wake" })?;
+        Ok(())
+    }
+
+    pub fn activate_sync(&self, handle: &Arc<ChatDocHandle>) {
+        handle.sync_background.store(false, Ordering::Release);
+        if !handle.sync_started.load(Ordering::Acquire) {
+            let _ = handle.sync_wait_since.compare_exchange(
+                0,
+                now_ms(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+        if self.inner.config.edge.is_some() && !self.inner.edge_disconnected.load(Ordering::Acquire)
+        {
+            handle.sync_requested.store(true, Ordering::Release);
+        }
+    }
+
+    /// Resolve an actual operation before reserving a client slot. Generation
+    /// comes from the opened handle, including the local epoch override; an
+    /// absent registry row is still the legitimate born-chat2 race.
+    fn prepare_sync_admission(
+        &self,
+        handle: &ChatDocHandle,
+        wake_version: Option<i64>,
+    ) -> Result<Option<SyncAdmission>, EngineError> {
+        if handle.room_gen >= 2 {
+            return Ok(Some(SyncAdmission::Join));
+        }
+        let row = match self.workspace() {
+            Some(workspace) => workspace.chat(&handle.chat_id)?,
+            None => None,
+        };
+        match row {
+            None => Ok(Some(SyncAdmission::Seed)),
+            Some(row) if row.device_id == self.inner.config.device_id => {
+                Ok(Some(SyncAdmission::Seed))
+            }
+            Some(row) if row.room_gen.unwrap_or(1) < 2 => {
+                // Only retire the receipt examined before this decision. A
+                // newer wake must survive, and outgoing updates are untouched.
+                if let Some(version) = wake_version {
+                    self.inner
+                        .store
+                        .complete_sync_job(&handle.chat_id, "wake", version)?;
+                }
+                handle.sync_requested.store(false, Ordering::Release);
+                Ok(None)
+            }
+            // Registry cutover overtook a pinned legacy handle. Let the
+            // cutover watcher replace it; do not lose its pending work.
+            Some(_) => Ok(None),
+        }
+    }
+
+    /// Cold candidates stay metadata-only until a connection can be admitted.
+    /// Local epoch wins over an older registry row, exactly as in `open_local`.
+    fn prepare_stored_sync_admission(
+        &self,
+        chat_id: &str,
+        wake_version: Option<i64>,
+    ) -> Result<Option<SyncAdmission>, EngineError> {
+        if self.inner.store.snapshot_epoch(chat_id)? >= crate::chat2_host::CHAT2_DOC_EPOCH {
+            return Ok(Some(SyncAdmission::Join));
+        }
+        let row = match self.workspace() {
+            Some(ws) => ws.chat(chat_id)?,
+            None => None,
+        };
+        match row {
+            None => Ok(Some(SyncAdmission::Join)),
+            Some(row) if row.room_gen.unwrap_or(1) >= 2 => Ok(Some(SyncAdmission::Join)),
+            Some(row) if row.device_id == self.inner.config.device_id => {
+                Ok(Some(SyncAdmission::Seed))
+            }
+            Some(_) => {
+                if let Some(version) = wake_version {
+                    self.inner
+                        .store
+                        .complete_sync_job(chat_id, "wake", version)?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// One dispatcher per host; waiting chats are flags on existing handles,
+    /// never a spawned task per connection request. Oldest service wins within
+    /// each class, with one background admission every four selections.
+    fn spawn_sync_scheduler(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        self.spawn_worker(async move {
+            use futures::{StreamExt, stream::FuturesUnordered};
+            let mut turn = 0u64;
+            let mut disk_cursor = String::new();
+            // (winner, fairness turn). Reserve a released slot until teardown
+            // ends; a disk-page change must not steal it from the winner.
+            let mut handoff: Option<(String, bool)> = None;
+            let mut contention_since = None;
+            // Closing clients keep their admission slots until teardown ends,
+            // but no individual close can suspend unrelated admissions/work.
+            // Track teardown independently of this cancellable dispatcher:
+            // host shutdown must join these actors before its final snapshot.
+            let mut stopping = FuturesUnordered::<tokio::task::JoinHandle<String>>::new();
+            let mut stopping_ids = HashSet::new();
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                    Some(result) = stopping.next(), if !stopping.is_empty() => {
+                        match result {
+                            Ok(id) => { stopping_ids.remove(&id); }
+                            Err(error) => tracing::error!(%error, "chat sync teardown failed"),
+                        }
+                        continue;
+                    }
+                }
+                let Some(inner) = weak.upgrade() else { return };
+                let host = Self { inner };
+                host.evict_over_budget();
+                if host.inner.edge_disconnected.load(Ordering::Acquire) {
+                    continue;
+                }
+                let Some(edge) = host.inner.config.edge.clone() else {
+                    continue;
+                };
+                // Overflow reconciliation is metadata-only and resumable. Wait
+                // for registry truth before deciding the hosted set is complete.
+                if let Some(ws) = host.workspace() {
+                    if ws.sync_status().is_some_and(|s| s.synced) {
+                        if let Ok(Some((version, cursor))) =
+                            host.inner.store.reconciliation_progress()
+                        {
+                            let mut ids: Vec<_> = ws
+                                .watch_chats()
+                                .borrow()
+                                .iter()
+                                .filter(|c| {
+                                    c.device_id == host.inner.config.device_id && c.id > cursor
+                                })
+                                .map(|c| c.id.clone())
+                                .collect();
+                            ids.sort();
+                            ids.truncate(32);
+                            let _ = host.inner.store.reconcile_page(version, &ids);
+                        }
+                    }
+                }
+                let handles: Vec<_> = lock(&host.inner.handles).values().cloned().collect();
+                for handle in &handles {
+                    if !handle.publication_failed.load(Ordering::Acquire) {
+                        continue;
+                    }
+                    let _client = lock(&handle.chat2);
+                    let mut failed = lock(&handle.chat2_pending_local);
+                    failed.retain(|(id, bytes)| {
+                        host.inner
+                            .store
+                            .enqueue_chat_update(&handle.chat_id, id, bytes)
+                            .is_err()
+                    });
+                    if failed.is_empty() {
+                        handle.publication_failed.store(false, Ordering::Release);
+                    }
+                }
+
+                let durable = host
+                    .inner
+                    .store
+                    .pending_sync_docs(&disk_cursor, 4)
+                    .unwrap_or_default();
+                if durable.is_empty() {
+                    disk_cursor.clear();
+                }
+                // Discover actual contenders before deciding whether to retire
+                // a client. A connected chat's outbox is not slot contention.
+                let disk_healthy = !handles.iter()
+                    .any(|h| h.publication_failed.load(Ordering::Acquire));
+                // A None handle is a cold, metadata-only candidate. Discovery
+                // advances at capacity without loading and evicting its history.
+                let mut candidates: Vec<_> = handles.iter()
+                    .filter(|h| h.sync_requested.load(Ordering::Acquire)
+                        && !h.sync_started.load(Ordering::Acquire)
+                        && !stopping_ids.contains(&h.chat_id))
+                    .map(|h| (h.chat_id.clone(), Some(h.clone()))).collect();
+                if disk_healthy {
+                    for id in durable {
+                        disk_cursor = id.clone();
+                        if candidates.iter().any(|(chat, _)| chat == &id)
+                            || stopping_ids.contains(&id)
+                            || handles.iter().any(|h| h.chat_id == id && h.sync_started.load(Ordering::Acquire))
+                        {
+                            continue;
+                        }
+                        candidates.push((id, None));
+                    }
+                }
+                if let Some((id, _)) = &handoff {
+                    if !candidates.iter().any(|(chat, _)| chat == id) {
+                        candidates.push((id.clone(), handles.iter().find(|h| &h.chat_id == id).cloned()));
+                    }
+                }
+                let mut waiting = Vec::new();
+                for (id, handle) in candidates {
+                    let wake_version = match host.inner.store.sync_job_version(&id, "wake") {
+                        Ok(version) => version,
+                        Err(error) => {
+                            tracing::warn!(chat = %id, %error, "sync admission deferred: wake read failed");
+                            continue;
+                        }
+                    };
+                    let admission = match &handle {
+                        Some(h) => host.prepare_sync_admission(h, wake_version),
+                        None => host.prepare_stored_sync_admission(&id, wake_version),
+                    };
+                    match admission {
+                        Ok(Some(_)) => waiting.push((id, handle, wake_version)),
+                        Ok(None) => {},
+                        Err(error) => tracing::warn!(chat = %id, %error, "sync admission eligibility deferred"),
+                    }
+                }
+                // Ownership/cutover changes can invalidate a reserved winner.
+                if handoff.as_ref().is_some_and(|(id, _)| !waiting.iter().any(|(chat, _, _)| chat == id)) {
+                    handoff = None;
+                }
+                for handle in &handles {
+                    if !handle.sync_started.load(Ordering::Acquire)
+                        || stopping_ids.contains(&handle.chat_id)
+                    {
+                        continue;
+                    }
+                    // A focus during teardown remains unserved and can
+                    // reclaim a slot. Only resident, non-closing clients
+                    // acknowledge focus here.
+                    handle.sync_focus_served.fetch_max(handle.last_focus.load(Ordering::Acquire), Ordering::AcqRel);
+                    let mut captured = handle.sync_wake_version.load(Ordering::Acquire);
+                    let pending_wake = host
+                        .inner
+                        .store
+                        .sync_job_version(&handle.chat_id, "wake")
+                        .ok()
+                        .flatten();
+                    if let Some(version) = pending_wake.filter(|v| *v != captured) {
+                        // Keep the healthy transport. Retirement of this wake
+                        // requires a read started after its version was seen.
+                        if let Some(client) = lock(&handle.chat2).as_ref() {
+                            let ticket = client.request_catch_up();
+                            handle.sync_wake_ticket.store(ticket, Ordering::Release);
+                            handle.sync_wake_version.store(version, Ordering::Release);
+                            captured = version;
+                        }
+                    }
+                    let wake_read_complete = captured != 0
+                        && lock(&handle.chat2).as_ref().is_some_and(|c|
+                            c.catch_up_completed(handle.sync_wake_ticket.load(Ordering::Acquire)));
+                    if wake_read_complete && host.wakeup_is_durable(handle)
+                    {
+                        let _ =
+                            host.inner
+                                .store
+                                .complete_sync_job(&handle.chat_id, "wake", captured);
+                    }
+                    let caught_up = lock(&handle.chat2).as_ref().is_some_and(|c| c.caught_up());
+                    // A quiet document can still be receiving its checkpoint
+                    // or commands. Incomplete catch-up only yields via rotate's
+                    // explicit service deadline, never the short reuse grace.
+                    let idle = caught_up
+                        && !handle.sync_protected()
+                        && (now_ms() - handle.last_access.load(Ordering::Relaxed) >= SYNC_IDLE_MS
+                            || (handle.sync_background.load(Ordering::Acquire) && caught_up))
+                        && !host
+                            .inner
+                            .store
+                            .has_pending_chat_updates(&handle.chat_id)
+                            .unwrap_or(true);
+                    if idle {
+                        handle.sync_requested.store(false, Ordering::Release);
+                        stopping_ids.insert(handle.chat_id.clone());
+                        stopping.push(host.inner.tasks.spawn(host.stop_sync_owned(handle.clone())));
+                    }
+                }
+                // Closing clients still own capacity until teardown is joined.
+                let running = handles.iter().filter(|h|
+                    h.sync_started.load(Ordering::Acquire) || stopping_ids.contains(&h.chat_id)
+                ).count();
+                let available = ACTIVE_SYNC_CAP.saturating_sub(running);
+                let now = now_ms();
+                let contended = available == 0 && !waiting.is_empty();
+                let budget = zeron_sync::budget::shared().stats();
+                let global_contended = !budget.resource_paused && budget.sockets >= budget.socket_limit && budget.socket_waiting > 0;
+                // A teardown gap or the end of a paged disk scan is not the
+                // end of contention. Resetting there starves cold jobs under
+                // continuous navigation or a full set of active writers.
+                if available > 0 && waiting.is_empty() {
+                    contention_since = None;
+                }
+                let since = if !waiting.is_empty() { *contention_since.get_or_insert(now) } else { now };
+                for (_, h, _) in &waiting {
+                    if let Some(h) = h {
+                        let _ = h.sync_wait_since.compare_exchange(0, now, Ordering::AcqRel, Ordering::Acquire);
+                    }
+                }
+                let newest_focus = waiting.iter().filter_map(|(id, h, _)| {
+                    let h = h.as_ref()?;
+                    let focus = h.last_focus.load(Ordering::Acquire);
+                    (focus > h.sync_focus_served.load(Ordering::Acquire)).then(|| (focus, id.clone()))
+                }).max();
+                let oldest_waiter = waiting.iter().filter(|(_, h, _)| {
+                    now - h.as_ref().map_or(since, |h| h.sync_wait_since.load(Ordering::Acquire)) >= SYNC_QUANTUM_MS
+                }).min_by_key(|(id, h, _)| (
+                    h.as_ref().map_or(0, |h| h.sync_last_started.load(Ordering::Acquire)), id.clone(),
+                ));
+                // Three focus turns, then one overdue service turn. A served
+                // focus cannot immediately take its slot back after rotation.
+                let fair = oldest_waiter.is_some() && (newest_focus.is_none() || (turn + 1) % 4 == 0);
+                let winner = if fair {
+                    oldest_waiter.map(|(id, _, _)| id.clone())
+                } else {
+                    newest_focus.as_ref().map(|(_, id)| id.clone())
+                };
+                let latest_focus = handles.iter().map(|h| h.last_focus.load(Ordering::Acquire)).max().unwrap_or(0);
+                if disk_healthy && (contended || global_contended) && handoff.is_none() && stopping_ids.is_empty() {
+                    let mut victims = Vec::new();
+                    for h in &handles {
+                        if !h.sync_started.load(Ordering::Acquire)
+                            || h.sync_service_until.load(Ordering::Acquire) > now {
+                            continue;
+                        }
+                        let protected = h.sync_protected();
+                        let focus = h.last_focus.load(Ordering::Acquire);
+                        let caught_up = lock(&h.chat2).as_ref().is_some_and(|c| c.caught_up());
+                        if !contended && !caught_up { continue; }
+                        let pending = host.inner.store.has_pending_chat_updates(&h.chat_id).unwrap_or(true);
+                        let age = now - h.sync_last_started.load(Ordering::Acquire);
+                        let service_complete = (caught_up && age >= SYNC_QUANTUM_MS) || age >= SYNC_CATCH_UP_QUANTUM_MS;
+                        let eligible = if !protected {
+                            (caught_up && !pending) || service_complete
+                        } else if fair || !contended {
+                            // Keep the most recently focused thread live while
+                            // the other slots provide bounded service turns.
+                            service_complete && (focus == 0 || focus != latest_focus || running == 1)
+                        } else {
+                            newest_focus.as_ref().is_some_and(|(newest, _)| *newest > focus)
+                        };
+                        if eligible {
+                            victims.push((protected, h.writers.load(Ordering::Acquire) > 0, focus,
+                                h.sync_last_started.load(Ordering::Acquire), h.clone(), caught_up, pending));
+                        }
+                    }
+                    // Reclaim idle work first, then viewed-only docs, then
+                    // writers in least-recent-user-focus order. One handoff
+                    // retires one transport, never a whole batch of agents.
+                    victims.sort_by_key(|(protected, writer, focus, started, h, _, _)|
+                        (*protected, *writer, *focus, *started, h.chat_id.clone()));
+                    if let Some((protected, _, _, _, handle, caught_up, pending)) = victims.into_iter().next() {
+                        let unfinished = protected || !caught_up || pending
+                            || host.inner.store.sync_job_version(&handle.chat_id, "wake").map_or(true, |v| v.is_some());
+                        handle.sync_requested.store(unfinished, Ordering::Release);
+                        handle.sync_wait_since.store(now, Ordering::Release);
+                        handoff = winner.map(|id| (id, fair));
+                        stopping_ids.insert(handle.chat_id.clone());
+                        stopping.push(host.inner.tasks.spawn(host.stop_sync_owned(handle)));
+                    }
+                }
+                let admission_limit = if disk_healthy {
+                    available.min(SYNC_ADMISSION_BATCH)
+                } else {
+                    0
+                };
+                let mut admitted = 0;
+                while admitted < admission_limit && !waiting.is_empty() {
+                    turn += 1;
+                    waiting.sort_by_key(|(id, h, _)| {
+                        let protected = h.as_ref().is_some_and(|h| h.sync_protected());
+                        let focus = h.as_ref().map_or(0, |h| {
+                            let focus = h.last_focus.load(Ordering::Acquire);
+                            if focus > h.sync_focus_served.load(Ordering::Acquire) { focus } else { 0 }
+                        });
+                        (
+                            handoff.as_ref().map(|(chat, _)| chat) != Some(id),
+                            if turn % 4 == 0 { protected } else { !protected },
+                            std::cmp::Reverse(if turn % 4 == 0 { 0 } else { focus }),
+                            h.as_ref().map_or(0, |h| h.sync_last_started.load(Ordering::Acquire)),
+                            id.clone(),
+                        )
+                    });
+                    let (id, cached, wake_version) = waiting.remove(0);
+                    let handle = match cached {
+                        Some(h) => h,
+                        None => match host.open_local(&id) {
+                            Ok(h) => {
+                                h.sync_background.store(true, Ordering::Release);
+                                h.sync_requested.store(true, Ordering::Release);
+                                h
+                            }
+                            Err(error) => {
+                                tracing::warn!(chat = %id, %error, "durable sync work deferred");
+                                continue;
+                            }
+                        },
+                    };
+                    // Opening may observe a newer registry/lineage. Recheck
+                    // ownership before admission, retaining the captured wake.
+                    let action = match host.prepare_sync_admission(&handle, wake_version) {
+                        Ok(Some(action)) => action,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            tracing::warn!(chat = %id, %error, "sync admission recheck failed");
+                            continue;
+                        }
+                    };
+                    if handle.sync_started.swap(true, Ordering::AcqRel) {
+                        continue;
+                    }
+                    admitted += 1;
+                    let fair_turn = handoff.as_ref().is_some_and(|(chat, fair)| chat == &id && *fair);
+                    if handoff.as_ref().is_some_and(|(chat, _)| chat == &id) {
+                        handoff = None;
+                    }
+                    handle.sync_wait_since.store(0, Ordering::Release);
+                    handle.sync_service_until.store(if fair_turn { now_ms() + SYNC_QUANTUM_MS } else { 0 }, Ordering::Release);
+                    handle.sync_focus_served.fetch_max(handle.last_focus.load(Ordering::Acquire), Ordering::AcqRel);
+                    handle.sync_last_started.store(now_ms(), Ordering::Release);
+                    handle.sync_wake_version.store(wake_version.unwrap_or(0), Ordering::Release);
+                    handle.sync_wake_ticket.store(0, Ordering::Release);
+                    match action {
+                        SyncAdmission::Join => {
+                            let cursor = handle.persistence.as_ref().map_or(0, |p| p.cursor());
+                            host.spawn_chat2_join(edge.clone(), &handle, cursor);
+                        }
+                        SyncAdmission::Seed => {
+                            host.spawn_chat2_seed_when_quiet(edge.clone(), &handle.chat_id, &handle);
+                        }
+                    }
+                }
+                drop(waiting);
+                host.evict_over_budget();
+            }
+        });
+    }
+
+    fn stop_sync_owned(
+        &self,
+        handle: Arc<ChatDocHandle>,
+    ) -> impl std::future::Future<Output = String> + Send + 'static {
+        let host = self.clone();
+        async move {
+            host.stop_sync(&handle).await;
+            handle.chat_id.clone()
+        }
+    }
+
+    async fn stop_sync(&self, handle: &ChatDocHandle) {
+        lock(&handle.sync_cancel).cancel();
+        let client = lock(&handle.chat2).take();
+        if let Some(client) = client {
+            client.shutdown().await;
+        }
+        handle.sync_started.store(false, Ordering::Release);
+    }
+
+    /// Catch-up alone is not a durable handoff: a crash before the snapshot
+    /// debounce/command drain would otherwise lose the only discovery receipt.
+    fn wakeup_is_durable(&self, handle: &ChatDocHandle) -> bool {
+        if handle.publication_failed.load(Ordering::Acquire) {
+            return false;
+        }
+        if self.is_host(&handle.chat_id) {
+            let Ok(commands) = handle.doc.read_commands() else {
+                return false;
+            };
+            if commands.iter().any(|c| {
+                c.status == SessionCommandStatus::Pending
+                    && !self.inner.store.is_processed(&c.id).unwrap_or(false)
+            }) {
+                return false;
+            }
+        }
+        self.save_snapshot(handle);
+        handle.persistence.as_ref().is_some_and(|p| p.is_clean())
+    }
+
+    fn spawn_sync_worker(
+        &self,
+        cancel: CancellationToken,
+        fut: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        self.spawn_worker(async move {
+            tokio::select! { _ = cancel.cancelled() => {}, _ = fut => {} }
+        });
+    }
+
+    /// Install a supervised chat2 client. Construction is local-first; only
+    /// caught_up() proves the checkpoint and row replay actually completed.
     fn spawn_chat2_join(&self, edge: EdgeConfig, handle: &Arc<ChatDocHandle>, cursor: u64) {
+        let cancel = CancellationToken::new();
+        *lock(&handle.sync_cancel) = cancel.clone();
+        let priority = if handle.sync_background.load(Ordering::Acquire) {
+            zeron_sync::budget::Priority::Background
+        } else {
+            zeron_sync::budget::Priority::Interactive
+        };
         let chat = handle.chat_id.clone();
         let doc = handle.doc.clone();
         let store = self.inner.store.clone();
@@ -1462,7 +2214,7 @@ impl DocHost {
         let weak = Arc::downgrade(handle);
         let host = self.clone();
         let mut token_changes = edge.token_changes();
-        self.spawn_worker(async move {
+        self.spawn_sync_worker(cancel.clone(), async move {
             let sink = Arc::new(crate::chat2_host::EngineChatSink::new(&doc, store, chat.clone())
                 .with_handle(weak.clone()));
             // The sink holds only a Weak doc ref (a strong one made every
@@ -1473,8 +2225,9 @@ impl DocHost {
                 http,
                 edge.clone(),
                 chat.clone(),
-            ));
-            let url = edge.room_url(format!("/chat2/{chat}/ws"));
+            ).with_priority(priority));
+            let remote_host = host.remote_host_for(&chat);
+            let url = edge.room_url_with_host(format!("/chat2/{chat}/ws"), remote_host.clone());
             let mut wake = zeron_sync::wake::subscribe();
             // Sibling-dial successes end a backoff wait immediately, exactly
             // like the joined clients' own reconnect loops (chat_client.rs).
@@ -1499,7 +2252,7 @@ impl DocHost {
                     edge.clone(),
                     chat.clone(),
                     device.clone(),
-                ));
+                ).with_host_device(remote_host.clone()).with_priority(priority));
                 let dial = tokio::time::timeout(
                     std::time::Duration::from_secs(60),
                     zeron_sync::ChatClient::connect_via_transport(
@@ -1529,21 +2282,27 @@ impl DocHost {
                             // is either drained here or enqueued directly
                             // after — never dropped between (verify pass).
                             let mut client_slot = lock(&handle.chat2);
-                            if host.inner.edge_disconnected.load(Ordering::Acquire) { return; }
+                            if host.inner.edge_disconnected.load(Ordering::Acquire) || cancel.is_cancelled() { return; }
+                            // Include commits made after the sink's initial
+                            // load but before installation. The same lock is
+                            // held by the local-update subscription.
+                            for (id, bytes) in host.inner.store.pending_chat_updates(&chat).unwrap_or_default() {
+                                client.enqueue_batch(id, bytes);
+                            }
                             let pending: Vec<(String, Vec<u8>)> =
-                                std::mem::take(&mut *lock(&handle.chat2_pending_local));
+                                lock(&handle.chat2_pending_local).clone();
                             for (batch_id, update) in pending {
                                 client.enqueue_batch(batch_id, update);
                             }
                             *client_slot = Some(client);
                         }
-                        tracing::info!(chat = %chat, "chat2 room joined (converged)");
+                        tracing::info!(chat = %chat, "chat2 client admitted (catch-up pending)");
                         // A missed event, failed POST or actor restart must not
                         // forget rejected operations. Any author can checkpoint
                         // its own durable history, including a non-host desktop.
                         let checkpoint_host = host.clone();
                         let checkpoint_weak = weak.clone();
-                        host.spawn_worker(async move {
+                        host.spawn_sync_worker(cancel.clone(), async move {
                             loop {
                                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                                 let Some(handle) = checkpoint_weak.upgrade() else { return };
@@ -1568,7 +2327,7 @@ impl DocHost {
                         if host.is_host(&chat) {
                             let host = host.clone();
                             let weak = weak.clone();
-                            host.clone().spawn_worker(async move {
+                            host.clone().spawn_sync_worker(cancel.clone(), async move {
                                 // With the pull-first transport the client
                                 // constructs before any state answer — wait
                                 // until the server's view is KNOWN (bounded)
@@ -1609,7 +2368,7 @@ impl DocHost {
                             let host = host.clone();
                             let weak = weak.clone();
                             let chat = chat.clone();
-                            host.clone().spawn_worker(async move {
+                            host.clone().spawn_sync_worker(cancel.clone(), async move {
                                 use zeron_sync::chat_client::ChatEvent;
                                 loop {
                                     match events.recv().await {
@@ -1801,6 +2560,10 @@ impl DocHost {
             edge.url.trim_end_matches('/'),
             chat_id
         );
+        let _permit = zeron_sync::budget::shared()
+            .http(zeron_sync::budget::Priority::Background)
+            .await
+            .map_err(|e| e.to_string())?;
         let res = self
             .inner
             .http
@@ -1920,14 +2683,105 @@ impl DocHost {
                     continue; // never ran here — an empty doc is just new
                 }
                 if let Err(err) = host.salvage_chat_transcript(&chat.id).await {
+                    let _ = host.inner.store.schedule_sync_job(&chat.id, "recovery");
                     tracing::warn!(chat = %chat.id, error = %err, "transcript salvage failed");
+                }
+            }
+            let mut after = String::new();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                let jobs = host
+                    .inner
+                    .store
+                    .pending_sync_jobs("recovery", &after, 1)
+                    .unwrap_or_default();
+                let Some(chat) = jobs.into_iter().next() else {
+                    after.clear();
+                    continue;
+                };
+                after = chat.clone();
+                let version = host
+                    .inner
+                    .store
+                    .sync_job_version(&chat, "recovery")
+                    .ok()
+                    .flatten();
+                if host.salvage_chat_transcript(&chat).await.is_ok() {
+                    if let Some(version) = version {
+                        let _ = host
+                            .inner
+                            .store
+                            .complete_sync_job(&chat, "recovery", version);
+                    }
                 }
             }
         });
     }
 
     async fn salvage_chat_transcript(&self, chat_id: &str) -> Result<(), String> {
+        // Inspection must not register a handle or start sync. A healthy
+        // history used to open one room per journal during every boot.
+        let stored = self
+            .inner
+            .store
+            .load_snapshot_with_cursor(chat_id)
+            .map_err(|e| e.to_string())?;
+        if let Some((bytes, _, epoch)) = &stored {
+            // A pre-chat2 snapshot may be discarded by open() during adoption;
+            // its entries are a recovery SOURCE, not proof the new doc is healthy.
+            if *epoch >= crate::chat2_host::CHAT2_DOC_EPOCH || self.inner.config.edge.is_none() {
+                let raw = loro::LoroDoc::new();
+                raw.import(bytes).map_err(|e| e.to_string())?;
+                for (_, update) in self
+                    .inner
+                    .store
+                    .pending_chat_updates(chat_id)
+                    .map_err(|e| e.to_string())?
+                {
+                    raw.import(&update).map_err(|e| e.to_string())?;
+                }
+                if !SessionDoc::from_doc(raw)
+                    .read_entries()
+                    .map_err(|e| e.to_string())?
+                    .is_empty()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        let rollback_id = format!("{chat_id}.pre-chat2");
+        let source = self
+            .inner
+            .store
+            .load_snapshot(&rollback_id)
+            .map_err(|e| e.to_string())?
+            .or_else(|| {
+                stored
+                    .filter(|(_, _, epoch)| *epoch < crate::chat2_host::CHAT2_DOC_EPOCH)
+                    .map(|(bytes, _, _)| bytes)
+            });
+        let Some(bytes) = source else { return Ok(()) };
+        let raw = loro::LoroDoc::new();
+        raw.import(&bytes).map_err(|e| e.to_string())?;
+        let fat = SessionDoc::from_doc(raw);
+        let rebuilt = zeron_doc::rebuild::rebuild_thin_doc(&fat).map_err(|e| e.to_string())?;
+        let entries = rebuilt.doc.read_entries().map_err(|e| e.to_string())?;
+        if entries.is_empty() {
+            return Ok(());
+        }
         let handle = self.open(chat_id).map_err(|e| e.to_string())?;
+        if self.inner.config.edge.is_some() {
+            tokio::time::timeout(std::time::Duration::from_secs(90), async {
+                loop {
+                    if lock(&handle.chat2).as_ref().is_some_and(|c| c.caught_up()) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .map_err(|_| "recovery deferred: remote history has not converged".to_string())?;
+        }
         if !handle
             .doc()
             .read_entries()
@@ -1940,32 +2794,22 @@ impl DocHost {
         // source — the legacy s2 room — went away with the s2 client; any
         // transcript that existed only there was salvaged by earlier
         // releases or is reachable in the room's storage server-side.)
-        let rollback_id = format!("{chat_id}.pre-chat2");
-        let fat_bytes = self.inner.store.load_snapshot(&rollback_id).ok().flatten();
-        let Some(bytes) = fat_bytes else {
-            return Ok(()); // no fat lineage anywhere — genuinely empty chat
-        };
-        let raw = loro::LoroDoc::new();
-        raw.import(&bytes).map_err(|e| e.to_string())?;
-        let fat = SessionDoc::from_doc(raw);
         // Thin before appending (docs/chat2-sync.md A2): full outputs are
         // parked, exactly like a seed — they survive in the rollback copy
         // saved below and the run journal.
-        let rebuilt = zeron_doc::rebuild::rebuild_thin_doc(&fat).map_err(|e| e.to_string())?;
-        let entries = rebuilt.doc.read_entries().map_err(|e| e.to_string())?;
-        if entries.is_empty() {
-            return Ok(());
-        }
         if matches!(self.inner.store.load_snapshot(&rollback_id), Ok(None)) {
             let _ = self.inner.store.save_snapshot(&rollback_id, &bytes);
         }
         // Re-check emptiness at the last instant: a run that started during
         // the room fetch must not get history interleaved under it.
-        if !handle
-            .doc()
-            .read_entries()
-            .map_err(|e| e.to_string())?
-            .is_empty()
+        let _drain = handle.drain_lock.lock().await;
+        let _import = lock(&handle.transcript_import);
+        if Arc::strong_count(&handle.doc) > 1
+            || !handle
+                .doc()
+                .read_entries()
+                .map_err(|e| e.to_string())?
+                .is_empty()
         {
             return Err("doc gained entries mid-salvage; aborted".into());
         }
@@ -2022,6 +2866,12 @@ impl DocHost {
                     edge_tail.url.trim_end_matches('/'),
                     chat
                 );
+                let Ok(_permit) = zeron_sync::budget::shared()
+                    .http(zeron_sync::budget::Priority::Background)
+                    .await
+                else {
+                    return;
+                };
                 let _ = http
                     .put(&url)
                     .bearer_auth(&bearer)
@@ -2070,7 +2920,9 @@ impl DocHost {
         let seq_covered = stats.cursor;
         let http = self.inner.http.clone();
         let weak_note = Arc::downgrade(handle);
+        let reset = ResetFlag(in_flight);
         self.spawn_worker(async move {
+            let _reset = reset;
             let store = publication_store.clone();
             let chat = chat_id.clone();
             let prepared = tokio::task::spawn_blocking(move || {
@@ -2085,12 +2937,10 @@ impl DocHost {
                 Some((snapshot, frontier, covered_rejections))
             }).await;
             let Ok(Some((snapshot, frontier, covered_rejections))) = prepared else {
-                in_flight.store(false, Ordering::Release);
                 return;
             };
 
             let Ok(bearer) = edge.bearer().await else {
-                in_flight.store(false, Ordering::Release);
                 return;
             };
             let url = format!(
@@ -2099,6 +2949,9 @@ impl DocHost {
                 chat_id,
                 seq_covered
             );
+            let Ok(_permit) = zeron_sync::budget::shared().http(zeron_sync::budget::Priority::Background).await else {
+                return;
+            };
             let size = snapshot.len() as u64;
             match http
                 .post(&url)
@@ -2135,7 +2988,6 @@ impl DocHost {
                     tracing::warn!(chat = %chat_id, error = %err, "chat2 checkpoint POST failed");
                 }
             }
-            in_flight.store(false, Ordering::Release);
         });
     }
 
@@ -2150,6 +3002,8 @@ impl DocHost {
     /// Eviction flushes a final snapshot, so reopen loses nothing; missed
     /// remote updates re-arrive through the room join's VV backfill.
     fn evict_over_budget(&self) {
+        // Do not let a cold reopen race the retiring handle's final flush.
+        let _opening = lock(&self.inner.opening);
         let mut by_age: Vec<(i64, String)> = {
             let handles = lock(&self.inner.handles);
             handles
@@ -2158,11 +3012,7 @@ impl DocHost {
                 .collect()
         };
         by_age.sort_unstable();
-        for (last_access, chat_id) in by_age {
-            if now_ms() - last_access < EVICT_MIN_IDLE_MS {
-                // Sorted oldest-first: everything after this is younger.
-                return;
-            }
+        for (_, chat_id) in by_age {
             let (count, estimate) = {
                 let handles = lock(&self.inner.handles);
                 (
@@ -2179,7 +3029,9 @@ impl DocHost {
             let evicted = {
                 let mut handles = lock(&self.inner.handles);
                 match handles.get(&chat_id) {
-                    Some(handle) if !self.pinned(handle) => handles.remove(&chat_id),
+                    Some(handle) if !self.pinned(handle) && Arc::strong_count(handle) == 1 => {
+                        handles.remove(&chat_id)
+                    }
                     _ => None,
                 }
             };
@@ -2218,12 +3070,15 @@ impl DocHost {
     }
 
     fn pinned(&self, handle: &Arc<ChatDocHandle>) -> bool {
+        if handle.sync_started.load(Ordering::Acquire) {
+            return true;
+        }
         // Durable batches may outlive this handle. Only failed disk writes
         // require retaining the in-memory copy until persistence recovers.
         if handle.publication_failed.load(Ordering::Acquire) {
             return true;
         }
-        if handle.messages_tx.receiver_count() > 0 {
+        if handle.messages_tx.receiver_count() > 0 || handle.queue_tx.receiver_count() > 0 {
             return true;
         }
         // The handle itself holds one doc ref; more means a live writer.
@@ -2375,17 +3230,28 @@ impl DocHost {
             return Connectivity::default();
         }
         let now = std::time::Instant::now();
+        let mut handles: Vec<Arc<ChatDocHandle>> =
+            lock(&self.inner.handles).values().cloned().collect();
+        handles.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
         let mut grace = lock(&self.inner.connectivity_grace);
-        let statuses = self.sync_statuses();
-        grace.retain_chats(|id| statuses.iter().any(|(chat_id, _)| chat_id == id));
-        let chats = statuses
+        grace.retain_chats(|id| handles.iter().any(|handle| handle.chat_id == id));
+        let chats = handles
             .into_iter()
-            .map(|(chat_id, stats)| {
-                let stats = stats.unwrap_or_default();
-                let connected = !grace.degraded(GraceKey::Chat(&chat_id), !stats.connected, now);
+            .map(|handle| {
+                let snapshot = ChatConnectionSnapshot::read(&handle);
+                let stats = snapshot.stats.unwrap_or_default();
+                // An idle chat deliberately has no room. Clear any previous
+                // timer so selecting it starts a fresh grace window.
+                let connected = !grace.degraded(
+                    GraceKey::Chat(&handle.chat_id),
+                    snapshot.sync_expected() && !stats.connected,
+                    now,
+                );
                 ChatConnectivity {
-                    chat_id,
+                    sync_state: self.chat_sync_state_for_handle(&handle, &snapshot),
+                    chat_id: handle.chat_id.clone(),
                     connected,
+                    delivery_live: snapshot.delivery_live,
                     pending_pushes: stats.pending_pushes,
                 }
             })
@@ -2420,6 +3286,90 @@ impl DocHost {
             last_failure,
             chats,
         }
+    }
+
+    pub fn chat_sync_state(&self, chat_id: &str) -> zeron_proto::ChatSyncState {
+        use zeron_proto::ChatSyncState as S;
+        let handle = lock(&self.inner.handles).get(chat_id).cloned();
+        let Some(handle) = handle else {
+            return S::Local;
+        };
+        let snapshot = ChatConnectionSnapshot::read(&handle);
+        self.chat_sync_state_for_handle(&handle, &snapshot)
+    }
+
+    fn chat_sync_state_for_handle(
+        &self,
+        handle: &ChatDocHandle,
+        snapshot: &ChatConnectionSnapshot,
+    ) -> zeron_proto::ChatSyncState {
+        use zeron_proto::ChatSyncState as S;
+        if handle.publication_failed.load(Ordering::Acquire) {
+            return S::StorageError;
+        }
+        if self.inner.config.edge.is_none() {
+            return S::Local;
+        }
+        if !snapshot.sync_started {
+            return if snapshot.sync_requested {
+                S::Waiting
+            } else {
+                S::Local
+            };
+        }
+        match snapshot.stats {
+            Some(stats) if snapshot.delivery_live && stats.pending_pushes == 0 => S::Synced,
+            Some(_) if !snapshot.delivery_live && zeron_sync::wake::path_is_offline() => S::Offline,
+            _ => S::Connecting,
+        }
+    }
+
+    pub fn sync_resources(&self) -> serde_json::Value {
+        let handles = lock(&self.inner.handles);
+        let mut reasons =
+            serde_json::json!({"views":0,"writers":0,"storageFailures":0,"connections":0});
+        let mut waiting = 0usize;
+        let mut oldest = 0i64;
+        for h in handles.values() {
+            if h.messages_tx.receiver_count() > 0 || h.queue_tx.receiver_count() > 0 {
+                reasons["views"] = (reasons["views"].as_u64().unwrap() + 1).into();
+            }
+            if h.writers.load(Ordering::Acquire) > 0 {
+                reasons["writers"] = (reasons["writers"].as_u64().unwrap() + 1).into();
+            }
+            if h.publication_failed.load(Ordering::Acquire) {
+                reasons["storageFailures"] =
+                    (reasons["storageFailures"].as_u64().unwrap() + 1).into();
+            }
+            if h.sync_started.load(Ordering::Acquire) {
+                reasons["connections"] = (reasons["connections"].as_u64().unwrap() + 1).into();
+            } else if h.sync_requested.load(Ordering::Acquire) {
+                waiting += 1;
+                oldest = oldest.max(now_ms() - h.last_access.load(Ordering::Relaxed));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        let open_fds = std::fs::read_dir("/proc/self/fd")
+            .ok()
+            .map(|fds| fds.count());
+        #[cfg(not(target_os = "linux"))]
+        let open_fds: Option<usize> = None;
+        #[cfg(unix)]
+        let fd_limit = unsafe {
+            let mut limit: libc::rlimit = std::mem::zeroed();
+            (libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0).then_some(limit.rlim_cur as u64)
+        };
+        #[cfg(not(unix))]
+        let fd_limit: Option<u64> = None;
+        serde_json::json!({
+            "budget": zeron_sync::budget::shared().stats(),
+            "activeClientLimit": ACTIVE_SYNC_CAP,
+            "openDocuments": handles.len(), "waitingDocuments": waiting,
+            "documentLoads": self.inner.document_loads.load(Ordering::Relaxed),
+            "oldestWaitingAccessAgeMs": oldest, "retainedBy": reasons,
+            "openFileDescriptors": open_fds, "fileDescriptorLimit": fd_limit,
+            "durable": self.inner.store.sync_work_counts().ok().map(|(batches, jobs)| serde_json::json!({"pendingBatches": batches, "pendingJobs": jobs})),
+        })
     }
 
     /// Per-open-chat room introspection for SyncStatus / `zeron sync`.
@@ -2502,10 +3452,8 @@ impl DocHost {
         if is_message {
             self.unarchive_on_send(chat_id);
         }
-        // §7 durable delivery: when another device hosts this chat, nudge its device
-        // room so a cold host opens the doc and drains the queue. Fire-and-forget —
-        // the command is durable in the doc either way (a host that opens the chat
-        // for any other reason still executes it).
+        // The cold host must discover the command even after its room rows
+        // are ACKed. Persist that wake independently and recover it on restart.
         self.nudge_remote_host(chat_id);
         self.spawn_command_delivery(chat_id, entry, transfers);
         Ok(id)
@@ -3020,8 +3968,8 @@ impl DocHost {
 
     /// Promote one held row without ever interrupting a turn. A live,
     /// steerable turn receives it as steering; if that turn has already ended,
-    /// it starts normally as the next turn. Unsupported harnesses and
-    /// attachment-bearing rows stay untouched.
+    /// it starts normally as the next turn. Turn-boundary providers retain it
+    /// in their mailbox until ready. Attachment-bearing rows stay untouched.
     pub async fn steer_queued_now(&self, chat_id: &str, id: &str) -> Result<bool, EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
@@ -3031,14 +3979,6 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
-        let Some(sessions) = self.sessions() else {
-            return Err(EngineError::Other("sessions engine not wired".into()));
-        };
-        if !sessions.steers_mid_turn(self.harness_for(chat_id)) {
-            return Err(EngineError::Other(
-                "the selected agent cannot accept mid-turn steering".into(),
-            ));
-        }
         let Some(candidate) = handle
             .doc
             .read_queue()?
@@ -3056,6 +3996,22 @@ impl DocHost {
             return Err(EngineError::Other(
                 "queued message is blocked for editing or review".into(),
             ));
+        }
+        if self
+            .sessions()
+            .is_some_and(|sessions| sessions.defers_to_turn_end(chat_id, None))
+        {
+            // Send next: lead the ordinary rows; the drain delivers it the
+            // moment the current turn ends.
+            let Some(item) = handle.doc.take_queued(id)? else {
+                return Ok(false);
+            };
+            handle
+                .doc
+                .insert_queued(handle.steer_slot(&item.id)?, &item)?;
+            handle.queue_paused.store(false, Ordering::Release);
+            handle.publish_queue();
+            return Ok(true);
         }
         let Some(item) = handle.doc.take_queued(id)? else {
             return Ok(false);
@@ -3138,12 +4094,23 @@ impl DocHost {
             if sessions.turn_in_flight(&handle.chat_id) {
                 return; // All queued messages wait, including rows from older clients.
             }
+            // A row from another device names its images by `pending://` ref
+            // while the bytes chase it over the peer link. Hold it (in order)
+            // until they land — UploadCommit re-drains — rather than handing
+            // the agent refs it cannot open.
+            if !self.missing_row_attachments(&head).is_empty() {
+                tracing::info!(chat = %handle.chat_id, row = %head.id,
+                    "queued row held: attachment bytes in transit");
+                self.arm_attachment_wait(handle);
+                return;
+            }
             let send = QueueSend::NextTurn;
             // Take it only once we know it is going out — a row that stays in
             // the queue on a failed send is recoverable; a vanished one is not.
             let Ok(Some(item)) = handle.doc.take_queued(&head.id) else {
                 return;
             };
+            lock(&handle.steered_rows).retain(|row| row != &item.id);
             handle.publish_queue();
             if let Err(err) = self.dispatch_queued(handle, &item, send).await {
                 tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
@@ -3155,19 +4122,98 @@ impl DocHost {
         }
     }
 
+    /// A Stop acts on everything sent before it, in the order the user sent
+    /// it. Controls bypass the prompt drain (so a stalled provider stays
+    /// stoppable), which let a Stop execute before a send queued ahead of it
+    /// had dispatched: with no turn yet it did nothing and the turn then ran
+    /// in full; mid-turn, the earlier steer landed after the Stop and read as
+    /// the user's next message, re-running in the fresh runtime. Wait for
+    /// earlier prompts to dispatch (milliseconds) — bounded short while a
+    /// turn is in flight, so a provider wedged on backpressure still stops.
+    async fn await_earlier_prompts(
+        &self,
+        sessions: &SessionsEngine,
+        handle: &Arc<ChatDocHandle>,
+        stop_id: &str,
+    ) {
+        let started = tokio::time::Instant::now();
+        loop {
+            let bound = if sessions.turn_in_flight(&handle.chat_id) {
+                std::time::Duration::from_secs(2)
+            } else {
+                std::time::Duration::from_secs(15)
+            };
+            if started.elapsed() >= bound {
+                return;
+            }
+            let Ok(commands) = handle.doc.read_commands() else {
+                return;
+            };
+            let Some(at) = commands.iter().position(|c| c.id == stop_id) else {
+                return;
+            };
+            let earlier_prompt = commands[..at].iter().any(|c| {
+                c.status == SessionCommandStatus::Pending
+                    && matches!(
+                        c.payload,
+                        SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
+                    )
+            });
+            if !earlier_prompt {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A prompt queued after a control that is still executing (a Stop
+    /// tearing the runtime down) waits for it: running ahead of it put the
+    /// user's next message into the runtime the Stop was killing.
+    async fn await_earlier_controls(&self, handle: &Arc<ChatDocHandle>, prompt_id: &str) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while tokio::time::Instant::now() < deadline {
+            let Ok(commands) = handle.doc.read_commands() else {
+                return;
+            };
+            let Some(at) = commands.iter().position(|c| c.id == prompt_id) else {
+                return;
+            };
+            let earlier_control = {
+                let executing = lock(&self.inner.executing);
+                commands[..at].iter().any(|c| {
+                    c.status == SessionCommandStatus::Pending
+                        && !matches!(
+                            c.payload,
+                            SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
+                        )
+                        && executing.contains(&c.id)
+                })
+            };
+            if !earlier_control {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     /// Stop the active turn without treating the resulting Idle transition as
     /// permission to release the next queued message. The same lock used by
     /// drains closes the race between clicking Cancel and the status watcher.
+    /// A parked runtime still running background work is stopped too: the
+    /// idle reaper spares it, so Stop is what ends that work.
     async fn interrupt_and_pause_queue(
         &self,
         sessions: &SessionsEngine,
         handle: &Arc<ChatDocHandle>,
     ) -> Result<bool, EngineError> {
         let _drain = handle.drain_lock.lock().await;
-        if !sessions.turn_in_flight(&handle.chat_id) {
+        if !sessions.turn_in_flight(&handle.chat_id)
+            && !sessions.holds_background_work(&handle.chat_id)
+        {
             return Ok(false);
         }
         handle.queue_paused.store(true, Ordering::Release);
+        self.cancel_held_sends(handle);
         match sessions.interrupt(&handle.chat_id).await {
             Ok(true) => Ok(true),
             Ok(false) => {
@@ -3178,6 +4224,33 @@ impl DocHost {
                 handle.queue_paused.store(false, Ordering::Release);
                 Err(err)
             }
+        }
+    }
+
+    /// A Stop cancels the messages sent during the turn it stops: the sends
+    /// and steers held for that turn's end leave the queue (the user's own
+    /// queued rows stay, paused) and land in the transcript unrun — never
+    /// to start the stopped work again in the next runtime.
+    fn cancel_held_sends(&self, handle: &Arc<ChatDocHandle>) {
+        let held: Vec<String> = {
+            let mut sends = lock(&handle.held_sends);
+            let mut steered = lock(&handle.steered_rows);
+            let ids = sends.keys().cloned().chain(steered.drain(..)).collect();
+            sends.clear();
+            ids
+        };
+        let mut changed = false;
+        for id in held {
+            let Ok(Some(row)) = handle.doc.take_queued(&id) else {
+                continue;
+            };
+            changed = true;
+            if let Err(err) = handle.write_user_message(&row.id, &row.text, row.issued_at) {
+                tracing::warn!(chat = %handle.chat_id, error = %err, "cancelled held send write failed");
+            }
+        }
+        if changed {
+            handle.publish_queue();
         }
     }
 
@@ -3197,13 +4270,32 @@ impl DocHost {
         // therefore wait without disturbing the active turn's runway, then
         // anchor the prompt only once this exact row reaches the transcript.
         let message_id = item.id.clone();
-        let prompt = queued_message_prompt(&item.text, &item.attachments);
+        if !self.missing_row_attachments(item).is_empty() {
+            return Err(EngineError::Other(
+                "this message's images are still uploading".into(),
+            ));
+        }
+        let mut attachments = item.attachments.clone();
+        // A send held for the turn end goes out exactly as it was sent: its
+        // text never carried the queue's image note.
+        let held = lock(&handle.held_sends).remove(&item.id);
+        let mut prompt = if held.is_some() {
+            item.text.clone()
+        } else {
+            queued_message_prompt(&item.text, &attachments)
+        };
+        self.resolve_attachment_refs(&mut prompt, &mut attachments);
         if send == QueueSend::Steer {
             match sessions
                 .steer(chat_id, &prompt, Some(message_id.clone()))
                 .await?
             {
                 SteerOutcome::Accepted => return Ok(()),
+                SteerOutcome::DeferredByUpdate => {
+                    return Err(EngineError::Other(
+                        "agent update pending; the message remains queued".into(),
+                    ));
+                }
                 // The run died under us between the status read and the send;
                 // fall through and start a fresh turn with it.
                 SteerOutcome::NotSteerable => {}
@@ -3211,20 +4303,24 @@ impl DocHost {
         }
         // Same reading of "busy" as the drain: a turn parked on a question is
         // still a turn, and it has to be stopped before this one starts.
+        // The message replaces the turn, not the agent: its background work
+        // keeps running (only the user's Stop tears that down).
         if send == QueueSend::Interrupt && sessions.turn_in_flight(chat_id) {
-            sessions.interrupt(chat_id).await?;
+            sessions.stop_turn(chat_id).await?;
         }
         let previous = sessions.last_request(chat_id);
-        let request = self
-            .request_from_chat_row(chat_id, &prompt)
-            .map(|mut current| {
-                if let Some(previous) = &previous {
-                    current.auto_approve = previous.auto_approve;
-                    current.worktree = previous.worktree.clone();
-                }
-                current
-            })
-            .or(previous);
+        // ... and on its model, effort and options, not the chat's saved ones.
+        let request = held.or_else(|| {
+            self.request_from_chat_row(chat_id, &prompt)
+                .map(|mut current| {
+                    if let Some(previous) = &previous {
+                        current.auto_approve = previous.auto_approve;
+                        current.worktree = previous.worktree.clone();
+                    }
+                    current
+                })
+                .or(previous)
+        });
         let Some(mut request) = request else {
             return Err(EngineError::Other(
                 "no live run and no prior run config".into(),
@@ -3232,69 +4328,22 @@ impl DocHost {
         };
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
-        request.attachments = item.attachments.clone();
+        request.attachments = attachments;
         let harness = self.harness_for_request(chat_id, &request);
         self.dispatch_with_source_context(&sessions, chat_id, harness, request, Some(message_id))
             .await?;
         Ok(())
     }
 
-    /// POST `{edge}/device/{host}/nudge {chatId}` when the chat's workspace row names
-    /// another device as host. Best-effort: offline/edge-less engines skip silently.
+    /// Persist remote host discovery separately from the outgoing room rows.
+    /// A row ACK does not prove a cold host has been told to open its room.
     fn nudge_remote_host(&self, chat_id: &str) {
-        let Some(edge) = self.inner.config.edge.clone() else {
-            return;
-        };
-        let Some(workspace) = self.workspace() else {
-            return;
-        };
-        let host_device = match workspace.chat(chat_id) {
-            Ok(Some(chat)) => chat.device_id,
-            // Unclaimed chat: whoever drains first claims it — nobody to nudge.
-            _ => return,
-        };
-        if host_device == self.inner.config.device_id {
+        if self.inner.config.edge.is_none() || self.remote_host_for(chat_id).is_none() {
             return;
         }
-        // Only meaningful inside a runtime (RPC handlers, executors); bare sync
-        // callers (unit tests) skip rather than panic.
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let url = format!(
-            "{}/device/{}/nudge",
-            edge.url.trim_end_matches('/'),
-            host_device
-        );
-        let chat = chat_id.to_string();
-        self.spawn_worker_on(&runtime, async move {
-            // Fresh bearer per request — never the boot-time snapshot.
-            let bearer = match edge.bearer().await {
-                Ok(bearer) => bearer,
-                Err(err) => {
-                    tracing::warn!(chat = %chat, error = %err, "nudge skipped: token unavailable");
-                    return;
-                }
-            };
-            let send = reqwest::Client::new()
-                .post(&url)
-                .bearer_auth(&bearer)
-                .json(&serde_json::json!({ "chatId": chat }))
-                .timeout(std::time::Duration::from_secs(10))
-                .send()
-                .await;
-            match send {
-                Ok(res) if res.status().is_success() => {
-                    tracing::info!(chat = %chat, device = %host_device, "host nudged");
-                }
-                Ok(res) => tracing::warn!(chat = %chat, device = %host_device,
-                    status = res.status().as_u16(), "nudge rejected"),
-                Err(err) => {
-                    let err = describe_http_error(err);
-                    tracing::warn!(chat = %chat, error = %err, "nudge failed (best-effort)")
-                }
-            }
-        });
+        if let Err(err) = self.inner.store.schedule_sync_job(chat_id, "remote-wake") {
+            tracing::warn!(chat = %chat_id, %err, "remote host wake persistence failed");
+        }
     }
 
     /// The chat's host device when it is NOT this engine (mirrors
@@ -3654,6 +4703,14 @@ impl DocHost {
         let sessions = self
             .sessions()
             .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
+        let _prompt_guard = if matches!(
+            entry.payload,
+            SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
+        ) {
+            Some(handle.command_drain_lock.lock().await)
+        } else {
+            None
+        };
         let commands = handle.doc.read_commands()?;
         let messages = handle.doc.read_entries().unwrap_or_default();
         let current_turn_id = messages.last().map(|m| m.id.clone());
@@ -3686,8 +4743,12 @@ impl DocHost {
                 CommandDisposition::Skip => Ok("duplicate"),
                 CommandDisposition::Expired => Ok("expired"),
                 CommandDisposition::Superseded => Ok("superseded"),
-                CommandDisposition::Execute => match self.execute(&sessions, &handle, &entry).await
-                {
+                CommandDisposition::Execute => match {
+                    if _prompt_guard.is_some() {
+                        self.await_earlier_controls(&handle, &entry.id).await;
+                    }
+                    self.execute(&sessions, &handle, &entry).await
+                } {
                     Ok(_) => Ok("executed"),
                     Err(err) => Err(err),
                 },
@@ -3935,12 +4996,24 @@ impl DocHost {
     /// Drain pending commands (host-only): evaluate → mark processed BEFORE execute →
     /// execute → write the outcome as the sole outcome writer.
     pub async fn drain_commands(&self, handle: &Arc<ChatDocHandle>) {
+        self.drain_command_kind(handle, false).await;
+    }
+
+    async fn drain_command_kind(&self, handle: &Arc<ChatDocHandle>, controls_only: bool) {
         let Some(sessions) = self.sessions() else {
             return; // executor not wired yet (or retired); the set_sessions kick re-drains
         };
         if !self.is_host(&handle.chat_id) {
             return;
         }
+        // Do not let another drain overtake a prompt waiting for mailbox
+        // capacity (or preflight). Controls bypass this lock so a stalled
+        // provider can still be interrupted or have its question answered.
+        let mut prompt_guard = if controls_only {
+            None
+        } else {
+            handle.command_drain_lock.try_lock().ok()
+        };
         // Entries this pass decided to leave alone (processed dedupe hits).
         let mut skipped: HashSet<String> = HashSet::new();
         loop {
@@ -3981,9 +5054,21 @@ impl DocHost {
                     c.status == SessionCommandStatus::Pending
                         && !skipped.contains(&c.id)
                         && !is_processed(&c.id)
+                        && (prompt_guard.is_some()
+                            || !matches!(
+                                c.payload,
+                                SessionCommandPayload::Run { .. }
+                                    | SessionCommandPayload::Steer { .. }
+                            ))
                 })
                 .cloned()
             else {
+                if prompt_guard.is_none() && !controls_only {
+                    // Wait after handling controls, then re-read: simply
+                    // returning here could miss a newly appended prompt.
+                    prompt_guard = Some(handle.command_drain_lock.lock().await);
+                    continue;
+                }
                 return;
             };
             let messages = handle.doc.read_entries().unwrap_or_default();
@@ -4054,6 +5139,12 @@ impl DocHost {
                     self.resolve_command(handle, &entry.id, SessionCommandStatus::Superseded, None);
                 }
                 CommandDisposition::Execute => {
+                    if matches!(
+                        entry.payload,
+                        SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
+                    ) {
+                        self.await_earlier_controls(handle, &entry.id).await;
+                    }
                     let (status, resolution) = match self.execute(&sessions, handle, &entry).await {
                         Ok(outcome) => outcome,
                         Err(err) => (SessionCommandStatus::Rejected, Some(err.to_string())),
@@ -4110,6 +5201,7 @@ impl DocHost {
                     break;
                 }
                 host.drain_commands(&handle).await;
+                host.drain_queue(&handle).await;
                 let Some(handle) = weak.upgrade() else { break };
                 if !host.awaiting_attachments(&handle) {
                     break;
@@ -4122,11 +5214,18 @@ impl DocHost {
     /// True while some pending, unprocessed command still waits on bytes.
     fn awaiting_attachments(&self, handle: &Arc<ChatDocHandle>) -> bool {
         let commands = handle.doc.read_commands().unwrap_or_default();
-        commands.iter().any(|c| {
+        let command_waiting = commands.iter().any(|c| {
             c.status == SessionCommandStatus::Pending
                 && !self.inner.store.is_processed(&c.id).unwrap_or(false)
                 && !self.missing_attachments(c).is_empty()
-        })
+        });
+        command_waiting
+            || handle
+                .doc
+                .read_queue()
+                .ok()
+                .and_then(|q| q.into_iter().next())
+                .is_some_and(|head| !self.missing_row_attachments(&head).is_empty())
     }
 
     /// Rewrite a request's landed `pending://` refs to this device's absolute
@@ -4134,15 +5233,44 @@ impl DocHost {
     /// (and the persisted user entry) see ordinary local files, exactly like
     /// the legacy pre-upload flow produced.
     fn resolve_request_attachments(&self, request: &mut zeron_proto::RunRequest) {
+        self.resolve_attachment_refs(&mut request.prompt, &mut request.attachments);
+    }
+
+    /// Rewrite landed `pending://` refs in `attachments` (and wherever the
+    /// prompt names them) to this device's absolute paths.
+    fn resolve_attachment_refs(&self, prompt: &mut String, attachments: &mut [String]) {
         let Some(uploads) = self.inner.uploads.get() else {
             return;
         };
-        for path in request.attachments.iter_mut() {
+        for path in attachments.iter_mut() {
             if let Some(abs) = uploads.resolve_pending(path) {
-                request.prompt = request.prompt.replace(path.as_str(), &abs);
+                *prompt = prompt.replace(path.as_str(), &abs);
                 *path = abs;
             }
         }
+    }
+
+    /// A queue row's `pending://` refs whose bytes are not on this device
+    /// yet ([`Self::missing_attachments`] for rows). Covers refs in the
+    /// row's text too: older clients inlined the attachment trailer.
+    fn missing_row_attachments(&self, item: &QueuedMessage) -> Vec<String> {
+        let Some(uploads) = self.inner.uploads.get() else {
+            return Vec::new();
+        };
+        let mut refs: Vec<String> = item
+            .attachments
+            .iter()
+            .filter(|p| crate::uploads::is_pending_ref(p))
+            .cloned()
+            .collect();
+        for r in crate::uploads::pending_refs_in(&item.text) {
+            if !refs.contains(&r) {
+                refs.push(r);
+            }
+        }
+        refs.into_iter()
+            .filter(|r| uploads.resolve_pending(r).is_none())
+            .collect()
     }
 
     /// [`Self::resolve_request_attachments`] for a bare prompt (Steer).
@@ -4180,6 +5308,27 @@ impl DocHost {
         }
     }
 
+    /// `entry` is a prompt sent before the Stop that has already acted on
+    /// this chat: the Stop cancelled it. Returns its message id.
+    fn cancelled_by_stop(
+        &self,
+        handle: &Arc<ChatDocHandle>,
+        entry: &SessionCommandEntry,
+    ) -> Option<String> {
+        let message_id = match &entry.payload {
+            SessionCommandPayload::Run { message_id, .. } => message_id.clone(),
+            SessionCommandPayload::Steer { message_id, .. } => {
+                message_id.clone().unwrap_or_else(|| entry.id.clone())
+            }
+            _ => return None,
+        };
+        let stop = lock(&handle.stopped_by).clone()?;
+        let commands = handle.doc.read_commands().ok()?;
+        let at = commands.iter().position(|c| c.id == entry.id)?;
+        let stop_at = commands.iter().position(|c| c.id == stop)?;
+        (at < stop_at).then_some(message_id)
+    }
+
     async fn execute(
         &self,
         sessions: &SessionsEngine,
@@ -4187,6 +5336,24 @@ impl DocHost {
         entry: &SessionCommandEntry,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
+        if let Some(message_id) = self.cancelled_by_stop(handle, entry) {
+            // Still the user's message: it stays in the transcript, unrun.
+            let prompt = match &entry.payload {
+                SessionCommandPayload::Run { request, .. } => request.prompt.clone(),
+                SessionCommandPayload::Steer { prompt, .. } => prompt.clone(),
+                _ => String::new(),
+            };
+            if let Err(err) =
+                handle.write_user_message(&message_id, &prompt, entry.issued_at.min(now_ms()))
+            {
+                tracing::warn!(chat = %chat_id, error = %err, "cancelled message write failed");
+            }
+            tracing::info!(chat = %chat_id, "prompt sent before a Stop that has acted: cancelled");
+            return Ok((
+                SessionCommandStatus::Applied,
+                Some("cancelled by the Stop sent after it".into()),
+            ));
+        }
         match &entry.payload {
             SessionCommandPayload::Run {
                 request,
@@ -4218,6 +5385,16 @@ impl DocHost {
                 // creates the row under our device id (we are about to host it).
                 if let Some(ws) = self.workspace() {
                     ws.claim_chat(chat_id, Some(&request.cwd))?;
+                    // Older clients send `~` for a projectless run; a chat
+                    // created with a scratch folder runs there instead.
+                    if zeron_proto::projectless::is_home_cwd(&request.cwd)
+                        && let Ok(Some(chat)) = ws.chat(chat_id)
+                        && let Some(cwd) = chat.cwd.filter(|cwd| {
+                            chat.space_id.is_none() && zeron_proto::projectless::is_scratch_cwd(cwd)
+                        })
+                    {
+                        request.cwd = cwd;
+                    }
                     // A pre-existing row (the client's createChat raced ahead)
                     // still carries the repo folder — repoint it at the fresh
                     // worktree, and stamp the actual `zeron/<name>` branch so
@@ -4261,6 +5438,20 @@ impl DocHost {
                         tracing::warn!(chat = %chat_id, error = %err, "run-config backfill failed");
                     }
                 }
+                if sessions.defers_to_turn_end(chat_id, Some((harness, &request))) {
+                    self.hold_until_turn_end(
+                        handle,
+                        message_id,
+                        &request.prompt,
+                        entry.issued_at,
+                        false,
+                        Some(&request),
+                    )?;
+                    return Ok((
+                        SessionCommandStatus::Applied,
+                        Some("held until the turn ends".into()),
+                    ));
+                }
                 // Timestamp canonicalization: the user message lands in
                 // history at the moment the user SENT it (the entry's
                 // issued_at, clamped against clock skew) — not whenever this
@@ -4299,6 +5490,29 @@ impl DocHost {
                 .await
             }
             SessionCommandPayload::Interrupt {} => {
+                self.await_earlier_prompts(sessions, handle, &entry.id)
+                    .await;
+                *lock(&handle.stopped_by) = Some(entry.id.clone());
+                // Sends before this Stop that are still on their way (a slow
+                // dispatch the wait above gave up on) are cancelled with it.
+                if let Ok(commands) = handle.doc.read_commands()
+                    && let Some(at) = commands.iter().position(|c| c.id == entry.id)
+                {
+                    let earlier = commands[..at]
+                        .iter()
+                        .filter(|c| c.status == SessionCommandStatus::Pending)
+                        .filter_map(|c| match &c.payload {
+                            SessionCommandPayload::Run { message_id, .. } => {
+                                Some(message_id.clone())
+                            }
+                            SessionCommandPayload::Steer { message_id, .. } => {
+                                Some(message_id.clone().unwrap_or_else(|| c.id.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    sessions.cancel_sent_messages(&handle.chat_id, earlier);
+                }
                 self.interrupt_and_pause_queue(sessions, handle).await?;
                 Ok((SessionCommandStatus::Applied, None))
             }
@@ -4372,6 +5586,47 @@ impl DocHost {
         }
     }
 
+    /// Park a prompt for a turn-boundary agent in the visible queue instead
+    /// of its mailbox, keeping the message id so the transcript entry written
+    /// at delivery is the same message. Steers lead ordinary rows.
+    fn hold_until_turn_end(
+        &self,
+        handle: &Arc<ChatDocHandle>,
+        message_id: &str,
+        prompt: &str,
+        issued_at: i64,
+        steer: bool,
+        request: Option<&zeron_proto::RunRequest>,
+    ) -> Result<(), EngineError> {
+        let item = QueuedMessage {
+            id: message_id.to_string(),
+            text: prompt.to_string(),
+            attachments: request.map(|r| r.attachments.clone()).unwrap_or_default(),
+            hold_for_turn_end: false,
+            issued_by: self.inner.config.device_id.clone(),
+            issued_at: issued_at.min(now_ms()),
+            edited_at: None,
+            delivery_gate: None,
+        };
+        if handle.doc.read_queue()?.iter().any(|row| row.id == item.id) {
+            return Ok(()); // a redelivered command: already held
+        }
+        if let Some(request) = request {
+            lock(&handle.held_sends).insert(item.id.clone(), request.clone());
+        }
+        if steer {
+            handle
+                .doc
+                .insert_queued(handle.steer_slot(&item.id)?, &item)?;
+        } else {
+            handle.doc.push_queued(&item)?;
+        }
+        // Sending is the deliberate action that thaws a queue frozen by Cancel.
+        handle.queue_paused.store(false, Ordering::Release);
+        handle.publish_queue();
+        Ok(())
+    }
+
     /// Put a typed prompt in front of a live agent: steer it in, or — with no
     /// live steerable run — deliver the durable command as the next turn.
     /// After an engine restart `last_request` is empty too, so rebuild the run
@@ -4379,8 +5634,7 @@ impl DocHost {
     /// the chat row the same way — sessions.ts:601-620); dispatch's engine-owned
     /// resume then reattaches the prior harness conversation.
     ///
-    /// A working agent that only takes prompts at a turn boundary is the
-    /// exception: see [`Self::held_until_turn_end`].
+    /// Turn-boundary drivers retain explicit steers until their next boundary.
     async fn deliver_prompt(
         &self,
         sessions: &SessionsEngine,
@@ -4390,27 +5644,48 @@ impl DocHost {
         issued_at: i64,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
-        // Keep upstream's queued-attachment rewrite and send-time canonical
-        // history while preserving the personal cut's turn-boundary queue.
+        // Explicit steering uses the run mailbox when the agent reads it
+        // mid-turn. A turn-boundary agent would read it only after the turn,
+        // so it waits in the queue, ahead of ordinary rows, and reaches the
+        // transcript when it is actually delivered. Never interrupt to hurry
+        // steering.
         let prompt = self.resolve_prompt_attachments(prompt);
-        if self.held_until_turn_end(sessions, chat_id, &prompt, message_id.as_deref())? {
+        // A live turn without a mailbox can't take it either: the fresh
+        // dispatch below would interrupt it.
+        let unsteerable_turn =
+            sessions.turn_in_flight(chat_id) && !sessions.live_run_steerable(chat_id);
+        if !prompt.trim().is_empty()
+            && (unsteerable_turn || sessions.defers_to_turn_end(chat_id, None))
+        {
+            let id = message_id.unwrap_or_else(new_id);
+            self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None)?;
             return Ok((
                 SessionCommandStatus::Applied,
                 Some("held until the turn ends".into()),
             ));
         }
-        if let Some(message_id) = message_id.as_deref()
+        // The transcript shows the send while mailbox backpressure holds it.
+        // A pending agent update instead holds it in the queue below, where a
+        // transcript copy would duplicate it until the update finishes.
+        if !sessions.live_run_update_pending(chat_id)
+            && let Some(message_id) = message_id.as_deref()
             && let Err(err) =
                 handle.write_user_message(message_id, &prompt, issued_at.min(now_ms()))
         {
             tracing::warn!(chat = %chat_id, error = %err, "canonical user-message write failed");
         }
-        match sessions.steer(chat_id, &prompt, message_id.clone()).await? {
+        match sessions
+            .steer_at(chat_id, &prompt, message_id.clone(), issued_at)
+            .await?
+        {
             SteerOutcome::Accepted => {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok((SessionCommandStatus::Applied, None))
             }
             SteerOutcome::NotSteerable => {
+                if let Some(message_id) = message_id.as_deref() {
+                    handle.write_user_message(message_id, &prompt, issued_at.min(now_ms()))?;
+                }
                 let request = sessions
                     .last_request(chat_id)
                     .or_else(|| self.request_from_chat_row(chat_id, &prompt));
@@ -4434,52 +5709,18 @@ impl DocHost {
                     Some("queued as new turn".into()),
                 ))
             }
+            SteerOutcome::DeferredByUpdate => {
+                let id = message_id.unwrap_or_else(new_id);
+                self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None)?;
+                // The completed turn's status publication normally re-drains
+                // this queue. Also cover completion racing the enqueue itself.
+                self.drain_queue(handle).await;
+                Ok((
+                    SessionCommandStatus::Applied,
+                    Some("held until the agent update finishes".into()),
+                ))
+            }
         }
-    }
-
-    /// Put `prompt` in the pending-message queue instead of a run mailbox when
-    /// the agent is working and takes prompts only between turns. `true` when it
-    /// was queued.
-    ///
-    /// A turn-boundary agent has no mid-turn mailbox: what it has is a next
-    /// prompt. Posting into the run's mailbox anyway made delivery depend on how
-    /// the turn ended — a turn that was interrupted or errored discarded the
-    /// mailbox, and the message sat in the transcript looking sent, unread. The
-    /// queue is the honest home: shown as pending rather than sent, editable,
-    /// and flushed by the turn-end watcher, which is where [`Self::drain_queue`]
-    /// already sends a typed message for exactly this agent. `steers_mid_turn`
-    /// is a catalog lookup — no spawn, no probe.
-    fn held_until_turn_end(
-        &self,
-        sessions: &SessionsEngine,
-        chat_id: &str,
-        prompt: &str,
-        message_id: Option<&str>,
-    ) -> Result<bool, EngineError> {
-        // A persistent session parked BETWEEN turns DOES take the next prompt
-        // through its mailbox (the warm-child fast path), so the question is
-        // whether a turn is in flight — including one parked on a question,
-        // which is the state a question's own follow-up arrives in. An empty
-        // prompt is no message to queue.
-        if !sessions.turn_in_flight(chat_id)
-            || prompt.trim().is_empty()
-            || sessions.steers_mid_turn(self.harness_for(chat_id))
-        {
-            return Ok(false);
-        }
-        let handle = self.open(chat_id)?;
-        handle.doc.push_queued(&QueuedMessage {
-            id: message_id.map(str::to_string).unwrap_or_else(new_id),
-            text: prompt.to_string(),
-            attachments: Vec::new(),
-            hold_for_turn_end: false,
-            issued_by: self.inner.config.device_id.clone(),
-            issued_at: now_ms(),
-            edited_at: None,
-            delivery_gate: None,
-        })?;
-        handle.publish_queue();
-        Ok(true)
     }
 
     async fn capture_source_context(&self, cwd: &str) -> Option<ConversationSourceContext> {
@@ -4522,11 +5763,6 @@ impl DocHost {
             .await
     }
 
-    /// Create (or reuse) the isolated worktree a Run's [`zeron_proto::WorktreeSpec`]
-    /// asks for, returning the resolved cwd plus the fresh worktree when one was
-    /// actually created. Reuse guard: a chat whose row already points inside a
-    /// linked worktree of the same repo keeps it — a duplicate Run (client retry
-    /// after a lost ack, ledger reset) must not mint a second checkout.
     async fn materialize_worktree(
         &self,
         chat_id: &str,
@@ -4535,9 +5771,9 @@ impl DocHost {
         if let Some(ws) = self.workspace()
             && let Ok(Some(chat)) = ws.chat(chat_id)
             && let Some(cwd) = chat.cwd
-            && cwd != spec.repo_path
-            && crate::workspace_host::linked_worktree_root(std::path::Path::new(&cwd)).as_deref()
-                == Some(spec.repo_path.as_str())
+            && crate::workspace_host::linked_worktree_root(std::path::Path::new(&cwd)).is_some_and(
+                |root| same_file::is_same_file(&root, &spec.repo_path).unwrap_or(false),
+            )
         {
             tracing::info!(chat = %chat_id, cwd = %cwd, "worktree spec: reusing the chat's existing worktree");
             return Ok((cwd, None));
@@ -4657,6 +5893,7 @@ impl DocHost {
         };
         let config = chat.config;
         Some(zeron_proto::RunRequest {
+            mcp: None,
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
             model: config.as_ref().and_then(|c| c.model.clone()),
@@ -4708,6 +5945,14 @@ impl DocHost {
                 tracing::warn!(chat = %handle.chat_id, error = %err, "snapshot export failed");
             }
         }
+    }
+
+    /// A fork must be durable before publishing its discoverable registry row.
+    pub(crate) fn persist_fork(&self, handle: &ChatDocHandle) -> Result<(), EngineError> {
+        let bytes = handle.doc.export_snapshot()?;
+        self.inner.store.save_snapshot(&handle.chat_id, &bytes)?;
+        handle.snapshot_bytes.store(bytes.len(), Ordering::Relaxed);
+        Ok(())
     }
 
     /// Persist every open doc now (shutdown path; bypasses the debounce).
@@ -5020,6 +6265,60 @@ mod degrade_grace_tests {
         // OsPath kept its own timer through the retain.
         assert!(g.degraded(GraceKey::OsPath, true, t0 + DEGRADE_GRACE));
     }
+
+    #[tokio::test]
+    async fn dormant_chat_clears_old_degradation_before_reconnection() {
+        use super::{DocHost, DocHostConfig, EdgeConfig, lock};
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use zeron_proto::{ChatSyncState, HarnessId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = DocHost::new(
+            Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap()),
+            DocHostConfig {
+                device_id: "local".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        );
+        let handle = host.open_local("dormant").unwrap();
+        lock(&host.inner.connectivity_grace)
+            .chats
+            .insert("dormant".into(), Instant::now() - DEGRADE_GRACE * 2);
+
+        let dormant = host.compute_connectivity();
+        assert_eq!(dormant.chats[0].sync_state, ChatSyncState::Local);
+        assert!(dormant.chats[0].connected);
+        assert!(!dormant.chats[0].delivery_live);
+        assert!(
+            !lock(&host.inner.connectivity_grace)
+                .chats
+                .contains_key("dormant")
+        );
+
+        // Focus requests a connection. Its first down sample gets a new grace
+        // period even though the doc was dormant longer than DEGRADE_GRACE.
+        handle.sync_requested.store(true, Ordering::Release);
+        let waking = host.compute_connectivity();
+        assert_eq!(waking.chats[0].sync_state, ChatSyncState::Waiting);
+        assert!(waking.chats[0].connected);
+        assert!(!waking.chats[0].delivery_live);
+
+        lock(&host.inner.connectivity_grace)
+            .chats
+            .insert("dormant".into(), Instant::now() - DEGRADE_GRACE);
+        assert!(!host.compute_connectivity().chats[0].connected);
+
+        // An active chat with the same sustained outage also reports down.
+        handle.sync_started.store(true, Ordering::Release);
+        handle.sync_requested.store(false, Ordering::Release);
+        let active = host.compute_connectivity();
+        assert_eq!(active.chats[0].sync_state, ChatSyncState::Connecting);
+        assert!(!active.chats[0].connected);
+        assert!(!active.chats[0].delivery_live);
+        host.shutdown_workers().await;
+    }
 }
 
 #[cfg(test)]
@@ -5068,6 +6367,23 @@ mod queued_message_prompt_tests {
 /// by re-publishing the transcript watch, draining commands, and debouncing snapshots.
 /// Holds only a weak handle so a dropped host tears the task down.
 async fn chat_task(host: DocHost, weak: Weak<ChatDocHandle>, mut changed_rx: watch::Receiver<u64>) {
+    // Prompt delivery may wait for mailbox capacity. Keep a separate watcher
+    // for interrupt/question controls so that wait cannot block recovery.
+    let control_host = host.clone();
+    let control_weak = weak.clone();
+    let mut control_changes = changed_rx.clone();
+    host.spawn_worker(async move {
+        loop {
+            let Some(handle) = control_weak.upgrade() else {
+                break;
+            };
+            control_host.drain_command_kind(&handle, true).await;
+            drop(handle);
+            if control_changes.changed().await.is_err() {
+                break;
+            }
+        }
+    });
     // Initial pass: the snapshot may already carry pending commands. The
     // mirror stays lazy — it materializes on the first watch attach.
     {
@@ -5118,8 +6434,224 @@ async fn chat_task(host: DocHost, weak: Weak<ChatDocHandle>, mut changed_rx: wat
 mod publication_eviction_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn wakeup_handoff_waits_for_snapshot_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let host = DocHost::new(
+            store,
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let handle = host.open_local("receipt").unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("docs.sqlite3")).unwrap();
+        db.execute_batch("CREATE TRIGGER no_snapshot BEFORE INSERT ON snapshots BEGIN SELECT RAISE(FAIL,'disk unavailable'); END;").unwrap();
+        handle
+            .doc
+            .doc()
+            .get_text("body")
+            .insert(0, "received before crash")
+            .unwrap();
+        handle.doc.doc().commit();
+        assert!(
+            !host.wakeup_is_durable(&handle),
+            "cannot retire receipt while snapshot is only in memory"
+        );
+        db.execute_batch("DROP TRIGGER no_snapshot;").unwrap();
+        assert!(host.wakeup_is_durable(&handle));
+        host.shutdown_workers().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_disk_writes_pin_edits_and_resume_admission_after_recovery() {
+        let _budget_guard = SYNC_TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        );
+        let handle = host.open_local("failed").unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("docs.sqlite3")).unwrap();
+        db.execute_batch("CREATE TRIGGER injected_disk_failure BEFORE INSERT ON chat_outbox WHEN NEW.doc_id='failed' BEGIN SELECT RAISE(FAIL,'injected disk failure'); END;").unwrap();
+        handle
+            .doc
+            .doc()
+            .get_text("body")
+            .insert(0, "must survive a failed write")
+            .unwrap();
+        handle.doc.doc().commit();
+        let other = host.open("waiting-for-storage").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert_eq!(
+            host.chat_sync_state("failed"),
+            zeron_proto::ChatSyncState::StorageError
+        );
+        assert!(!other.sync_started.load(Ordering::Acquire));
+        assert!(host.pinned(&handle));
+        db.execute_batch("DROP TRIGGER injected_disk_failure;")
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while handle.publication_failed.load(Ordering::Acquire)
+                || !other.sync_started.load(Ordering::Acquire)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(lock(&handle.chat2_pending_local).is_empty());
+        host.shutdown_workers().await;
+        let reopened = DocHost::new(
+            store,
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        assert_eq!(
+            reopened
+                .open_local("failed")
+                .unwrap()
+                .doc
+                .doc()
+                .get_text("body")
+                .to_string(),
+            "must survive a failed write"
+        );
+        reopened.shutdown_workers().await;
+    }
+
+    #[tokio::test]
+    async fn caller_and_watch_protect_the_open_to_attach_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = DocHost::new(
+            Arc::new(DocsStore::open(dir.path()).unwrap()),
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let held = host.open_local("held").unwrap();
+        for i in 0..30 {
+            host.open_local(&format!("other-{i}")).unwrap();
+        }
+        assert!(lock(&host.inner.handles).contains_key("held"));
+        let watch = held.watch_messages();
+        drop(held);
+        for i in 30..60 {
+            host.open_local(&format!("other-{i}")).unwrap();
+        }
+        assert!(lock(&host.inner.handles).contains_key("held"));
+        drop(watch);
+        host.open_local("overflow").unwrap();
+        assert!(!lock(&host.inner.handles).contains_key("held"));
+        host.shutdown_workers().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opening_many_chats_bounds_active_clients() {
+        let _budget_guard = SYNC_TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let host = DocHost::new(
+            store,
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        );
+        for i in 0..300 {
+            host.open(&format!("chat-{i}")).unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        let running = lock(&host.inner.handles)
+            .values()
+            .filter(|h| h.sync_started.load(Ordering::Acquire))
+            .count();
+        assert!(
+            running > 0 && running <= ACTIVE_SYNC_CAP,
+            "active clients: {running}"
+        );
+        host.shutdown_workers().await;
+    }
+
+    #[tokio::test]
+    async fn local_open_journals_without_starting_sync_and_reuses_the_document() {
+        let _budget_guard = SYNC_TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "writer".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        );
+        let handle = host.open_local("local").unwrap();
+        handle
+            .doc
+            .doc()
+            .get_text("body")
+            .insert(0, "offline update")
+            .unwrap();
+        handle.doc.doc().commit();
+        assert!(!handle.sync_started.load(Ordering::Acquire));
+        assert!(lock(&handle.chat2).is_none());
+        assert!(!store.pending_chat_updates("local").unwrap().is_empty());
+        assert!(lock(&handle.chat2_pending_local).is_empty());
+        let same = host.open("local").unwrap();
+        assert!(Arc::ptr_eq(&handle, &same));
+        assert!(handle.sync_requested.load(Ordering::Acquire));
+        host.shutdown_workers().await;
+    }
+
+    #[tokio::test]
+    async fn salvage_inspection_does_not_open_healthy_or_unrecoverable_chats() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        );
+        for n in 0..300 {
+            let id = format!("healthy-{n}");
+            let doc = SessionDoc::init(&id).unwrap();
+            let entry: SessionMessageEntry = serde_json::from_value(serde_json::json!({
+                "id": "message", "role": "user", "parts": [], "createdAt": 1, "deviceId": "host"
+            }))
+            .unwrap();
+            doc.push_message(&entry).unwrap();
+            store
+                .save_snapshot_with_cursor(&id, &doc.export_snapshot().unwrap(), 0, 2)
+                .unwrap();
+            host.salvage_chat_transcript(&id).await.unwrap();
+        }
+        host.salvage_chat_transcript("no-recovery-source")
+            .await
+            .unwrap();
+        assert!(lock(&host.inner.handles).is_empty());
+        host.shutdown_workers().await;
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn lru_eviction_replays_unacknowledged_updates_after_reopen() {
+        let _budget_guard = SYNC_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
@@ -5149,16 +6681,16 @@ mod publication_eviction_tests {
         for i in 0..WARM_DOC_CAP {
             host.open(&format!("other-{i}")).unwrap();
         }
-        handle
-            .last_access
-            .store(now_ms() - 2 * EVICT_MIN_IDLE_MS, Ordering::Relaxed);
+
+        host.stop_sync(&handle).await;
         assert!(
             !host.pinned(&handle),
             "durably queued ops need not retain the whole doc in memory"
         );
+        drop(handle);
+        host.open("overflow").unwrap();
         host.evict_over_budget();
         assert!(!lock(&host.inner.handles).contains_key("evicted"));
-        drop(handle);
         let before = store.pending_chat_updates("evicted").unwrap();
         let reopened = host.open("evicted").unwrap();
         assert_eq!(
@@ -5170,3 +6702,10 @@ mod publication_eviction_tests {
         host.shutdown_workers().await;
     }
 }
+
+#[cfg(test)]
+#[path = "doc_host_sync_tests.rs"]
+mod sync_lifecycle_tests;
+
+#[path = "doc_host_delivery.rs"]
+mod remote_delivery;

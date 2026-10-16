@@ -314,7 +314,7 @@ impl Shell {
             Command::FocusDown => self.move_pane(Dir::Down, window, cx),
             Command::FocusNext => self.move_pane(Dir::Next, window, cx),
             Command::NewChat => {
-                self.open_new_session(cx);
+                self.open_new_session(None, cx);
                 self.enter_pane(Pane::Composer, window, cx);
                 self.composer_vim_insert(cx);
             }
@@ -328,7 +328,7 @@ impl Shell {
             }
             Command::PickDevice if in_chat => {
                 if self.state.read(cx).selected_chat.is_some() {
-                    self.open_new_session(cx);
+                    self.open_new_session(None, cx);
                 }
                 let pickers = self.composer.read(cx).pickers().clone();
                 pickers.update(cx, |p, cx| p.open_device_menu(window, cx));

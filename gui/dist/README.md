@@ -10,7 +10,11 @@ PROFILE=debug scripts/package-linux.sh   # fast smoke package
 Produces `target/package/wizard-gui-<version>-linux-<arch>.tar.gz` containing:
 
 - `wizard-gui` — the binary (headed by default; `wizard-gui headless` runs the engine alone)
-- `wizard-gui.desktop` — XDG desktop entry, `StartupWMClass` matching the window's app id
+- `wizard-gui.desktop` — XDG desktop entry template, `StartupWMClass` matching the
+  window's app id (`Exec=wizard-gui` for packagers; `install.sh` rewrites
+  `Exec`, `TryExec`, and `Icon` to absolute paths under
+  `~/.local/share/wizard-gui/current`, since `~/.local/bin` is often not on a
+  desktop session's `PATH`)
 - `wizard-gui.png` — 1024×1024 app icon
 - `install.sh` — copies the package to `~/.local/share/wizard-gui/<version>`,
   points `~/.local/share/wizard-gui/current` at it, links

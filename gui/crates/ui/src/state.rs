@@ -136,12 +136,16 @@ pub enum EngineMode {
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
     fn mode(&self) -> EngineMode;
+    async fn media_client(&self) -> Result<RpcClient, RpcError> {
+        Err(RpcError::Failed("voice media unavailable".into()))
+    }
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
 
 /// Embedded engine: owns the [`EngineCore`] and an in-memory RPC loop.
 struct InProcessEngine {
+    service: Arc<dyn RpcService>,
     runtime: Arc<tokio::sync::Mutex<Option<EngineRuntime>>>,
     boot_task: tokio::task::JoinHandle<()>,
     refresh_task: tokio::task::JoinHandle<()>,
@@ -153,6 +157,9 @@ struct InProcessEngine {
 
 #[async_trait]
 impl EngineBackend for InProcessEngine {
+    async fn media_client(&self) -> Result<RpcClient, RpcError> {
+        Ok(memory_client(self.service.clone()))
+    }
     fn client(&self) -> &RpcClient {
         &self.client
     }
@@ -257,6 +264,9 @@ struct RemoteEngine {
 
 #[async_trait]
 impl EngineBackend for RemoteEngine {
+    async fn media_client(&self) -> Result<RpcClient, RpcError> {
+        connect_ws(&self.url).await
+    }
     fn client(&self) -> &RpcClient {
         &self.client
     }
@@ -375,7 +385,8 @@ impl EngineHandle {
         //
         // Best-effort — losing the bind race with another engine costs other
         // viewports, not this one.
-        let ipc_task = match zeron_engine::serve_ipc(engine_config.ipc_port, service).await {
+        let ipc_task = match zeron_engine::serve_ipc(engine_config.ipc_port, service.clone()).await
+        {
             Ok(task) => Some(task),
             Err(err) => {
                 tracing::warn!(
@@ -389,6 +400,9 @@ impl EngineHandle {
         let runtime = Arc::new(tokio::sync::Mutex::new(None));
         let runtime_for_boot = runtime.clone();
         let service_for_boot = assembled_service.clone();
+        // Agents only learn a port THIS window serves: a lost bind race must
+        // not point their injected MCP server at some other engine.
+        let served_ipc_port = ipc_task.as_ref().map(|_| engine_config.ipc_port);
         // The instance lock rides into the boot task and is consumed by
         // assembly — held through sign-in onboarding too, because this process
         // owns the data dir from the moment it decided to embed.
@@ -424,6 +438,9 @@ impl EngineHandle {
             match Engine::assemble_runtime_with_lock(&engine_config, auth, profile, lock).await {
                 Ok(engine_runtime) => {
                     let service: Arc<dyn RpcService> = engine_runtime.core().rpc_service();
+                    if let Some(port) = served_ipc_port {
+                        engine_runtime.core().sessions.set_ipc_port(port);
+                    }
                     *runtime_for_boot.lock().await = Some(engine_runtime);
                     if service_for_boot.set(service).is_err() {
                         state_tx.send_replace(DeferredEngineState::Failed(
@@ -441,6 +458,7 @@ impl EngineHandle {
         });
         let handle = EngineHandle {
             inner: Arc::new(InProcessEngine {
+                service,
                 runtime,
                 boot_task,
                 refresh_task,
@@ -554,6 +572,10 @@ impl EngineHandle {
         self.inner.mode()
     }
 
+    pub async fn media_client(&self) -> Result<RpcClient, RpcError> {
+        self.inner.media_client().await
+    }
+
     pub fn engine_info(&self) -> &EngineInfo {
         &self.engine_info
     }
@@ -606,8 +628,18 @@ async fn query_engine_info(client: &RpcClient) -> Result<EngineInfo, RpcError> {
 pub use zeron_proto::view::{
     ChatGroup, ConnectionStatus, GatePhase, Indicator, SESSION_STALE_MS, attention_rank,
     chat_location, display_status, effective_indicator, format_time_ago, gate_phase, group_chats,
-    parse_auth_state, project_label, sort_active, sort_chats, sort_spaces, sort_tabs,
+    parse_auth_state, project_label, running_subagents, sort_active, sort_chats, sort_spaces, sort_tabs,
 };
+
+/// What a session row shows that ticks with the clock rather than with its
+/// content: the staleness-checked indicator and running-subagent count. A
+/// change in either must repaint even when the row itself is untouched.
+fn session_presence(session: &Session, now: DateTime<Utc>) -> (Indicator, u32) {
+    (
+        effective_indicator(Some(session), now),
+        running_subagents(Some(session), now),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Org gate (pure)
@@ -668,6 +700,56 @@ struct PendingSend {
 /// incident fell into.
 pub const UNDELIVERED_GRACE_MS: i64 = 120_000;
 
+/// The one-shot timer behind [`AppState::watch_clock_transitions`].
+#[derive(Default)]
+struct ClockTransitions {
+    /// Re-arms the timer after every notify.
+    observation: Option<gpui::Subscription>,
+    /// The last time observers saw current state (a notify or a wake).
+    checked_at: Option<DateTime<Utc>>,
+    wake_at: Option<DateTime<Utc>>,
+    task: Option<Task<()>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CLOCK: std::cell::Cell<Option<DateTime<Utc>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Wall-clock time for clock-driven state derivations. Tests pin it to the
+/// simulated executor's timeline with [`TestClock`].
+pub(crate) fn clock_now() -> DateTime<Utc> {
+    #[cfg(test)]
+    if let Some(now) = TEST_CLOCK.with(std::cell::Cell::get) {
+        return now;
+    }
+    Utc::now()
+}
+
+/// Pins [`clock_now`] on this test thread until dropped.
+#[cfg(test)]
+pub(crate) struct TestClock;
+
+#[cfg(test)]
+impl TestClock {
+    pub(crate) fn start(now: DateTime<Utc>) -> Self {
+        let clock = Self;
+        clock.set(now);
+        clock
+    }
+
+    pub(crate) fn set(&self, now: DateTime<Utc>) {
+        TEST_CLOCK.with(|clock| clock.set(Some(now)));
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestClock {
+    fn drop(&mut self) {
+        TEST_CLOCK.with(|clock| clock.set(None));
+    }
+}
+
 /// A send's attachment-upload leg in flight. `done` is bumped by the upload
 /// task per completed chunk (binary bytes); the working label reads it every
 /// paint (the spinner already animates each frame), so no notify plumbing is
@@ -676,6 +758,21 @@ pub const UNDELIVERED_GRACE_MS: i64 = 120_000;
 pub struct UploadProgress {
     done: std::sync::Arc<std::sync::atomic::AtomicU64>,
     total: u64,
+}
+
+pub(crate) const CANVAS_PANEL_PREFIX: &str = "space-canvas:";
+
+/// Per-space key for new-session-canvas chrome (terminal tabs, panel flags).
+pub fn canvas_panel_key(space_id: Option<&str>) -> String {
+    format!("{CANVAS_PANEL_PREFIX}{}", space_id.unwrap_or(""))
+}
+
+/// The new-session canvas's project/device pick, see [`AppState::canvas_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanvasTarget {
+    space: Option<String>,
+    no_project: bool,
+    device: Option<String>,
 }
 
 /// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
@@ -694,7 +791,7 @@ pub struct AppState {
     device_presentation: Option<Vec<(Device, bool, String)>>,
     // Presence ticks also retire stale remote session indicators. Remember
     // their last published appearance even when the device rows stay online.
-    session_presence_presentation: Vec<Indicator>,
+    session_presence_presentation: Vec<(Indicator, u32)>,
     /// Live edge posture (WatchConnectivity): drives the connection pill,
     /// composer honesty ("will queue"), and the Queued send badges.
     pub connectivity: zeron_proto::Connectivity,
@@ -706,6 +803,11 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    /// Fork RPC may arrive ahead of its registry row on a remote device.
+    pending_side_chat: Option<Chat>,
+    /// `pending_side_chat` was started by hand and nothing has minted it:
+    /// no registry row, no doc, until its first send.
+    unsaved_side_chat: bool,
     pub sessions: Vec<Session>,
     /// Synced user/org sidebar pin state. Local workspaces deliberately ignore
     /// this and continue reading their device-local settings entry.
@@ -724,6 +826,10 @@ pub struct AppState {
     /// device whose projects the project picker lists. `None` falls back to
     /// the local device.
     pub selected_device: Option<String>,
+    /// The new-session canvas's own target, set aside while a chat is open
+    /// (a chat implies ITS project/device) and put back on return, so the
+    /// canvas always reopens where the user left it.
+    pub(crate) canvas_target: Option<CanvasTarget>,
     pub selected_chat: Option<String>,
     /// Boot auto-select happened (or a manual selection superseded it).
     pub auto_selected: bool,
@@ -752,6 +858,9 @@ pub struct AppState {
     /// Changes only when transcript/optimistic content changes. Presence,
     /// catalogs and other app-state notifications need no row derivation.
     pub(crate) transcript_revision: u64,
+    /// Changes whenever an input of [`Self::file_link_roots`] does — chat
+    /// rows, projects, this device's id — so views can memoize the roots.
+    pub(crate) link_roots_revision: u64,
     /// Optimistic user echoes per chat id, shown until the doc frame carrying
     /// the same message id arrives (client-minted ids make dedup exact).
     echoes: HashMap<String, Vec<SessionMessageEntry>>,
@@ -775,9 +884,14 @@ pub struct AppState {
     pub local_device_id: Option<String>,
     /// Latest `UpdateStatus` frame — drives the sidebar update strip.
     pub update: Option<zeron_update::UpdateStatus>,
+    /// Device-local agent CLI update lifecycle. Unlike `ListHarnesses`, this
+    /// standing stream may be backed by subprocess and network probes.
+    pub harness_updates: Vec<zeron_proto::HarnessUpdateStatus>,
     /// Data directory (`ui-settings.json`, `composer-defaults.json`); set at
     /// bootstrap so child views can persist small preference files.
     pub data_dir: Option<PathBuf>,
+    /// Notifies at clock-driven transitions (see [`Self::watch_clock_transitions`]).
+    clock: ClockTransitions,
     engine: Option<EngineHandle>,
     watch_tasks: Vec<Task<()>>,
     transcript_task: Option<Task<()>>,
@@ -810,6 +924,31 @@ fn is_text_append(frame: &TranscriptFrame) -> bool {
         if upsert.is_empty() && remove.is_empty() && !append.is_empty())
 }
 
+/// Each session's presence at `now` (the lease-dependent part of a frame).
+fn session_presence_at(sessions: &[Session], now: DateTime<Utc>) -> Vec<(Indicator, u32)> {
+    sessions
+        .iter()
+        .map(|session| session_presence(session, now))
+        .collect()
+}
+
+/// Device rows as rendered at `now`: the heartbeat timestamp only through its
+/// online state and last-seen label.
+fn device_presentation_at(devices: &[Device], now: DateTime<Utc>) -> Vec<(Device, bool, String)> {
+    devices
+        .iter()
+        .map(|device| {
+            let mut metadata = device.clone();
+            metadata.last_seen_at = None;
+            (
+                metadata,
+                crate::settings::devices::device_online(device.last_seen_at, now),
+                crate::settings::devices::format_last_seen(device.last_seen_at, now),
+            )
+        })
+        .collect()
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
@@ -829,12 +968,15 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_side_chat: None,
+            unsaved_side_chat: false,
             sessions: Vec::new(),
             sidebar_preferences: SidebarPreferencesState::default(),
             session_presentation: None,
             selected_space: None,
             no_project: false,
             selected_device: None,
+            canvas_target: None,
             selected_chat: None,
             transcript: Vec::new(),
             queue: Vec::new(),
@@ -844,6 +986,7 @@ impl AppState {
             transcript_cache: Default::default(),
             prepared_transcripts: HashMap::new(),
             transcript_revision: 0,
+            link_roots_revision: 0,
             echoes: HashMap::new(),
             pending_sends: HashMap::new(),
             upload_progress: None,
@@ -852,7 +995,9 @@ impl AppState {
             review_comment_flushes: HashMap::new(),
             local_device_id: None,
             update: None,
+            harness_updates: Vec::new(),
             data_dir: None,
+            clock: ClockTransitions::default(),
             engine: None,
             watch_tasks: Vec::new(),
             transcript_task: None,
@@ -875,6 +1020,68 @@ impl AppState {
     /// first send survives the chat being minted.
     pub fn composer_key(&self) -> String {
         self.selected_chat.clone().unwrap_or_default()
+    }
+
+    /// Per-session chrome key (terminal tabs, panel open flags). Real chats
+    /// use the chat id; the new-session canvas is per-space so two projects
+    /// don't share one drawer.
+    pub fn panel_session_key(&self) -> String {
+        match self.selected_chat.as_deref() {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => canvas_panel_key(self.selected_space.as_deref()),
+        }
+    }
+
+    /// Optional `OpenTerminal` cwd. Existing chats leave this unset so the
+    /// engine reads the chat row. The canvas has no row yet — pass the
+    /// selected project's folder. When the project id is known but the
+    /// WatchSpaces row has not landed, leave cwd unset: `chatId` is
+    /// `space-canvas:{spaceId}` and the engine resolves the folder. Only
+    /// a deliberate project-less canvas sends `~`.
+    pub fn terminal_open_cwd(&self) -> Option<String> {
+        self.terminal_open_cwd_for(&self.panel_session_key())
+    }
+
+    /// [`Self::terminal_open_cwd`] for a specific panel key (the tab being
+    /// opened, which matches the selected session).
+    pub fn terminal_open_cwd_for(&self, session_key: &str) -> Option<String> {
+        let Some(space_id) = session_key.strip_prefix(CANVAS_PANEL_PREFIX) else {
+            return None;
+        };
+        if space_id.is_empty() || self.no_project {
+            return Some("~".to_string());
+        }
+        self.spaces
+            .iter()
+            .find(|space| space.id == space_id)
+            .map(|space| space.path.clone())
+            .filter(|path| !path.trim().is_empty())
+    }
+
+    /// Device to address terminal RPCs at, when it isn't this engine.
+    /// Canvas keys (`space-canvas:{space}`) resolve through the space row
+    /// (or the project-less device pick).
+    pub fn terminal_target_device(&self, session_key: &str) -> Option<String> {
+        let device = if let Some(space_id) = session_key.strip_prefix(CANVAS_PANEL_PREFIX) {
+            if space_id.is_empty() {
+                self.selected_device
+                    .clone()
+                    .or_else(|| self.local_device_id.clone())?
+            } else {
+                self.spaces
+                    .iter()
+                    .find(|space| space.id == space_id)?
+                    .device_id
+                    .clone()
+            }
+        } else {
+            self.chats
+                .iter()
+                .find(|chat| chat.id == session_key)?
+                .device_id
+                .clone()
+        };
+        (self.local_device_id.as_deref() != Some(device.as_str())).then_some(device)
     }
 
     pub fn review_comments(&self, key: &str) -> &[ReviewComment] {
@@ -978,19 +1185,37 @@ impl AppState {
         true
     }
 
-    pub fn apply_chats(&mut self, mut chats: Vec<Chat>) {
+    /// Returns whether anything observable changed. The engine re-publishes
+    /// identical lists (presence and sync churn elsewhere in the doc), and
+    /// each notify re-renders the whole shell.
+    pub fn apply_chats(&mut self, mut chats: Vec<Chat>) -> bool {
+        let mut changed = false;
+        if let Some(pending) = &self.pending_side_chat {
+            if chats.iter().any(|chat| chat.id == pending.id) {
+                self.pending_side_chat = None;
+                changed = true;
+            } else {
+                chats.push(pending.clone());
+            }
+        }
         sort_chats(&mut chats);
-        self.chats = chats;
-        self.chats_synced = true;
-        self.transcript_cache
-            .retain(|cached| self.chats.iter().any(|c| c.id == cached.chat_id));
+        if !self.chats_synced || self.chats != chats {
+            changed = true;
+            self.chats = chats;
+            self.link_roots_revision = self.link_roots_revision.wrapping_add(1);
+            self.chats_synced = true;
+            self.transcript_cache
+                .retain(|cached| self.chats.iter().any(|c| c.id == cached.chat_id));
+        }
         if let Some(selected) = &self.selected_chat
             && !self.chats.iter().any(|c| &c.id == selected)
         {
+            changed = true;
             // Selected chat vanished (deleted elsewhere): drop selection + transcript.
             self.transcript_baselines.remove(selected);
             self.prepared_transcripts.remove(selected);
             self.selected_chat = None;
+            self.restore_canvas_target();
             self.transcript.clear();
             self.context_usage = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
@@ -999,6 +1224,7 @@ impl AppState {
             self.queue.clear();
             self.queue_task = None;
         }
+        changed
     }
 
     pub fn apply_sessions(&mut self, sessions: Vec<Session>) -> bool {
@@ -1006,10 +1232,7 @@ impl AppState {
     }
 
     fn apply_sessions_at(&mut self, sessions: Vec<Session>, now: DateTime<Utc>) -> bool {
-        let presence: Vec<_> = sessions
-            .iter()
-            .map(|session| effective_indicator(Some(session), now))
-            .collect();
+        let presence = session_presence_at(&sessions, now);
         let presentation: Vec<_> = sessions
             .iter()
             .map(|session| {
@@ -1028,10 +1251,22 @@ impl AppState {
         changed
     }
 
-    pub fn apply_spaces(&mut self, mut spaces: Vec<Space>) {
+    /// Returns whether the list or the healed selection changed.
+    pub fn apply_spaces(&mut self, mut spaces: Vec<Space>) -> bool {
         sort_spaces(&mut spaces);
-        self.spaces = spaces;
-        self.spaces_synced = true;
+        let previous_selection = self.selected_space.clone();
+        let mut changed = false;
+        if !self.spaces_synced || self.spaces != spaces {
+            changed = true;
+            self.spaces = spaces;
+            self.link_roots_revision = self.link_roots_revision.wrapping_add(1);
+            self.spaces_synced = true;
+        }
+        self.heal_space_selection();
+        changed || self.selected_space != previous_selection
+    }
+
+    fn heal_space_selection(&mut self) {
         if self.no_project {
             self.selected_space = None;
             return;
@@ -1055,25 +1290,117 @@ impl AppState {
         }
     }
 
+    /// The ordered checkouts a file link from `chat_id` may resolve against:
+    /// the chat's own checkout, its parent chat's, then every project root on
+    /// the linking chat's device — an agent's paths name its own disk, so a
+    /// root on another device never owns them. Project roots have no owning
+    /// chat — a link that matches one opens by absolute path through the
+    /// linking chat. `local` marks roots whose files sit on this disk; a
+    /// remote chat's worktree still resolves links (reads go through its own
+    /// device) but cannot offer local file actions.
+    pub(crate) fn file_link_roots(
+        &self,
+        chat_id: &str,
+    ) -> Vec<crate::workspace_links::FileLinkRoot> {
+        use crate::workspace_links::FileLinkRoot;
+        // An unprobed device id means the chats on screen are the local
+        // engine's — everything shown counts as local until sync says else.
+        let on_this_device = |device: &str| {
+            self.local_device_id
+                .as_deref()
+                .is_none_or(|local| device == local)
+        };
+        let mut roots: Vec<FileLinkRoot> = Vec::new();
+        let mut push = |chat: Option<&Chat>, device: &str, root: Option<&str>| {
+            let Some(root) = root.filter(|root| !root.is_empty()) else {
+                return;
+            };
+            if roots.iter().any(|existing| existing.root == root) {
+                return;
+            }
+            roots.push(FileLinkRoot {
+                chat: chat.map(|chat| chat.id.clone()),
+                local: on_this_device(device),
+                root: root.to_owned(),
+            });
+        };
+        let chat_row = |id: &str| self.chats.iter().find(|chat| chat.id == id);
+        let linking = chat_row(chat_id);
+        // Roots on the linking chat's device; an unknown chat row falls back
+        // to this device's.
+        let on_link_device = |device: &str| match linking {
+            Some(chat) => chat.device_id == device,
+            None => on_this_device(device),
+        };
+        if let Some(chat) = linking {
+            push(Some(chat), &chat.device_id, chat.cwd.as_deref());
+        }
+        if let Some(parent) = linking
+            .and_then(|chat| chat.parent_chat_id.as_deref())
+            .and_then(chat_row)
+            .filter(|parent| on_link_device(&parent.device_id))
+        {
+            push(Some(parent), &parent.device_id, parent.cwd.as_deref());
+        }
+        for space in self
+            .spaces
+            .iter()
+            .filter(|space| on_link_device(&space.device_id))
+        {
+            push(None, &space.device_id, Some(space.path.as_str()));
+        }
+        roots
+    }
+
+    /// Whether `chat_id` lives on this device — an outside file link from it
+    /// resolves to this disk, so its menu may offer local file actions. An
+    /// unprobed device id (or an unknown chat row) counts as local, matching
+    /// `file_link_roots`.
+    pub(crate) fn chat_is_local(&self, chat_id: &str) -> bool {
+        self.chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .is_none_or(|chat| {
+                self.local_device_id
+                    .as_deref()
+                    .is_none_or(|local| chat.device_id == local)
+            })
+    }
+
     /// Optimistic local echo of a `setChatConfig` mutate: stamp the row now so
     /// the chips update on click; the next chats watch frame carries the same
     /// value once the engine applies the LWW write.
     pub fn apply_chat_config(&mut self, chat_id: &str, config: zeron_proto::ChatConfig) {
+        // The pending side chat's copy is what `apply_chats` re-inserts and
+        // what an unsaved one is minted from.
+        if let Some(chat) = self
+            .pending_side_chat
+            .as_mut()
+            .filter(|chat| chat.id == chat_id)
+        {
+            chat.config = Some(config.clone());
+        }
         if let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) {
             chat.config = Some(config);
         }
     }
 
-    pub fn apply_connectivity(&mut self, connectivity: zeron_proto::Connectivity) {
+    /// Returns whether the posture changed. The first frame after attach always
+    /// counts: it ends the bootstrap gap the shell's alert baseline waits on.
+    pub fn apply_connectivity(&mut self, connectivity: zeron_proto::Connectivity) -> bool {
+        let changed = !self.connectivity_observed || self.connectivity != connectivity;
         self.connectivity = connectivity;
         self.connectivity_observed = true;
+        changed
     }
 
     /// Is this chat's delivery path degraded — will a send QUEUE rather than
     /// reach its executor promptly? Locally-hosted chats are never degraded
     /// (a queued command executes on this device even fully offline). Remote
-    /// chats degrade when the OS says offline, when the chat's own edge room
-    /// is down, or when the host device has gone presence-dark.
+    /// chats degrade when the OS is offline, when registry recovery is needed
+    /// to restore their delivery path, when an active room stays down, or when
+    /// the host device has gone presence-dark. A Local sync state is normal
+    /// dormancy while the global connection and remote host are healthy.
     pub fn chat_delivery_degraded(&self, chat_id: &str) -> bool {
         use zeron_proto::ConnectivityState as S;
         if self.connectivity.state == S::Disabled {
@@ -1082,24 +1409,31 @@ impl AppState {
         let Some(chat) = self.chats.iter().find(|c| c.id == chat_id) else {
             // Unknown chat (a just-minted canvas send): only the global
             // state can speak.
-            return self.connectivity.state == S::Offline;
+            return self.connectivity.state != S::Connected;
         };
         if Some(chat.device_id.as_str()) == self.local_device_id.as_deref() {
             return false;
         }
-        if self.connectivity.state == S::Offline {
+        if self.connectivity.state == S::Offline
+            || !self.device_online(&chat.device_id, Utc::now())
+        {
             return true;
         }
-        let room_down = match self
+        let net = self
             .connectivity
             .chats
             .iter()
-            .find(|c| c.chat_id == chat_id)
-        {
+            .find(|c| c.chat_id == chat_id);
+        if self.connectivity.state == S::Reconnecting {
+            // The registry can be down while this chat's room or HTTP fallback
+            // still delivers. A dormant or unknown chat has no such proof.
+            return !net.is_some_and(|net| net.delivery_live);
+        }
+        match net {
+            Some(net) if net.sync_state == zeron_proto::ChatSyncState::Local => false,
             Some(net) => !net.connected,
-            None => self.connectivity.state != S::Connected,
-        };
-        room_down || !self.device_online(&chat.device_id, Utc::now())
+            None => false,
+        }
     }
 
     /// A send is queued: in flight AND its delivery path is degraded — the
@@ -1127,23 +1461,8 @@ impl AppState {
             self.change_requests
                 .clear_unsupported_on_version_change(&device.id, device.version.as_deref());
         }
-        let presentation: Vec<_> = devices
-            .iter()
-            .map(|device| {
-                let mut metadata = device.clone();
-                metadata.last_seen_at = None;
-                (
-                    metadata,
-                    crate::settings::devices::device_online(device.last_seen_at, now),
-                    crate::settings::devices::format_last_seen(device.last_seen_at, now),
-                )
-            })
-            .collect();
-        let session_presence: Vec<_> = self
-            .sessions
-            .iter()
-            .map(|session| effective_indicator(Some(session), now))
-            .collect();
+        let presentation = device_presentation_at(&devices, now);
+        let session_presence = session_presence_at(&self.sessions, now);
         let changed = self.device_presentation.as_ref() != Some(&presentation)
             || self.session_presence_presentation != session_presence;
         self.device_presentation = Some(presentation);
@@ -1208,15 +1527,33 @@ impl AppState {
         self.update = Some(status);
     }
 
-    pub fn apply_auth(&mut self, auth: AuthState) {
+    pub fn apply_harness_updates(
+        &mut self,
+        statuses: Vec<zeron_proto::HarnessUpdateStatus>,
+    ) -> bool {
+        if self.harness_updates == statuses {
+            return false;
+        }
+        self.harness_updates = statuses;
+        true
+    }
+
+    pub fn apply_auth(&mut self, auth: AuthState) -> bool {
+        if self.auth.as_ref() == Some(&auth) {
+            return false;
+        }
         self.auth = Some(auth);
+        true
     }
 
     /// Tolerant AuthStatus frame reducer (see [`parse_auth_state`]).
-    pub fn apply_auth_value(&mut self, value: serde_json::Value) {
+    pub fn apply_auth_value(&mut self, value: serde_json::Value) -> bool {
         match parse_auth_state(&value) {
             Some(auth) => self.apply_auth(auth),
-            None => tracing::warn!("dropping unrecognized AuthStatus frame"),
+            None => {
+                tracing::warn!("dropping unrecognized AuthStatus frame");
+                false
+            }
         }
     }
 
@@ -1491,11 +1828,16 @@ impl AppState {
 
     /// A `WatchTransfers` snapshot: the engine-side relay leg's in-flight
     /// queued-attachment transfers, replacing the whole set each frame.
-    pub fn apply_transfers(&mut self, transfers: Vec<zeron_proto::TransferProgress>) {
-        self.transfers = transfers
+    pub fn apply_transfers(&mut self, transfers: Vec<zeron_proto::TransferProgress>) -> bool {
+        let transfers: HashMap<_, _> = transfers
             .into_iter()
             .map(|t| (t.upload_id, (t.done, t.total)))
             .collect();
+        if self.transfers == transfers {
+            return false;
+        }
+        self.transfers = transfers;
+        true
     }
 
     /// Percent of one queued attachment's relay transfer, by the uploadId
@@ -1568,6 +1910,28 @@ impl AppState {
         }
     }
 
+    /// A send the host held for the next turn shows as its queue row, not
+    /// as an echo: drop echoes (and the pending-send overlay) for queued ids.
+    pub fn apply_queue(&mut self, items: Vec<zeron_doc::QueuedMessage>) {
+        if let Some(chat_id) = self.selected_chat.as_deref() {
+            if let Some(echoes) = self.echoes.get_mut(chat_id) {
+                let before = echoes.len();
+                echoes.retain(|echo| !items.iter().any(|q| q.id == echo.id));
+                if echoes.len() != before {
+                    self.transcript_revision = self.transcript_revision.wrapping_add(1);
+                }
+            }
+            if self
+                .pending_sends
+                .get(chat_id)
+                .is_some_and(|p| items.iter().any(|q| q.id == p.message_id))
+            {
+                self.pending_sends.remove(chat_id);
+            }
+        }
+        self.queue = items;
+    }
+
     /// Unconfirmed echoes for the selected chat, in send order.
     pub fn pending_echoes(&self) -> &[SessionMessageEntry] {
         self.selected_chat
@@ -1583,10 +1947,11 @@ impl AppState {
     /// another chat (`parent_chat_id`, the Zeron MCP's orchestration link)
     /// are the parent's workers, not sessions the user started: they stay
     /// reachable by id/deep link but never take a sidebar row or jump slot.
+    /// Voice orchestrator chats are hidden the same way.
     pub fn visible_chats(&self) -> impl Iterator<Item = &Chat> {
         self.chats
             .iter()
-            .filter(|c| !c.archived && c.parent_chat_id.is_none())
+            .filter(|c| !c.archived && c.is_top_level())
     }
 
     pub(crate) fn restore_composer_target(
@@ -1606,6 +1971,34 @@ impl AppState {
             } else {
                 defaults.project.clone()
             };
+        }
+    }
+
+    fn current_canvas_target(&self) -> CanvasTarget {
+        CanvasTarget {
+            space: self.selected_space.clone(),
+            no_project: self.no_project,
+            device: self.selected_device.clone(),
+        }
+    }
+
+    /// Put back the canvas target set aside when a chat opened. A project
+    /// deleted meanwhile heals the way [`Self::apply_spaces`] would.
+    fn restore_canvas_target(&mut self) {
+        let Some(target) = self.canvas_target.take() else {
+            return;
+        };
+        self.selected_device = target.device;
+        self.no_project = target.no_project;
+        self.selected_space = target.space;
+        if self.spaces_synced
+            && !self.no_project
+            && self
+                .selected_space
+                .as_ref()
+                .is_none_or(|id| !self.spaces.iter().any(|s| &s.id == id))
+        {
+            self.selected_space = self.first_space_on_picked_device();
         }
     }
 
@@ -1629,17 +2022,22 @@ impl AppState {
     }
 
     /// Pick the composer's target device. Keeps the project pick consistent:
-    /// a project on another device can't survive the switch — fall back to
-    /// the first project on the new device, else "no project".
+    /// it moves to the project's checkout on the new device, else the first
+    /// project there, else "no project".
     pub fn select_device(&mut self, device_id: String, cx: &mut Context<Self>) {
-        let project_moves = self
+        let moving = self
             .selected_space_row()
-            .is_some_and(|s| s.device_id != device_id);
-        if project_moves {
+            .filter(|s| s.device_id != device_id);
+        if let Some(space) = moving {
             let first = self
-                .spaces_sorted()
-                .iter()
+                .project_members(space)
+                .into_iter()
                 .find(|s| s.device_id == device_id)
+                .or_else(|| {
+                    self.spaces_sorted()
+                        .into_iter()
+                        .find(|s| s.device_id == device_id)
+                })
                 .map(|s| s.id.clone());
             self.no_project = first.is_none();
             self.selected_space = first;
@@ -1663,6 +2061,35 @@ impl AppState {
 
     pub fn space_for_chat(&self, chat: &Chat) -> Option<&Space> {
         self.space_row(chat.space_id.as_deref()?)
+    }
+
+    /// The space whose name and color stand for `space`'s whole project
+    /// ([`zeron_proto::view::representative_space`]).
+    pub fn representative_space<'a>(&'a self, space: &'a Space) -> &'a Space {
+        zeron_proto::view::representative_space(&self.spaces, space)
+    }
+
+    /// Every space of `space`'s project ([`zeron_proto::view::project_key`]):
+    /// this device's first, then by device name and path.
+    pub fn project_members(&self, space: &Space) -> Vec<&Space> {
+        let key = zeron_proto::view::project_key(space);
+        let local = self.local_device_id.as_deref();
+        let mut members: Vec<&Space> = self
+            .spaces
+            .iter()
+            .filter(|s| zeron_proto::view::project_key(s) == key)
+            .collect();
+        members.sort_by_key(|s| {
+            (
+                local != Some(s.device_id.as_str()),
+                self.device_name(&s.device_id)
+                    .unwrap_or_default()
+                    .to_lowercase(),
+                s.path.clone(),
+                s.id.clone(),
+            )
+        });
+        members
     }
 
     /// Non-archived chats of a space in tab (creation) order. Chats with a
@@ -1751,17 +2178,97 @@ impl AppState {
         now: DateTime<Utc>,
         space_filter: Option<&str>,
     ) -> Vec<(ChatIndicator, &Chat)> {
+        let in_filter = self.project_filter(space_filter);
         self.overview_chats(now)
             .into_iter()
-            .filter(|(_, chat)| match space_filter {
-                Some(space_id) => chat.space_id.as_deref() == Some(space_id),
-                None => true,
-            })
+            .filter(|(_, chat)| in_filter(chat))
             .collect()
+    }
+
+    /// The sidebar's project filter matches by repository: it stores one
+    /// checkout's space id, and a chat in ANY checkout of that repository
+    /// (clones and worktrees on every device, [`zeron_proto::view::project_key`])
+    /// matches. A filter naming a space not synced here matches its own id.
+    pub fn project_filter<'a>(&'a self, filter: Option<&str>) -> impl Fn(&Chat) -> bool + 'a {
+        let filter = filter.map(|id| {
+            (
+                id.to_owned(),
+                self.space_row(id).map(zeron_proto::view::project_key),
+            )
+        });
+        move |chat| {
+            let Some((id, key)) = &filter else {
+                return true;
+            };
+            match chat.space_id.as_deref() {
+                Some(space_id) if space_id == id => true,
+                Some(space_id) => key.as_ref().is_some_and(|key| {
+                    self.space_row(space_id)
+                        .is_some_and(|space| zeron_proto::view::project_key(space) == *key)
+                }),
+                None => false,
+            }
+        }
+    }
+
+    /// Every project — one per repository across devices — as its checkouts
+    /// in [`Self::project_members`] order (this device's first), ordered by
+    /// the project's name.
+    pub fn projects(&self) -> Vec<Vec<&Space>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut projects: Vec<Vec<&Space>> = self
+            .spaces
+            .iter()
+            .filter(|space| seen.insert(zeron_proto::view::project_key(space)))
+            .map(|space| self.project_members(space))
+            .collect();
+        projects.sort_by_key(|members| {
+            let representative = self.representative_space(members[0]);
+            (
+                representative.display_name().to_lowercase(),
+                representative.id.clone(),
+            )
+        });
+        projects
+    }
+
+    /// A project's host tag: its one device as in [`Self::space_device_tag`],
+    /// else the devices holding a checkout. Offline only when every one is.
+    pub fn project_device_tag(&self, members: &[&Space], now: DateTime<Utc>) -> (String, bool) {
+        let mut devices: Vec<&str> = Vec::new();
+        for member in members {
+            if !devices.contains(&member.device_id.as_str()) {
+                devices.push(member.device_id.as_str());
+            }
+        }
+        match devices.as_slice() {
+            [] => (String::new(), false),
+            [_] => self.space_device_tag(members[0], now),
+            _ => {
+                let offline = devices.iter().all(|d| !self.device_online(d, now));
+                let tag = if devices.len() == 2 {
+                    devices
+                        .iter()
+                        .map(|d| self.device_name(d).unwrap_or("Unknown device"))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                } else {
+                    format!("{} devices", devices.len())
+                };
+                (format!("@ {tag}"), offline)
+            }
+        }
     }
 
     pub fn session_for(&self, chat_id: &str) -> Option<&Session> {
         self.sessions.iter().find(|s| s.chat_id == chat_id)
+    }
+
+    /// Subagents running under `chat_id` right now (the engine's count on its
+    /// session row; 0 once that row goes stale). Every device can ask, opened
+    /// chat or not.
+    pub fn running_subagents_for(&self, chat_id: &str, now: DateTime<Utc>) -> u32 {
+        running_subagents(self.session_for(chat_id), now)
     }
 
     /// Staleness-checked status dot for a chat row. A send in flight reads as
@@ -1771,6 +2278,113 @@ impl AppState {
             return Indicator::Working;
         }
         effective_indicator(self.session_for(chat_id), now)
+    }
+
+    /// The earliest moment after `now` at which a clock-derived value flips
+    /// with no frame to announce it: a Working/AwaitingInput session going
+    /// stale ([`SESSION_STALE_MS`]), a remote device leaving its online window
+    /// (offline glyphs, degraded delivery, Queued badges), or a pending send's
+    /// grace expiring into "Not delivered". Each deadline is the first instant
+    /// the predicate reads differently. Relative-time labels are excluded:
+    /// they advance on the views' minute heartbeat. Pure.
+    pub fn next_clock_transition(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.clock_deadlines()
+            .filter(|deadline| *deadline > now)
+            .min()
+    }
+
+    /// Whether any clock-driven transition fell in `(from, to]`. Heartbeats
+    /// that move a deadline later without notifying (session and device
+    /// liveness leases) leave an armed timer early; this tells a real
+    /// transition from such an obsolete wake. Pure.
+    fn clock_transition_between(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> bool {
+        self.clock_deadlines()
+            .any(|deadline| from < deadline && deadline <= to)
+    }
+
+    fn clock_deadlines(&self) -> impl Iterator<Item = DateTime<Utc>> + '_ {
+        let stale = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                matches!(
+                    session.status,
+                    zeron_proto::SessionStatus::Working | zeron_proto::SessionStatus::AwaitingInput
+                )
+            })
+            // `age_ms > SESSION_STALE_MS` first holds one millisecond past it.
+            .map(|session| {
+                session.updated_at + chrono::TimeDelta::milliseconds(SESSION_STALE_MS + 1)
+            });
+        let offline = self
+            .devices
+            .iter()
+            .filter(|device| self.local_device_id.as_deref() != Some(device.id.as_str()))
+            .filter_map(|device| device.last_seen_at)
+            // Whole seconds `<= DEVICE_ONLINE_WINDOW_SECS` stay online.
+            .map(|at| {
+                at + chrono::TimeDelta::seconds(
+                    crate::settings::devices::DEVICE_ONLINE_WINDOW_SECS + 1,
+                )
+            });
+        let grace = self.pending_sends.values().map(|pending| {
+            pending.started + chrono::TimeDelta::milliseconds(UNDELIVERED_GRACE_MS + 1)
+        });
+        stale.chain(offline).chain(grace)
+    }
+
+    /// Notify this entity at every clock-driven transition, so each state
+    /// observer (composer interrupts, session sounds, views) sees a session
+    /// go stale, a device go dark or a send's grace expire on time — no state
+    /// frame announces those. Idempotent; every notify re-arms a single
+    /// one-shot timer for the next deadline, so idle state never polls.
+    pub fn watch_clock_transitions(&mut self, cx: &mut Context<Self>) {
+        if self.clock.observation.is_none() {
+            self.clock.observation =
+                Some(cx.observe_self(|state, cx| state.arm_clock_transition(cx)));
+        }
+        self.arm_clock_transition(cx);
+    }
+
+    /// Re-evaluate the clock-dependent parts of the change-detection caches.
+    fn refresh_clock_presentations(&mut self, now: DateTime<Utc>) {
+        self.session_presence_presentation = session_presence_at(&self.sessions, now);
+        if self.device_presentation.is_some() {
+            self.device_presentation = Some(device_presentation_at(&self.devices, now));
+        }
+    }
+
+    fn arm_clock_transition(&mut self, cx: &mut Context<Self>) {
+        let now = clock_now();
+        self.clock.checked_at = Some(now);
+        let wake = self.next_clock_transition(now);
+        if wake == self.clock.wake_at && self.clock.task.is_some() {
+            return;
+        }
+        self.clock.wake_at = wake;
+        self.clock.task = wake.map(|wake| {
+            let delay = (wake - now).to_std().unwrap_or_default();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(delay).await;
+                this.update(cx, |state, cx| {
+                    state.clock.wake_at = None;
+                    state.clock.task = None;
+                    let now = clock_now();
+                    let from = state.clock.checked_at.unwrap_or(now);
+                    if state.clock_transition_between(from, now) {
+                        // Record what this transition changed, so the frame
+                        // that later reverts it (a heartbeat reviving the
+                        // session or device) compares unequal and notifies.
+                        state.refresh_clock_presentations(now);
+                        // The self-observer re-arms for the next deadline.
+                        cx.notify();
+                    } else {
+                        state.arm_clock_transition(cx);
+                    }
+                })
+                .ok();
+            })
+        });
     }
 
     pub fn selected_chat_row(&self) -> Option<&Chat> {
@@ -1823,12 +2437,15 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_side_chat = None;
+        self.unsaved_side_chat = false;
         self.sessions.clear();
         self.sidebar_preferences = SidebarPreferencesState::default();
         self.session_presentation = None;
         self.selected_space = None;
         self.no_project = false;
         self.selected_device = None;
+        self.canvas_target = None;
         self.selected_chat = None;
         self.auto_selected = false;
         self.chats_synced = false;
@@ -1846,7 +2463,106 @@ impl AppState {
         self.transfers.clear();
         self.local_device_id = None;
         self.update = None;
+        self.link_roots_revision = self.link_roots_revision.wrapping_add(1);
         cx.notify();
+    }
+
+    /// Independent selection and transcript subscriptions over the same engine.
+    /// An `unsaved` chat is a hand-started side chat nothing has written yet:
+    /// it opens no doc until its first send mints it (see
+    /// [`Self::unsaved_side_chat_create`]).
+    pub(crate) fn side_chat_state(
+        parent: &Entity<Self>,
+        chat: Chat,
+        unsaved: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let source = parent.read(cx);
+        let engine = source.engine.clone();
+        let mut state = Self::new();
+        state.chats = source.chats.clone();
+        if !state.chats.iter().any(|c| c.id == chat.id) {
+            state.chats.push(chat.clone());
+        }
+        state.spaces = source.spaces.clone();
+        state.devices = source.devices.clone();
+        state.data_dir = source.data_dir.clone();
+        state.auto_selected = true;
+        state.pending_side_chat = Some(chat.clone());
+        state.unsaved_side_chat = unsaved;
+        if let Some(engine) = engine {
+            state.attach_engine(engine, cx);
+        }
+        state.select_chat(Some(chat.id), cx);
+        state.watch_clock_transitions(cx);
+        state
+    }
+
+    /// This is a side chat's state whose chat its first send has yet to mint.
+    pub(crate) fn side_chat_unsaved(&self) -> bool {
+        self.unsaved_side_chat
+    }
+
+    /// The harness can change until the first send snapshots it.
+    /// Keep the harness fixed while createChat is in flight, including uploads.
+    pub(crate) fn side_chat_harness_editable(&self) -> bool {
+        self.unsaved_side_chat
+            && self
+                .selected_chat
+                .as_ref()
+                .is_some_and(|id| !self.pending_sends.contains_key(id))
+    }
+
+    fn is_unsaved_side_chat(&self, chat_id: &str) -> bool {
+        self.unsaved_side_chat
+            && self
+                .pending_side_chat
+                .as_ref()
+                .is_some_and(|chat| chat.id == chat_id)
+    }
+
+    /// The `Mutate createChat` params that mint the unsaved side chat
+    /// `chat_id` on its first send; `None` once it exists.
+    pub(crate) fn unsaved_side_chat_create(&self, chat_id: &str) -> Option<serde_json::Value> {
+        if !self.is_unsaved_side_chat(chat_id) {
+            return None;
+        }
+        let chat = self.pending_side_chat.as_ref()?;
+        Some(serde_json::json!({
+            "op": "createChat",
+            "chatId": chat.id,
+            "deviceId": chat.device_id,
+            "spaceId": chat.space_id,
+            "config": chat.config,
+            "branch": chat.branch,
+            "cwd": chat.cwd,
+            "parentChatId": chat.parent_chat_id,
+        }))
+    }
+
+    /// The unsaved side chat now exists: attach the doc watches it deferred.
+    pub(crate) fn side_chat_saved(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        if !self.is_unsaved_side_chat(chat_id) {
+            return;
+        }
+        self.unsaved_side_chat = false;
+        if self.selected_chat.as_deref() == Some(chat_id) {
+            self.focus_chat_sync(chat_id, cx);
+            self.start_chat_watches(chat_id.to_owned(), cx);
+        }
+    }
+
+    fn start_chat_watches(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+        if handle
+            .engine_info()
+            .supports(zeron_proto::capabilities::MESSAGE_QUEUE_V1)
+        {
+            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+        }
     }
 
     // ---- gpui glue ----
@@ -1893,8 +2609,14 @@ impl AppState {
         // baseline instead of comparing the new runtime with the old one.
         self.connectivity_observed = false;
         let engine_info = handle.engine_info();
+        let supports_harness_updates =
+            engine_info.supports(zeron_proto::capabilities::HARNESS_UPDATES_V1);
         self.workspace_scope = Some(engine_info.workspace_scope);
         self.local_device_id = Some(engine_info.device_id.clone());
+        self.link_roots_revision = self.link_roots_revision.wrapping_add(1);
+        if !supports_harness_updates {
+            self.harness_updates.clear();
+        }
         self.engine = Some(handle.clone());
         let mut watch_tasks = Vec::with_capacity(10);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
@@ -1924,29 +2646,27 @@ impl AppState {
                 cx,
                 handle.clone(),
                 methods::WATCH_CONNECTIVITY,
-                |state, value| {
-                    state.apply_connectivity(value);
-                    true
-                },
+                AppState::apply_connectivity,
             ),
             spawn_watch(
                 cx,
                 handle.clone(),
                 methods::WATCH_TRANSFERS,
-                |state, value| {
-                    state.apply_transfers(value);
-                    true
-                },
+                AppState::apply_transfers,
             ),
-            spawn_watch(cx, handle.clone(), methods::WATCH_SPACES, |state, value| {
-                state.apply_spaces(value);
-                true
-            }),
+            spawn_watch(
+                cx,
+                handle.clone(),
+                methods::WATCH_SPACES,
+                AppState::apply_spaces,
+            ),
             // Auth frames parse tolerantly — engine and proto tags differ today.
-            spawn_watch(cx, handle.clone(), methods::AUTH_STATUS, |state, value| {
-                state.apply_auth_value(value);
-                true
-            }),
+            spawn_watch(
+                cx,
+                handle.clone(),
+                methods::AUTH_STATUS,
+                AppState::apply_auth_value,
+            ),
             spawn_watch(
                 cx,
                 handle.clone(),
@@ -1958,6 +2678,14 @@ impl AppState {
             ),
             spawn_local_device_probe(cx, handle.clone()),
         ]);
+        if supports_harness_updates {
+            watch_tasks.push(spawn_watch(
+                cx,
+                handle.clone(),
+                methods::WATCH_HARNESS_UPDATES,
+                AppState::apply_harness_updates,
+            ));
+        }
         self.watch_tasks = watch_tasks;
         self.reconcile_change_request_watches(cx);
         // EngineInfo is part of the attachment boundary: views must know which
@@ -2027,29 +2755,34 @@ impl AppState {
         cx.notify();
     }
 
-    fn apply_pending_deep_link(&mut self, cx: &mut Context<Self>) {
+    /// Returns whether a pending link was resolved (selected or rejected).
+    fn apply_pending_deep_link(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(link) = self.pending_deep_link.clone() else {
-            return;
+            return false;
         };
         let Some(locator) = crate::links::workspace_locator(
             self.workspace_scope,
             self.auth.as_ref(),
             self.local_device_id.as_deref(),
         ) else {
-            return;
+            return false;
         };
         if locator != link.workspace {
             self.pending_deep_link = None;
             self.deep_link_notice =
                 Some("This conversation link belongs to another workspace".into());
-            return;
+            return true;
         }
         if self.chats.iter().any(|chat| chat.id == link.chat_id) {
             self.pending_deep_link = None;
             self.select_chat(Some(link.chat_id), cx);
+            true
         } else if self.chats_synced {
             self.pending_deep_link = None;
             self.deep_link_notice = Some("The linked conversation was not found".into());
+            true
+        } else {
+            false
         }
     }
 
@@ -2062,12 +2795,22 @@ impl AppState {
     /// watch server-side. Selecting a chat also lands in its space and marks it
     /// seen (a global-list click must switch the tab strip too).
     pub fn select_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
+        if let Some(id) = &chat_id
+            && !self.is_unsaved_side_chat(id)
+        {
+            self.focus_chat_sync(id, cx);
+        }
         if self.selected_chat == chat_id {
             // Re-selecting still clears a fresh "completed" badge.
             if let Some(id) = chat_id {
                 self.mark_chat_seen(&id, cx);
             }
             return;
+        }
+        match (&self.selected_chat, &chat_id) {
+            (None, Some(_)) => self.canvas_target = Some(self.current_canvas_target()),
+            (Some(_), None) => self.restore_canvas_target(),
+            _ => {}
         }
         // Take the destination before trimming: switching to the oldest warm
         // transcript must not evict the very entry we are about to display.
@@ -2159,7 +2902,7 @@ impl AppState {
         self.queue_task = None;
         if let Some(id) = chat_id.as_deref() {
             // A chat implies its project (or the lack of one); `select_chat(None)`
-            // (the new-session canvas) keeps the current project pick.
+            // (the new-session canvas) restores the pick set aside above.
             if let Some(chat) = self.chats.iter().find(|c| c.id == id) {
                 match chat.space_id.clone() {
                     Some(space_id) => {
@@ -2175,14 +2918,12 @@ impl AppState {
             }
             self.mark_chat_seen(id, cx);
         }
-        if let (Some(chat_id), Some(handle)) = (chat_id, self.engine.clone()) {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
-            if handle
-                .engine_info()
-                .supports(zeron_proto::capabilities::MESSAGE_QUEUE_V1)
-            {
-                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+        if let Some(chat_id) = chat_id {
+            if self.is_unsaved_side_chat(&chat_id) {
+                // Nothing to watch yet, and opening its doc would start one.
+                self.transcript_replayed = true;
+            } else {
+                self.start_chat_watches(chat_id, cx);
             }
         }
         cx.notify();
@@ -2270,6 +3011,33 @@ impl AppState {
         })
         .detach();
     }
+
+    /// Navigation signal is separate from watch lifetime: resubscribing,
+    /// receiving agent output and MCP reads cannot refresh focus priority.
+    pub(crate) fn focus_chat_sync(&self, chat_id: &str, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        let chat_id = chat_id.to_owned();
+        cx.spawn(async move |_, _| {
+            if let Err(error) = handle
+                .client()
+                .call(methods::FOCUS_CHAT, serde_json::json!({ "chatId": chat_id }))
+                .await
+            {
+                tracing::debug!(%chat_id, %error, "chat focus sync hint unavailable");
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn focus_subagent_sync(&self, doc_id: &str, cx: &mut Context<Self>) {
+        // Frozen transcripts are static blobs: navigation must not open their
+        // old room just to report focus.
+        if self.sub_watch_tasks.contains_key(doc_id) {
+            self.focus_chat_sync(doc_id, cx);
+        }
+    }
 }
 
 /// Observe assembly after an early attach (cloud onboarding or another viewport
@@ -2333,10 +3101,16 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     }
                 };
                 let alive = this.update(cx, |state, cx| {
-                    state.apply_chats(parsed);
-                    state.apply_pending_deep_link(cx);
-                    state.reconcile_change_request_watches(cx);
-                    cx.notify();
+                    // Identical re-published lists skip the re-sort fan-out:
+                    // watch reconciliation and a whole-shell re-render.
+                    let changed = state.apply_chats(parsed);
+                    let linked = state.apply_pending_deep_link(cx);
+                    if changed {
+                        state.reconcile_change_request_watches(cx);
+                    }
+                    if changed || linked {
+                        cx.notify();
+                    }
                 });
                 if alive.is_err() {
                     return;
@@ -2419,8 +3193,9 @@ fn spawn_change_request_watch(
                 };
                 if this
                     .update(cx, |state, cx| {
-                        state.change_requests.store(target.clone(), snapshot);
-                        cx.notify();
+                        if state.change_requests.store(target.clone(), snapshot) {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -2481,11 +3256,11 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                 };
                 let alive = this.update(cx, |state, cx| {
                     let changed = apply(state, parsed);
-                    state.apply_pending_deep_link(cx);
-                    if changed {
-                        if matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
-                            state.reconcile_change_request_watches(cx);
-                        }
+                    let linked = state.apply_pending_deep_link(cx);
+                    if changed && matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
+                        state.reconcile_change_request_watches(cx);
+                    }
+                    if changed || linked {
                         cx.notify();
                     }
                 });
@@ -2522,6 +3297,7 @@ fn spawn_local_device_probe(cx: &mut Context<AppState>, handle: EngineHandle) ->
         if let Some(id) = id {
             this.update(cx, |state, cx| {
                 state.local_device_id = Some(id);
+                state.link_roots_revision = state.link_roots_revision.wrapping_add(1);
                 state.apply_pending_deep_link(cx);
                 // Watches opened before this probe conservatively route through
                 // targetDeviceId. Recreate them now that local routing is known.
@@ -2539,6 +3315,8 @@ fn spawn_transcript_watch(
     handle: EngineHandle,
     chat_id: String,
 ) -> Task<()> {
+    // The scoped subscription cancels even a silent server stream on drop;
+    // otherwise a deselected chat would retain its protected sync slot.
     cx.spawn(async move |this, cx| {
         // Outer loop: a delta desync (missed frame) resubscribes immediately
         // and the fresh stream's opening reset heals the copy; a subscribe
@@ -2553,7 +3331,7 @@ fn spawn_transcript_watch(
             let params = serde_json::json!({ "chatId": chat_id, "openingTail": true });
             let mut rx = match handle
                 .client()
-                .subscribe(methods::WATCH_DOC_MESSAGES, params)
+                .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
                 .await
             {
                 Ok(rx) => rx,
@@ -2649,7 +3427,7 @@ fn spawn_queue_watch(
             let params = serde_json::json!({ "chatId": chat_id });
             let mut rx = match handle
                 .client()
-                .subscribe(methods::WATCH_QUEUE, params)
+                .subscribe_checked(methods::WATCH_QUEUE, params)
                 .await
             {
                 Ok(rx) => rx,
@@ -2673,7 +3451,7 @@ fn spawn_queue_watch(
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
-                        state.queue = frame.items;
+                        state.apply_queue(frame.items);
                         cx.notify();
                     }
                 });
@@ -2703,7 +3481,7 @@ fn spawn_subagent_watch(
             let params = serde_json::json!({ "chatId": doc_id });
             let mut rx = match handle
                 .client()
-                .subscribe(methods::WATCH_DOC_MESSAGES, params)
+                .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
                 .await
             {
                 Ok(rx) => rx,
@@ -3342,6 +4120,7 @@ mod tests {
             git_detected: false,
             git_checked_at: None,
             checkout_id: None,
+            repository_id: None,
             created_at: base + TimeDelta::minutes(created_min),
         }
     }
@@ -3354,6 +4133,7 @@ mod tests {
     ) -> Session {
         Session {
             last_completed_turn: None,
+            running_subagents: 0,
             chat_id: chat_id.into(),
             device_id: "dev".into(),
             status,
@@ -3598,6 +4378,7 @@ mod tests {
         let now = Utc::now();
         let mut row = Session {
             last_completed_turn: None,
+            running_subagents: 0,
             chat_id: "chat".into(),
             device_id: "host".into(),
             status: SessionStatus::Working,
@@ -3629,6 +4410,7 @@ mod tests {
         let now = Utc::now();
         state.sessions = vec![Session {
             last_completed_turn: None,
+            running_subagents: 0,
             chat_id: "chat".into(),
             device_id: "host".into(),
             status: SessionStatus::Working,
@@ -3982,6 +4764,137 @@ mod tests {
     }
 
     #[test]
+    fn file_link_roots_order_chat_parent_then_projects() {
+        use crate::workspace_links::FileLinkRoot;
+        let mut state = AppState::new();
+        state.local_device_id = Some("dev".into());
+        let mut parent = chat("parent", 0, None);
+        parent.cwd = Some("/repo".into());
+        let mut fork = chat("fork", 1, None);
+        fork.cwd = Some("/fork/fork".into());
+        fork.parent_chat_id = Some("parent".into());
+        // A chat hosted on another device still contributes its checkout —
+        // reads go through it — but is flagged remote so system-level file
+        // actions stay hidden.
+        let mut remote = chat("remote", 2, None);
+        remote.device_id = "other".into();
+        remote.cwd = Some("/far/worktree".into());
+        remote.parent_chat_id = Some("fork".into());
+        state.apply_chats(vec![parent, fork, remote]);
+        state.apply_spaces(vec![
+            space("local", "dev", "/projects/zeron", 0),
+            space("remote", "other", "/remote/only", 1),
+        ]);
+        let root = |chat: Option<&str>, root: &str, local: bool| FileLinkRoot {
+            chat: chat.map(str::to_owned),
+            root: root.into(),
+            local,
+        };
+
+        let roots = state.file_link_roots("fork");
+        assert_eq!(
+            roots,
+            vec![
+                root(Some("fork"), "/fork/fork", true),
+                root(Some("parent"), "/repo", true),
+                root(None, "/projects/zeron", true),
+            ],
+            "own checkout, parent, then this device's projects"
+        );
+        assert!(state.chat_is_local("fork"));
+        assert!(!state.chat_is_local("remote"));
+        // A remote chat's paths name its own device: this device's projects
+        // and a parent hosted here never own them.
+        assert_eq!(
+            state.file_link_roots("remote"),
+            vec![
+                root(Some("remote"), "/far/worktree", false),
+                root(None, "/remote/only", false),
+            ]
+        );
+
+        // An absolute path outside every known root is still a file: it
+        // resolves as an outside link owned by the linking chat.
+        let root_refs: Vec<&str> = roots.iter().map(|root| root.root.as_str()).collect();
+        assert!(matches!(
+            crate::workspace_links::first_root_owning("/elsewhere/x.md", root_refs.clone()),
+            Some(crate::workspace_links::FileLinkResolution::Outside(link))
+                if link.path == "/elsewhere/x.md" && link.outside
+        ));
+        // A path under the parent's checkout resolves to that root.
+        assert_eq!(
+            match crate::workspace_links::first_root_owning("/repo/src/lib.rs", root_refs) {
+                Some(crate::workspace_links::FileLinkResolution::Owned { root, link }) =>
+                    Some((roots[root].chat.clone(), link.path)),
+                _ => None,
+            },
+            Some((Some("parent".into()), "src/lib.rs".into()))
+        );
+    }
+
+    #[test]
+    fn canvas_terminal_uses_the_selected_project_folder() {
+        let mut state = AppState::new();
+        state.local_device_id = Some("local".into());
+        state.apply_spaces(vec![
+            space("s1", "local", "/Users/me/proj", 1),
+            space("remote-space", "remote", "/remote/proj", 2),
+        ]);
+        state.selected_chat = None;
+        state.no_project = false;
+        state.selected_space = Some("s1".into());
+
+        assert_eq!(state.panel_session_key(), "space-canvas:s1");
+        assert_eq!(state.terminal_open_cwd().as_deref(), Some("/Users/me/proj"));
+        assert_eq!(
+            state.terminal_open_cwd_for("space-canvas:s1").as_deref(),
+            Some("/Users/me/proj")
+        );
+        // Project id is known, row not in the list yet — do not send `~`.
+        state.spaces.clear();
+        assert_eq!(state.terminal_open_cwd(), None);
+        state.apply_spaces(vec![
+            space("s1", "local", "/Users/me/proj", 1),
+            space("remote-space", "remote", "/remote/proj", 2),
+        ]);
+        assert_eq!(state.terminal_open_cwd().as_deref(), Some("/Users/me/proj"));
+        assert_eq!(
+            state.terminal_target_device(&state.panel_session_key()),
+            None,
+            "local project stays on this engine"
+        );
+
+        state.selected_space = Some("remote-space".into());
+        assert_eq!(
+            state
+                .terminal_target_device("space-canvas:remote-space")
+                .as_deref(),
+            Some("remote")
+        );
+
+        state.no_project = true;
+        state.selected_space = None;
+        state.selected_device = Some("remote".into());
+        assert_eq!(state.panel_session_key(), "space-canvas:");
+        assert_eq!(state.terminal_open_cwd().as_deref(), Some("~"));
+        assert_eq!(
+            state.terminal_target_device("space-canvas:").as_deref(),
+            Some("remote")
+        );
+
+        let mut row = chat("chat-1", 0, None);
+        row.device_id = "remote".into();
+        state.chats = vec![row];
+        state.selected_chat = Some("chat-1".into());
+        assert_eq!(state.panel_session_key(), "chat-1");
+        assert_eq!(state.terminal_open_cwd(), None);
+        assert_eq!(
+            state.terminal_target_device("chat-1").as_deref(),
+            Some("remote")
+        );
+    }
+
+    #[test]
     fn projectless_preference_survives_restart_and_space_refreshes() {
         let dir = tempfile::tempdir().unwrap();
         let defaults = crate::settings::composer::ComposerDefaults {
@@ -4040,6 +4953,46 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn canvas_reopens_on_its_own_target_after_visiting_chats(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, cx| {
+            state.apply_spaces(vec![
+                space("s1", "dev", "/a", 1),
+                space("s2", "remote", "/b", 2),
+            ]);
+            let mut remote = chat("remote-chat", 1, None);
+            remote.device_id = "remote".into();
+            remote.space_id = Some("s2".into());
+            let mut loose = chat("loose-chat", 2, None);
+            loose.device_id = "remote".into();
+            state.apply_chats(vec![remote, loose.clone()]);
+            state.select_space(Some("s1".into()), cx);
+
+            // Chats imply their own target while open…
+            state.select_chat(Some("remote-chat".into()), cx);
+            assert_eq!(state.selected_space.as_deref(), Some("s2"));
+            state.select_chat(Some("loose-chat".into()), cx);
+            assert!(state.no_project);
+            // …and the canvas returns to where it was left.
+            state.select_chat(None, cx);
+            assert!(!state.no_project);
+            assert_eq!(state.selected_space.as_deref(), Some("s1"));
+            assert_eq!(state.effective_device_id().as_deref(), Some("dev"));
+
+            // A projectless canvas survives a project chat, and a chat deleted
+            // elsewhere lands back on it too.
+            state.select_space(None, cx);
+            state.select_device("remote".into(), cx);
+            state.select_chat(Some("remote-chat".into()), cx);
+            state.apply_chats(vec![loose]);
+            assert!(state.selected_chat.is_none());
+            assert!(state.no_project);
+            assert!(state.selected_space.is_none());
+            assert_eq!(state.effective_device_id().as_deref(), Some("remote"));
+        });
+    }
+
     #[test]
     fn chats_in_space_filters_and_orders() {
         let mut state = AppState::new();
@@ -4075,6 +5028,64 @@ mod tests {
     }
 
     #[test]
+    fn project_filter_and_projects_span_a_repository_across_devices() {
+        let mut state = AppState::new();
+        state.local_device_id = Some("laptop".into());
+        let mut remote = space("remote", "metal", "/w/anara", 1);
+        remote.repository_id = Some("commit:abc".into());
+        let mut local = space("local", "laptop", "/h/anara", 2);
+        local.repository_id = Some("commit:abc".into());
+        let other = space("other", "laptop", "/h/notes", 3);
+        state.apply_spaces(vec![remote, local, other]);
+        let in_space = |id: &str, space: &str| {
+            let mut chat = chat(id, 0, None);
+            chat.space_id = Some(space.into());
+            chat
+        };
+        state.apply_chats(vec![
+            in_space("on-remote", "remote"),
+            in_space("on-local", "local"),
+            in_space("on-other", "other"),
+        ]);
+
+        // One project per repository, its checkouts local-first.
+        let projects: Vec<Vec<&str>> = state
+            .projects()
+            .iter()
+            .map(|members| members.iter().map(|s| s.id.as_str()).collect())
+            .collect();
+        assert_eq!(projects, vec![vec!["local", "remote"], vec!["other"]]);
+
+        // Filtering on either checkout shows the whole repository's chats.
+        for filter in ["remote", "local"] {
+            let mut ids: Vec<&str> = state
+                .sidebar_chats(Utc::now(), Some(filter))
+                .iter()
+                .map(|(_, c)| c.id.as_str())
+                .collect();
+            ids.sort();
+            assert_eq!(ids, ["on-local", "on-remote"], "filter {filter}");
+        }
+        let other_only: Vec<&str> = state
+            .sidebar_chats(Utc::now(), Some("other"))
+            .iter()
+            .map(|(_, c)| c.id.as_str())
+            .collect();
+        assert_eq!(other_only, ["on-other"]);
+
+        // A two-device project tags both hosts; a one-device one keeps the
+        // plain host tag.
+        let anara = state.projects().into_iter().next().unwrap();
+        let (tag, _) = state.project_device_tag(&anara, Utc::now());
+        assert!(tag.starts_with("@ ") && tag.contains(" · "), "{tag}");
+        let notes = state.projects().into_iter().nth(1).unwrap();
+        assert_eq!(
+            state.project_device_tag(&notes, Utc::now()).0,
+            state.space_device_tag(notes[0], Utc::now()).0
+        );
+    }
+
+    #[test]
     fn apply_chats_drops_vanished_selection() {
         let mut state = AppState::new();
         state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
@@ -4086,6 +5097,301 @@ mod tests {
         state.selected_chat = Some("b".into());
         state.apply_chats(vec![chat("b", 1, None), chat("c", 2, None)]);
         assert_eq!(state.selected_chat.as_deref(), Some("b"));
+    }
+
+    fn clock_epoch() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-07-19T12:00:00Z")
+            .unwrap()
+            .to_utc()
+    }
+
+    /// Builds a clock-watching state at the pinned `now` and counts its
+    /// notifications.
+    fn clock_state(
+        cx: &mut gpui::TestAppContext,
+        setup: impl FnOnce(&mut AppState),
+    ) -> (
+        Entity<AppState>,
+        std::rc::Rc<std::cell::Cell<usize>>,
+        gpui::Subscription,
+    ) {
+        let state = cx.new(|cx| {
+            let mut state = AppState::new();
+            setup(&mut state);
+            state.watch_clock_transitions(cx);
+            state
+        });
+        let notifies = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = notifies.clone();
+        let subscription =
+            cx.update(|cx| cx.observe(&state, move |_, _| counter.set(counter.get() + 1)));
+        (state, notifies, subscription)
+    }
+
+    /// Steps the simulated executor and the pinned wall clock together.
+    fn advance_to(
+        cx: &mut gpui::TestAppContext,
+        clock: &TestClock,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) {
+        clock.set(to);
+        cx.executor().advance_clock((to - from).to_std().unwrap());
+    }
+
+    /// Proves the state notifies exactly once, exactly at `deadline`.
+    fn assert_state_notifies_at(
+        cx: &mut gpui::TestAppContext,
+        now: DateTime<Utc>,
+        deadline: DateTime<Utc>,
+        setup: impl FnOnce(&mut AppState),
+    ) {
+        let clock = TestClock::start(now);
+        let (_state, notifies, _subscription) = clock_state(cx, setup);
+        let before = deadline - TimeDelta::milliseconds(1);
+        advance_to(cx, &clock, now, before);
+        assert_eq!(notifies.get(), 0, "no notify before the deadline");
+        advance_to(cx, &clock, before, deadline);
+        assert_eq!(notifies.get(), 1, "one notify at the deadline");
+        // Nothing else is due: the next minute passes silently.
+        advance_to(cx, &clock, deadline, deadline + TimeDelta::minutes(1));
+        assert_eq!(notifies.get(), 1);
+    }
+
+    #[gpui::test]
+    fn stale_session_notifies_state_at_its_cutoff(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let row = session("row", SessionStatus::Working, 10, now);
+        let cutoff = row.updated_at + TimeDelta::milliseconds(SESSION_STALE_MS + 1);
+        let mut probe = AppState::new();
+        probe.sessions = vec![row.clone()];
+        assert_eq!(
+            probe.indicator_for("row", cutoff - TimeDelta::milliseconds(1)),
+            Indicator::Working
+        );
+        assert_eq!(probe.indicator_for("row", cutoff), Indicator::None);
+        assert_state_notifies_at(cx, now, cutoff, |state| state.sessions = vec![row]);
+    }
+
+    #[gpui::test]
+    fn remote_device_notifies_state_when_it_goes_offline(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let seen = now - TimeDelta::seconds(40);
+        let mut remote = device("remote", "Remote");
+        remote.last_seen_at = Some(seen);
+        // The local device is always online; its stale heartbeat is no deadline.
+        let mut local = device("local", "Local");
+        local.last_seen_at = Some(now - TimeDelta::seconds(65));
+        let offline =
+            seen + TimeDelta::seconds(crate::settings::devices::DEVICE_ONLINE_WINDOW_SECS + 1);
+        let mut probe = AppState::new();
+        probe.devices = vec![remote.clone()];
+        assert!(probe.device_online("remote", offline - TimeDelta::milliseconds(1)));
+        assert!(!probe.device_online("remote", offline));
+        assert_state_notifies_at(cx, now, offline, |state| {
+            state.local_device_id = Some("local".into());
+            state.devices = vec![local, remote];
+        });
+    }
+
+    #[gpui::test]
+    fn pending_send_notifies_state_when_its_grace_expires(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let started = now - TimeDelta::seconds(100);
+        let expiry = started + TimeDelta::milliseconds(UNDELIVERED_GRACE_MS + 1);
+        let mut probe = AppState::new();
+        probe.begin_pending_send("chat", "message", started);
+        assert!(!probe.send_undelivered("chat", expiry - TimeDelta::milliseconds(1)));
+        assert!(probe.send_undelivered("chat", expiry));
+        assert_state_notifies_at(cx, now, expiry, |state| {
+            state.begin_pending_send("chat", "message", started)
+        });
+    }
+
+    #[gpui::test]
+    fn settled_state_arms_no_clock(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let clock = TestClock::start(now);
+        let (state, notifies, _subscription) = clock_state(cx, |state| {
+            state.sessions = vec![
+                session("failed", SessionStatus::Errored, 0, now),
+                session("idle", SessionStatus::Idle, 0, now),
+            ];
+        });
+        assert!(state.read_with(cx, |state, _| state.clock.task.is_none()));
+        advance_to(cx, &clock, now, now + TimeDelta::hours(1));
+        assert_eq!(notifies.get(), 0);
+    }
+
+    #[gpui::test]
+    fn silent_heartbeat_defers_the_stale_notify(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let clock = TestClock::start(now);
+        let row = session("row", SessionStatus::Working, 10, now);
+        let first_cutoff = row.updated_at + TimeDelta::milliseconds(SESSION_STALE_MS + 1);
+        let (state, notifies, _subscription) = clock_state(cx, |state| {
+            state.apply_sessions_at(vec![row], now);
+        });
+        // A heartbeat only refreshes the lease: the reducer stores it without
+        // notifying, so the armed timer is now early.
+        let heartbeat = now + TimeDelta::seconds(20);
+        advance_to(cx, &clock, now, heartbeat);
+        state.update(cx, |state, _| {
+            let changed = state.apply_sessions_at(
+                vec![session("row", SessionStatus::Working, 0, heartbeat)],
+                heartbeat,
+            );
+            assert!(!changed);
+        });
+        advance_to(cx, &clock, heartbeat, first_cutoff);
+        assert_eq!(notifies.get(), 0, "an obsolete deadline re-arms silently");
+        let cutoff = heartbeat + TimeDelta::milliseconds(SESSION_STALE_MS + 1);
+        advance_to(
+            cx,
+            &clock,
+            first_cutoff,
+            cutoff - TimeDelta::milliseconds(1),
+        );
+        assert_eq!(notifies.get(), 0);
+        advance_to(cx, &clock, cutoff - TimeDelta::milliseconds(1), cutoff);
+        assert_eq!(notifies.get(), 1);
+    }
+
+    #[gpui::test]
+    fn revival_after_a_clock_transition_notifies_and_rearms(cx: &mut gpui::TestAppContext) {
+        let now = clock_epoch();
+        let clock = TestClock::start(now);
+        let row = session("row", SessionStatus::Working, 0, now);
+        let stale_at = now + TimeDelta::milliseconds(SESSION_STALE_MS + 1);
+        let (state, notifies, _subscription) = clock_state(cx, |state| {
+            state.apply_sessions_at(vec![row], now);
+        });
+        advance_to(cx, &clock, now, stale_at);
+        assert_eq!(notifies.get(), 1, "went stale by clock alone");
+        // A heartbeat revives it: that is a visible change again, and the
+        // revived lease arms its own cutoff.
+        let revived = stale_at + TimeDelta::seconds(1);
+        advance_to(cx, &clock, stale_at, revived);
+        state.update(cx, |state, cx| {
+            let changed = state.apply_sessions_at(
+                vec![session("row", SessionStatus::Working, 0, revived)],
+                revived,
+            );
+            assert!(changed, "revival is a change");
+            cx.notify();
+        });
+        assert_eq!(notifies.get(), 2);
+        let next_cutoff = revived + TimeDelta::milliseconds(SESSION_STALE_MS + 1);
+        advance_to(cx, &clock, revived, next_cutoff);
+        assert_eq!(notifies.get(), 3, "the revived lease's cutoff fires");
+    }
+
+    #[test]
+    fn identical_chats_frames_report_no_change() {
+        let mut state = AppState::new();
+        // The first frame flips `chats_synced` even when empty.
+        assert!(state.apply_chats(vec![]));
+        assert!(!state.apply_chats(vec![]));
+        assert!(state.apply_chats(vec![chat("b", 1, None), chat("a", 0, None)]));
+        let revision = state.link_roots_revision;
+        // Same rows in a different wire order sort to the same list.
+        assert!(!state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]));
+        assert_eq!(state.link_roots_revision, revision);
+        let mut renamed = chat("a", 0, None);
+        renamed.title = Some("Renamed".into());
+        assert!(state.apply_chats(vec![renamed.clone(), chat("b", 1, None)]));
+        assert_ne!(state.link_roots_revision, revision);
+        // A selection pointing at no row still heals on an unchanged frame.
+        state.selected_chat = Some("gone".into());
+        assert!(state.apply_chats(vec![renamed, chat("b", 1, None)]));
+        assert_eq!(state.selected_chat, None);
+    }
+
+    #[test]
+    fn identical_spaces_frames_report_no_change() {
+        let mut state = AppState::new();
+        assert!(state.apply_spaces(vec![]));
+        assert!(!state.apply_spaces(vec![]));
+        let frame = vec![space("s2", "dev", "/b", 2), space("s1", "dev", "/a", 1)];
+        assert!(state.apply_spaces(frame.clone()));
+        assert_eq!(state.selected_space.as_deref(), Some("s1"));
+        assert!(!state.apply_spaces(frame.clone()));
+        // A vanished selection still heals (and reports it) on an unchanged list.
+        state.selected_space = Some("gone".into());
+        assert!(state.apply_spaces(frame));
+        assert_eq!(state.selected_space.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn identical_connectivity_frames_report_no_change() {
+        use zeron_proto::{Connectivity, ConnectivityState};
+        let mut state = AppState::new();
+        // The first frame ends the bootstrap gap even when it equals the default.
+        assert!(state.apply_connectivity(Connectivity::default()));
+        assert!(state.connectivity_observed);
+        assert!(!state.apply_connectivity(Connectivity::default()));
+        let reconnecting = Connectivity {
+            state: ConnectivityState::Reconnecting,
+            retry_at_ms: 5_000,
+            ..Default::default()
+        };
+        assert!(state.apply_connectivity(reconnecting.clone()));
+        assert!(!state.apply_connectivity(reconnecting.clone()));
+        assert!(state.apply_connectivity(Connectivity {
+            retry_at_ms: 9_000,
+            ..reconnecting
+        }));
+        // Re-attach reopens the gap: the next frame counts again.
+        state.connectivity_observed = false;
+        assert!(state.apply_connectivity(state.connectivity.clone()));
+    }
+
+    #[test]
+    fn identical_transfer_auth_and_harness_frames_report_no_change() {
+        use zeron_proto::{HarnessUpdatePhase, HarnessUpdateStatus, TransferProgress};
+        let mut state = AppState::new();
+        assert!(!state.apply_transfers(vec![]));
+        let progress = |done| TransferProgress {
+            upload_id: "u1".into(),
+            file_name: "a.png".into(),
+            done,
+            total: 100,
+        };
+        assert!(state.apply_transfers(vec![progress(10)]));
+        assert!(!state.apply_transfers(vec![progress(10)]));
+        assert!(state.apply_transfers(vec![progress(20)]));
+        assert_eq!(state.transfer_percent("u1"), Some(20));
+        assert!(state.apply_transfers(vec![]));
+
+        assert!(state.apply_auth(AuthState::SignedOut));
+        assert!(!state.apply_auth_value(serde_json::json!({ "state": "signedOut" })));
+        let user = UserProfile {
+            id: "u".into(),
+            email: "w@example.com".into(),
+            name: None,
+        };
+        assert!(state.apply_auth(AuthState::NeedsOrganization { user: user.clone() }));
+        assert!(!state.apply_auth(AuthState::NeedsOrganization { user }));
+        assert!(!state.apply_auth_value(serde_json::json!({ "bogus": true })));
+
+        let status = |phase| HarnessUpdateStatus {
+            harness: HarnessId::Codex,
+            installed_version: Some("1.0".into()),
+            latest_version: Some("2.0".into()),
+            channel: None,
+            source: Default::default(),
+            policy: Default::default(),
+            phase,
+            progress: None,
+            checked_at: None,
+            error: None,
+            can_apply: true,
+            manual_command: None,
+        };
+        assert!(!state.apply_harness_updates(vec![]));
+        assert!(state.apply_harness_updates(vec![status(HarnessUpdatePhase::Available)]));
+        assert!(!state.apply_harness_updates(vec![status(HarnessUpdatePhase::Available)]));
+        assert!(state.apply_harness_updates(vec![status(HarnessUpdatePhase::Current)]));
     }
 
     #[test]
@@ -4157,6 +5463,42 @@ mod tests {
     }
 
     #[test]
+    fn side_chats_remain_addressable_but_do_not_appear_in_sidebar() {
+        let mut state = AppState::new();
+        let main = chat("main", 0, None);
+        let mut side = chat("side", 1, Some(2));
+        side.parent_chat_id = Some(main.id.clone());
+        state.apply_chats(vec![main, side]);
+        assert_eq!(
+            state
+                .visible_chats()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["main"]
+        );
+        state.selected_chat = Some("side".into());
+        assert_eq!(
+            state.selected_chat_row().unwrap().parent_chat_id.as_deref(),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn remote_fork_waits_for_registry_then_observes_deletion() {
+        let mut state = AppState::new();
+        let mut side = chat("side", 1, None);
+        side.parent_chat_id = Some("main".into());
+        state.selected_chat = Some(side.id.clone());
+        state.pending_side_chat = Some(side.clone());
+        state.apply_chats(vec![]);
+        assert_eq!(state.selected_chat.as_deref(), Some("side"));
+        state.apply_chats(vec![side]);
+        assert!(state.pending_side_chat.is_none());
+        state.apply_chats(vec![]);
+        assert_eq!(state.selected_chat, None);
+    }
+
+    #[test]
     fn jump_slots_count_the_rows_the_sidebar_draws() {
         let now = Utc::now();
         let mut state = AppState::new();
@@ -4205,6 +5547,44 @@ mod tests {
         // An already archived chat stays put — the shortcut never unarchives.
         state.selected_chat = Some("a".into());
         assert_eq!(state.archivable_selected_chat(), None);
+    }
+
+    #[test]
+    fn a_send_held_in_the_queue_drops_its_echo_and_pending_overlay() {
+        let mut state = AppState::new();
+        state.selected_chat = Some("c1".into());
+        let echo = |id: &str| SessionMessageEntry {
+            id: id.into(),
+            role: zeron_doc::MessageRole::User,
+            parts: vec![],
+            created_at: 0,
+            device_id: "local".into(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let row = |id: &str| zeron_doc::QueuedMessage {
+            id: id.into(),
+            text: "held".into(),
+            attachments: vec![],
+            hold_for_turn_end: false,
+            issued_by: "local".into(),
+            issued_at: 0,
+            edited_at: None,
+            delivery_gate: None,
+        };
+        state.push_echo("c1", echo("held"));
+        state.push_echo("c1", echo("sent"));
+        state.begin_pending_send("c1", "held", Utc::now());
+        state.apply_queue(vec![row("held")]);
+        let ids: Vec<_> = state
+            .pending_echoes()
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sent"]);
+        assert!(!state.pending_sends.contains_key("c1"));
+        assert_eq!(state.queue.len(), 1);
     }
 
     #[test]
@@ -4402,6 +5782,10 @@ mod tests {
         assert_eq!(project_label(None), "No project");
         assert_eq!(project_label(Some("~")), "No project");
         assert_eq!(project_label(Some("~/")), "No project");
+        assert_eq!(
+            project_label(Some("~/.zeron/scratch/2026-10-11-3e4f5a6b")),
+            "No project"
+        );
         assert_eq!(project_label(Some("   ")), "No project");
         assert_eq!(project_label(Some("/")), "/");
     }
@@ -4464,6 +5848,11 @@ mod tests {
         assert_eq!(chat_location(&c), None);
         c.branch = None;
         assert_eq!(chat_location(&c), None);
+        // Projectless: no project name, no folder.
+        for cwd in ["~", "~/.zeron/scratch/2026-10-11-3e4f5a6b"] {
+            c.cwd = Some(cwd.into());
+            assert_eq!(chat_location(&c), None);
+        }
     }
 
     #[test]
@@ -4620,8 +6009,10 @@ mod tests {
         }];
         s.connectivity.state = ConnectivityState::Connected;
         s.connectivity.chats = vec![ChatConnectivity {
+            sync_state: zeron_proto::ChatSyncState::Unknown,
             chat_id: "c-remote".into(),
             connected: true,
+            delivery_live: false,
             pending_pushes: 0,
         }];
 
@@ -4629,12 +6020,55 @@ mod tests {
         assert!(!s.chat_delivery_degraded("c-remote"));
         assert!(!s.chat_delivery_degraded("c-local"));
 
-        // The chat's own room down → degraded even while globally Connected.
+        // Idle chats can remain without a socket for longer than the engine's
+        // grace. A stale down sample during focus must not flash a warning.
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Local;
         s.connectivity.chats[0].connected = false;
+        assert!(!s.chat_delivery_degraded("c-remote"));
+
+        // A requested reconnect stays quiet inside its fresh grace window.
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Waiting;
+        s.connectivity.chats[0].connected = true;
+        assert!(!s.chat_delivery_degraded("c-remote"));
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Connecting;
+        assert!(!s.chat_delivery_degraded("c-remote"));
+
+        // A requested or active room down past grace degrades even while
+        // globally Connected.
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Waiting;
+        s.connectivity.chats[0].connected = false;
+        assert!(s.chat_delivery_degraded("c-remote"));
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Connecting;
         assert!(s.chat_delivery_degraded("c-remote"));
         s.connectivity.chats[0].connected = true;
 
+        // Global registry failure and host presence loss still warn for a
+        // dormant chat.
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Local;
+        s.connectivity.state = ConnectivityState::Reconnecting;
+        assert!(s.chat_delivery_degraded("c-remote"));
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Waiting;
+        assert!(s.chat_delivery_degraded("c-remote"));
+
+        // A live chat room can deliver while the registry reconnects. The
+        // graced `connected` bit alone is not proof, but delivery_live is.
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Synced;
+        assert!(s.chat_delivery_degraded("c-remote"));
+        s.connectivity.chats[0].delivery_live = true;
+        assert!(!s.chat_delivery_degraded("c-remote"));
+        s.begin_pending_send("c-remote", "m-live", now);
+        assert!(!s.send_queued("c-remote", now));
+        s.connectivity.chats[0].sync_state = zeron_proto::ChatSyncState::Connecting;
+        s.connectivity.chats[0].connected = false; // HTTP delivery can outlive the socket.
+        assert!(!s.chat_delivery_degraded("c-remote"));
+        s.connectivity.chats[0].delivery_live = false;
+        assert!(s.chat_delivery_degraded("c-remote"));
+        assert!(s.send_queued("c-remote", now));
+        s.connectivity.chats[0].connected = true;
+        s.connectivity.state = ConnectivityState::Connected;
+
         // Host gone presence-dark → degraded (a send would queue at best).
+        s.connectivity.chats[0].delivery_live = true;
         s.devices[0].last_seen_at = Some(now - TimeDelta::minutes(10));
         assert!(s.chat_delivery_degraded("c-remote"));
         s.devices[0].last_seen_at = Some(now);
@@ -4644,6 +6078,7 @@ mod tests {
         s.connectivity.state = ConnectivityState::Offline;
         assert!(s.chat_delivery_degraded("c-remote"));
         assert!(!s.chat_delivery_degraded("c-local"));
+        s.connectivity.chats[0].delivery_live = false;
 
         // Local profile (Disabled): nothing degrades.
         s.connectivity.state = ConnectivityState::Disabled;
@@ -4673,7 +6108,7 @@ mod tests {
     }
 }
 
-#[cfg(feature = "appshots-fixture")]
+#[cfg(any(feature = "appshots-fixture", feature = "pull-request-fixture"))]
 impl AppState {
     /// Keep fixture documents deterministic while using the real attachment RPC.
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {

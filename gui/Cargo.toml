@@ -1,7 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/voice",
+    "crates/voice-media",
+    "crates/voice-session",
+    "crates/orb",
+    "crates/veil",
     "crates/theme",
+    "crates/audio",
     "crates/proto",
     "crates/preview",
     "crates/doc",
@@ -12,7 +18,10 @@ members = [
     "crates/update",
     "crates/ui",
     "crates/syntax",
+    "crates/markdown",
     "crates/mcp",
+    "crates/visual",
+    "crates/visual-gpu",
     "apps/zeron",
 ]
 
@@ -23,6 +32,11 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+zeron-voice-session = { path = "crates/voice-session" }
+zeron-orb = { path = "crates/orb" }
+zeron-veil = { path = "crates/veil" }
+zeron-voice-media = { path = "crates/voice-media" }
+zeron-audio = { path = "crates/audio" }
 zeron-proto = { path = "crates/proto" }
 zeron-preview = { path = "crates/preview" }
 zeron-doc = { path = "crates/doc" }
@@ -33,8 +47,11 @@ zeron-rpc = { path = "crates/rpc" }
 zeron-update = { path = "crates/update" }
 zeron-ui = { path = "crates/ui" }
 zeron-syntax = { path = "crates/syntax" }
+zeron-markdown = { path = "crates/markdown" }
 zeron-theme = { path = "crates/theme" }
 zeron-mcp = { path = "crates/mcp" }
+zeron-visual = { path = "crates/visual" }
+zeron-visual-gpu = { path = "crates/visual-gpu" }
 
 # CRDT
 loro = "1.13"
@@ -68,15 +85,16 @@ loro-protocol = "0.3"
 # Linux — the Metal path's snapshot/blur/composite, ported).
 # Paint-time rounded image masks (#9), bounded Windows backdrop blur and
 # translucent compositing, plus blur-aware scene batching (#10).
-gpui = { git = "https://github.com/zeronsh/zui", rev = "c2d273dc3dadcb260b0fa7c35fc2fe02a14f5add" }
-gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "c2d273dc3dadcb260b0fa7c35fc2fe02a14f5add", features = [
+# Per-pixel rounded clipping (`Window::with_rounded_clip`, 361ff20).
+gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "c2d273dc3dadcb260b0fa7c35fc2fe02a14f5add" }
-gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "03cd9947a6aa07921cb284ad66c87fd6735e55b0" }
+gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
+gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "701ca97af7983bf85343d2d1d404ab528b18ec96" }
 
 # diffs
 similar = "2"
@@ -129,9 +147,13 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 fontdb = "0.23"
 ttf-parser = "0.25.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# Packaged GUI apps do not inherit shell proxy variables; honor the macOS and
+# Windows system proxy for provider usage probes and other HTTP clients.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy"] }
 ignore = "0.4"
-nucleo-matcher = "0.3"
+# Workspace file/content search index (@ mentions, file tree, cmd+K).
+# Pinned exactly: crates.io also carries `0.11.1-nightly.*` prereleases.
+fff-search = "=0.11.0"
 
 [profile.release]
 # Distribution profile (scripts/package-linux.sh): thin LTO buys most of fat
@@ -146,10 +168,10 @@ opt-level = 0
 [profile.dev.package."*"]
 opt-level = 2
 
-# Temporary renderer override for the companion per-pixel text fade PR.
-# Replace with an upstream revision once it merges.
-[patch."https://github.com/zeronsh/zui"]
-gpui = { git = "https://github.com/gaelcado/zui", rev = "53869c204efb866d19af292cab8b1773898eeedd" }
-gpui_macros = { git = "https://github.com/gaelcado/zui", rev = "53869c204efb866d19af292cab8b1773898eeedd" }
-gpui_platform = { git = "https://github.com/gaelcado/zui", rev = "53869c204efb866d19af292cab8b1773898eeedd" }
-gpui_tokio = { git = "https://github.com/gaelcado/zui", rev = "53869c204efb866d19af292cab8b1773898eeedd" }
+# Scenes rasterize in software every frame the camera moves.
+[profile.dev.package.zeron-visual]
+opt-level = 3
+
+[profile.dev.package.zeron-visual-gpu]
+opt-level = 3
+

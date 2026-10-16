@@ -272,6 +272,23 @@ mod tests {
     }
 
     #[test]
+    fn check_for_updates_follows_about() {
+        let menus = app_menus();
+        let Some(MenuItem::Action {
+            name,
+            action,
+            disabled,
+            ..
+        }) = menus[0].items.get(1)
+        else {
+            panic!("second app-menu item must be an action");
+        };
+        assert_eq!(name.as_ref(), "Check for Updates…");
+        assert_eq!(action.name(), shell::CheckForUpdates.name());
+        assert!(!disabled);
+    }
+
+    #[test]
     fn edit_menu_uses_composer_clipboard_os_actions() {
         let menus = app_menus();
         let edit = menus

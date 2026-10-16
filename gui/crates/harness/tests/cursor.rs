@@ -31,6 +31,7 @@ fn harness() -> CursorHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        mcp: None,
         prompt: prompt.into(),
         harness: None,
         model: None,
@@ -49,6 +50,8 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
     let (steer_tx, steer_rx) = mpsc::channel(8);
     let token = CancellationToken::new();
     let controls = RunControls {
+        realtime: None,
+        execution_lease: None,
         request_input: Box::new(move |_| {
             let (tx, rx) = oneshot::channel();
             let _ = tx.send(Vec::new());
@@ -56,6 +59,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        turn: Default::default(),
     };
     (controls, steer_tx, token)
 }
@@ -81,6 +85,194 @@ async fn run_to_first_done(
     })
     .await
     .expect("run finished in time")
+}
+
+#[tokio::test]
+async fn run_sends_catalog_defaults_when_options_are_implicit() {
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:model-default");
+    req.model = Some("auto-smart".into());
+    let events = run_to_first_done(&harness(), req, controls).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_preserves_explicit_options_over_catalog_defaults() {
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:model-override");
+    req.model = Some("auto-smart".into());
+    req.model_options
+        .insert("optimize_for".into(), serde_json::json!("intelligence"));
+    let events = run_to_first_done(&harness(), req, controls).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_preserves_legacy_auto_options_without_duplicate_defaults() {
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:model-legacy");
+    req.model = Some("auto-smart".into());
+    req.model_options
+        .insert("optimizeFor".into(), serde_json::json!("speed"));
+    let events = run_to_first_done(&harness(), req, controls).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn catalog_failure_does_not_block_an_existing_model_selection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let shim = dir.path().join("shim.sh");
+    let source = include_str!("fixtures/fake-cursor-shim.sh").replacen(
+        "if [ \"$1\" = \"models\" ]; then",
+        "if [ \"$1\" = \"models\" ]; then\n  emit '{\"ev\":\"fatal\",\"message\":\"rate limit\"}'\n  exit 1",
+        1,
+    );
+    std::fs::write(&shim, source).unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let harness = CursorHarness::new().with_executable(shim);
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:model-override");
+    req.model = Some("auto-smart".into());
+    req.model_options
+        .insert("optimize_for".into(), serde_json::json!("intelligence"));
+    let events = run_to_first_done(&harness, req, controls).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn model_switch_mid_session_sends_catalog_defaults() {
+    let (controls, steer, _token) = controls();
+    let mut req = request("scenario:model-switch");
+    req.model = Some("auto-smart".into());
+    let mut stream = harness().run(req, controls).await.expect("run starts");
+    let mut next = request("switch");
+    next.model = Some("claude-fable-5".into());
+    let mut statuses = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            if let AgentEvent::Done { status, error, .. } = event.unwrap() {
+                assert_eq!(status, DoneStatus::Completed, "{error:?}");
+                statuses.push(status);
+                if statuses.len() == 1 {
+                    steer
+                        .send(SteerMessage {
+                            prompt: "switch".into(),
+                            message_id: None,
+                            attachments: Vec::new(),
+                            config: Some(Box::new(next.clone())),
+                        })
+                        .await
+                        .unwrap();
+                } else {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("switch finished in time");
+    assert_eq!(statuses.len(), 2);
+}
+
+/// The backend can reject the Max Mode variant its own catalog marks default
+/// (Grok 4.7's 500k, verified live), so such models keep the bare id.
+#[tokio::test]
+async fn max_mode_defaults_are_not_sent() {
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:model-maxmode");
+    req.model = Some("grok-4.7".into());
+    let events = run_to_first_done(&harness(), req, controls).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn runs_use_the_loaded_catalog_without_refreshing_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let probes = dir.path().join("probes");
+    let shim = dir.path().join("shim.sh");
+    let source = include_str!("fixtures/fake-cursor-shim.sh").replacen(
+        "if [ \"$1\" = \"models\" ]; then",
+        &format!(
+            "if [ \"$1\" = \"models\" ]; then\n  echo probe >> '{}'",
+            probes.display()
+        ),
+        1,
+    );
+    std::fs::write(&shim, source).unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let harness = CursorHarness::new().with_executable(shim);
+    harness.models().await.expect("catalog loads");
+    for _ in 0..2 {
+        let (controls, _steer, _token) = controls();
+        let mut req = request("scenario:model-default");
+        req.model = Some("auto-smart".into());
+        let events = run_to_first_done(&harness, req, controls).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{events:?}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&probes).unwrap().lines().count(), 1);
 }
 
 #[tokio::test]
@@ -185,6 +377,8 @@ async fn steer_after_done_becomes_the_next_turn() {
                         .send(SteerMessage {
                             prompt: "follow up".into(),
                             message_id: None,
+                            attachments: Vec::new(),
+                            config: None,
                         })
                         .await
                         .expect("steer sent");
@@ -296,7 +490,7 @@ async fn shim_crash_mid_run_reports_stderr_tail() {
 async fn model_discovery_maps_the_live_catalog() {
     let models = harness().models().await.expect("models");
     // Parameterized Auto first; its bare `default` alias twin skipped.
-    assert_eq!(models.len(), 2, "{models:?}");
+    assert_eq!(models.len(), 3, "{models:?}");
     assert_eq!(models[0].id, "auto-smart");
     assert_eq!(models[0].label, "Auto");
     let optimize = &models[0].options[0];
@@ -336,6 +530,8 @@ async fn followup_crash_is_not_hidden_by_a_previous_completed_turn() {
                         .send(SteerMessage {
                             prompt: "follow up".into(),
                             message_id: None,
+                            attachments: Vec::new(),
+                            config: None,
                         })
                         .await
                         .unwrap();
@@ -391,6 +587,8 @@ async fn steering_spam_preserves_every_turn_in_order_and_closes_cleanly() {
                     .send(SteerMessage {
                         prompt: format!("ITEM-{n}"),
                         message_id: None,
+                        attachments: Vec::new(),
+                        config: None,
                     })
                     .await
                     .unwrap();
@@ -433,20 +631,20 @@ async fn steering_spam_preserves_every_turn_in_order_and_closes_cleanly() {
         .await
         .unwrap();
         producer.await.unwrap();
+        // Native steering acknowledges every input before starting another turn.
+        texts.retain(|text| text != "INITIAL");
         assert_eq!(
             texts,
-            std::iter::once("INITIAL".into())
-                .chain((0..200).map(|n| format!("ITEM-{n}")))
-                .collect::<Vec<_>>()
+            (0..200).map(|n| format!("ITEM-{n}")).collect::<Vec<_>>()
         );
-        assert_eq!(dones, 201);
+        assert!(dones >= 1);
         assert_eq!(transitions, 200);
         assert_eq!(ids.len(), 201);
     }
 }
 
 #[tokio::test]
-async fn cancelling_a_saturated_steering_queue_never_starts_queued_turns() {
+async fn cancelling_a_native_steering_burst_stops_without_starting_another_turn() {
     for _ in 0..20 {
         let (controls, steer, token) = controls();
         let mut stream = harness()
@@ -456,8 +654,10 @@ async fn cancelling_a_saturated_steering_queue_never_starts_queued_turns() {
         for n in 0..100 {
             steer
                 .send(SteerMessage {
-                    prompt: format!("MUST-NOT-RUN-{n}"),
+                    prompt: format!("LIVE-STEER-{n}"),
                     message_id: None,
+                    attachments: Vec::new(),
+                    config: None,
                 })
                 .await
                 .unwrap();
@@ -469,7 +669,7 @@ async fn cancelling_a_saturated_steering_queue_never_starts_queued_turns() {
             while let Some(event) = stream.next().await {
                 match event.unwrap() {
                     AgentEvent::Steered { .. } | AgentEvent::TextDelta { .. } => {
-                        panic!("cancelled queue executed")
+                        assert_eq!(dones, 0, "output after cancellation completed")
                     }
                     AgentEvent::Done { status, .. } => {
                         assert_eq!(status, DoneStatus::Interrupted);
@@ -482,5 +682,24 @@ async fn cancelling_a_saturated_steering_queue_never_starts_queued_turns() {
         .await
         .unwrap();
         assert_eq!(dones, 1);
+    }
+}
+
+#[tokio::test]
+async fn mcp_injection_reaches_shim_on_new_and_resumed_runs() {
+    for resume in [None, Some("agent-1")] {
+        let mut req = request("scenario:mcp");
+        req.resume = resume.map(str::to_owned);
+        req.mcp = Some(zeron_proto::McpServer {
+            name: "zeron".into(),
+            command: "/path with spaces/zeron".into(),
+            args: vec!["mcp".into()],
+            env: [("ZERON_CHAT_ID".into(), "origin-chat".into())].into(),
+        });
+        let (controls, _steer, _token) = controls();
+        let events = run_to_first_done(&harness(), req, controls).await;
+        assert!(events.contains(&AgentEvent::TextDelta {
+            text: "mcp configured".into()
+        }));
     }
 }

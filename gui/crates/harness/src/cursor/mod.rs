@@ -31,8 +31,8 @@
 //! - AUTH: the SDK's credentials are SEPARATE from `cursor-agent login`
 //!   (verified live). Runs need `CURSOR_API_KEY` (or a prior SDK browser
 //!   login); the shim surfaces the exact fix as an error chip otherwise.
-//! - Steering: turn-boundary — steers queue and become the next turn on the
-//!   parked session (parity with the previous ACP behavior).
+//! - Steering: native SDK input at the next model step, acknowledged only
+//!   when consumed. Inputs that race turn completion become a coalesced follow-up.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -49,7 +49,7 @@ use tokio::sync::mpsc;
 
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SteeringMode, TodoItem, ToolCall,
+    RunRequest, SteeringMode, TodoItem, TodoStatus, ToolCall,
 };
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
@@ -57,7 +57,7 @@ use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_ch
 
 /// The pinned SDK (public beta 1.0.x line; inspected against 1.0.31's
 /// typings). Bump deliberately — see the module header.
-const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.31";
+const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.32";
 const SHIM_NAME: &str = "zeron-cursor-shim.mjs";
 const SHIM_SOURCE: &str = include_str!("shim.mjs");
 
@@ -95,6 +95,11 @@ pub struct CursorHarness {
     kill_grace: Duration,
     /// Credential-scoped successful catalog, with bounded refresh and backoff.
     pub(crate) models_cache: catalog::Catalog,
+    /// Models whose catalog default is a Max Mode variant, from the latest
+    /// discovery. Their defaults are never sent: the backend can reject the
+    /// very variant the catalog marks default (verified live: Grok 4.7's
+    /// 500k default fails "Invalid parameters" while the bare id runs).
+    max_mode_defaults: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for CursorHarness {
@@ -104,6 +109,7 @@ impl Default for CursorHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             models_cache: catalog::Catalog::default(),
+            max_mode_defaults: Default::default(),
         }
     }
 }
@@ -177,11 +183,37 @@ impl CursorHarness {
                 .ok_or_else(|| {
                     HarnessError::Protocol("cursor models probe returned no catalog".into())
                 })?;
+            *self
+                .max_mode_defaults
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = max_mode_default_ids(&items);
             Ok::<_, HarnessError>(map_model_items(&items))
         };
         tokio::time::timeout(Duration::from_secs(15), run)
             .await
             .map_err(|_| HarnessError::Protocol("cursor models probe timed out".into()))?
+    }
+
+    /// The catalog that supplies omitted parameter defaults. The picker has
+    /// normally loaded it already, so a run never waits on a refresh; only a
+    /// cold catalog is fetched. A failed fetch yields none (bare SDK ids), and
+    /// Max Mode defaults are left out (bare ids, as before).
+    async fn catalog_for_defaults(&self) -> Vec<Model> {
+        let mut models = match self
+            .model_context()
+            .ok()
+            .flatten()
+            .and_then(|context| self.models_cache.cached_for(context.key()))
+        {
+            Some(models) => models,
+            None => self.models().await.unwrap_or_default(),
+        };
+        let max_mode = self
+            .max_mode_defaults
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        models.retain(|model| !max_mode.contains(&model.id));
+        models
     }
 
     /// (program, args) for the shim process: the test override, or node
@@ -229,9 +261,9 @@ impl Harness for CursorHarness {
     fn supports_steering(&self) -> bool {
         true
     }
-    /// The SDK has no mid-turn injection; steers queue for the next turn.
+    /// Native SDK steering appends input to the active turn.
     fn steering_mode(&self) -> SteeringMode {
-        SteeringMode::TurnBoundary
+        SteeringMode::StepBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         &[]
@@ -243,9 +275,24 @@ impl Harness for CursorHarness {
         self.executable.is_some()
             || crate::acp::find_on_paths("cursor-agent", cursor_cli_paths()).is_some()
     }
+    fn executable_path(&self) -> Option<PathBuf> {
+        self.executable
+            .clone()
+            .or_else(|| crate::acp::find_on_paths("cursor-agent", cursor_cli_paths()))
+    }
     /// Done is the SDK run's terminal result, for every turn shape.
     fn deterministic_turn_end(&self) -> bool {
         true
+    }
+    /// The shim's `stop` cancels the turn's SDK run; the agent (and the
+    /// shim holding it) take the next prompt.
+    fn stops_turn_in_place(&self) -> bool {
+        true
+    }
+    /// Each SDK send names its model, so a change runs from the next turn on
+    /// the same agent; no model is Cursor's `auto`.
+    fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
+        live.cwd == next.cwd
     }
 
     /// Keep a successful catalog during transient outages. A cold failure
@@ -291,9 +338,18 @@ impl Harness for CursorHarness {
 
     async fn run(
         &self,
-        request: RunRequest,
+        mut request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        // Plus requires explicit defaults, but catalog outages must not block
+        // existing SDK runs. The same snapshot fills mid-session model switches.
+        let catalog = self.catalog_for_defaults().await;
+        fill_catalog_defaults(
+            &catalog,
+            request.model.as_deref(),
+            &mut request.model_options,
+        );
+
         let lease = if self.executable.is_none() {
             Some(state::Lease::acquire(&state::state_root(), request.resume.as_deref()).await?)
         } else {
@@ -352,6 +408,7 @@ impl Harness for CursorHarness {
             // shim folds them into the SDK's ModelSelection params.
             "modelOptions": request.model_options,
             "resume": request.resume,
+            "mcp": request.mcp,
             "storeDir": lease.as_ref().and_then(|lease| lease.store_dir.as_ref()),
         });
         let _ = stdin_tx.send(first.to_string());
@@ -366,6 +423,7 @@ impl Harness for CursorHarness {
             controls,
             request_cwd: request.cwd,
             request_model: request.model.unwrap_or_default(),
+            catalog,
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
@@ -376,6 +434,52 @@ impl Harness for CursorHarness {
         })
         .boxed())
     }
+}
+
+/// Send every parameter the user left implicit as the account catalog's
+/// default — the value the picker shows. Cursor resolves a bare model id
+/// server-side, which on some plans (Plus) is a variant the account cannot
+/// run, while the catalog's credential-scoped default is one it can.
+fn fill_catalog_defaults(
+    catalog: &[Model],
+    model: Option<&str>,
+    options: &mut serde_json::Map<String, Value>,
+) {
+    let Some(model) = model.and_then(|id| catalog.iter().find(|m| m.id == id)) else {
+        return;
+    };
+    for option in &model.options {
+        // Legacy sessions carry the pre-discovery `optimizeFor`, which the
+        // shim translates; its catalog twin must not ride beside it.
+        if option.id == "optimize_for" && options.contains_key("optimizeFor") {
+            continue;
+        }
+        options
+            .entry(option.id.clone())
+            .or_insert_with(|| Value::String(option.default_choice.clone()));
+    }
+}
+
+/// Catalog items whose default variant is a Max Mode variant.
+fn max_mode_default_ids(items: &Value) -> std::collections::HashSet<String> {
+    items
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| {
+            item.get("variants")
+                .and_then(Value::as_array)
+                .and_then(|variants| {
+                    variants
+                        .iter()
+                        .find(|v| v.get("isDefault").and_then(Value::as_bool) == Some(true))
+                })
+                .and_then(|v| v.get("isMaxMode").and_then(Value::as_bool))
+                == Some(true)
+        })
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect()
 }
 
 /// `Cursor.models.list()` items → picker models. Item shape (1.0.28
@@ -486,6 +590,8 @@ struct Session {
     controls: RunControls,
     request_cwd: String,
     request_model: String,
+    /// Fills implicit parameters of a model the session switches to.
+    catalog: Vec<Model>,
     interrupt_grace: Duration,
     kill_grace: Duration,
     stderr_tail: crate::StderrTail,
@@ -505,14 +611,18 @@ async fn run_session(session: Session) {
         controls,
         request_cwd,
         request_model,
+        catalog,
         interrupt_grace,
         kill_grace,
         stderr_tail,
     } = session;
     let RunControls {
+        realtime: _,
+        execution_lease: _execution_lease,
         request_input: _request_input,
         mut steering,
         interrupt,
+        turn,
     } = controls;
 
     let mut assistant_message_id = new_message_id();
@@ -520,11 +630,14 @@ async fn run_session(session: Session) {
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
+    // A turn stop (`TurnControl::stop_turn`) in flight: the shim cancels the
+    // run; the agent stays up for the next prompt.
+    let mut stopping = false;
     let mut any_done = false;
     let mut done_after_interrupt = false;
     // A turn is settled and the session is parked awaiting the next prompt.
     let mut parked = false;
-    let mut queued_steers: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut pending_steers = 0usize;
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     let send = |ev: AgentEvent| {
@@ -547,6 +660,24 @@ async fn run_session(session: Session) {
                         tokio::time::sleep(kill_grace).await;
                         send_signal(&pid, Signal::Kill);
                     }));
+                }
+            },
+
+            // Cancel this turn's SDK run, not the agent: the shim answers
+            // with a cancelled turn and takes the next prompt. Steers still
+            // undelivered go with the stopped turn.
+            _ = turn.stop_requested(), if !interrupted => {
+                if parked {
+                    if !send(AgentEvent::Done {
+                        status: DoneStatus::Interrupted,
+                        result: None,
+                        error: None,
+                        session_id: session_id.clone(),
+                    }).await { break 'main; }
+                } else {
+                    stopping = true;
+                    pending_steers = 0;
+                    let _ = stdin_tx.send(json!({ "op": "stop" }).to_string());
                 }
             },
 
@@ -586,6 +717,16 @@ async fn run_session(session: Session) {
                                 break 'main;
                             }
                         }
+                        "steered" => {
+                            pending_steers = pending_steers.saturating_sub(1);
+                            parked = false;
+                            any_done = false;
+                            let prev = std::mem::replace(&mut assistant_message_id, new_message_id());
+                            if !send(AgentEvent::Steered {
+                                assistant_message_id: Some(prev),
+                                next_assistant_message_id: Some(assistant_message_id.clone()),
+                            }).await { break 'main; }
+                        }
                         _ => {
                             if frame.get("ev").and_then(Value::as_str) == Some("fatal")
                                 || frame.get("status").and_then(Value::as_str) == Some("error")
@@ -595,7 +736,7 @@ async fn run_session(session: Session) {
                                     error = ?frame.get("error").or_else(|| frame.get("message")),
                                     "Cursor SDK run failed");
                             }
-                            for ev in map_shim_frame(&frame, interrupted) {
+                            for ev in map_shim_frame(&frame, interrupted || stopping) {
                                 let is_done = matches!(ev, AgentEvent::Done { .. });
                                 let failed = matches!(ev, AgentEvent::Done { status: DoneStatus::Errored, .. });
                                 // Stamp the session id onto Dones the mapper
@@ -610,38 +751,16 @@ async fn run_session(session: Session) {
                                 }
                                 if is_done {
                                     any_done = true;
+                                    stopping = false;
                                     if interrupted {
                                         done_after_interrupt = true;
                                         break 'main;
                                     }
                                     if failed { break 'main; }
-                                    // Turn boundary: a queued steer becomes
-                                    // the next turn; otherwise park for the
-                                    // mailbox (caller owns teardown).
-                                    if let Some(text) = queued_steers.pop_front() {
-                                        any_done = false;
-                                        let prev = std::mem::replace(
-                                            &mut assistant_message_id,
-                                            new_message_id(),
-                                        );
-                                        if !send(AgentEvent::Steered {
-                                            assistant_message_id: Some(prev),
-                                            next_assistant_message_id: Some(
-                                                assistant_message_id.clone(),
-                                            ),
-                                        })
-                                        .await
-                                        {
-                                            break 'main;
-                                        }
-                                        let _ = stdin_tx.send(
-                                            json!({ "op": "user", "prompt": text }).to_string(),
-                                        );
-                                    } else if !steering_open {
+                                    if !steering_open && pending_steers == 0 {
                                         break 'main;
-                                    } else {
-                                        parked = true;
                                     }
+                                    parked = pending_steers == 0;
                                 }
                             }
                         }
@@ -656,28 +775,22 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    if parked {
-                        parked = false;
-                        any_done = false;
-                        let prev = std::mem::replace(&mut assistant_message_id, new_message_id());
-                        if !send(AgentEvent::Steered {
-                            assistant_message_id: Some(prev),
-                            next_assistant_message_id: Some(assistant_message_id.clone()),
-                        })
-                        .await
-                        {
-                            break 'main;
-                        }
-                        let _ = stdin_tx
-                            .send(json!({ "op": "user", "prompt": msg.prompt }).to_string());
-                    } else {
-                        // Turn-boundary steering: queue for the next boundary.
-                        queued_steers.push_back(msg.prompt);
+                    pending_steers += 1;
+                    parked = false;
+                    any_done = false;
+                    let mut line = json!({ "op": "steer", "prompt": msg.prompt });
+                    // A changed model runs from this message's own turn.
+                    if let Some(mut next) = msg.config {
+                        fill_catalog_defaults(&catalog, next.model.as_deref(), &mut next.model_options);
+                        line["reconfigure"] = Value::Bool(true);
+                        line["model"] = json!(next.model);
+                        line["modelOptions"] = Value::Object(next.model_options);
                     }
+                    let _ = stdin_tx.send(line.to_string());
                 }
                 None => {
                     steering_open = false;
-                    if parked && queued_steers.is_empty() {
+                    if parked && pending_steers == 0 {
                         break 'main;
                     }
                 }
@@ -717,6 +830,13 @@ async fn run_session(session: Session) {
         }
     }
 
+    // The SDK runs tools in the shim's process: snapshot them before it
+    // goes, so none outlives the runtime (see [`crate::shutdown_agent`]).
+    #[cfg(unix)]
+    let tree = match child.id() {
+        Some(pid) => crate::process::descendants(pid).await,
+        None => Vec::new(),
+    };
     drop(stdin_tx);
     // EOF asks the shim to cancel/close the SDK and settle its durable state.
     // Signals remain the bounded fallback when the SDK cannot shut down.
@@ -726,6 +846,8 @@ async fn run_session(session: Session) {
     ) {
         shutdown_child(&mut child, kill_grace).await;
     }
+    #[cfg(unix)]
+    crate::process::terminate_tree(&tree, kill_grace).await;
     if let Some(handle) = escalation {
         handle.abort();
     }
@@ -787,15 +909,19 @@ fn decode_tool(name: &str, args: &Value) -> ToolCall {
                 .map(|a| a.as_slice())
                 .unwrap_or_default()
                 .iter()
-                .map(|t| TodoItem {
-                    text: t
-                        .get("content")
-                        .or_else(|| t.get("text"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .into(),
-                    done: t.get("status").and_then(Value::as_str) == Some("completed")
-                        || t.get("completed").and_then(Value::as_bool) == Some(true),
+                .map(|t| {
+                    let status = if t.get("completed").and_then(Value::as_bool) == Some(true) {
+                        TodoStatus::Completed
+                    } else {
+                        TodoStatus::parse(t.get("status").and_then(Value::as_str).unwrap_or(""))
+                    };
+                    TodoItem::new(
+                        t.get("content")
+                            .or_else(|| t.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        status,
+                    )
                 })
                 .collect(),
         },

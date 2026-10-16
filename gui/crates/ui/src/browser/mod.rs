@@ -7,7 +7,12 @@ mod macos;
 use linux as native;
 #[cfg(target_os = "macos")]
 use macos as native;
+#[cfg(windows)]
+mod windows_webview;
+#[cfg(windows)]
+use windows_webview as native;
 pub mod model;
+pub(crate) mod profile;
 mod view;
 
 use crate::composer::{ComposerInput, ComposerInputEvent};
@@ -67,15 +72,32 @@ pub enum BrowserEvent {
     Close,
 }
 
-/// A window/profile's ephemeral website data, allocated on first navigation.
+/// A profile's website data, allocated on first navigation. Default contexts are
+/// ephemeral, for unresolved identities and isolated fixtures.
 #[derive(Clone, Default)]
 pub struct BrowserContext {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     data: native::BrowserData,
 }
 
+impl BrowserContext {
+    pub(crate) fn for_profile(profile: profile::BrowserProfile) -> Self {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            Self {
+                data: native::BrowserData::for_profile(profile),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = profile;
+            Self::default()
+        }
+    }
+}
+
 pub struct BrowserSurface {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     context: BrowserContext,
     address: Entity<ComposerInput>,
     focus: FocusHandle,
@@ -92,19 +114,24 @@ pub struct BrowserSurface {
     presentation: Presentation,
     #[cfg(target_os = "macos")]
     resize_inset: gpui::Pixels,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     right_occlusion: gpui::Pixels,
     _input_sub: Subscription,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     native: Option<native::NativePage>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
+    native_startup: Option<gpui::Task<()>>,
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     native_tx: tokio::sync::mpsc::Sender<native::NativeEvent>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     _native_task: gpui::Task<()>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     favicon_task: Option<gpui::Task<()>>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     favicon_generation: u64,
+    /// The page's pointer cursor (Windows: GPUI owns the cursor).
+    #[cfg(windows)]
+    page_cursor: gpui::CursorStyle,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserSurface {}
@@ -135,9 +162,9 @@ impl BrowserSurface {
                 cx.notify();
             }
         });
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let (native_tx, mut events) = tokio::sync::mpsc::channel(64);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let native_task = cx.spawn_in(window, async move |this, cx| {
             while let Some(event) = events.recv().await {
                 if this
@@ -150,10 +177,10 @@ impl BrowserSurface {
                 }
             }
         });
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let _ = (window, context);
         Self {
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             context,
             address,
             focus: cx.focus_handle(),
@@ -170,19 +197,23 @@ impl BrowserSurface {
             presentation: Presentation::Hidden,
             #[cfg(target_os = "macos")]
             resize_inset: gpui::px(0.0),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             right_occlusion: gpui::px(0.0),
             _input_sub: input_sub,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             native: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
+            native_startup: None,
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             native_tx,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             _native_task: native_task,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             favicon_task: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             favicon_generation: 0,
+            #[cfg(windows)]
+            page_cursor: gpui::CursorStyle::Arrow,
         }
     }
 
@@ -193,7 +224,7 @@ impl BrowserSurface {
         self.remote = remote;
     }
     pub fn set_shortcuts(&mut self, keymap: &crate::settings::KeymapConfig) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(native) = &self.native {
             native.set_shortcuts(
                 crate::settings::ShortcutId::ALL
@@ -203,12 +234,12 @@ impl BrowserSurface {
                     .collect(),
             );
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = keymap;
     }
 
     pub fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(native) = &self.native {
             native.focus_chrome();
         }
@@ -226,7 +257,7 @@ impl BrowserSurface {
     }
 
     /// Crop a GPUI overlay out of both native painting and native hit testing.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn set_right_occlusion(&mut self, width: gpui::Pixels, cx: &mut Context<Self>) {
         if self.right_occlusion != width {
             self.right_occlusion = width;
@@ -239,7 +270,7 @@ impl BrowserSurface {
             return;
         }
         self.presentation = presentation;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         if let Some(native) = &mut self.native {
             native.present(presentation);
         }
@@ -331,9 +362,9 @@ impl BrowserSurface {
         self.page.title.clear();
         self.page.error = None;
         self.clear_favicon(cx);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             {
                 self.favicon_generation += 1;
                 self.favicon_task = None;
@@ -341,12 +372,19 @@ impl BrowserSurface {
             let result = if let Some(native) = &self.native {
                 native.load(&url)
             } else {
-                native::NativePage::new(window, &self.context.data, self.native_tx.clone())
-                    .map(|mut native| {
-                        native.present(self.presentation);
-                        self.native = Some(native);
-                    })
-                    .and_then(|_| self.native.as_ref().unwrap().load(&url))
+                #[cfg(any(target_os = "macos", windows))]
+                {
+                    native::NativePage::new(window, &self.context.data, self.native_tx.clone())
+                        .map(|mut native| {
+                            native.present(self.presentation);
+                            self.native = Some(native);
+                        })
+                        .and_then(|_| self.native.as_ref().unwrap().load(&url))
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    self.start_linux_page(window, cx)
+                }
             };
             self.page.loading = result.is_ok();
             if let Err(error) = result {
@@ -354,7 +392,7 @@ impl BrowserSurface {
             }
             window.focus(&self.focus, cx);
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
             let _ = window;
             cx.open_url(&url);
@@ -369,7 +407,7 @@ impl BrowserSurface {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         if let Some(native) = &self.native {
             if self.page.error.is_some() {
                 if let Some(url) = &self.page.url {
@@ -380,7 +418,7 @@ impl BrowserSurface {
             }
             self.page.error = None;
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         self.open_external(cx);
         cx.notify();
     }
@@ -397,11 +435,11 @@ impl BrowserSurface {
     }
 
     fn history(&mut self, forward: bool) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         if let Some(native) = &self.native {
             native.history(forward);
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let _ = forward;
     }
 
@@ -415,7 +453,13 @@ impl BrowserSurface {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.set_presentation(Presentation::Hidden, cx);
         self.clear_favicon(cx);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "linux")]
+        {
+            // Cancels delivery; any helper still starting finishes/cleans up on
+            // its startup thread and cannot reattach to this closed tab.
+            self.native_startup = None;
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         {
             if let Some(native) = &mut self.native {
                 native.present(Presentation::Hidden);
@@ -425,7 +469,7 @@ impl BrowserSurface {
                 cx.defer(move |cx| gpui::ImageSource::Render(image).evict(None, cx));
             }
             self.native = None;
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             {
                 self.favicon_task = None;
                 self.favicon_generation += 1;
@@ -434,7 +478,7 @@ impl BrowserSurface {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl BrowserSurface {
     fn on_native_event(
         &mut self,
@@ -495,17 +539,29 @@ impl BrowserSurface {
                     });
                 }
             }
+            #[cfg(windows)]
+            native::NativeEvent::Cursor(style) => {
+                if self.page_cursor != style {
+                    self.page_cursor = style;
+                    cx.notify();
+                }
+            }
             native::NativeEvent::Favicon { page, url } => {
                 if self.page.url.as_deref() != Some(&page) || !model::allowed_navigation(&url) {
                     return;
                 }
                 let generation = self.favicon_generation;
+                // reqwest's system proxy has no loopback exemption; a local dev
+                // server's favicon must be fetched directly.
+                let direct = url::Url::parse(&url).is_ok_and(|parsed| model::loopback(&parsed));
                 let download = gpui_tokio::Tokio::spawn(cx, async move {
-                    let client = reqwest::Client::builder()
+                    let mut builder = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(5))
-                        .redirect(reqwest::redirect::Policy::limited(3))
-                        .build()
-                        .ok()?;
+                        .redirect(reqwest::redirect::Policy::limited(3));
+                    if direct {
+                        builder = builder.no_proxy();
+                    }
+                    let client = builder.build().ok()?;
                     let mut response =
                         client.get(url).send().await.ok()?.error_for_status().ok()?;
                     if response.content_length().is_some_and(|n| n > 1024 * 1024) {
@@ -549,6 +605,61 @@ impl BrowserSurface {
                     });
                 }));
             }
+        }
+    }
+}
+
+#[cfg(feature = "browser-fixture")]
+impl BrowserContext {
+    pub fn fixture_persistence_supported() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            native::persistent_profiles_supported()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            cfg!(target_os = "linux")
+        }
+    }
+
+    /// Named WK stores live outside the fixture's temporary data directory.
+    /// Remove only the store derived from this fixture installation and identity.
+    pub fn fixture_remove_profile(
+        data_dir: &std::path::Path,
+        device: &str,
+        completion: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtDarwin;
+            if native::persistent_profiles_supported() {
+                let profile = profile::BrowserProfile::for_workspace(
+                    data_dir,
+                    Some(zeron_proto::WorkspaceScope::Local),
+                    None,
+                    Some(device),
+                )
+                .unwrap();
+                eprintln!("Storage cleanup: invoke; main_thread={}", objc2::MainThreadMarker::new().is_some());
+                // A cleanup-only process has not constructed a WebKit store yet.
+                // Initialize its main run loop before removal dispatches back from the
+                // WebsiteDataStoreIO queue. An ephemeral store never opens user data.
+                let mtm = objc2::MainThreadMarker::new().expect("profile cleanup requires the main thread");
+                let initialization = unsafe { objc2_web_kit::WKWebsiteDataStore::nonPersistentDataStore(mtm) };
+                drop(initialization);
+                wry::WebView::remove_data_store(&profile.data_store_identifier(), move |result| {
+                    eprintln!("Storage cleanup: callback; main_thread={}; result={result:?}", objc2::MainThreadMarker::new().is_some());
+                    completion(result.map_err(|error| error.to_string()));
+                });
+                eprintln!("Storage cleanup: invocation returned");
+            } else {
+                completion(Ok(()));
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (data_dir, device);
+            completion(Ok(()));
         }
     }
 }
@@ -602,7 +713,11 @@ impl BrowserSurface {
             self.presentation != Presentation::Hidden
                 && self.native.as_ref().is_some_and(|n| n.image.is_some())
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(windows)]
+        {
+            self.presentation != Presentation::Hidden && self.native.is_some()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
             false
         }
@@ -623,6 +738,11 @@ impl BrowserSurface {
     pub fn fixture_geometry(&self) -> (f32, f32, f32) {
         self.native.as_ref().unwrap().fixture_geometry()
     }
+    #[cfg(target_os = "macos")]
+    pub fn fixture_cookies(&self, completion: impl FnOnce(Vec<String>) + 'static) {
+        self.native.as_ref().expect("storage page must be attached").fixture_cookies(completion);
+    }
+
     pub fn fixture_eval(&self, script: &str) {
         #[cfg(target_os = "macos")]
         if let Some(native) = &self.native {

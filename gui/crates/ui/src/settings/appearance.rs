@@ -5,11 +5,12 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{
-    AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyDownEvent, ObjectFit, Render, SharedString, StyledImage as _, Subscription, Window, div,
-    img, prelude::*, px,
+    AnyElement, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
+    KeyDownEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, SharedString, StyledImage as _,
+    Subscription, Window, div, img, point, prelude::*, px,
 };
 use zeron_theme::vscode::{ImportReport, SourceCompilation};
 use zeron_theme::{
@@ -20,6 +21,7 @@ use zeron_theme::{
 use crate::appearance::{self, AppearanceMode};
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons;
+use crate::motion::ReduceMotion;
 use crate::popover::{self, Popup};
 use crate::settings::widgets;
 use crate::theme::{Appearance, Theme};
@@ -36,6 +38,91 @@ struct ImportDialog {
     selected: HashSet<String>,
     review_variant: Option<String>,
     error: Option<SharedString>,
+}
+
+struct BackgroundAdjustmentDialog {
+    focus: FocusHandle,
+    zoom_focus: FocusHandle,
+    end_focus: FocusHandle,
+    return_focus: Option<FocusHandle>,
+    path: String,
+    source: Option<Arc<gpui::RenderImage>>,
+    draft: crate::settings::NewThreadBackgroundAdjustment,
+    preview_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    zoom_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    drag: Option<(
+        Point<Pixels>,
+        crate::settings::NewThreadBackgroundAdjustment,
+    )>,
+    pinch: Option<(f32, f32)>,
+}
+
+#[derive(Clone)]
+struct BackgroundAdjustmentDrag;
+
+impl Render for BackgroundAdjustmentDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+#[derive(Clone)]
+struct BackgroundAdjustmentZoomDrag;
+
+impl Render for BackgroundAdjustmentZoomDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+const BACKGROUND_ZOOM_STEP: f32 = 0.1;
+
+fn background_pinch_factor(factor: f32, delta: f32, relative_delta: bool) -> f32 {
+    if !delta.is_finite() {
+        return factor;
+    }
+    // Direct Manipulation reports a ratio to the last scale; the other
+    // native backends report an additive change to the gesture's scale.
+    let next = if relative_delta {
+        factor * (1.0 + delta)
+    } else {
+        factor + delta
+    };
+    next.max(0.001)
+}
+
+fn background_zoom_fraction(zoom: f32) -> f32 {
+    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
+    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
+    ((zoom - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
+}
+
+fn background_zoom_at_x(bounds: Bounds<Pixels>, x: Pixels) -> f32 {
+    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
+    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
+    let fraction = ((f32::from(x - bounds.left()) - 7.0)
+        / (f32::from(bounds.size.width) - 14.0).max(1.0))
+    .clamp(0.0, 1.0);
+    minimum + fraction * (maximum - minimum)
+}
+
+fn background_preview_size(
+    viewport: gpui::Size<Pixels>,
+    sidebar_width: f32,
+    sidebar_collapsed: bool,
+) -> gpui::Size<Pixels> {
+    let hero_width = (f32::from(viewport.width)
+        - if sidebar_collapsed {
+            0.0
+        } else {
+            sidebar_width
+        })
+    .max(1.0);
+    let hero_height =
+        crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0);
+    let max_width = (f32::from(viewport.width) - 84.0).clamp(1.0, 556.0);
+    let scale = (max_width / hero_width).min(258.0 / hero_height);
+    gpui::size(px(hero_width * scale), px(hero_height * scale))
 }
 
 /// The three independently configurable font slots. Interface and code/diff
@@ -74,9 +161,9 @@ impl FontKind {
 
     fn description(self) -> &'static str {
         match self {
-            Self::Ui => "Menus, sidebars, and conversation text.",
-            Self::Terminal => "Terminal panes and shell output. Fixed-width families only.",
-            Self::Code => "Code blocks, diffs, and workspace file editors.",
+            Self::Ui => "Menus and conversations",
+            Self::Terminal => "Terminal output · monospace only",
+            Self::Code => "Code, diffs, and files",
         }
     }
 
@@ -196,15 +283,9 @@ pub struct AppearancePage {
     selected_font: UiFontFamily,
     selected_terminal_font: UiFontFamily,
     selected_code_font: UiFontFamily,
-    selected_size: UiFontSize,
-    selected_terminal_size: f32,
-    selected_code_size: f32,
     font_focus: FocusHandle,
     terminal_font_focus: FocusHandle,
     code_font_focus: FocusHandle,
-    size_focus: FocusHandle,
-    terminal_size_focus: FocusHandle,
-    code_size_focus: FocusHandle,
     font_menu: Popup<()>,
     terminal_font_menu: Popup<()>,
     code_font_menu: Popup<()>,
@@ -215,9 +296,9 @@ pub struct AppearancePage {
     font_list: widgets::PageScroll,
     terminal_font_list: widgets::PageScroll,
     code_font_list: widgets::PageScroll,
-    size_menu: Popup<()>,
-    terminal_size_menu: Popup<()>,
-    code_size_menu: Popup<()>,
+    size_select: widgets::SelectState,
+    terminal_size_select: widgets::SelectState,
+    code_size_select: widgets::SelectState,
     font_menu_dismissed_at: Option<std::time::Instant>,
     terminal_font_menu_dismissed_at: Option<std::time::Instant>,
     code_font_menu_dismissed_at: Option<std::time::Instant>,
@@ -226,12 +307,13 @@ pub struct AppearancePage {
     /// scroll. One input serves all three kinds: only one menu is ever open.
     font_search: Entity<ComposerInput>,
     _font_search_events: Subscription,
-    size_menu_dismissed_at: Option<std::time::Instant>,
-    terminal_size_menu_dismissed_at: Option<std::time::Instant>,
-    code_size_menu_dismissed_at: Option<std::time::Instant>,
-    light_theme_menu: Popup<()>,
-    dark_theme_menu: Popup<()>,
+    light_theme_select: widgets::SelectState,
+    dark_theme_select: widgets::SelectState,
+    surface_select: widgets::SelectState,
+    background_effect_select: widgets::SelectState,
+    reduce_motion_select: widgets::SelectState,
     import_dialog: Option<ImportDialog>,
+    background_adjustment_dialog: Option<BackgroundAdjustmentDialog>,
     review_entry: Option<String>,
     library_error: Option<SharedString>,
     background_error: Option<SharedString>,
@@ -375,26 +457,21 @@ impl AppearancePage {
                             .bg(theme.accent),
                     ),
             );
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
+        widgets::card_row(theme, false)
             .gap(px(20.0))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(200.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(widgets::field_label(theme, "Conversation width"))
-                    .child(
-                        div()
-                            .text_size(typography::ui_rems(12.0))
-                            .line_height(px(18.0))
-                            .text_color(theme.text_muted)
-                            .child("Maximum width of messages and the composer in conversations. Adapts to smaller windows."),
-                    ),
+                    .child(widgets::row_title(theme, "Conversation width"))
+                    .child(widgets::meta_line(
+                        theme,
+                        vec![
+                            div()
+                                .child("Maximum width for messages and the composer.")
+                                .into_any_element(),
+                        ],
+                    )),
             )
             .child(
                 div()
@@ -477,35 +554,30 @@ impl AppearancePage {
             selected_font: typography::effective(cx),
             selected_terminal_font: typography::terminal_effective(cx),
             selected_code_font: typography::code_effective(cx),
-            selected_size: typography::font_size(cx),
-            selected_terminal_size: typography::terminal_font_size(cx),
-            selected_code_size: typography::code_font_size(cx),
             font_focus: cx.focus_handle(),
             terminal_font_focus: cx.focus_handle(),
             code_font_focus: cx.focus_handle(),
-            size_focus: cx.focus_handle(),
-            terminal_size_focus: cx.focus_handle(),
-            code_size_focus: cx.focus_handle(),
             font_menu: Popup::default(),
             terminal_font_menu: Popup::default(),
             code_font_menu: Popup::default(),
             font_list: widgets::PageScroll::default(),
             terminal_font_list: widgets::PageScroll::default(),
             code_font_list: widgets::PageScroll::default(),
-            size_menu: Popup::default(),
-            terminal_size_menu: Popup::default(),
-            code_size_menu: Popup::default(),
+            size_select: widgets::SelectState::default(),
+            terminal_size_select: widgets::SelectState::default(),
+            code_size_select: widgets::SelectState::default(),
             font_menu_dismissed_at: None,
             terminal_font_menu_dismissed_at: None,
             code_font_menu_dismissed_at: None,
             font_search,
             _font_search_events: font_search_events,
-            size_menu_dismissed_at: None,
-            terminal_size_menu_dismissed_at: None,
-            code_size_menu_dismissed_at: None,
-            light_theme_menu: Popup::default(),
-            dark_theme_menu: Popup::default(),
+            light_theme_select: widgets::SelectState::default(),
+            dark_theme_select: widgets::SelectState::default(),
+            surface_select: widgets::SelectState::default(),
+            background_effect_select: widgets::SelectState::default(),
+            reduce_motion_select: widgets::SelectState::default(),
             import_dialog: None,
+            background_adjustment_dialog: None,
             review_entry: None,
             library_error: None,
             background_error: None,
@@ -579,80 +651,45 @@ impl AppearancePage {
         }
     }
 
-    fn size_menu(&self, kind: FontKind) -> &Popup<()> {
+    fn size_select(&self, kind: FontKind) -> &widgets::SelectState {
         match kind {
-            FontKind::Ui => &self.size_menu,
-            FontKind::Terminal => &self.terminal_size_menu,
-            FontKind::Code => &self.code_size_menu,
+            FontKind::Ui => &self.size_select,
+            FontKind::Terminal => &self.terminal_size_select,
+            FontKind::Code => &self.code_size_select,
         }
     }
 
-    fn size_menu_mut(&mut self, kind: FontKind) -> &mut Popup<()> {
+    fn size_select_mut(&mut self, kind: FontKind) -> &mut widgets::SelectState {
         match kind {
-            FontKind::Ui => &mut self.size_menu,
-            FontKind::Terminal => &mut self.terminal_size_menu,
-            FontKind::Code => &mut self.code_size_menu,
+            FontKind::Ui => &mut self.size_select,
+            FontKind::Terminal => &mut self.terminal_size_select,
+            FontKind::Code => &mut self.code_size_select,
         }
     }
 
-    fn size_focus(&self, kind: FontKind) -> &FocusHandle {
-        match kind {
-            FontKind::Ui => &self.size_focus,
-            FontKind::Terminal => &self.terminal_size_focus,
-            FontKind::Code => &self.code_size_focus,
-        }
-    }
-
-    fn size_dismissed_at(&mut self, kind: FontKind) -> &mut Option<std::time::Instant> {
-        match kind {
-            FontKind::Ui => &mut self.size_menu_dismissed_at,
-            FontKind::Terminal => &mut self.terminal_size_menu_dismissed_at,
-            FontKind::Code => &mut self.code_size_menu_dismissed_at,
-        }
-    }
-
-    /// Highlighted rung of this kind's size ladder.
-    fn selected_size_ix(&self, kind: FontKind) -> usize {
-        match kind {
-            FontKind::Ui => UiFontSize::ALL
-                .iter()
-                .position(|size| *size == self.selected_size)
-                .unwrap_or_default(),
-            FontKind::Terminal => nearest_mono_ix(self.selected_terminal_size),
-            FontKind::Code => nearest_mono_ix(self.selected_code_size),
-        }
-    }
-
-    fn set_selected_size_ix(&mut self, kind: FontKind, ix: usize) {
+    /// Apply rung `ix` of this kind's size ladder.
+    fn commit_size(
+        &mut self,
+        kind: FontKind,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ix = ix.min(kind.size_count() - 1);
-        match kind {
-            FontKind::Ui => self.selected_size = UiFontSize::ALL[ix],
-            FontKind::Terminal => self.selected_terminal_size = MONO_FONT_SIZES[ix],
-            FontKind::Code => self.selected_code_size = MONO_FONT_SIZES[ix],
-        }
-    }
-
-    fn commit_size(&mut self, kind: FontKind, window: &mut Window, cx: &mut Context<Self>) {
-        let ix = self.selected_size_ix(kind);
         match kind {
             FontKind::Ui => {
                 typography::set_font_size(UiFontSize::ALL[ix], window, cx);
-                self.selected_size = typography::font_size(cx);
             }
             FontKind::Terminal => {
-                let next = MONO_FONT_SIZES[ix];
-                typography::set_terminal_font_size(next, cx);
-                self.selected_terminal_size = next;
+                typography::set_terminal_font_size(MONO_FONT_SIZES[ix], cx);
             }
             FontKind::Code => {
                 let next = MONO_FONT_SIZES[ix];
                 typography::set_code_font_size(next, cx);
-                self.selected_code_size = next;
                 // Open file editors only learn the new size through this event.
                 cx.emit(AppearanceSettingsEvent::CodeFontSizeChanged(next));
             }
         }
-        self.close_size_menu(kind, cx);
         cx.notify();
     }
 
@@ -722,30 +759,14 @@ impl AppearancePage {
                 self.close_font_menu(kind, cx);
             }
             if Some(kind) != keep_size {
-                self.close_size_menu(kind, cx);
+                widgets::close_select(self, move |page: &mut Self| page.size_select_mut(kind), cx);
             }
-        }
-    }
-
-    fn close_size_menu(&mut self, kind: FontKind, cx: &mut Context<Self>) {
-        if !self.size_menu_mut(kind).begin_close() {
-            return;
-        }
-        match kind {
-            FontKind::Ui => popover::reap_popup(cx, |page| &mut page.size_menu),
-            FontKind::Terminal => popover::reap_popup(cx, |page| &mut page.terminal_size_menu),
-            FontKind::Code => popover::reap_popup(cx, |page| &mut page.code_size_menu),
         }
     }
 
     fn dismiss_font_menu(&mut self, kind: FontKind, cx: &mut Context<Self>) {
         *self.font_dismissed_at(kind) = Some(std::time::Instant::now());
         self.close_font_menu(kind, cx);
-    }
-
-    fn dismiss_size_menu(&mut self, kind: FontKind, cx: &mut Context<Self>) {
-        *self.size_dismissed_at(kind) = Some(std::time::Instant::now());
-        self.close_size_menu(kind, cx);
     }
 
     fn toggle_font_menu(&mut self, kind: FontKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -770,30 +791,6 @@ impl AppearancePage {
             window.focus(&self.font_search.read(cx).focus_handle(cx), cx);
         }
         cx.notify();
-    }
-
-    fn toggle_size_menu(&mut self, kind: FontKind, cx: &mut Context<Self>) {
-        self.close_other_menus(None, Some(kind), cx);
-        let just_dismissed = self
-            .size_dismissed_at(kind)
-            .take()
-            .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(400));
-        if self.size_menu(kind).is_open() {
-            self.close_size_menu(kind, cx);
-        } else if !just_dismissed {
-            self.set_selected_size_ix(kind, kind.size_ix(cx));
-            self.size_menu_mut(kind).open(());
-        }
-        cx.notify();
-    }
-
-    /// Open on the first navigation key, so ↑↓/Home/End work from the closed
-    /// trigger exactly as they do inside the list.
-    fn open_size_menu(&mut self, kind: FontKind, cx: &mut Context<Self>) {
-        if !self.size_menu(kind).is_open() {
-            *self.size_dismissed_at(kind) = None;
-            self.toggle_size_menu(kind, cx);
-        }
     }
 
     /// Returns whether the key was consumed. The card and its trigger both
@@ -858,51 +855,15 @@ impl AppearancePage {
         true
     }
 
-    fn on_size_key_down(
-        &mut self,
-        kind: FontKind,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let last = kind.size_count() - 1;
-        let current = self.selected_size_ix(kind);
-        match event.keystroke.key.as_str() {
-            "up" | "left" => {
-                self.open_size_menu(kind, cx);
-                self.set_selected_size_ix(kind, current.saturating_sub(1));
-                cx.notify();
-            }
-            "down" | "right" => {
-                self.open_size_menu(kind, cx);
-                self.set_selected_size_ix(kind, current + 1);
-                cx.notify();
-            }
-            "home" => {
-                self.open_size_menu(kind, cx);
-                self.set_selected_size_ix(kind, 0);
-                cx.notify();
-            }
-            "end" => {
-                self.open_size_menu(kind, cx);
-                self.set_selected_size_ix(kind, last);
-                cx.notify();
-            }
-            "enter" | "space" => {
-                if self.size_menu(kind).is_open() {
-                    self.commit_size(kind, window, cx);
-                } else {
-                    *self.size_dismissed_at(kind) = None;
-                    self.toggle_size_menu(kind, cx);
-                }
-            }
-            "escape" => {
-                self.set_selected_size_ix(kind, kind.size_ix(cx));
-                self.close_size_menu(kind, cx);
-                cx.notify();
-            }
-            _ => {}
+    /// Escape that reached Settings unclaimed closes the topmost dialog
+    /// (import, else the mapping review) first, so it never closes Settings
+    /// under it. Returns whether it did.
+    pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.import_dialog.take().is_none() && self.review_entry.take().is_none() {
+            return false;
         }
+        cx.notify();
+        true
     }
 
     fn open_import(&mut self, cx: &mut Context<Self>) {
@@ -1019,6 +980,48 @@ impl AppearancePage {
         .detach();
     }
 
+    pub(crate) fn show_wallpaper_error(&mut self, error: String, cx: &mut Context<Self>) {
+        self.background_error = Some(error.into());
+        cx.notify();
+    }
+
+    fn random_wallpaper(&mut self, cx: &mut Context<Self>) {
+        self.background_error = None;
+        let task = crate::settings::wallpaper::randomize(cx);
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |page, cx| {
+                page.background_error = result.err().map(SharedString::from);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn choose_wallpaper_folder(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose Wallpaper Folder".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.pop() else {
+                return;
+            };
+            let _ = this.update(cx, |page, cx| {
+                crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                    settings.wallpaper_folder = Some(path);
+                });
+                page.random_wallpaper(cx);
+            });
+        })
+        .detach();
+    }
+
     fn choose_new_thread_background(&mut self, cx: &mut Context<Self>) {
         self.background_error = None;
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -1051,6 +1054,163 @@ impl AppearancePage {
             .err()
             .map(SharedString::from);
         cx.notify();
+    }
+
+    fn open_background_adjustment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(background) = crate::settings::current(cx).new_thread_composer_background else {
+            return;
+        };
+        let focus = cx.focus_handle();
+        let zoom_focus = cx.focus_handle();
+        let return_focus = window.focused(cx);
+        window.focus(&focus, cx);
+        self.background_adjustment_dialog = Some(BackgroundAdjustmentDialog {
+            focus,
+            zoom_focus,
+            end_focus: cx.focus_handle(),
+            return_focus,
+            path: background.path,
+            source: None,
+            draft: background.adjustment.normalized(),
+            preview_bounds: Rc::default(),
+            zoom_bounds: Rc::default(),
+            drag: None,
+            pinch: None,
+        });
+        cx.notify();
+    }
+
+    fn dismiss_background_adjustment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.background_adjustment_dialog.take()
+            && let Some(focus) = dialog.return_focus
+        {
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+
+    fn apply_background_adjustment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.background_adjustment_dialog.as_ref() else {
+            return;
+        };
+        // A shuffle or replacement must not receive a draft for another image.
+        if dialog.source.is_none()
+            || crate::settings::current(cx)
+                .new_thread_composer_background
+                .as_ref()
+                .is_none_or(|background| background.path != dialog.path)
+        {
+            return;
+        }
+        crate::settings::set_new_thread_background_adjustment(dialog.draft, cx);
+        self.dismiss_background_adjustment(window, cx);
+    }
+
+    fn reset_background_adjustment(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
+            dialog.draft = Default::default();
+            dialog.drag = None;
+            dialog.pinch = None;
+        }
+        cx.notify();
+    }
+
+    fn set_background_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.zoom_background_around(zoom, None, cx);
+    }
+
+    fn set_background_zoom_from_x(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some(bounds) = self
+            .background_adjustment_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.zoom_bounds.get())
+        else {
+            return;
+        };
+        self.set_background_zoom(background_zoom_at_x(bounds, x), cx);
+    }
+
+    fn zoom_background_around(
+        &mut self,
+        zoom: f32,
+        anchor: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        if dialog.source.is_none() {
+            return;
+        }
+        let zoom = zoom.clamp(
+            crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
+            crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
+        );
+        let next = match (dialog.preview_bounds.get(), dialog.source.as_ref()) {
+            (Some(bounds), Some(source)) => {
+                crate::new_thread_background_mask::zoom_adjustment_around(
+                    source,
+                    bounds,
+                    dialog.draft,
+                    zoom,
+                    anchor.unwrap_or_else(|| bounds.center()),
+                )
+            }
+            _ => crate::settings::NewThreadBackgroundAdjustment {
+                zoom,
+                ..dialog.draft
+            },
+        };
+        if dialog.draft != next {
+            dialog.draft = next;
+            dialog.drag = None;
+            cx.notify();
+        }
+    }
+
+    fn pan_background(&mut self, delta: Point<f32>, cx: &mut Context<Self>) {
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        let (Some(bounds), Some(source)) = (dialog.preview_bounds.get(), dialog.source.as_ref())
+        else {
+            return;
+        };
+        let before = dialog.draft;
+        dialog.draft = crate::new_thread_background_mask::pan_adjustment(
+            source,
+            bounds,
+            dialog.draft,
+            point(px(delta.x), px(delta.y)),
+        );
+        if dialog.draft != before {
+            cx.notify();
+        }
+    }
+
+    fn drag_background(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(dialog) = self.background_adjustment_dialog.as_ref() else {
+            return;
+        };
+        let Some((start, initial)) = dialog.drag else {
+            return;
+        };
+        let delta = point(
+            f32::from(position.x - start.x),
+            f32::from(position.y - start.y),
+        );
+        if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
+            dialog.draft = initial;
+        }
+        self.pan_background(delta, cx);
+    }
+
+    fn finish_background_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.background_adjustment_dialog.as_mut()
+            && dialog.drag.take().is_some()
+        {
+            cx.notify();
+        }
     }
 
     fn finish_import(&mut self, cx: &mut Context<Self>) {
@@ -1220,13 +1380,8 @@ fn bar(fraction: f32, tone: Hsla) -> gpui::Div {
 
 fn accent_helper(accent: AccentSelection) -> String {
     match accent {
-        AccentSelection::ThemeDefault => {
-            "Theme default · Uses the palette's intended color.".into()
-        }
-        AccentSelection::Preset(preset) => format!(
-            "{} · Controls, glyphs, selections, code, and activity.",
-            preset.label()
-        ),
+        AccentSelection::ThemeDefault => "Theme default".into(),
+        AccentSelection::Preset(preset) => preset.label().into(),
     }
 }
 
@@ -1238,98 +1393,29 @@ fn surface_label(surface: SurfacePreference) -> &'static str {
     }
 }
 
+fn reduce_motion_helper(preference: ReduceMotion, system: bool) -> &'static str {
+    match (preference, system) {
+        (ReduceMotion::System, true) => {
+            "Following reduced system motion. Activity indicators use a gentle brightness pulse."
+        }
+        (ReduceMotion::System, false) => "Following the system, which currently allows motion.",
+        (ReduceMotion::On, _) => "Animations skip straight to their final state.",
+        (ReduceMotion::Off, _) => "Animations play even if the system asks for less motion.",
+    }
+}
+
 fn surface_helper(surface: SurfacePreference, resolved: SurfaceTreatment) -> String {
     match surface {
         SurfacePreference::ThemeDefault => format!(
-            "Uses this theme's {} default.",
+            "Theme default: {}",
             match resolved {
                 SurfaceTreatment::Frosted => "frosted",
                 SurfaceTreatment::Opaque => "opaque",
             }
         ),
-        SurfacePreference::Frosted => "Theme-colored glass where supported.".into(),
-        SurfacePreference::Opaque => "Solid surfaces for every theme.".into(),
+        SurfacePreference::Frosted => "Translucent surfaces".into(),
+        SurfacePreference::Opaque => "Solid surfaces".into(),
     }
-}
-
-fn surface_choice(
-    theme: &Theme,
-    surface: SurfacePreference,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(format!(
-            "appearance-surface-{}",
-            surface_label(surface).to_lowercase().replace(' ', "-")
-        )))
-        .h(px(30.0))
-        .px(px(10.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .bg(if selected {
-            theme.accent_wash
-        } else {
-            theme.surface_raised.opacity(0.28)
-        })
-        .text_size(crate::typography::ui_rems(11.5))
-        .font_weight(if selected {
-            gpui::FontWeight::MEDIUM
-        } else {
-            gpui::FontWeight::NORMAL
-        })
-        .text_color(if selected {
-            theme.accent
-        } else {
-            theme.text_muted
-        })
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .when(!selected, |control| {
-            control.hover(|style| style.bg(theme.surface_raised_hover))
-        })
-        .child(surface_label(surface))
-}
-
-fn background_effect_choice(
-    theme: &Theme,
-    effect: crate::settings::NewThreadBackgroundEffect,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(format!(
-            "new-thread-background-effect-{}",
-            effect.label().to_lowercase()
-        )))
-        .h(px(28.0))
-        .px(px(9.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .bg(if selected {
-            theme.accent_wash
-        } else {
-            theme.surface_raised.opacity(0.28)
-        })
-        .text_size(crate::typography::ui_rems(11.0))
-        .font_weight(if selected {
-            gpui::FontWeight::MEDIUM
-        } else {
-            gpui::FontWeight::NORMAL
-        })
-        .text_color(if selected {
-            theme.accent
-        } else {
-            theme.text_muted
-        })
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .when(!selected, |control| {
-            control.hover(|style| style.bg(theme.surface_raised_hover))
-        })
-        .child(effect.label())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1462,19 +1548,7 @@ fn compact_action(
     label: &str,
     id: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    let id = id.into();
-    popover::btn_ghost(theme, label, id.clone())
-        .id(id)
-        .h(px(28.0))
-        .px(px(9.0))
-        .py(px(0.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface_raised.opacity(0.34))
-        .flex()
-        .items_center()
-        .text_size(crate::typography::ui_rems(11.5))
+    widgets::text_action(theme, widgets::ActionTone::Outlined, label).id(id.into())
 }
 
 fn import_scene_preview(variant: &zeron_theme::ThemeVariant) -> AnyElement {
@@ -1576,7 +1650,7 @@ fn import_scene_preview(variant: &zeron_theme::ThemeVariant) -> AnyElement {
         .into_any_element()
 }
 
-fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Div> {
+fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
     let summary = format!(
         "{} mapped · {} adjusted · {} inferred/fallback · {} unsupported · {} warnings · {} validation",
         report.mappings.len(),
@@ -1586,57 +1660,63 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Di
         report.warnings.len(),
         report.validation.len(),
     );
-    div()
-        .id(SharedString::from(format!(
-            "theme-report-{}",
-            report.source_hash
-        )))
-        .mt(px(8.0))
-        .w_full()
-        .max_h(px(168.0))
-        .overflow_y_scroll()
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface_raised.opacity(0.35))
-        .p(px(10.0))
-        .text_size(crate::typography::ui_rems(11.0))
-        .line_height(px(16.0))
-        .text_color(theme.text_muted)
-        .child(div().text_color(theme.text).child(summary))
-        .children(report.adjustments.iter().map(|adjustment| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
-                "Adjusted · {} {} → {} · {}",
-                adjustment.zeron_role, adjustment.original, adjustment.resolved, adjustment.reason
+    widgets::scroll_faded(
+        format!("theme-report-{}", report.source_hash),
+        div()
+            .id(SharedString::from(format!(
+                "theme-report-{}",
+                report.source_hash
             )))
-        }))
-        .children(report.fallbacks.iter().map(|message| {
-            div()
-                .mt(px(4.0))
-                .child(SharedString::from(format!("Fallback · {message}")))
-        }))
-        .children(report.warnings.iter().map(|message| {
-            div()
-                .mt(px(4.0))
-                .child(SharedString::from(format!("Warning · {message}")))
-        }))
-        .children(report.validation.iter().map(|issue| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
-                "Validation {:?} {:?} · {}",
-                issue.category, issue.severity, issue.message
-            )))
-        }))
-        .children(report.dropped.iter().map(|message| {
-            div()
-                .mt(px(4.0))
-                .child(SharedString::from(format!("Unsupported · {message}")))
-        }))
-        .children(report.mappings.iter().map(|mapping| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
-                "{} ← {}",
-                mapping.zeron_role, mapping.vscode_key
-            )))
-        }))
+            .mt(px(8.0))
+            .w_full()
+            .max_h(px(168.0))
+            .overflow_y_scroll()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.surface_raised.opacity(0.35))
+            .p(px(10.0))
+            .text_size(crate::typography::ui_rems(11.0))
+            .line_height(px(16.0))
+            .text_color(theme.text_muted)
+            .child(div().text_color(theme.text).child(summary))
+            .children(report.adjustments.iter().map(|adjustment| {
+                div().mt(px(4.0)).child(SharedString::from(format!(
+                    "Adjusted · {} {} → {} · {}",
+                    adjustment.zeron_role,
+                    adjustment.original,
+                    adjustment.resolved,
+                    adjustment.reason
+                )))
+            }))
+            .children(report.fallbacks.iter().map(|message| {
+                div()
+                    .mt(px(4.0))
+                    .child(SharedString::from(format!("Fallback · {message}")))
+            }))
+            .children(report.warnings.iter().map(|message| {
+                div()
+                    .mt(px(4.0))
+                    .child(SharedString::from(format!("Warning · {message}")))
+            }))
+            .children(report.validation.iter().map(|issue| {
+                div().mt(px(4.0)).child(SharedString::from(format!(
+                    "Validation {:?} {:?} · {}",
+                    issue.category, issue.severity, issue.message
+                )))
+            }))
+            .children(report.dropped.iter().map(|message| {
+                div()
+                    .mt(px(4.0))
+                    .child(SharedString::from(format!("Unsupported · {message}")))
+            }))
+            .children(report.mappings.iter().map(|mapping| {
+                div().mt(px(4.0)).child(SharedString::from(format!(
+                    "{} ← {}",
+                    mapping.zeron_role, mapping.vscode_key
+                )))
+            })),
+    )
 }
 
 fn accent_swatch(
@@ -1684,6 +1764,8 @@ fn accent_swatch(
     };
     div()
         .id(SharedString::from(format!("accent-{}", selection.label())))
+        .aria_label(selection.label())
+        .aria_selected(selected)
         .flex_none()
         .w(px(30.0))
         .h(px(34.0))
@@ -1712,36 +1794,13 @@ fn accent_swatch(
 }
 
 impl AppearancePage {
-    fn theme_menu(&self, appearance: Appearance) -> &Popup<()> {
-        match appearance {
-            Appearance::Light => &self.light_theme_menu,
-            Appearance::Dark => &self.dark_theme_menu,
-        }
-    }
-
-    fn theme_menu_mut(&mut self, appearance: Appearance) -> &mut Popup<()> {
-        match appearance {
-            Appearance::Light => &mut self.light_theme_menu,
-            Appearance::Dark => &mut self.dark_theme_menu,
-        }
-    }
-
-    fn close_theme_menu(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
-        if !self.theme_menu_mut(appearance).begin_close() {
-            return;
-        }
-        match appearance {
-            Appearance::Light => popover::reap_popup(cx, |page| &mut page.light_theme_menu),
-            Appearance::Dark => popover::reap_popup(cx, |page| &mut page.dark_theme_menu),
-        }
-    }
-
     fn render_font_picker(
         &mut self,
         kind: FontKind,
         theme: &Theme,
         availability: &FontAvailability,
         fixed: SharedString,
+        viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let slug = kind.slug();
@@ -1772,8 +1831,15 @@ impl AppearancePage {
                 let active = family == effective;
                 let focused = family == selected;
                 let label = SharedString::from(family.label().to_owned());
-                popover::menu_row_nav(theme, active, focused, format!("{slug}-font-option-{ix}"))
+                popover::picker_row(theme, active, focused, format!("{slug}-font-option-{ix}"))
                     .id(SharedString::from(format!("{slug}-font-option-{ix}")))
+                    .role(gpui::Role::MenuItemRadio)
+                    .aria_label(label.clone())
+                    .aria_toggled(if active {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
                     .when(available, |row| {
                         row.on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -1783,13 +1849,6 @@ impl AppearancePage {
                     })
                     .when(!available, |row| row.opacity(0.45))
                     .child(div().flex_1().min_w_0().truncate().child(label))
-                    .child(div().w(px(18.0)).flex_none().when(active, |slot| {
-                        slot.child(
-                            icons::icon(icons::CHECK)
-                                .size(px(14.0))
-                                .text_color(theme.accent),
-                        )
-                    }))
                     .into_any_element()
             })
             .collect();
@@ -1820,14 +1879,19 @@ impl AppearancePage {
                         cx.notify();
                     }
                 }))
-                .child(
+                .child(popover::faded_menu_list(
+                    &scroll,
                     popover::menu_scroll_list(list_id, &scroll)
-                        .max_h(px(280.0))
+                        .max_h(px(widgets::dropdown_list_height(
+                            viewport,
+                            widgets::SELECT_HEIGHT,
+                            52.0,
+                        )))
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
                         .children(rows),
-                )
+                ))
                 .children(rail)
                 .into_any_element()
         };
@@ -1835,9 +1899,9 @@ impl AppearancePage {
         // The key handler sits on the card, not just the trigger: focus moves
         // into the filter input, and `PaletteSearch` lets arrows/Enter/Escape
         // bubble to exactly this ancestor.
-        let menu = popover::popover_card(theme)
+        let menu = widgets::select_menu(theme)
             .w(px(220.0))
-            .font_family(fixed)
+            .font_family(fixed.clone())
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| this.dismiss_font_menu(kind, cx)))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 if this.on_font_key_down(kind, event, window, cx) {
@@ -1850,67 +1914,44 @@ impl AppearancePage {
                 theme,
                 self.font_search.clone().into_any_element(),
             ))
-            .child(list)
-            .into_any_element();
+            .child(list);
 
         let open = self.font_menu(kind).is_open();
         let closing = self.font_menu(kind).closing_since();
-        div()
-            .id(SharedString::from(format!("{slug}-font-dropdown")))
-            .relative()
+        let value = SharedString::from(effective.label().to_owned());
+        widgets::select_trigger(theme, format!("{slug}-font-dropdown"), open)
             .w(px(220.0))
-            .h(px(36.0))
-            .px(px(11.0))
-            .rounded(px(9.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            .bg(crate::theme::ink(0.025))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .track_focus(self.font_focus(kind))
+            .font_family(fixed)
+            .aria_label(format!("{}: {value}", kind.label()))
+            .track_focus(&self.font_focus(kind).clone().tab_stop(true))
             // Only the closed state: once open, the card above owns these keys
             // and stops their propagation before they reach us.
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 if !this.font_menu(kind).is_open() {
-                    this.on_font_key_down(kind, event, window, cx);
+                    if this.on_font_key_down(kind, event, window, cx) {
+                        cx.stop_propagation();
+                    }
                 }
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
                 window.focus(&this.font_focus(kind).clone(), cx);
                 this.toggle_font_menu(kind, window, cx);
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(effective.label().to_owned())),
-            )
-            .child(
-                icons::icon(icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
+            .child(widgets::select_value(value))
+            .child(widgets::select_chevron(theme, open))
             .when_some(self.font_menu(kind).get(), |trigger, _| {
-                trigger.child(popover::anchored_menu_below(
+                trigger.child(widgets::dropdown(
                     SharedString::from(format!("{slug}-font-menu")),
                     menu,
                     closing,
+                    widgets::SELECT_HEIGHT,
                 ))
             })
             .into_any_element()
     }
 
-    /// The size dropdown, identical in shape to the family picker beside it.
-    /// Every kind picks from a discrete ladder, so all three rows read alike.
+    /// The size dropdown beside the family picker. Every kind picks from a
+    /// discrete ladder, so all three rows read alike.
     fn render_size_picker(
         &mut self,
         kind: FontKind,
@@ -1919,91 +1960,23 @@ impl AppearancePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let slug = kind.slug();
-        let labels = kind.size_labels();
-        let current = kind.size_ix(cx);
-        let selected = self.selected_size_ix(kind);
-        let rows: Vec<AnyElement> = labels
-            .iter()
-            .enumerate()
-            .map(|(ix, label)| {
-                popover::menu_row_nav(
-                    theme,
-                    ix == current,
-                    ix == selected,
-                    format!("{slug}-font-size-option-{ix}"),
-                )
-                .id(SharedString::from(format!("{slug}-font-size-option-{ix}")))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.set_selected_size_ix(kind, ix);
-                    this.commit_size(kind, window, cx);
-                }))
-                .child(div().flex_1().child(label.clone()))
-                .child(div().w(px(18.0)).flex_none().when(ix == current, |slot| {
-                    slot.child(
-                        icons::icon(icons::CHECK)
-                            .size(px(14.0))
-                            .text_color(theme.accent),
-                    )
-                }))
-                .into_any_element()
-            })
-            .collect();
-
-        let menu = popover::popover_card(theme)
-            .w(px(128.0))
-            .font_family(fixed)
-            .on_mouse_down_out(cx.listener(move |this, _, _, cx| this.dismiss_size_menu(kind, cx)))
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .children(rows)
-            .into_any_element();
-
-        let open = self.size_menu(kind).is_open();
-        let closing = self.size_menu(kind).closing_since();
-        div()
-            .id(SharedString::from(format!("{slug}-font-size-dropdown")))
-            .relative()
-            .w(px(128.0))
-            .h(px(36.0))
-            .px(px(11.0))
-            .rounded(px(9.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            .bg(crate::theme::ink(0.025))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .track_focus(self.size_focus(kind))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                this.on_size_key_down(kind, event, window, cx)
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                window.focus(&this.size_focus(kind).clone(), cx);
-                this.toggle_size_menu(kind, cx);
-            }))
-            .child(div().flex_1().child(labels[current].clone()))
-            .child(
-                icons::icon(icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
-            .when_some(self.size_menu(kind).get(), |trigger, _| {
-                trigger.child(popover::anchored_menu_below(
-                    SharedString::from(format!("{slug}-font-size-menu")),
-                    menu,
-                    closing,
-                ))
-            })
-            .into_any_element()
+        widgets::select(
+            format!("{slug}-font-size-dropdown"),
+            format!("{} size", kind.label()),
+            theme,
+            move |page: &mut Self| page.size_select_mut(kind),
+        )
+        .options(
+            kind.size_labels()
+                .into_iter()
+                .map(widgets::SelectOption::new),
+            kind.size_ix(cx),
+        )
+        .width(128.0)
+        .font_family(fixed)
+        .on_select(move |page, ix, window, cx| page.commit_size(kind, ix, window, cx))
+        .render(self.size_select(kind), cx)
+        .into_any_element()
     }
 
     fn render_theme_selector(
@@ -2017,161 +1990,54 @@ impl AppearancePage {
         let selected_id = selections
             .variant_id(model_appearance(appearance_kind))
             .to_owned();
-        let selected_variant = registry
-            .variant(&selected_id)
-            .or_else(|| {
-                registry
-                    .variants_for(model_appearance(appearance_kind))
-                    .next()
-            })
-            .expect("the built-in registry has both appearances");
-        let selected_theme = Theme::for_selection(
-            appearance_kind,
-            &selected_variant.id,
-            AccentSelection::ThemeDefault,
-            theme.surface_preference,
-        );
-        let open = self.theme_menu(appearance_kind).is_open();
-
-        let mut trigger = div()
-            .id(SharedString::from(format!(
-                "{}-theme-selector",
-                if appearance_kind.is_light() {
-                    "light"
-                } else {
-                    "dark"
-                }
-            )))
-            .relative()
-            .flex_none()
-            .w(px(218.0))
-            .h(px(34.0))
-            .px(px(10.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            .bg(theme.surface_raised.opacity(if open { 0.75 } else { 0.42 }))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .when(!open, |el| {
-                el.hover(|style| style.bg(theme.surface_raised_hover))
-            })
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _, _, _| {
-                    this.theme_menu_mut(appearance_kind).note_trigger_press();
-                }),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.theme_menu_mut(appearance_kind).take_press_was_open() {
-                    this.close_theme_menu(appearance_kind, cx);
-                } else {
-                    let other = if appearance_kind.is_light() {
-                        Appearance::Dark
-                    } else {
-                        Appearance::Light
-                    };
-                    this.close_theme_menu(other, cx);
-                    this.theme_menu_mut(appearance_kind).open(());
-                }
-                cx.notify();
-            }))
-            .child(palette_preview(&selected_theme))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(crate::typography::ui_rems(12.5))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(SharedString::from(selected_variant.name.clone())),
-            )
-            .child(
-                icons::icon(icons::SORT_VERTICAL)
-                    .size(px(14.0))
-                    .text_color(theme.text_muted.opacity(if open { 0.9 } else { 0.45 })),
-            );
-
-        if self.theme_menu(appearance_kind).get().is_some() {
-            let closing = self.theme_menu(appearance_kind).closing_since();
-            let heading = if appearance_kind.is_light() {
-                "Light themes"
-            } else {
-                "Dark themes"
-            };
-            let menu = popover::popover_card(theme)
-                .w(px(260.0))
-                .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
-                    this.close_theme_menu(appearance_kind, cx);
-                    cx.notify();
-                }))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(popover::menu_heading(theme, heading))
-                .children(
-                    registry
-                        .variants_for(model_appearance(appearance_kind))
-                        .enumerate()
-                        .map(|(index, variant)| {
-                            let id = variant.id.clone();
-                            let name = variant.name.clone();
-                            let active = id == selected_id;
-                            let sample = Theme::for_selection(
-                                appearance_kind,
-                                &id,
-                                AccentSelection::ThemeDefault,
-                                theme.surface_preference,
-                            );
-                            popover::menu_row(
-                                theme,
-                                active,
-                                SharedString::from(format!(
-                                    "appearance-theme-menu-{appearance_kind:?}-{index}"
-                                )),
-                            )
-                            .id(SharedString::from(format!(
-                                "appearance-theme-row-{appearance_kind:?}-{index}"
-                            )))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                appearance::set_theme(appearance_kind, id.clone(), cx);
-                                this.close_theme_menu(appearance_kind, cx);
-                                cx.notify();
-                            }))
-                            .child(palette_preview(&sample))
-                            .child(div().flex_1().min_w_0().truncate().child(name))
-                            .when(active, |row| {
-                                row.child(
-                                    icons::icon(icons::CHECK)
-                                        .size(px(14.0))
-                                        .text_color(theme.accent),
-                                )
-                            })
-                        }),
-                )
-                .into_any_element();
-            trigger = trigger.child(popover::anchored_menu_below(
-                SharedString::from(format!(
-                    "appearance-{}-theme-menu",
-                    if appearance_kind.is_light() {
-                        "light"
-                    } else {
-                        "dark"
-                    }
-                )),
-                menu,
-                closing,
-            ));
-        }
-
-        trigger.into_any_element()
+        let surface = theme.surface_preference;
+        let variants: Vec<_> = registry
+            .variants_for(model_appearance(appearance_kind))
+            .map(|variant| (variant.id.clone(), variant.name.clone()))
+            .collect();
+        let selected = variants
+            .iter()
+            .position(|(id, _)| *id == selected_id)
+            .unwrap_or_default();
+        let options = variants.iter().map(|(id, name)| {
+            let sample =
+                Theme::for_selection(appearance_kind, id, AccentSelection::ThemeDefault, surface);
+            widgets::SelectOption::new(name.clone())
+                .leading(move || palette_preview(&sample).into_any_element())
+        });
+        let ids: Vec<String> = variants.iter().map(|(id, _)| id.clone()).collect();
+        let (slug, label, heading) = if appearance_kind.is_light() {
+            ("light", "Light theme", "Light themes")
+        } else {
+            ("dark", "Dark theme", "Dark themes")
+        };
+        widgets::select(
+            format!("{slug}-theme-selector"),
+            label,
+            theme,
+            move |page: &mut Self| match appearance_kind {
+                Appearance::Light => &mut page.light_theme_select,
+                Appearance::Dark => &mut page.dark_theme_select,
+            },
+        )
+        .options(options, selected)
+        .width(218.0)
+        .menu_width(260.0)
+        .heading(heading)
+        .on_select(move |_, ix, _, cx| {
+            if let Some(id) = ids.get(ix) {
+                appearance::set_theme(appearance_kind, id.clone(), cx);
+            }
+            cx.notify();
+        })
+        .render(
+            match appearance_kind {
+                Appearance::Light => &self.light_theme_select,
+                Appearance::Dark => &self.dark_theme_select,
+            },
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_import_dialog(
@@ -2221,6 +2087,9 @@ impl AppearancePage {
                 .when(!active, |control| {
                     control.hover(|style| style.bg(theme.surface_raised_hover))
                 })
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(dialog) = this.import_dialog.as_mut() {
                         dialog.mode = value;
@@ -2304,6 +2173,9 @@ impl AppearancePage {
                             .h(px(36.0))
                             .px(px(12.0))
                             .flex_none()
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                             .on_click(cx.listener(|this, _, _, cx| this.choose_import_source(cx))),
                     ),
             )
@@ -2418,6 +2290,11 @@ impl AppearancePage {
                                                     .text_color(theme.on_accent),
                                             )
                                         })
+                                        .tab_index(0)
+                                        .role(gpui::Role::Button)
+                                        .focus_visible(|s| {
+                                            s.border_2().border_color(theme.accent).opacity(1.0)
+                                        })
                                         .on_click(cx.listener({
                                             let variant_id = variant_id.clone();
                                             move |this, _, _, cx| {
@@ -2459,6 +2336,11 @@ impl AppearancePage {
                                         },
                                         format!("theme-import-review-{variant_id}"),
                                     )
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| {
+                                        s.border_2().border_color(theme.accent).opacity(1.0)
+                                    })
                                     .on_click(cx.listener({
                                         let variant_id = variant_id.clone();
                                         move |this, _, _, cx| {
@@ -2581,7 +2463,9 @@ impl AppearancePage {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.surface_raised_hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .tab_index(0).role(gpui::Role::Button)
+.focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+.on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
                     }))
@@ -2606,14 +2490,18 @@ impl AppearancePage {
                 compact_action(theme, "Cancel", "theme-import-cancel")
                     .h(px(34.0))
                     .px(px(13.0))
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
                     })),
             )
             .child(
-                popover::btn_primary(
+                widgets::text_action(
                     theme,
+                    widgets::ActionTone::Solid,
                     if compilation.is_some() {
                         "Import selected"
                     } else {
@@ -2630,17 +2518,21 @@ impl AppearancePage {
                     button.opacity(0.45)
                 })
                 .when(compilation.is_none() || ready, |button| {
-                    button.on_click(cx.listener(move |this, _, _, cx| {
-                        if this
-                            .import_dialog
-                            .as_ref()
-                            .is_some_and(|dialog| dialog.compilation.is_some())
-                        {
-                            this.finish_import(cx);
-                        } else {
-                            this.compile_import(cx);
-                        }
-                    }))
+                    button
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this
+                                .import_dialog
+                                .as_ref()
+                                .is_some_and(|dialog| dialog.compilation.is_some())
+                            {
+                                this.finish_import(cx);
+                            } else {
+                                this.compile_import(cx);
+                            }
+                        }))
                 }),
             );
 
@@ -2658,6 +2550,7 @@ impl AppearancePage {
                     event.keystroke.modifiers.control,
                 ) {
                     popover::MenuKey::Escape => {
+                        cx.stop_propagation();
                         this.import_dialog = None;
                         cx.notify();
                     }
@@ -2680,11 +2573,528 @@ impl AppearancePage {
                 cx.notify();
             }))
             .child(header)
-            .child(main)
+            .child(widgets::scroll_faded("theme-import-main-fade", main))
             .child(footer)
             .into_any_element();
 
         Some(popover::modal("theme-import-dialog", viewport, card))
+    }
+
+    fn render_background_adjustment_dialog(
+        &mut self,
+        viewport: gpui::Size<Pixels>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.background_adjustment_dialog.as_ref()?;
+        let focus = dialog.focus.clone();
+        let zoom_focus = dialog.zoom_focus.clone();
+        let end_focus = dialog.end_focus.clone();
+        let tab_start = focus.clone();
+        let tab_end = end_focus.clone();
+        let path = dialog.path.clone();
+        let draft = dialog.draft;
+        let preview_bounds = dialog.preview_bounds.clone();
+        let zoom_bounds = dialog.zoom_bounds.clone();
+        let dragging = dialog.drag.is_some();
+        let settings = crate::settings::current(cx);
+        let same_image = settings
+            .new_thread_composer_background
+            .as_ref()
+            .is_some_and(|background| background.path == path);
+        let available = Path::new(&path).is_file();
+        let source = (same_image && available)
+            .then(|| {
+                crate::new_thread_background_effects::prepare(
+                    settings.new_thread_background_effect,
+                    theme,
+                    Path::new(&path),
+                    cx,
+                )
+            })
+            .flatten();
+        let ready = source.is_some();
+        let preview_size =
+            background_preview_size(viewport, settings.sidebar_width, settings.sidebar_collapsed);
+        if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
+            dialog.source = source.clone();
+        }
+
+        let paint_source = source.clone();
+        let measured_bounds = preview_bounds.clone();
+        let preview = div()
+            .id("new-thread-background-adjustment-preview")
+            .relative()
+            .w(preview_size.width + px(2.0))
+            .h(preview_size.height + px(2.0))
+            .overflow_hidden()
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(crate::theme::hairline(0.12))
+            .bg(theme.bg)
+            .cursor(if !ready {
+                gpui::CursorStyle::Arrow
+            } else if dragging {
+                gpui::CursorStyle::ClosedHand
+            } else {
+                gpui::CursorStyle::OpenHand
+            })
+            .on_scroll_wheel(
+                cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
+                    let delta = match event.delta {
+                        ScrollDelta::Pixels(delta) => f32::from(delta.y),
+                        ScrollDelta::Lines(delta) => delta.y * 40.0,
+                    };
+                    let Some(dialog) = this.background_adjustment_dialog.as_ref() else {
+                        return;
+                    };
+                    let zoom = dialog.draft.zoom * (delta * 0.0025).clamp(-2.0, 2.0).exp();
+                    this.zoom_background_around(zoom, Some(event.position), cx);
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }),
+            )
+            .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
+                let Some(dialog) = this.background_adjustment_dialog.as_mut() else {
+                    return;
+                };
+                if event.phase == gpui::TouchPhase::Ended {
+                    dialog.pinch = None;
+                    return;
+                }
+                if event.phase == gpui::TouchPhase::Started {
+                    dialog.pinch = Some((dialog.draft.zoom, 1.0));
+                }
+                let current_zoom = dialog.draft.zoom;
+                let (start, factor) = dialog.pinch.get_or_insert((current_zoom, 1.0));
+                *factor =
+                    background_pinch_factor(*factor, event.delta, cfg!(target_os = "windows"));
+                let zoom = *start * *factor;
+                this.zoom_background_around(zoom, Some(event.position), cx);
+                cx.stop_propagation();
+                window.prevent_default();
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    let Some(dialog) = this.background_adjustment_dialog.as_mut() else {
+                        return;
+                    };
+                    if dialog.source.is_none() {
+                        return;
+                    }
+                    window.focus(&dialog.focus, cx);
+                    dialog.drag = Some((event.position, dialog.draft));
+                    cx.notify();
+                    cx.stop_propagation();
+                }),
+            )
+            .on_drag(BackgroundAdjustmentDrag, |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| measured_bounds.set(Some(bounds)),
+                    move |bounds, _, window, _| {
+                        if let Some(source) = paint_source.clone() {
+                            crate::new_thread_background_mask::paint_adjusted(
+                                source,
+                                bounds,
+                                draft,
+                                // Canvas content masks are rectangular; round the image
+                                // itself to the frame's 12px radius inside its 1px border.
+                                gpui::Corners::all(px(11.0)),
+                                window,
+                            );
+                        }
+                    },
+                )
+                .w(preview_size.width)
+                .h(preview_size.height),
+            )
+            .when(source.is_none(), |preview| {
+                preview.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(typography::ui_rems(11.5))
+                        .text_color(theme.text_muted)
+                        .child(if !same_image {
+                            "Background changed. Close and adjust the new image."
+                        } else if !available {
+                            "Image unavailable. Choose a replacement or remove it."
+                        } else {
+                            "Preparing preview…"
+                        }),
+                )
+            })
+            .when(dragging, |preview| {
+                preview
+                    .child(
+                        div()
+                            .absolute()
+                            .left(gpui::relative(1.0 / 3.0))
+                            .top_0()
+                            .bottom_0()
+                            .w(px(1.0))
+                            .bg(gpui::white().opacity(0.22)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(gpui::relative(2.0 / 3.0))
+                            .top_0()
+                            .bottom_0()
+                            .w(px(1.0))
+                            .bg(gpui::white().opacity(0.22)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(gpui::relative(1.0 / 3.0))
+                            .left_0()
+                            .right_0()
+                            .h(px(1.0))
+                            .bg(gpui::white().opacity(0.22)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(gpui::relative(2.0 / 3.0))
+                            .left_0()
+                            .right_0()
+                            .h(px(1.0))
+                            .bg(gpui::white().opacity(0.22)),
+                    )
+            });
+
+        let zoom_fraction = background_zoom_fraction(draft.zoom);
+        let measured_zoom_bounds = zoom_bounds.clone();
+        let zoom_slider = div()
+            .id("new-thread-background-adjustment-zoom")
+            .track_focus(&zoom_focus)
+            .tab_index(0)
+            .role(gpui::Role::Slider)
+            .aria_label("Background zoom")
+            .aria_numeric_value(f64::from(draft.zoom * 100.0))
+            .aria_min_numeric_value(f64::from(
+                crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM * 100.0,
+            ))
+            .aria_max_numeric_value(f64::from(
+                crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM * 100.0,
+            ))
+            .aria_numeric_value_step(f64::from(BACKGROUND_ZOOM_STEP * 100.0))
+            .aria_value(format!("{:.0}%", draft.zoom * 100.0))
+            .focus_visible(|s| s.border_2().border_color(theme.accent))
+            .relative()
+            .w(px(168.0))
+            .h(px(28.0))
+            .cursor_pointer()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    if let Some(dialog) = this.background_adjustment_dialog.as_ref() {
+                        window.focus(&dialog.zoom_focus, cx);
+                    }
+                    this.set_background_zoom_from_x(event.position.x, cx);
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }),
+            )
+            .on_drag(BackgroundAdjustmentZoomDrag, |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let Some(current) = this
+                    .background_adjustment_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.draft.zoom)
+                else {
+                    return;
+                };
+                let next = match event.keystroke.key.as_str() {
+                    "left" | "down" => current - BACKGROUND_ZOOM_STEP,
+                    "right" | "up" => current + BACKGROUND_ZOOM_STEP,
+                    "home" => crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
+                    "end" => crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
+                    _ => return,
+                };
+                this.set_background_zoom(next, cx);
+                cx.stop_propagation();
+                window.prevent_default();
+            }))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| measured_zoom_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(7.0))
+                    .right(px(7.0))
+                    .top(px(12.0))
+                    .h(px(4.0))
+                    .rounded_full()
+                    .bg(theme.border)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(gpui::relative(zoom_fraction))
+                            .rounded_full()
+                            .bg(theme.accent),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(gpui::relative(zoom_fraction))
+                            .ml(px(-7.0))
+                            .top(px(-5.0))
+                            .size(px(14.0))
+                            .rounded_full()
+                            .bg(theme.accent),
+                    ),
+            );
+        let controls = div()
+            .mt(px(14.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .child(
+                compact_action(theme, "Reset", "new-thread-background-adjustment-reset")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        compact_action(theme, "−", "new-thread-background-adjustment-zoom-out")
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .aria_label("Zoom out")
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
+                                else {
+                                    return;
+                                };
+                                this.set_background_zoom(
+                                    dialog.draft.zoom - BACKGROUND_ZOOM_STEP,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(zoom_slider)
+                    .child(
+                        div()
+                            .w(px(52.0))
+                            .text_center()
+                            .text_size(typography::ui_rems(11.5))
+                            .text_color(theme.text_muted)
+                            .child(format!("{:.0}%", draft.zoom * 100.0)),
+                    )
+                    .child(
+                        compact_action(theme, "+", "new-thread-background-adjustment-zoom-in")
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .aria_label("Zoom in")
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
+                                else {
+                                    return;
+                                };
+                                this.set_background_zoom(
+                                    dialog.draft.zoom + BACKGROUND_ZOOM_STEP,
+                                    cx,
+                                );
+                            })),
+                    ),
+            );
+
+        let footer = div()
+            .mt(px(18.0))
+            .pt(px(12.0))
+            .border_t_1()
+            .border_color(theme.border)
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(8.0))
+            .child(
+                compact_action(theme, "Cancel", "new-thread-background-adjustment-cancel")
+                    .h(px(34.0))
+                    .px(px(13.0))
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dismiss_background_adjustment(window, cx)
+                    })),
+            )
+            .child(
+                widgets::text_action(theme, widgets::ActionTone::Solid, "Apply")
+                    .id("new-thread-background-adjustment-apply")
+                    .h(px(34.0))
+                    .px(px(14.0))
+                    .py(px(0.0))
+                    .flex()
+                    .items_center()
+                    .when(!ready, |button| button.opacity(0.45))
+                    .when(ready, |button| {
+                        button
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.apply_background_adjustment(window, cx)
+                            }))
+                    }),
+            );
+
+        let header = div()
+            .flex()
+            .items_start()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(popover::dialog_title(theme, "Adjust background"))
+                    .child(
+                        popover::dialog_body(theme, "Drag to reposition. Scroll or pinch to zoom.")
+                            .mt(px(4.0)),
+                    ),
+            )
+            .child(
+                div()
+                    .id("new-thread-background-adjustment-close")
+                    .size(px(28.0))
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface_raised.opacity(0.28))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface_raised_hover))
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .aria_label("Close background adjustment")
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dismiss_background_adjustment(window, cx)
+                    }))
+                    .child(
+                        icons::icon(icons::CLOSE)
+                            .size(px(12.0))
+                            .text_color(theme.text_muted),
+                    ),
+            );
+
+        let card = popover::dialog_card(theme)
+            .id("new-thread-background-adjustment-card")
+            .w(px((f32::from(viewport.width) - 40.0).clamp(1.0, 600.0)))
+            .p(px(20.0))
+            .track_focus(&focus)
+            .tab_group()
+            .tab_index(0)
+            .tab_stop(false)
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    let step = if event.keystroke.modifiers.shift {
+                        24.0
+                    } else {
+                        8.0
+                    };
+                    match popover::classify_key(
+                        event.keystroke.key.as_str(),
+                        event.keystroke.modifiers.platform,
+                        event.keystroke.modifiers.control,
+                    ) {
+                        popover::MenuKey::Escape => this.dismiss_background_adjustment(window, cx),
+                        popover::MenuKey::ModEnter => this.apply_background_adjustment(window, cx),
+                        _ => match event.keystroke.key.as_str() {
+                            "tab" => {
+                                if event.keystroke.modifiers.shift {
+                                    window.focus_prev(cx);
+                                } else {
+                                    window.focus_next(cx);
+                                }
+                                if !tab_start.contains_focused(window, cx) {
+                                    if event.keystroke.modifiers.shift {
+                                        window.focus(&tab_end, cx);
+                                        window.focus_prev(cx);
+                                    } else {
+                                        window.focus(&tab_start, cx);
+                                        window.focus_next(cx);
+                                    }
+                                }
+                            }
+                            "left" => this.pan_background(point(step, 0.0), cx),
+                            "right" => this.pan_background(point(-step, 0.0), cx),
+                            "up" => this.pan_background(point(0.0, step), cx),
+                            "down" => this.pan_background(point(0.0, -step), cx),
+                            "+" | "=" => {
+                                let zoom = this
+                                    .background_adjustment_dialog
+                                    .as_ref()
+                                    .map_or(1.0, |dialog| dialog.draft.zoom + BACKGROUND_ZOOM_STEP);
+                                this.set_background_zoom(zoom, cx);
+                            }
+                            "-" => {
+                                let zoom = this
+                                    .background_adjustment_dialog
+                                    .as_ref()
+                                    .map_or(1.0, |dialog| dialog.draft.zoom - BACKGROUND_ZOOM_STEP);
+                                this.set_background_zoom(zoom, cx);
+                            }
+                            _ => return,
+                        },
+                    }
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }),
+            )
+            .on_mouse_down_out(
+                cx.listener(|this, _, window, cx| this.dismiss_background_adjustment(window, cx)),
+            )
+            .child(header)
+            .child(div().h(px(16.0)))
+            .child(
+                div()
+                    .w_full()
+                    .h(px(260.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(preview),
+            )
+            .child(controls)
+            .child(footer)
+            .child(div().track_focus(&end_focus).tab_index(0).tab_stop(false))
+            .into_any_element();
+
+        Some(popover::modal(
+            "new-thread-background-adjustment-dialog",
+            viewport,
+            card,
+        ))
     }
 
     fn render_review_dialog(
@@ -2723,8 +3133,11 @@ impl AppearancePage {
         }
         card = card.child(
             div().mt(px(16.0)).flex().justify_end().child(
-                popover::btn_primary(theme, "Done")
+                widgets::text_action(theme, widgets::ActionTone::Solid, "Done")
                     .id("theme-review-close")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.review_entry = None;
                         cx.notify();
@@ -2734,7 +3147,7 @@ impl AppearancePage {
         Some(popover::modal(
             "theme-review-dialog",
             viewport,
-            card.into_any_element(),
+            widgets::scroll_faded("theme-review-fade", card).into_any_element(),
         ))
     }
 
@@ -2768,18 +3181,10 @@ impl AppearancePage {
             }
         };
         widgets::card_row(theme, false)
-            .child(widgets::row_tile(
-                theme,
-                if linked {
-                    icons::GLOBAL
-                } else {
-                    icons::DOCUMENT
-                },
-            ))
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(160.0))
                     .child(widgets::row_title(theme, &entry.name))
                     .child(
                         div()
@@ -2803,20 +3208,27 @@ impl AppearancePage {
                     .gap(px(2.0))
                     .when(linked, |actions| {
                         actions.child(
-                            compact_action(theme, "Reload", format!("theme-reload-{id}")).on_click(
-                                cx.listener({
+                            compact_action(theme, "Reload", format!("theme-reload-{id}"))
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|s| {
+                                    s.border_2().border_color(theme.accent).opacity(1.0)
+                                })
+                                .on_click(cx.listener({
                                     let id = id.clone();
                                     move |_, _, _, cx| {
                                         let _ = theme_library::reload(&id, cx);
                                         cx.notify();
                                     }
-                                }),
-                            ),
+                                })),
                         )
                     })
                     .child(
-                        compact_action(theme, "Reveal", format!("theme-reveal-{id}")).on_click(
-                            cx.listener({
+                        compact_action(theme, "Reveal", format!("theme-reveal-{id}"))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener({
                                 let id = id.clone();
                                 move |this, _, _, cx| {
                                     if let Err(error) = theme_library::reveal(&id, cx) {
@@ -2824,19 +3236,20 @@ impl AppearancePage {
                                     }
                                     cx.notify();
                                 }
-                            }),
-                        ),
+                            })),
                     )
                     .child(
-                        compact_action(theme, "Review", format!("theme-review-{id}")).on_click(
-                            cx.listener({
+                        compact_action(theme, "Review", format!("theme-review-{id}"))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener({
                                 let id = id.clone();
                                 move |this, _, _, cx| {
                                     this.review_entry = Some(id.clone());
                                     cx.notify();
                                 }
-                            }),
-                        ),
+                            })),
                     )
                     .child(
                         compact_action(
@@ -2844,6 +3257,9 @@ impl AppearancePage {
                             "Duplicate as editable",
                             format!("theme-duplicate-{id}"),
                         )
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                         .on_click(cx.listener({
                             let id = id.clone();
                             move |this, _, _, cx| {
@@ -2856,8 +3272,13 @@ impl AppearancePage {
                     )
                     .when(linked, |actions| {
                         actions.child(
-                            compact_action(theme, "Unlink", format!("theme-unlink-{id}")).on_click(
-                                cx.listener({
+                            compact_action(theme, "Unlink", format!("theme-unlink-{id}"))
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|s| {
+                                    s.border_2().border_color(theme.accent).opacity(1.0)
+                                })
+                                .on_click(cx.listener({
                                     let id = id.clone();
                                     move |this, _, _, cx| {
                                         if let Err(error) = theme_library::unlink(&id, cx) {
@@ -2865,13 +3286,15 @@ impl AppearancePage {
                                         }
                                         cx.notify();
                                     }
-                                }),
-                            ),
+                                })),
                         )
                     })
                     .child(
                         compact_action(theme, "Remove", format!("theme-remove-{id}"))
                             .text_color(theme.danger)
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Err(error) = theme_library::remove(&id, cx) {
                                     this.library_error = Some(error.to_string().into());
@@ -2893,25 +3316,19 @@ impl AppearancePage {
             .into_iter()
             .partition(|entry| entry.source.is_linked());
         let mut rows = vec![
-            widgets::card_row(theme, false)
-                .child(widgets::row_tile(theme, icons::FOLDER_WITH_FILES))
+            widgets::card_row(theme, true)
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(theme, "Theme library"))
-                        .child(widgets::meta_line(
-                            theme,
-                            vec![
-                                div()
-                                    .child("Import or link custom themes.")
-                                    .into_any_element(),
-                            ],
-                        )),
+                        .min_w(px(160.0))
+                        .child(widgets::row_title(theme, "Theme library")),
                 )
                 .child(
-                    popover::btn_primary(theme, "Add theme")
+                    widgets::text_action(theme, widgets::ActionTone::Solid, "Add theme")
                         .id("theme-library-add")
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                         .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
                 )
                 .into_any_element(),
@@ -2919,15 +3336,14 @@ impl AppearancePage {
         if !imported.is_empty() {
             rows.push(
                 div()
-                    .px(px(16.0))
+                    .mx(px(16.0))
                     .pt(px(12.0))
                     .pb(px(4.0))
                     .border_t_1()
-                    .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(10.5))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_faint)
-                    .child("IMPORTED")
+                    .border_color(widgets::row_divider(theme))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_muted)
+                    .child("Imported")
                     .into_any_element(),
             );
             rows.extend(
@@ -2939,15 +3355,14 @@ impl AppearancePage {
         if !linked.is_empty() {
             rows.push(
                 div()
-                    .px(px(16.0))
+                    .mx(px(16.0))
                     .pt(px(12.0))
                     .pb(px(4.0))
                     .border_t_1()
-                    .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(10.5))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_faint)
-                    .child("LINKED")
+                    .border_color(widgets::row_divider(theme))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_muted)
+                    .child("Linked")
                     .into_any_element(),
             );
             rows.extend(
@@ -2964,7 +3379,8 @@ impl EventEmitter<AppearanceSettingsEvent> for AppearancePage {}
 
 impl Render for AppearancePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
+        crate::toast::take_error(&mut self.background_error, cx);
+        let theme = Theme::of(cx).for_settings_surface();
         let availability = typography::availability(cx);
         let fixed = theme.font_sans_fixed.clone();
         let current_mode = appearance::mode(cx);
@@ -2974,18 +3390,29 @@ impl Render for AppearancePage {
         let ui_settings = crate::settings::current(cx);
         let current_background = ui_settings.new_thread_composer_background;
         let current_background_effect = ui_settings.new_thread_background_effect;
-        let compact_mode = ui_settings.transcript_compact_mode;
+        let reduced_motion = crate::motion::reduced_motion(cx);
         let cards = AppearanceMode::ALL
             .into_iter()
             .map(|mode| {
+                let selected = mode == current_mode;
+                let selection_t = widgets::tab_selection_t(
+                    window,
+                    format!("appearance-mode-{}-selection", mode.label()),
+                    selected,
+                    reduced_motion,
+                );
                 widgets::option_card(
                     &theme,
                     mode.icon(),
                     mode.label(),
-                    mode == current_mode,
+                    selected,
+                    selection_t,
                     preview(mode, &current_themes, current_accent, current_surface),
                 )
                 .id(SharedString::from(format!("appearance-{}", mode.label())))
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     appearance::set_mode(mode, cx);
                     cx.notify();
@@ -2998,30 +3425,19 @@ impl Render for AppearancePage {
             .into_iter()
             .enumerate()
         {
-            let (label, mode) = if appearance_kind.is_light() {
-                ("Light theme", AppearanceMode::Light)
+            let label = if appearance_kind.is_light() {
+                "Light theme"
             } else {
-                ("Dark theme", AppearanceMode::Dark)
+                "Dark theme"
             };
             let selector = self.render_theme_selector(appearance_kind, &current_themes, &theme, cx);
             theme_rows.push(
                 widgets::card_row(&theme, index == 0)
-                    .child(widgets::row_tile(&theme, mode.icon()))
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
-                            .child(widgets::row_title(&theme, label))
-                            .child(widgets::meta_line(
-                                &theme,
-                                vec![
-                                    div()
-                                        .child(SharedString::from(
-                                            "Used whenever this appearance is active.",
-                                        ))
-                                        .into_any_element(),
-                                ],
-                            )),
+                            .min_w(px(160.0))
+                            .child(widgets::row_title(&theme, label)),
                     )
                     .child(selector)
                     .into_any_element(),
@@ -3034,61 +3450,95 @@ impl Render for AppearancePage {
             .into_iter()
             .map(|selection| {
                 let selected = selection == current_accent;
-                accent_swatch(&theme, selection, selected).on_click(cx.listener(
-                    move |_, _, _, cx| {
+                accent_swatch(&theme, selection, selected)
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(move |_, _, _, cx| {
                         appearance::set_accent(selection, cx);
                         cx.notify();
-                    },
-                ))
+                    }))
             })
             .collect::<Vec<_>>();
-        let surface_controls = SurfacePreference::ALL
-            .into_iter()
-            .map(|surface| {
-                surface_choice(&theme, surface, surface == current_surface).on_click(cx.listener(
-                    move |_, _, _, cx| {
-                        appearance::set_surface(surface, cx);
-                        cx.notify();
-                    },
-                ))
+        let surface_control =
+            widgets::select("appearance-surface", "Glass", &theme, |page: &mut Self| {
+                &mut page.surface_select
             })
-            .collect::<Vec<_>>();
+            .options(
+                SurfacePreference::ALL
+                    .into_iter()
+                    .map(|surface| widgets::SelectOption::new(surface_label(surface))),
+                SurfacePreference::ALL
+                    .into_iter()
+                    .position(|surface| surface == current_surface)
+                    .unwrap_or_default(),
+            )
+            .width(148.0)
+            .on_select(|_, ix, _, cx| {
+                appearance::set_surface(SurfacePreference::ALL[ix], cx);
+                cx.notify();
+            })
+            .render(&self.surface_select, cx);
         let mut settings_rows = theme_rows;
         settings_rows.push(
             widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::TUNING))
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
+                        .min_w(px(160.0))
                         .child(widgets::row_title(&theme, "Accent color"))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
                                 div()
-                                    .child(SharedString::from(accent_helper(current_accent)))
+                                    .child(SharedString::from(if crate::settings::current(cx).wallpaper_theme_colors {
+                                        "Wallpaper colors are enabled; this accent is used when they are off.".to_string()
+                                    } else { accent_helper(current_accent) }))
                                     .into_any_element(),
                             ],
                         )),
                 )
                 .child(
                     div()
-                        .flex_none()
-                        .ml(px(10.0))
+                        .max_w_full()
                         .flex()
+                        .flex_wrap()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(8.0))
                         .children(accent_controls),
                 )
                 .into_any_element(),
         );
+        let match_wallpaper = crate::settings::current(cx).wallpaper_theme_colors;
         settings_rows.push(
             widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::WIDGET))
+                .child(div().flex_1().min_w_0()
+                    .child(widgets::row_title(&theme, "Match wallpaper colors"))
+                    .child(widgets::meta_line(&theme, vec![div()
+                        .child("Use wallpaper colors for accents, highlights, and subtle surface tints.")
+                        .into_any_element()])))
+                .child(widgets::toggle_switch(&theme, match_wallpaper, "wallpaper-theme-colors")
+                    .id("wallpaper-theme-colors-toggle")
+                    .tab_index(0)
+                    .role(gpui::Role::Switch)
+                    .aria_label("Match wallpaper colors")
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .cursor_pointer()
+                    .aria_toggled(if match_wallpaper { gpui::Toggled::True } else { gpui::Toggled::False })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::settings::wallpaper_colors::set_enabled(!match_wallpaper, cx);
+                        cx.notify();
+                    })))
+                .into_any_element(),
+        );
+        let color_rows = settings_rows;
+        let mut settings_rows = Vec::new();
+        settings_rows.push(
+            widgets::card_row(&theme, true)
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
+                        .min_w(px(160.0))
                         .child(widgets::row_title(&theme, "Glass"))
                         .child(widgets::meta_line(
                             &theme,
@@ -3102,15 +3552,7 @@ impl Render for AppearancePage {
                             ],
                         )),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .ml(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .children(surface_controls),
-                )
+                .child(surface_control)
                 .into_any_element(),
         );
         let background_available = current_background
@@ -3125,48 +3567,33 @@ impl Render for AppearancePage {
         let wizard_artwork_path = wizard_artwork
             .then(|| crate::settings::wizard_background_path(cx))
             .flatten();
-        let background_tile: AnyElement = if let Some(path) = wizard_artwork_path.clone() {
-            div()
-                .flex_none()
-                .size(px(36.0))
-                .rounded(px(10.0))
-                .overflow_hidden()
-                .border_1()
-                .border_color(crate::theme::hairline(0.10))
-                .child(
-                    img(path)
-                        .size(px(34.0))
-                        .rounded(px(9.0))
-                        .object_fit(ObjectFit::Cover),
-                )
-                .into_any_element()
-        } else if let Some(background) =
-            current_background.as_ref().filter(|_| background_available)
-        {
-            div()
-                .flex_none()
-                .size(px(36.0))
-                .rounded(px(10.0))
-                .overflow_hidden()
-                .border_1()
-                .border_color(crate::theme::hairline(0.10))
-                .child(
-                    img(PathBuf::from(background.path.clone()))
-                        .size(px(34.0))
-                        .rounded(px(9.0))
-                        .object_fit(ObjectFit::Cover),
-                )
-                .into_any_element()
-        } else {
-            widgets::row_tile(&theme, icons::FILE_IMAGE).into_any_element()
-        };
+        // The chosen image (or the Starship artwork) previews in the row;
+        // without one the row is text only.
+        let background_tile: Option<AnyElement> = current_background
+            .as_ref()
+            .filter(|_| background_available)
+            .map(|background| PathBuf::from(background.path.clone()))
+            .or_else(|| wizard_artwork_path.clone())
+            .map(|path| {
+                div()
+                    .flex_none()
+                    .size(px(36.0))
+                    .rounded(px(10.0))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(crate::theme::hairline(0.10))
+                    .child(
+                        img(path)
+                            .size(px(34.0))
+                            .rounded(px(9.0))
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .into_any_element()
+            });
         let background_meta = match current_background.as_ref() {
             Some(background) if background_available => vec![
                 div()
                     .child(SharedString::from(background.name.clone()))
-                    .into_any_element(),
-                div()
-                    .child("Softened automatically on frosted themes.")
                     .into_any_element(),
             ],
             Some(_) => vec![
@@ -3181,37 +3608,57 @@ impl Render for AppearancePage {
                     .child("Shown behind new chats with any agent.")
                     .into_any_element(),
             ],
-            None => vec![
-                div()
-                    .child("Add an image behind the composer on empty new threads.")
-                    .into_any_element(),
-            ],
+            None => vec![div().child("No image selected").into_any_element()],
         };
         settings_rows.push(
             widgets::card_row(&theme, false)
-                .child(background_tile)
+                .children(background_tile)
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(&theme, "New thread composer background"))
+                        .min_w(px(160.0))
+                        .child(widgets::row_title(&theme, "New thread background"))
                         .child(widgets::meta_line(&theme, background_meta)),
                 )
                 .child(
                     div()
-                        .flex_none()
-                        .ml(px(10.0))
+                        .max_w_full()
                         .flex()
+                        .flex_wrap()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(8.0))
                         .when(current_background.is_some(), |actions| {
                             actions
+                                .when(background_available, |actions| {
+                                    actions.child(
+                                        compact_action(
+                                            &theme,
+                                            "Adjust",
+                                            "new-thread-background-adjust",
+                                        )
+                                        .tab_index(0)
+                                        .role(gpui::Role::Button)
+                                        .focus_visible(|s| {
+                                            s.border_2().border_color(theme.accent).opacity(1.0)
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.open_background_adjustment(window, cx)
+                                            }),
+                                        ),
+                                    )
+                                })
                                 .child(
                                     compact_action(
                                         &theme,
                                         "Replace image",
                                         "new-thread-background-replace",
                                     )
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| {
+                                        s.border_2().border_color(theme.accent).opacity(1.0)
+                                    })
                                     .on_click(cx.listener(
                                         |this, _, _, cx| this.choose_new_thread_background(cx),
                                     )),
@@ -3223,6 +3670,11 @@ impl Render for AppearancePage {
                                         "new-thread-background-remove",
                                     )
                                     .text_color(theme.danger)
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| {
+                                        s.border_2().border_color(theme.accent).opacity(1.0)
+                                    })
                                     .on_click(cx.listener(
                                         |this, _, _, cx| this.remove_new_thread_background(cx),
                                     )),
@@ -3240,6 +3692,11 @@ impl Render for AppearancePage {
                                         },
                                         "new-thread-background-wizard",
                                     )
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| {
+                                        s.border_2().border_color(theme.accent).opacity(1.0)
+                                    })
                                     .on_click(cx.listener(
                                         move |_, _, _, cx| {
                                             crate::settings::set_new_thread_wizard_background(
@@ -3256,6 +3713,11 @@ impl Render for AppearancePage {
                                         "Choose image",
                                         "new-thread-background-choose",
                                     )
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| {
+                                        s.border_2().border_color(theme.accent).opacity(1.0)
+                                    })
                                     .on_click(cx.listener(
                                         |this, _, _, cx| this.choose_new_thread_background(cx),
                                     )),
@@ -3264,24 +3726,90 @@ impl Render for AppearancePage {
                 )
                 .into_any_element(),
         );
+        let wallpaper_settings = crate::settings::current(cx);
+        let folder_label = wallpaper_settings
+            .wallpaper_folder
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Choose a folder of wallpaper images.".into());
+        let shortcut = crate::settings::display_combo(&wallpaper_settings.keymap.random_wallpaper);
+        settings_rows.push(
+            widgets::card_row(&theme, false)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(160.0))
+                        .child(widgets::row_title(&theme, "Wallpaper folder"))
+                        .child(widgets::meta_line(
+                            &theme,
+                            vec![
+                                div()
+                                    .child(SharedString::from(format!(
+                                        "{folder_label} · {shortcut} picks a random image"
+                                    )))
+                                    .into_any_element(),
+                            ],
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.0))
+                        .child(
+                            compact_action(&theme, "Choose folder", "wallpaper-folder-choose")
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|s| s.border_2().border_color(theme.accent))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.choose_wallpaper_folder(cx)),
+                                ),
+                        )
+                        .when(wallpaper_settings.wallpaper_folder.is_some(), |row| {
+                            row.child(
+                                compact_action(&theme, "Shuffle", "wallpaper-shuffle")
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.random_wallpaper(cx)),
+                                    ),
+                            )
+                        }),
+                )
+                .into_any_element(),
+        );
         if background_available || wizard_artwork_path.is_some() {
-            let effect_controls = crate::settings::NewThreadBackgroundEffect::ALL
-                .into_iter()
-                .map(|effect| {
-                    background_effect_choice(&theme, effect, effect == current_background_effect)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            crate::settings::set_new_thread_background_effect(effect, cx);
-                            cx.notify();
-                        }))
-                })
-                .collect::<Vec<_>>();
+            use crate::settings::NewThreadBackgroundEffect;
+            let effect_control = widgets::select(
+                "new-thread-background-effect",
+                "Background effect",
+                &theme,
+                |page: &mut Self| &mut page.background_effect_select,
+            )
+            .options(
+                NewThreadBackgroundEffect::ALL
+                    .into_iter()
+                    .map(|effect| widgets::SelectOption::new(effect.label())),
+                NewThreadBackgroundEffect::ALL
+                    .into_iter()
+                    .position(|effect| effect == current_background_effect)
+                    .unwrap_or_default(),
+            )
+            .width(128.0)
+            .on_select(|_, ix, _, cx| {
+                crate::settings::set_new_thread_background_effect(
+                    NewThreadBackgroundEffect::ALL[ix],
+                    cx,
+                );
+                cx.notify();
+            })
+            .render(&self.background_effect_select, cx);
             settings_rows.push(
                 widgets::card_row(&theme, false)
-                    .child(widgets::row_tile(&theme, icons::TUNING))
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(160.0))
                             .child(widgets::row_title(&theme, "Background effect"))
                             .child(widgets::meta_line(
                                 &theme,
@@ -3292,120 +3820,164 @@ impl Render for AppearancePage {
                                 ],
                             )),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .ml(px(10.0))
-                            .max_w(px(430.0))
-                            .flex()
-                            .flex_wrap()
-                            .justify_end()
-                            .gap(px(6.0))
-                            .children(effect_controls),
-                    )
+                    .child(effect_control)
                     .into_any_element(),
             );
         }
-        if let Some(error) = self.background_error.clone() {
-            settings_rows.push(
-                div()
-                    .px(px(20.0))
-                    .py(px(10.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(widgets::error_strip(&theme, error))
-                    .into_any_element(),
-            );
-        }
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::EYE_CLOSED))
+        let current_reduce_motion = crate::motion::preference(cx);
+        let reduce_motion_control = widgets::select(
+            "reduce-motion",
+            "Reduce motion",
+            &theme,
+            |page: &mut Self| &mut page.reduce_motion_select,
+        )
+        .options(
+            ReduceMotion::ALL
+                .into_iter()
+                .map(|preference| widgets::SelectOption::new(preference.label())),
+            ReduceMotion::ALL
+                .into_iter()
+                .position(|preference| preference == current_reduce_motion)
+                .unwrap_or_default(),
+        )
+        .width(128.0)
+        .on_select(|_, ix, _, cx| {
+            crate::motion::set_preference(ReduceMotion::ALL[ix], cx);
+            cx.notify();
+        })
+        .render(&self.reduce_motion_select, cx);
+        let pause_in_background = crate::motion::pause_in_background(cx);
+        let motion_rows = vec![
+            widgets::card_row(&theme, true)
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(&theme, "Compact mode"))
+                        .min_w(px(160.0))
+                        .child(widgets::row_title(&theme, "Reduce motion"))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
                                 div()
-                                    .child(SharedString::from(
-                                        "Fold a turn's thinking, tool calls, and narration into one collapsed row — only the reply shows.",
+                                    .child(reduce_motion_helper(
+                                        current_reduce_motion,
+                                        crate::motion::system_reduces_motion(cx),
                                     ))
                                     .into_any_element(),
                             ],
                         )),
                 )
+                .child(reduce_motion_control)
+                .into_any_element(),
+            widgets::card_row(&theme, false)
                 .child(
-                    widgets::toggle_switch(&theme, compact_mode)
-                        .id("transcript-compact-mode-toggle")
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            crate::settings::set_transcript_compact_mode(!compact_mode, cx);
-                            cx.notify();
-                        })),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(widgets::row_title(&theme, "Pause animations in background"))
+                        .child(widgets::meta_line(
+                            &theme,
+                            vec![
+                                div()
+                                    .child(
+                                        "Hold animations still while Wizard GUI isn't the focused window.",
+                                    )
+                                    .into_any_element(),
+                            ],
+                        )),
+                )
+                .child(
+                    widgets::toggle_switch(
+                        &theme,
+                        pause_in_background,
+                        "pause-animations-in-background",
+                    )
+                    .id("pause-animations-in-background-toggle")
+                    .tab_index(0)
+                    .role(gpui::Role::Switch)
+                    .aria_label("Pause animations in background")
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .cursor_pointer()
+                    .aria_toggled(if pause_in_background {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::motion::set_pause_in_background(!pause_in_background, cx);
+                        cx.notify();
+                    })),
                 )
                 .into_any_element(),
-        );
-        settings_rows.extend(self.render_theme_library_rows(&theme, cx));
+        ];
+        let library_rows = self.render_theme_library_rows(&theme, cx);
         let library_warning = self
             .library_error
             .clone()
             .or_else(|| theme_library::load_warning(cx).map(SharedString::from));
         let modal = self
-            .render_import_dialog(window.viewport_size(), &theme, window, cx)
+            .render_background_adjustment_dialog(window.viewport_size(), &theme, cx)
+            .or_else(|| self.render_import_dialog(window.viewport_size(), &theme, window, cx))
             .or_else(|| self.render_review_dialog(window.viewport_size(), &theme, cx));
 
-        let ui_picker =
-            self.render_font_picker(FontKind::Ui, &theme, &availability, fixed.clone(), cx);
-        let terminal_picker =
-            self.render_font_picker(FontKind::Terminal, &theme, &availability, fixed.clone(), cx);
-        let code_picker =
-            self.render_font_picker(FontKind::Code, &theme, &availability, fixed.clone(), cx);
+        let ui_picker = self.render_font_picker(
+            FontKind::Ui,
+            &theme,
+            &availability,
+            fixed.clone(),
+            window.viewport_size(),
+            cx,
+        );
+        let terminal_picker = self.render_font_picker(
+            FontKind::Terminal,
+            &theme,
+            &availability,
+            fixed.clone(),
+            window.viewport_size(),
+            cx,
+        );
+        let code_picker = self.render_font_picker(
+            FontKind::Code,
+            &theme,
+            &availability,
+            fixed.clone(),
+            window.viewport_size(),
+            cx,
+        );
         let ui_size = self.render_size_picker(FontKind::Ui, &theme, fixed.clone(), cx);
         let terminal_size = self.render_size_picker(FontKind::Terminal, &theme, fixed.clone(), cx);
         let code_size = self.render_size_picker(FontKind::Code, &theme, fixed.clone(), cx);
 
-        let mut font_section = div()
-            .mt(px(36.0))
-            .flex()
-            .flex_col()
-            .gap(px(18.0))
+        let mut font_rows = widgets::section_card(&theme)
+            .mt_0()
             .font_family(fixed.clone());
-        for (kind, picker, size_control) in [
+        for (ix, (kind, picker, size_control)) in [
             (FontKind::Ui, ui_picker, ui_size),
             (FontKind::Terminal, terminal_picker, terminal_size),
             (FontKind::Code, code_picker, code_size),
-        ] {
-            font_section = font_section.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            font_rows = font_rows.child(
+                widgets::card_row(&theme, ix == 0)
                     .justify_between()
-                    .gap(px(24.0))
                     .child(
                         div()
-                            .min_w_0()
+                            .min_w(px(160.0))
                             .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(widgets::field_label(&theme, kind.label()))
-                            .child(
-                                div()
-                                    .max_w(px(520.0))
-                                    .text_size(typography::ui_rems(12.0))
-                                    .line_height(px(18.0))
-                                    .text_color(theme.text_muted)
-                                    .child(kind.description()),
-                            ),
+                            .child(widgets::row_title(&theme, kind.label()))
+                            .child(widgets::meta_line(
+                                &theme,
+                                vec![div().child(kind.description()).into_any_element()],
+                            )),
                     )
                     .child(
                         div()
                             .flex_none()
+                            .max_w_full()
                             .flex()
                             .flex_row()
+                            .flex_wrap()
                             .items_center()
                             .gap(px(8.0))
                             .child(picker)
@@ -3413,7 +3985,8 @@ impl Render for AppearancePage {
                     ),
             );
         }
-        font_section = font_section.child(self.render_transcript_width(&theme, window, cx));
+        font_rows = font_rows.child(self.render_transcript_width(&theme, window, cx));
+        let mut font_section = widgets::section(&theme, "Fonts and layout", font_rows);
         for kind in FontKind::ALL {
             let (requested, effective) = (kind.requested(cx), kind.effective(cx));
             if requested != effective {
@@ -3427,6 +4000,7 @@ impl Render for AppearancePage {
                             effective.label()
                         ),
                     )
+                    .mt_0()
                     .font_family(fixed.clone()),
                 );
             }
@@ -3440,6 +4014,16 @@ impl Render for AppearancePage {
                     this.drag_width(event.event.position.x, window, cx);
                 },
             ))
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<BackgroundAdjustmentDrag>, _, cx| {
+                    this.drag_background(event.event.position, cx);
+                },
+            ))
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<BackgroundAdjustmentZoomDrag>, _, cx| {
+                    this.set_background_zoom_from_x(event.event.position.x, cx);
+                },
+            ))
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _: &gpui::MouseUpEvent, _, cx| {
@@ -3448,6 +4032,7 @@ impl Render for AppearancePage {
                         cx.notify();
                     }
                     this.apply_pending_width(cx);
+                    this.finish_background_drag(cx);
                 }),
             )
             .on_mouse_up_out(
@@ -3458,49 +4043,67 @@ impl Render for AppearancePage {
                         cx.notify();
                     }
                     this.apply_pending_width(cx);
+                    this.finish_background_drag(cx);
                 }),
             )
             .relative()
             .size_full()
             .on_hover(cx.listener(Self::on_scroll_hovered))
             .child(
-                div()
-                    .id("appearance-page")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll.scroll)
-                    .child(
-                        widgets::page_column()
-                            .child(widgets::page_header(&theme, "Appearance", None))
-                            .child(
-                                widgets::page_subtitle(
+                crate::edge_fade::edge_faded(
+                    16.0,
+                    true,
+                    true,
+                    div()
+                        .id("appearance-page")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll.scroll)
+                        .child(
+                            widgets::page_column()
+                                .child(widgets::page_header(&theme, "Appearance", None))
+                                .child(
+                                    widgets::section(
+                                        &theme,
+                                        "Color scheme",
+                                        widgets::option_card_row().children(cards),
+                                    )
+                                    .mt(px(24.0))
+                                    .gap(px(12.0)),
+                                )
+                                .child(
+                                    widgets::section_card(&theme)
+                                        .children(color_rows)
+                                        .mt(px(16.0)),
+                                )
+                                .child(widgets::section(
                                     &theme,
-                                    "Choose how Wizard GUI looks. These settings stay on this device.",
+                                    "Material and background",
+                                    widgets::section_card(&theme).mt_0().children(settings_rows),
+                                ))
+                                .child(widgets::section(
+                                    &theme,
+                                    "Motion",
+                                    widgets::section_card(&theme).mt_0().children(motion_rows),
+                                ))
+                                .child(
+                                    widgets::section_card(&theme)
+                                        .mt(px(32.0))
+                                        .children(library_rows),
                                 )
-                                .max_w(px(512.0))
-                                .line_height(px(20.0)),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(32.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(12.0))
-                                    .child(widgets::field_label(&theme, "Appearance"))
-                                    .child(widgets::option_card_row().children(cards)),
-                            )
-                            .child(widgets::section_card(&theme).children(settings_rows))
-                            .child(font_section)
-                            .when_some(library_warning, |page, warning| {
-                                page.child(
-                                    div()
-                                        .mt(px(8.0))
-                                        .text_size(crate::typography::ui_rems(11.5))
-                                        .text_color(theme.warning)
-                                        .child(warning),
-                                )
-                            }),
-                    ),
+                                .child(font_section)
+                                .when_some(library_warning, |page, warning| {
+                                    page.child(
+                                        div()
+                                            .mt(px(8.0))
+                                            .text_size(crate::typography::ui_rems(11.5))
+                                            .text_color(theme.warning)
+                                            .child(warning),
+                                    )
+                                }),
+                        ),
+                )
+                .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
             .children(modal)
@@ -3510,6 +4113,204 @@ impl Render for AppearancePage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn background_settings() -> crate::settings::UiSettings {
+        crate::settings::UiSettings {
+            new_thread_composer_background: Some(crate::settings::NewThreadComposerBackground {
+                path: "background.png".into(),
+                name: "Background".into(),
+                adjustment: crate::settings::NewThreadBackgroundAdjustment {
+                    focal_x: 0.25,
+                    focal_y: 0.75,
+                    zoom: 2.0,
+                },
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn ready_background_preview(page: &mut AppearancePage) {
+        page.background_adjustment_dialog.as_mut().unwrap().source = Some(Arc::new(
+            gpui::RenderImage::new([image::Frame::new(image::RgbaImage::new(4, 4))]),
+        ));
+    }
+
+    #[gpui::test]
+    fn background_adjustment_cancel_and_reset_leave_saved_settings_untouched(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let original = background_settings();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(original.clone(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, window, cx| {
+                window.focus(&page.width_focus, cx);
+                page.open_background_adjustment(window, cx);
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                dialog.drag = Some((point(px(0.0), px(0.0)), dialog.draft));
+                dialog.pinch = Some((2.0, 1.0));
+                page.reset_background_adjustment(cx);
+                let dialog = page.background_adjustment_dialog.as_ref().unwrap();
+                assert_eq!(dialog.draft, Default::default());
+                assert!(dialog.drag.is_none());
+                assert!(dialog.pinch.is_none());
+                assert_eq!(crate::settings::current(cx), original);
+                page.dismiss_background_adjustment(window, cx);
+                assert!(page.background_adjustment_dialog.is_none());
+                assert!(page.width_focus.is_focused(window));
+                assert_eq!(crate::settings::current(cx), original);
+                assert!(!crate::settings::UiSettings::path(dir.path()).exists());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn background_adjustment_apply_waits_for_preview_and_persists_only_the_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let original = background_settings();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(original.clone(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, window, cx| {
+                window.focus(&page.width_focus, cx);
+                page.open_background_adjustment(window, cx);
+                page.apply_background_adjustment(window, cx);
+                assert!(page.background_adjustment_dialog.is_some());
+                assert_eq!(crate::settings::current(cx), original);
+                ready_background_preview(page);
+                page.reset_background_adjustment(cx);
+                assert_eq!(crate::settings::current(cx), original);
+                page.apply_background_adjustment(window, cx);
+                assert!(page.background_adjustment_dialog.is_none());
+                assert!(page.width_focus.is_focused(window));
+                let mut expected = original.clone();
+                expected
+                    .new_thread_composer_background
+                    .as_mut()
+                    .unwrap()
+                    .adjustment = Default::default();
+                assert_eq!(crate::settings::current(cx), expected);
+                assert_eq!(crate::settings::UiSettings::load(dir.path()), expected);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn background_adjustment_does_not_apply_to_a_replaced_or_removed_image(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(background_settings(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, window, cx| {
+                page.open_background_adjustment(window, cx);
+                ready_background_preview(page);
+                page.reset_background_adjustment(cx);
+                crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                    settings
+                        .new_thread_composer_background
+                        .as_mut()
+                        .unwrap()
+                        .path = "replacement.png".into();
+                });
+                let replacement = crate::settings::current(cx);
+                page.apply_background_adjustment(window, cx);
+                assert_eq!(crate::settings::current(cx), replacement);
+                assert!(page.background_adjustment_dialog.is_some());
+                crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                    settings.new_thread_composer_background = None;
+                });
+                page.apply_background_adjustment(window, cx);
+                assert!(
+                    crate::settings::current(cx)
+                        .new_thread_composer_background
+                        .is_none()
+                );
+                assert!(page.background_adjustment_dialog.is_some());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn background_preview_matches_the_runtime_hero_aspect_ratio() {
+        for viewport in [
+            gpui::size(px(1440.0), px(900.0)),
+            gpui::size(px(800.0), px(1200.0)),
+        ] {
+            for collapsed in [false, true] {
+                let preview = background_preview_size(viewport, 260.0, collapsed);
+                let hero_width = f32::from(viewport.width) - if collapsed { 0.0 } else { 260.0 };
+                let hero_height =
+                    crate::shell::new_thread_background_height(f32::from(viewport.height));
+                let aspect = f32::from(preview.width) / f32::from(preview.height);
+                assert!((aspect - hero_width / hero_height).abs() < 0.00001);
+                assert!(f32::from(preview.width) <= 556.0);
+                assert!(f32::from(preview.height) <= 260.0);
+            }
+        }
+    }
+
+    #[test]
+    fn background_pinch_preserves_native_scale_and_round_trips() {
+        for relative_delta in [false, true] {
+            let mut previous = 1.0;
+            let mut factor = 1.0;
+            for scale in [1.5, 2.0, 1.5, 1.0] {
+                let delta = if relative_delta {
+                    scale / previous - 1.0
+                } else {
+                    scale - previous
+                };
+                factor = background_pinch_factor(factor, delta, relative_delta);
+                assert!((factor - scale).abs() < 0.00001);
+                previous = scale;
+            }
+            assert!((factor - 1.0).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn background_pinch_clamps_degenerate_scales_and_ignores_invalid_deltas() {
+        for relative_delta in [false, true] {
+            assert_eq!(background_pinch_factor(1.0, -1.0, relative_delta), 0.001);
+            assert_eq!(background_pinch_factor(1.0, -2.0, relative_delta), 0.001);
+            for delta in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                assert_eq!(background_pinch_factor(1.5, delta, relative_delta), 1.5);
+            }
+        }
+    }
+
+    #[test]
+    fn background_zoom_slider_matches_its_inset_track_and_clamps() {
+        let bounds = Bounds::new(point(px(100.0), px(20.0)), gpui::size(px(168.0), px(28.0)));
+        let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
+        let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
+
+        assert_eq!(background_zoom_at_x(bounds, px(90.0)), minimum);
+        assert_eq!(background_zoom_at_x(bounds, px(107.0)), minimum);
+        assert_eq!(background_zoom_at_x(bounds, px(261.0)), maximum);
+        assert_eq!(background_zoom_at_x(bounds, px(280.0)), maximum);
+        assert_eq!(background_zoom_at_x(bounds, px(184.0)), 2.5);
+        assert_eq!(background_zoom_fraction(minimum), 0.0);
+        assert_eq!(background_zoom_fraction(2.5), 0.5);
+        assert_eq!(background_zoom_fraction(maximum), 1.0);
+    }
 
     #[test]
     fn every_mode_gets_a_card() {
@@ -3535,24 +4336,34 @@ mod tests {
     }
 
     #[test]
-    fn accent_helper_explains_default_and_override_scope() {
-        assert!(accent_helper(AccentSelection::ThemeDefault).contains("intended"));
-        let copy = accent_helper(AccentSelection::Preset(AccentPreset::Pink));
-        assert!(copy.starts_with("Pink ·"));
-        assert!(copy.contains("glyphs"));
+    fn accent_helper_names_the_selected_accent() {
+        assert_eq!(
+            accent_helper(AccentSelection::ThemeDefault),
+            "Theme default"
+        );
+        assert_eq!(
+            accent_helper(AccentSelection::Preset(AccentPreset::Pink)),
+            "Pink"
+        );
     }
 
     #[test]
-    fn surface_helper_explains_theme_default_and_global_overrides() {
-        let default = surface_helper(SurfacePreference::ThemeDefault, SurfaceTreatment::Opaque);
-        assert!(default.contains("opaque default"));
-        assert!(
-            surface_helper(SurfacePreference::Frosted, SurfaceTreatment::Opaque)
-                .contains("where supported")
+    fn surface_helper_distinguishes_inherited_and_explicit_materials() {
+        assert_eq!(
+            surface_helper(SurfacePreference::ThemeDefault, SurfaceTreatment::Opaque),
+            "Theme default: opaque"
         );
-        assert!(
-            surface_helper(SurfacePreference::Opaque, SurfaceTreatment::Frosted)
-                .contains("every theme")
+        assert_eq!(
+            surface_helper(SurfacePreference::ThemeDefault, SurfaceTreatment::Frosted),
+            "Theme default: frosted"
+        );
+        assert_eq!(
+            surface_helper(SurfacePreference::Frosted, SurfaceTreatment::Opaque),
+            "Translucent surfaces"
+        );
+        assert_eq!(
+            surface_helper(SurfacePreference::Opaque, SurfaceTreatment::Frosted),
+            "Solid surfaces"
         );
     }
 
@@ -3735,6 +4546,38 @@ mod tests {
     }
 
     #[gpui::test]
+    fn glass_select_switches_opaque_to_frosted(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            crate::settings::init(Default::default(), dir.path(), cx);
+            appearance::init(
+                appearance::AppearanceMode::Dark,
+                ThemeSelection::default(),
+                AccentSelection::default(),
+                SurfacePreference::Opaque,
+                cx,
+            );
+        });
+        let (_page, cx) = cx.add_window_view(|_, cx| AppearancePage::new(cx));
+        cx.update(|window, cx| window.draw(cx).clear());
+        let trigger = cx
+            .debug_bounds("appearance-surface")
+            .expect("glass trigger");
+        cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let frosted = cx
+            .debug_bounds("appearance-surface-option-1")
+            .expect("frosted option");
+        cx.simulate_click(frosted.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(appearance::surface(cx), SurfacePreference::Frosted);
+            assert_eq!(Theme::of(cx).surface_preference, SurfacePreference::Frosted);
+        });
+    }
+
+    #[gpui::test]
     fn conversation_width_drag_coalesces_and_persists_the_last_value(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -3795,21 +4638,17 @@ mod tests {
         window
             .update(cx, |page, window, cx| {
                 for kind in [FontKind::Terminal, FontKind::Code] {
-                    page.toggle_size_menu(kind, cx);
-                    assert!(page.size_menu(kind).is_open());
-                    assert_eq!(page.selected_size_ix(kind), kind.size_ix(cx));
                     let target = kind.size_ix(cx) + 1;
-                    page.set_selected_size_ix(kind, target);
-                    page.commit_size(kind, window, cx);
+                    page.commit_size(kind, target, window, cx);
                     assert_eq!(kind.pixel_size(cx), MONO_FONT_SIZES[target]);
-                    assert!(!page.size_menu(kind).is_open());
+                    assert_eq!(kind.size_ix(cx), target);
                 }
 
                 // Opening a family menu closes a size menu left open elsewhere.
-                page.toggle_size_menu(FontKind::Ui, cx);
-                assert!(page.size_menu(FontKind::Ui).is_open());
+                page.size_select_mut(FontKind::Ui).open(0);
+                assert!(page.size_select(FontKind::Ui).is_open());
                 page.toggle_font_menu(FontKind::Code, window, cx);
-                assert!(!page.size_menu(FontKind::Ui).is_open());
+                assert!(!page.size_select(FontKind::Ui).is_open());
                 assert!(page.font_menu(FontKind::Code).is_open());
 
                 // Enter commits and reports the key consumed — without that the

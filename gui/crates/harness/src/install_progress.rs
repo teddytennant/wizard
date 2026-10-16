@@ -68,7 +68,7 @@ pub(crate) fn plan(harness: HarnessId, npm_only: bool, needs_node: bool) -> Vec<
     }
     match harness {
         _ if npm_only => plan.push((Npm, 10.0)),
-        HarnessId::Pi => plan.extend([(Download, 1.0), (Npm, 6.0), (Verify, 1.0), (Adapter, 3.0)]),
+        HarnessId::Pi => plan.extend([(Download, 1.0), (Npm, 6.0), (Verify, 1.0)]),
         HarnessId::ClaudeCode => plan.extend([(Download, 8.0), (SetUp, 3.0)]),
         HarnessId::Wizard | HarnessId::Antigravity => plan.push((Download, 10.0)),
         _ => plan.push((Run, 10.0)),
@@ -532,8 +532,8 @@ mod tests {
         let early = t.snapshot(now + Duration::from_secs(1)).fraction;
         let late = t.snapshot(now + Duration::from_secs(600)).fraction;
         assert!(late > early);
-        // Node is weight 6 starting after Preparing (1), total 18.5.
-        assert!(late <= (1.0 + 6.0 * 0.9) / 18.5 + 1e-4, "{late}");
+        // Node is weight 6 starting after Preparing (1), total 15.5.
+        assert!(late <= (1.0 + 6.0 * 0.9) / 15.5 + 1e-4, "{late}");
         // Measured bytes override the creep but the bar never goes back.
         t.bytes(1, Some(100));
         assert_eq!(t.snapshot(now + Duration::from_secs(601)).fraction, late);
@@ -545,7 +545,7 @@ mod tests {
         use Stage::*;
         assert_eq!(
             stages(plan(HarnessId::Pi, false, true)),
-            [Preparing, Node, Download, Npm, Verify, Adapter, Checking]
+            [Preparing, Node, Download, Npm, Verify, Checking]
         );
         assert_eq!(
             stages(plan(HarnessId::ClaudeCode, false, false)),

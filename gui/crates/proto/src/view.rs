@@ -63,6 +63,15 @@ pub fn effective_indicator(session: Option<&Session>, now: DateTime<Utc>) -> Ind
     }
 }
 
+/// Subagents running under a chat, staleness-checked like
+/// [`effective_indicator`]: a session row nobody has refreshed inside
+/// [`SESSION_STALE_MS`] belongs to a dead engine and counts nothing. Pure.
+pub fn running_subagents(session: Option<&Session>, now: DateTime<Utc>) -> u32 {
+    session
+        .filter(|s| now.signed_duration_since(s.updated_at).num_milliseconds() <= SESSION_STALE_MS)
+        .map_or(0, |s| s.running_subagents)
+}
+
 /// The full display status for a chat row / tab dot: live states win, then the
 /// synced seen marker decides completed-vs-idle. Staleness gating rides on
 /// [`effective_indicator`]; the derivation itself is [`crate::chat_indicator`].
@@ -122,6 +131,30 @@ pub fn sort_spaces(spaces: &mut [Space]) {
     });
 }
 
+/// The project a space belongs to: spaces sharing a repository identity —
+/// clones and worktrees of one repository, on any device — are one project.
+/// A space without an identity is a project of its own. Pure.
+pub fn project_key(space: &Space) -> String {
+    match space.repository_id.as_deref() {
+        Some(repository_id) => format!("repo:{repository_id}"),
+        None => space.id.clone(),
+    }
+}
+
+/// The space that speaks for `space`'s whole project: the oldest member, id
+/// tiebreak. Its name and color stand for every member, and the choice is
+/// the same on every device, so a repository looks alike everywhere. Pure.
+pub fn representative_space<'a>(spaces: &'a [Space], space: &'a Space) -> &'a Space {
+    let Some(repository_id) = space.repository_id.as_deref() else {
+        return space;
+    };
+    spaces
+        .iter()
+        .filter(|s| s.repository_id.as_deref() == Some(repository_id))
+        .min_by_key(|s| (s.created_at, s.id.as_str()))
+        .unwrap_or(space)
+}
+
 /// Sidebar order: `last_message_at` desc, falling back to `created_at`; ties
 /// break by `created_at` desc then id so the sort is total and stable across
 /// devices. Pure.
@@ -177,6 +210,40 @@ pub fn gate_phase(
 }
 
 #[cfg(test)]
+mod project_tests {
+    use super::*;
+
+    fn space(id: &str, device: &str, repository: Option<&str>, minutes: i64) -> Space {
+        Space {
+            id: id.into(),
+            device_id: device.into(),
+            path: format!("/{device}/{id}"),
+            name: None,
+            git_detected: repository.is_some(),
+            git_checked_at: None,
+            checkout_id: None,
+            repository_id: repository.map(str::to_string),
+            created_at: DateTime::<Utc>::UNIX_EPOCH + chrono::TimeDelta::minutes(minutes),
+        }
+    }
+
+    #[test]
+    fn spaces_sharing_a_repository_are_one_project_led_by_the_oldest() {
+        let spaces = vec![
+            space("laptop", "mac", Some("github.com/o/r"), 2),
+            space("server", "vps", Some("github.com/o/r"), 1),
+            space("notes", "mac", None, 0),
+        ];
+        assert_eq!(project_key(&spaces[0]), "repo:github.com/o/r");
+        assert_eq!(project_key(&spaces[0]), project_key(&spaces[1]));
+        assert_eq!(project_key(&spaces[2]), "notes");
+        assert_eq!(representative_space(&spaces, &spaces[0]).id, "server");
+        assert_eq!(representative_space(&spaces, &spaces[1]).id, "server");
+        assert_eq!(representative_space(&spaces, &spaces[2]).id, "notes");
+    }
+}
+
+#[cfg(test)]
 mod gate_tests {
     use super::*;
     use crate::UserProfile;
@@ -187,6 +254,32 @@ mod gate_tests {
             email: "user@example.com".into(),
             name: None,
         }
+    }
+
+    fn running_session(running: u32, updated_at: DateTime<Utc>) -> Session {
+        Session {
+            last_completed_turn: None,
+            chat_id: "chat".into(),
+            device_id: "dev".into(),
+            status: SessionStatus::Working,
+            started_at: None,
+            updated_at,
+            running_subagents: running,
+        }
+    }
+
+    #[test]
+    fn running_subagents_count_only_while_the_session_row_is_fresh() {
+        let now = Utc::now();
+        let fresh = running_session(3, now - chrono::Duration::seconds(10));
+        assert_eq!(running_subagents(Some(&fresh), now), 3);
+        // A crashed engine's row must not badge a chat forever.
+        let stale = running_session(
+            3,
+            now - chrono::Duration::milliseconds(SESSION_STALE_MS + 1),
+        );
+        assert_eq!(running_subagents(Some(&stale), now), 0);
+        assert_eq!(running_subagents(None, now), 0);
     }
 
     #[test]
@@ -292,7 +385,7 @@ pub fn project_label(cwd: Option<&str>) -> String {
     let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) else {
         return "No project".to_string();
     };
-    if matches!(cwd, "~" | "~/") {
+    if crate::projectless::is_projectless_cwd(Some(cwd)) {
         return "No project".to_string();
     }
     std::path::Path::new(cwd.trim_end_matches(['/', '\\']))
@@ -351,13 +444,14 @@ pub fn format_time_ago(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
 }
 
 /// Session-row sub-line, "project · branch" (zeron `chatLocation`): the repo
-/// checkout identity. Either part may be missing; empty when both are.
+/// checkout identity. Either part may be missing; empty when both are. A
+/// projectless chat names no project and no folder.
 pub fn chat_location(chat: &Chat) -> Option<String> {
     let project = chat
         .cwd
         .as_deref()
         .map(str::trim)
-        .filter(|c| !c.is_empty())
+        .filter(|c| !crate::projectless::is_projectless_cwd(Some(c)))
         .map(|c| project_label(Some(c)));
     let reference = chat
         .branch

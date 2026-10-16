@@ -227,7 +227,7 @@ pub fn installed(id: HarnessId) -> bool {
         Codex => crate::CodexHarness::new().installed(),
         Cursor => crate::CursorHarness::new().installed(),
         Opencode => crate::OpencodeHarness::new().installed(),
-        Pi => crate::AcpHarness::pi().installed(),
+        Pi => crate::PiHarness::new().installed(),
         Grok => crate::AcpHarness::grok().installed(),
         Hermes => crate::AcpHarness::hermes().installed(),
         Devin => crate::AcpHarness::devin().installed(),
@@ -424,15 +424,6 @@ pub async fn install_harness(
     .await;
     invalidate_versions(id);
     result?;
-    if id == HarnessId::Pi && installed(id) {
-        // Pi's first chat would otherwise start by installing its ACP adapter
-        // in the background. Best effort: a failure here leaves Pi installed
-        // and the chat-time install as the fallback.
-        progress.enter(Stage::Adapter);
-        if let Err(error) = crate::acp::install_pi_adapter().await {
-            tracing::warn!("installing the Pi adapter after Pi failed: {error}");
-        }
-    }
     progress.enter(Stage::Checking);
     tokio::task::spawn_blocking(move || post_install(id))
         .await

@@ -145,6 +145,7 @@ where
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        mcp: None,
         prompt: prompt.into(),
         harness: None,
         model: None,
@@ -403,7 +404,10 @@ async fn projectless_claim_syncs_after_offline_creation_and_survives_viewer_rest
     let row = b.workspace.chat("projectless-offline").unwrap().unwrap();
     assert_eq!(row.device_id, "dev-a");
     assert_eq!(row.space_id, None);
-    assert_eq!(row.cwd.as_deref(), Some("~"));
+    // The claim gives the new chat its own scratch folder, not `~`.
+    assert!(zeron_proto::projectless::is_scratch_cwd(
+        row.cwd.as_deref().unwrap()
+    ));
     assert!(a.workspace.read_spaces().unwrap().is_empty());
     assert!(b.workspace.read_spaces().unwrap().is_empty());
     b.shutdown().await;
@@ -692,6 +696,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 git_detected: true,
                 git_checked_at: Some(now),
                 checkout_id: Some("co-1".into()),
+                repository_id: None,
                 created_at: now,
             })
             .unwrap();
@@ -711,8 +716,8 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 created_at: now,
                 harness_session_id: Some("hs-9".into()),
                 room_gen: None,
-                harness_session_cwd: Some("/tmp/legacy".into()),
                 parent_chat_id: None,
+                harness_session_cwd: Some("/tmp/legacy".into()),
                 space_id: Some("space-legacy".into()),
                 last_seen_at: Some(now),
             })
@@ -720,6 +725,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
         legacy
             .upsert_session(&Session {
                 last_completed_turn: None,
+                running_subagents: 0,
                 chat_id: "chat-legacy".into(),
                 device_id: "dev-a".into(),
                 status: SessionStatus::Idle,

@@ -14,12 +14,12 @@
 //!   reflow already-painted text; the canonical parse settles honestly on
 //!   completion.
 
+pub(crate) mod inline_code_links;
 mod link_destination;
 mod link_interaction;
 mod link_presentation;
 pub mod links;
-pub mod mend;
-pub mod parser;
+pub use zeron_markdown::{mend, parser};
 pub mod render;
 pub mod selection;
 pub mod veil;
@@ -27,3 +27,4 @@ pub mod veil;
 pub use parser::{Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full};
 
 pub mod mermaid;
+pub(crate) mod mermaid_cache;

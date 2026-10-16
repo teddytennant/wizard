@@ -6,7 +6,9 @@
 //! come from [`motion::staggered_phase`], so all cells stay phase-locked.
 //! Cells animate inside fixed-size slots — opacity and inner size
 //! are paint-local and never move surrounding layout. Reduced motion snaps every
-//! cell to its rest state automatically (gpui `reduce_motion`).
+//! cell to its rest state automatically (gpui `reduce_motion`). Activity grids
+//! retain a gentle brightness pulse with system reduced motion; explicit On
+//! and background pause keep them still.
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EntityId, IntoElement, ParentElement,
@@ -121,7 +123,7 @@ pub fn gradient_spinner(
 ) -> impl IntoElement {
     let center = (MATRIX_SIDE as f32 - 1.0) / 2.0;
     let max = MATRIX_SIDE as f32 - 1.0 + center;
-    let delta = motion::pulse_delta_slow(&GRADIENT_SPIN, view, cx);
+    let pulse = motion::activity_pulse_slow(view, cx);
     div()
         .flex()
         .flex_col()
@@ -141,7 +143,7 @@ pub fn gradient_spinner(
                         .size(px(cell_px))
                         .rounded(px(cell_px / 2.0))
                         .bg(tint)
-                        .opacity(motion::gspin_opacity(delta + phase, GSPIN_DIM))
+                        .opacity(pulse.opacity(phase, GSPIN_DIM))
                 }))
         }))
 }
@@ -246,7 +248,7 @@ fn mini_spinner_cells(
     /// (0,0) → (0,1) → (1,1) → (2,1) → (2,0) → (1,0).
     const RING: [[usize; COLS]; ROWS] = [[0, 1], [5, 2], [4, 3]];
     const RING_LEN: f32 = (COLS * ROWS) as f32;
-    let delta = motion::pulse_delta(&GRADIENT_SPIN, view, cx);
+    let pulse = motion::activity_pulse(view, cx);
     div()
         .flex()
         .flex_col()
@@ -263,9 +265,86 @@ fn mini_spinner_cells(
                         .size(px(cell_px))
                         .rounded(px(cell_px / 2.0))
                         .bg(tint)
-                        .opacity(motion::gspin_opacity(delta + phase, GSPIN_DIM))
+                        .opacity(pulse.opacity(phase, GSPIN_DIM))
                 }))
         }))
+}
+
+/// A rounded fill that breathes on the zeron pulse clock between `floor` and
+/// `peak` opacity, filling whatever positioned box it is placed in. Like [`pulse_dot`] it repaints from its own cached
+/// view, so the surrounding chrome stays still.
+pub fn pulse_glow(
+    key: impl Into<SharedString>,
+    radius: f32,
+    tint: gpui::Hsla,
+    floor: f32,
+    peak: f32,
+) -> impl IntoElement {
+    PulseGlow {
+        key: key.into(),
+        style: GlowStyle {
+            radius,
+            tint,
+            floor,
+            peak,
+        },
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct GlowStyle {
+    radius: f32,
+    tint: gpui::Hsla,
+    floor: f32,
+    peak: f32,
+}
+
+#[derive(IntoElement)]
+struct PulseGlow {
+    key: SharedString,
+    style: GlowStyle,
+}
+
+impl RenderOnce for PulseGlow {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let style = self.style;
+        let view = window.with_global_id(self.key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<Entity<PulseGlowView>>, _| {
+                let view = previous.unwrap_or_else(|| cx.new(|_| PulseGlowView { style }));
+                view.update(cx, |view, cx| {
+                    if view.style != style {
+                        view.style = style;
+                        cx.notify();
+                    }
+                });
+                (view.clone(), view)
+            })
+        });
+        view.cached(gpui::StyleRefinement::default().size_full())
+    }
+}
+
+struct PulseGlowView {
+    style: GlowStyle,
+}
+
+impl Render for PulseGlowView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let GlowStyle {
+            radius,
+            tint,
+            floor,
+            peak,
+        } = self.style;
+        let delta = motion::pulse_delta_slow(&ZERON_PULSE, cx.entity_id(), cx);
+        // pulse_opacity spans 0.08..1; renormalise to 0..1 before mapping.
+        let wave = (motion::pulse_opacity(delta) - 0.08) / 0.92;
+        div()
+            .size_full()
+            .rounded(px(radius))
+            .bg(tint)
+            .opacity(motion::lerp(floor, peak, wave))
+    }
 }
 
 /// Stroke width of [`upload_progress_ring`].
@@ -281,8 +360,54 @@ const RING_SEGMENTS: f32 = 64.0;
 /// polylines. Fixed white-on-wash palette: the caller dims the image behind
 /// it, which reads in both themes.
 pub fn upload_progress_ring(percent: u8, diameter: f32) -> AnyElement {
+    let ring = progress_arc(
+        percent,
+        diameter,
+        gpui::hsla(0.0, 0.0, 1.0, 0.22),
+        gpui::hsla(0.0, 0.0, 1.0, 0.95),
+    );
+    div()
+        .relative()
+        .size(px(diameter))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(ring)
+        .child(
+            div()
+                .text_size(px(9.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(gpui::hsla(0.0, 0.0, 1.0, 0.95))
+                .child(SharedString::from(format!("{percent}%"))),
+        )
+        .into_any_element()
+}
+
+/// [`upload_progress_ring`] without the percent, in the caller's colors: for
+/// a spot too small to label, such as a sent chip's icon well.
+pub fn upload_progress_arc(
+    percent: u8,
+    diameter: f32,
+    track: gpui::Hsla,
+    arc: gpui::Hsla,
+) -> AnyElement {
+    div()
+        .relative()
+        .size(px(diameter))
+        .child(progress_arc(percent, diameter, track, arc))
+        .into_any_element()
+}
+
+/// A faint full track plus an arc growing clockwise from 12 o'clock, filling
+/// its parent.
+fn progress_arc(
+    percent: u8,
+    diameter: f32,
+    track: gpui::Hsla,
+    arc: gpui::Hsla,
+) -> gpui::Canvas<()> {
     let frac = f32::from(percent.min(100)) / 100.0;
-    let ring = canvas(
+    canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
             let center = bounds.center();
@@ -310,27 +435,12 @@ pub fn upload_progress_ring(percent: u8, diameter: f32) -> AnyElement {
                     window.paint_path(path, color);
                 }
             };
-            paint_arc(1.0, gpui::hsla(0.0, 0.0, 1.0, 0.22));
-            paint_arc(frac, gpui::hsla(0.0, 0.0, 1.0, 0.95));
+            paint_arc(1.0, track);
+            paint_arc(frac, arc);
         },
     )
     .absolute()
-    .inset_0();
-    div()
-        .relative()
-        .size(px(diameter))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(ring)
-        .child(
-            div()
-                .text_size(px(9.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(gpui::hsla(0.0, 0.0, 1.0, 0.95))
-                .child(SharedString::from(format!("{percent}%"))),
-        )
-        .into_any_element()
+    .inset_0()
 }
 
 /// Full-window boot splash: a tiny Game of Life ([`crate::life`]) over the

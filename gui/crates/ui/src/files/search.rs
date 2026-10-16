@@ -610,7 +610,11 @@ impl FilesSurface {
         let is_directory = row.kind == WorkspaceEntryKind::Directory;
         let decoration = self.git_decoration(&row.path, is_directory, cx);
         let padding = 8.0 + row.depth as f32 * super::tree::TREE_INDENT;
-        let drag_payload = WorkspacePathDrag::new(row.path.clone(), is_directory);
+        let drag_payload = WorkspacePathDrag::new(row.path.clone(), is_directory).with_origin(
+            self.interaction_origin(cx),
+            super::WorkspacePathSource::Search,
+            None,
+        );
         let content = div()
             .id(("files-search-result", index))
             .role(gpui::Role::TreeItem)
@@ -634,11 +638,9 @@ impl FilesSurface {
                 this.search_state.active = index;
                 this.activate_search_result(cx);
             }))
-            .when(crate::click_activation_drag_enabled(), |element| {
-                element.on_drag(drag_payload, |payload, _, _, cx| {
-                    cx.stop_propagation();
-                    workspace_path_drag_ghost(payload, cx)
-                })
+            .on_drag(drag_payload, |payload, _, _, cx| {
+                cx.stop_propagation();
+                workspace_path_drag_ghost(payload, cx)
             })
             .child(
                 div()

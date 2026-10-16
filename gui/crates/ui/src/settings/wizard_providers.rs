@@ -912,8 +912,12 @@ impl WizardProvidersPage {
                     .when(!subscription.windows.is_empty(), |el| {
                         el.child(div().mt(px(6.0)).flex().flex_col().gap(px(4.0)).children(
                             subscription.windows.iter().map(|window| {
-                                crate::settings::accounts::render_usage_meter(window, theme, now)
+                                crate::settings::accounts::render_usage_meter(window, theme)
                             }),
+                        ))
+                        .child(small(
+                            crate::settings::accounts::usage_resets(&subscription.windows, now),
+                            0.45,
                         ))
                     })
                     .when_some(subscription.products.clone(), |el, products| {

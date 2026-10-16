@@ -7,6 +7,7 @@ Exec=wizard-gui %u
 TryExec=wizard-gui
 Icon=wizard-gui
 Terminal=false
+StartupNotify=true
 Categories=Development;Utility;
 Keywords=wizard;agent;pi;claude;ai;coding;
 StartupWMClass=wizard-gui

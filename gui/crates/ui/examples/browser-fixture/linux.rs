@@ -4,6 +4,35 @@ use gpui::{
 };
 use zeron_ui::browser::BrowserSurface;
 
+/// The first software-rendered frame can take longer than the fixture's
+/// initial pause on a loaded runner. Yield to GPUI until X11 maps the window;
+/// blocking this thread would prevent the frame we're waiting for.
+pub(super) async fn wait_for_visible_window(cx: &mut AsyncApp) -> anyhow::Result<()> {
+    // Wayland captures the already-mapped nested compositor's X11 window.
+    if std::env::var("ZERON_BROWSER_CAPTURE_WINDOW").is_ok_and(|id| !id.is_empty()) {
+        return Ok(());
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let windows = std::process::Command::new("xdotool")
+            .args([
+                "search",
+                "--onlyvisible",
+                "--pid",
+                &std::process::id().to_string(),
+            ])
+            .output()?;
+        if windows.status.success() && !windows.stdout.is_empty() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "fixture window did not become visible within 10 seconds"
+        );
+        pause(cx, 50).await;
+    }
+}
+
 async fn eval(
     page: &Entity<BrowserSurface>,
     script: &str,
@@ -229,7 +258,7 @@ pub async fn exercise(
         })
     })?;
     pause(cx, 100).await;
-    capture(output, "linux-ime-dark")?;
+    capture_frame(window, output, "linux-ime-dark", cx).await?;
     window.update(cx, |_, w, cx| {
         page.update(cx, |b, cx| {
             gpui::EntityInputHandler::replace_text_in_range(b, None, "日本語", w, cx)
@@ -257,7 +286,7 @@ pub async fn exercise(
         page.read_with(cx, |b, _| b.fixture_linux_menu_open()),
         "HTML select did not open a GPUI menu"
     );
-    capture(output, "linux-select-dark")?;
+    capture_frame(window, output, "linux-select-dark", cx).await?;
     for key in ["down", "enter"] {
         dispatch(
             window,
@@ -300,7 +329,7 @@ pub async fn exercise(
         page.read_with(cx, |b, _| b.fixture_linux_menu_open()),
         "context menu did not open in GPUI"
     );
-    capture(output, "linux-context-dark")?;
+    capture_frame(window, output, "linux-context-dark", cx).await?;
     dispatch(
         window,
         PlatformInput::KeyDown(gpui::KeyDownEvent {
@@ -345,7 +374,7 @@ pub async fn exercise(
         cx,
     )?;
     pause(cx, 800).await;
-    capture(output, "linux-tooltip-dark")?;
+    capture_frame(window, output, "linux-tooltip-dark", cx).await?;
     let button=eval(&page,"(()=>{let r=document.getElementById('browser-button').getBoundingClientRect();return [r.x+15,r.y+10]})()",cx).await?;
     click(
         window,
@@ -437,7 +466,7 @@ pub async fn exercise(
         (width - layout as f64).abs() < 2.,
         "CSS viewport {width} differs from GPUI {layout}"
     );
-    capture(output, "linux-resize-dark")?;
+    capture_frame(window, output, "linux-resize-dark", cx).await?;
     for _ in 0..4 {
         window.update(cx, |s, _, cx| s.fixture_toggle_sidebar(false, cx))?;
         pause(cx, 400).await;
@@ -469,7 +498,7 @@ pub async fn exercise(
         "reopened sidebar lost browser"
     );
     cx.update(|cx| appearance::set_surface(zeron_theme::SurfacePreference::Frosted, cx));
-    capture(output, "browser-blur-baseline-dark")?;
+    capture_frame(window, output, "browser-blur-baseline-dark", cx).await?;
     window.update(cx, |s, _, cx| s.fixture_browser_menu(true, cx))?;
     pause(cx, 700).await;
     let presses = eval(&page, "window.pagePresses||0", cx).await?;
@@ -500,10 +529,10 @@ pub async fn exercise(
     );
     window.update(cx, |s, _, cx| s.fixture_browser_menu(true, cx))?;
     pause(cx, 500).await;
-    capture(output, "browser-blur-dark")?;
+    capture_frame(window, output, "browser-blur-dark", cx).await?;
     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
     pause(cx, 500).await;
-    capture(output, "browser-blur-light")?;
+    capture_frame(window, output, "browser-blur-light", cx).await?;
     eval(
         &page,
         "document.getElementById('browser-blur-grid').style.background='#263d35'",
@@ -511,10 +540,10 @@ pub async fn exercise(
     )
     .await?;
     pause(cx, 300).await;
-    capture(output, "browser-blur-solid-light")?;
+    capture_frame(window, output, "browser-blur-solid-light", cx).await?;
     cx.update(|cx| appearance::set_surface(zeron_theme::SurfacePreference::Opaque, cx));
     pause(cx, 300).await;
-    capture(output, "browser-menu-opaque")?;
+    capture_frame(window, output, "browser-menu-opaque", cx).await?;
     let bounds = page.read_with(cx, |b, _| b.fixture_linux_bounds());
     let viewport =
         AnyWindowHandle::from(window).update(cx, |_, w, _| f32::from(w.viewport_size().width))?;

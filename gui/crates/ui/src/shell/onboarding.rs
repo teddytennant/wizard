@@ -856,7 +856,7 @@ impl Shell {
                                 .child(detail),
                         ),
                 )
-                .child(widgets::toggle_switch(theme, on))
+                .child(widgets::toggle_switch(theme, on, id))
         };
         let modes = [
             (AppearanceMode::System, "System"),

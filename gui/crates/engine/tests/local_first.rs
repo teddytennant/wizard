@@ -315,7 +315,7 @@ async fn clean_local_auth_construction_does_not_probe_edge_health() {
 }
 
 #[tokio::test]
-async fn local_runtime_does_not_start_the_edge_updater() {
+async fn local_runtime_checks_public_releases_without_starting_edge_links() {
     let dir = tempfile::tempdir().unwrap();
     let (edge_url, requests, edge_task) = rejecting_edge().await;
     let config = config(dir.path(), edge_url, Some("client_test"), None);

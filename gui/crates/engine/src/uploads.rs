@@ -10,10 +10,11 @@
 //! Attachments live only on the host device — every read proxies through the
 //! owning device via `ReadAttachmentChunk`; nothing is mirrored to the edge.
 //!
-//! `read_chunk` serves transcript images back in 45KB base64 chunks. Path jail:
+//! `read_chunk` serves attachments back in 45KB base64 chunks. Path jail:
 //! only files under the uploads dir or a workspace-known chat cwd are readable
-//! (the RPC layer supplies the cwd roots) — and only supported image types, as
-//! in zeron.
+//! (the RPC layer supplies the cwd roots). Workspace files must be supported
+//! image types, as in zeron; files in the uploads dir read back whatever their
+//! type, so a queued message can restore them for editing.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -331,17 +332,37 @@ impl Uploads {
         } else {
             path
         };
-        // Canonicalize BOTH sides so `..` segments and symlinks can't escape.
-        let resolved = std::fs::canonicalize(path).map_err(|_| outside())?;
         let read_roots = self
             .inner
             .read_only_roots
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let allowed = std::iter::once(&self.inner.dir)
+        let roots: Vec<&PathBuf> = std::iter::once(&self.inner.dir)
             .chain(read_roots.iter())
             .chain(extra_roots.iter())
+            .collect();
+        // Jail lexically BEFORE any filesystem call: tool chips send paths an
+        // agent printed, and merely opening `\\host\share\a.png` (or an autofs
+        // `/net/host/…`) reaches out to that host — on Windows with the
+        // user's NTLM credentials. Roots match in raw and canonical form
+        // (`/var` vs `/private/var`, symlinked cwds).
+        let requested = lexical_components(Path::new(path)).ok_or_else(outside)?;
+        let lexically_allowed = roots.iter().any(|root| {
+            let canonical = std::fs::canonicalize(root).ok();
+            [Some(root.as_path()), canonical.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter_map(lexical_components)
+                .any(|root| requested.len() > root.len() && requested.starts_with(&root))
+        });
+        if !lexically_allowed {
+            return Err(outside());
+        }
+        // Canonicalize BOTH sides so symlinks can't escape.
+        let resolved = std::fs::canonicalize(path).map_err(|_| outside())?;
+        let allowed = roots
+            .iter()
             .filter_map(|root| std::fs::canonicalize(root).ok())
             .any(|root| resolved.starts_with(&root) && resolved != root);
         if !allowed {
@@ -354,8 +375,21 @@ impl Uploads {
         if meta.len() > MAX_BYTES {
             return Err(EngineError::Other("Attachment is too large".into()));
         }
-        let mime_type = mime_by_ext(&resolved)
-            .ok_or_else(|| EngineError::Other("Attachment is not a supported image".into()))?;
+        // Files the user attached themselves read back whatever their type (a
+        // queued message restores them for editing); other roots stay image-only.
+        let mime_type = match mime_by_ext(&resolved) {
+            Some(mime) => mime,
+            None if std::fs::canonicalize(&self.inner.dir)
+                .is_ok_and(|uploads| resolved.starts_with(uploads)) =>
+            {
+                "application/octet-stream"
+            }
+            None => {
+                return Err(EngineError::Other(
+                    "Attachment is not a supported image".into(),
+                ));
+            }
+        };
         Ok(InspectedFile {
             name: resolved
                 .file_name()
@@ -373,6 +407,48 @@ struct InspectedFile {
     name: String,
     mime_type: String,
     size: u64,
+}
+
+/// An absolute local path's components with `.`/`..` resolved WITHOUT
+/// touching the filesystem. `None` for relative or drive-relative paths and
+/// for any Windows prefix but a drive letter (UNC, `\\.\` devices, verbatim
+/// non-disk). `C:` and `\\?\C:` agree; Windows compares case-insensitively.
+fn lexical_components(path: &Path) -> Option<Vec<std::ffi::OsString>> {
+    use std::path::{Component, Prefix};
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    // Prefix + root: `/..` is `/`, so `..` never pops below them.
+    let mut anchor = 0;
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                    out.push(format!("{}:", drive.to_ascii_uppercase() as char).into());
+                    anchor = out.len();
+                }
+                _ => return None,
+            },
+            Component::RootDir => {
+                out.push(std::path::MAIN_SEPARATOR_STR.into());
+                anchor = out.len();
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if out.len() > anchor {
+                    out.pop();
+                }
+            }
+            Component::Normal(name) => {
+                #[cfg(windows)]
+                out.push(name.to_string_lossy().to_lowercase().into());
+                #[cfg(not(windows))]
+                out.push(name.to_os_string());
+            }
+        }
+    }
+    Some(out)
 }
 
 fn chunk_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, EngineError> {
@@ -451,6 +527,25 @@ fn mime_by_ext(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_assets_sit_beside_the_script_and_leave_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(dir.path());
+        let assets = vec![
+            ("prism.glb".to_owned(), b"glb".to_vec()),
+            ("sky.hdr".to_owned(), b"hdr".to_vec()),
+        ];
+        uploads.store_visual_assets("v:abc", &assets).unwrap();
+        let script = uploads.store_visual("v:abc", "return ui.text 'hi'").unwrap();
+        let stem = script.strip_suffix("-visual.luau").unwrap();
+        let names: Vec<String> =
+            serde_json::from_slice(&std::fs::read(format!("{stem}-assets.json")).unwrap()).unwrap();
+        assert_eq!(names, ["prism.glb", "sky.hdr"]);
+        assert_eq!(std::fs::read(format!("{stem}-asset-sky.hdr")).unwrap(), b"hdr");
+        uploads.remove_visual("v:abc");
+        assert_eq!(std::fs::read_dir(uploads.dir()).unwrap().count(), 0);
+    }
 
     #[test]
     fn sanitize_names() {
@@ -545,6 +640,35 @@ mod tests {
     }
 
     #[test]
+    fn uploaded_files_of_any_type_read_back_but_other_roots_stay_image_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(dir.path());
+        for (id, name, bytes) in [
+            ("u1", "notes.md", &b"# notes"[..]),
+            ("u2", "empty.bin", b""),
+        ] {
+            uploads.append(id, &BASE64.encode(bytes), Some(0)).unwrap();
+            let path = uploads.commit(id, name).unwrap();
+            let chunk = uploads.read_chunk(&path, 0, &[]).unwrap();
+            assert_eq!(chunk.mime_type, "application/octet-stream");
+            assert!(chunk.done);
+        }
+        // A non-image in a workspace root is still refused.
+        let notes = workspace.path().join("notes.md");
+        std::fs::write(&notes, "# not an upload").unwrap();
+        assert!(
+            uploads
+                .read_chunk(
+                    notes.to_str().unwrap(),
+                    0,
+                    &[workspace.path().to_path_buf()]
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn pending_ref_traversal_cannot_escape_the_jail() {
         let dir = tempfile::tempdir().unwrap();
         let uploads = Uploads::from_root(dir.path());
@@ -552,6 +676,81 @@ mod tests {
         let target = uploads.pending_target("../../../etc", "../../passwd");
         assert!(target.starts_with(dir.path()));
         assert!(!target.to_string_lossy().contains(".."));
+    }
+
+    #[test]
+    fn network_and_escaping_paths_are_refused_before_touching_the_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(dir.path());
+        let roots = [workspace.path().to_path_buf()];
+        std::fs::write(workspace.path().join("shot.png"), b"png").unwrap();
+        std::fs::write(elsewhere.path().join("shot.png"), b"png").unwrap();
+        let inside = workspace.path().join("shot.png");
+        assert!(
+            uploads
+                .read_chunk(inside.to_str().unwrap(), 0, &roots)
+                .is_ok()
+        );
+        let escape = workspace
+            .path()
+            .join("..")
+            .join(elsewhere.path().file_name().unwrap())
+            .join("shot.png");
+        let mut paths = vec![
+            r"\\host\share\x.png".to_string(),
+            "//host/share/x.png".into(),
+            r"\\?\UNC\host\share\x.png".into(),
+            r"\\.\pipe\x.png".into(),
+            "file:////host/share/x.png".into(),
+            "/net/somehost/x.png".into(),
+            "C:x.png".into(),
+            "shot.png".into(),
+            escape.to_string_lossy().into_owned(),
+        ];
+        // A link from outside every root into one canonicalizes inside the
+        // jail; refusing it proves the lexical check runs before any
+        // filesystem call on the requested path.
+        #[cfg(unix)]
+        {
+            let link = elsewhere.path().join("link");
+            std::os::unix::fs::symlink(workspace.path(), &link).unwrap();
+            paths.push(link.join("shot.png").to_string_lossy().into_owned());
+        }
+        for path in paths {
+            let error = uploads
+                .read_chunk(&path, 0, &roots)
+                .expect_err(&format!("accepted {path:?}"));
+            assert!(
+                error.to_string().contains("outside the upload cache"),
+                "{path:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn lexical_components_resolve_dots_and_refuse_non_disk_prefixes() {
+        let lexical = |path: &str| lexical_components(Path::new(path));
+        assert_eq!(lexical("/a/./b/../c/../../.."), lexical("/"));
+        assert_eq!(lexical("/a/b/../c.png"), lexical("/a/c.png"));
+        assert_eq!(lexical("relative/c.png"), None);
+        #[cfg(windows)]
+        {
+            assert_eq!(lexical(r"\\?\c:\A\b.png"), lexical(r"C:\a\B.PNG"));
+            assert_eq!(lexical(r"C:\..\..\a.png"), lexical(r"C:\a.png"));
+            for path in [
+                r"\\host\share\x.png",
+                "//host/share/x.png",
+                r"\\?\UNC\host\share\x.png",
+                r"\\.\pipe\x.png",
+                r"\\?\pipe\x.png",
+                "C:x.png",
+                r"\x.png",
+            ] {
+                assert_eq!(lexical(path), None, "{path}");
+            }
+        }
     }
 }
 
@@ -699,6 +898,76 @@ fn open_generated_file(
 }
 
 impl Uploads {
+    /// Store an agent's `show_visual` script and return its absolute path.
+    /// It lives beside other attachments, so clients read it the same way.
+    pub fn store_visual(&self, id: &str, script: &str) -> Result<String, EngineError> {
+        use std::io::Write;
+        std::fs::create_dir_all(self.dir())?;
+        let path = self.dir().join(format!("{}-visual.luau", sanitize(id)));
+        let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
+        temporary.write_all(script.as_bytes())?;
+        temporary
+            .persist(&path)
+            .map_err(|err| EngineError::Other(err.to_string()))?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Store the files a visual's script uses, beside it: each as
+    /// `{id}-asset-{name}`, and `{id}-assets.json` listing their names
+    /// (clients find it from the script's path).
+    pub fn store_visual_assets(&self, id: &str, assets: &[(String, Vec<u8>)]) -> Result<(), EngineError> {
+        use std::io::Write;
+        if assets.is_empty() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(self.dir())?;
+        let id = sanitize(id);
+        let write = |name: &str, bytes: &[u8]| -> Result<(), EngineError> {
+            let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
+            temporary.write_all(bytes)?;
+            temporary
+                .persist(self.dir().join(name))
+                .map_err(|err| EngineError::Other(err.to_string()))?;
+            Ok(())
+        };
+        // All or nothing: a failure part way removes what was written.
+        let mut written = Vec::with_capacity(assets.len() + 1);
+        let stored = (|| {
+            let mut names = Vec::with_capacity(assets.len());
+            for (name, bytes) in assets {
+                let name = sanitize(name);
+                let file = format!("{id}-asset-{name}");
+                write(&file, bytes)?;
+                written.push(file);
+                names.push(name);
+            }
+            let manifest = serde_json::to_vec(&names).map_err(|err| EngineError::Other(err.to_string()))?;
+            write(&format!("{id}-assets.json"), &manifest)
+        })();
+        if stored.is_err() {
+            for file in written {
+                let _ = std::fs::remove_file(self.dir().join(file));
+            }
+        }
+        stored
+    }
+
+    /// Remove a visual's script and its assets.
+    pub fn remove_visual(&self, id: &str) {
+        let id = sanitize(id);
+        let _ = std::fs::remove_file(self.dir().join(format!("{id}-visual.luau")));
+        let manifest = self.dir().join(format!("{id}-assets.json"));
+        if let Some(names) = std::fs::read(&manifest)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        {
+            for name in names {
+                let _ = std::fs::remove_file(self.dir().join(format!("{id}-asset-{}", sanitize(&name))));
+            }
+        }
+        let _ = std::fs::remove_file(manifest);
+    }
+
     /// Copy a Codex-owned raster into the active profile without exposing the
     /// original path to the journal, document, RPC readers, or relay.
     pub fn import_generated_image(

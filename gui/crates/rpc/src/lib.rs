@@ -33,6 +33,14 @@ pub use server::{serve_connection, serve_ws_listener};
 /// RPC method names — single source of truth for both ends.
 /// Full surface: docs/research/feature-inventory.md §2.
 pub mod methods {
+    pub const VOICE_CAPABILITIES_V2: &str = "VoiceCapabilitiesV2";
+    pub const PREPARE_VOICE_V2: &str = "PrepareVoiceV2";
+    pub const OWN_VOICE_V2: &str = "OwnVoiceV2";
+    pub const NEGOTIATE_VOICE_V2: &str = "NegotiateVoiceV2";
+    pub const CONFIRM_VOICE_MEDIA_V2: &str = "ConfirmVoiceMediaV2";
+    pub const REPORT_VOICE_MEDIA_V2: &str = "ReportVoiceMediaV2";
+    pub const STOP_VOICE_V2: &str = "StopVoiceV2";
+    pub const CANCEL_VOICE_ATTEMPT_V2: &str = "CancelVoiceAttemptV2";
     pub const WATCH_PREVIEWS: &str = "WatchPreviews";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
     pub const CANCEL_INSTALL: &str = "CancelInstall";
@@ -62,7 +70,11 @@ pub mod methods {
     /// fresh chat2 socket, host nudge, drain pass, and a new delivery escort
     /// per pending command. Params `{chatId}`; IPC-only.
     pub const RETRY_DELIVERY: &str = "RetryDelivery";
+    pub const FORK_SIDE_CHAT: &str = "ForkSideChat";
     pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
+    /// Explicit user navigation, `{chatId}`. Prioritizes this device's sync
+    /// connection; automatic subscriptions and retries must not call it.
+    pub const FOCUS_CHAT: &str = "FocusChat";
     /// Messages typed while the agent was busy, held on the chat doc so every
     /// device sees the same queue. `{ chatId }` → `{ items: QueuedMessage[] }`.
     pub const WATCH_QUEUE: &str = "WatchQueue";
@@ -156,16 +168,28 @@ pub mod methods {
     pub const FETCH_ALL: &str = "FetchAll";
     pub const SWITCH_REF: &str = "SwitchRef";
     pub const LIST_FOLDERS: &str = "ListFolders";
+    pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
+    pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";
     /// The device's browse roots: home plus mounted drives/volumes.
     pub const LIST_DRIVES: &str = "ListDrives";
+    /// Folders under the host's home by name (new-project picker).
+    pub const SEARCH_HOME_FOLDERS: &str = "SearchHomeFolders";
+    /// The new-project picker closed: drop the host's home index if unpinned.
+    pub const RELEASE_HOME_FOLDER_SEARCH: &str = "ReleaseHomeFolderSearch";
     /// Fuzzy relative-path search rooted in a known chat or space checkout.
     pub const SEARCH_FILES: &str = "SearchFiles";
     // Device-local workspace filesystem operations. All are relay-forwardable;
     // WatchWorkspaceFiles is the only streaming method in this group.
     pub const LIST_WORKSPACE_DIRECTORY: &str = "ListWorkspaceDirectory";
     pub const SEARCH_WORKSPACE_FILES: &str = "SearchWorkspaceFiles";
+    /// Start or keep alive a workspace's search index (fire-and-forget warm).
+    pub const WARM_WORKSPACE_SEARCH: &str = "WarmWorkspaceSearch";
+    /// Plain-text search over a workspace's file contents.
+    pub const SEARCH_WORKSPACE_CONTENT: &str = "SearchWorkspaceContent";
     pub const READ_WORKSPACE_IMAGE: &str = "ReadWorkspaceImage";
     pub const READ_WORKSPACE_FILE: &str = "ReadWorkspaceFile";
+    pub const MOVE_WORKSPACE_ENTRY: &str = "MoveWorkspaceEntry";
+    pub const DELETE_WORKSPACE_ENTRY: &str = "DeleteWorkspaceEntry";
     pub const WRITE_WORKSPACE_FILE: &str = "WriteWorkspaceFile";
     pub const WATCH_WORKSPACE_FILES: &str = "WatchWorkspaceFiles";
     pub const CREATE_WORKTREE: &str = "CreateWorktree";
@@ -187,7 +211,18 @@ pub mod methods {
     pub const WATCH_WORKSPACE_GIT_STATUS: &str = "WatchWorkspaceGitStatus";
     /// Current pull request for one checkout, resolved on the checkout's host device.
     pub const WATCH_CHECKOUT_CHANGE_REQUEST: &str = "WatchCheckoutChangeRequest";
+    /// One page of a repository's open pull requests (`filter`, `after`
+    /// cursor), with the total count.
+    pub const LIST_CHANGE_REQUEST_PAGE: &str = "ListChangeRequestPage";
+    /// Resolve a selected checkout through local Git metadata only.
+    pub const GET_CHANGE_REQUEST_REPOSITORY: &str = "GetChangeRequestRepository";
+    pub const GET_CHANGE_REQUEST: &str = "GetChangeRequest";
+    pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
+    pub const GET_CHANGE_REQUEST_DIFF: &str = "GetChangeRequestDiff";
     pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
+    /// Permanently restore one chat-owned checkout to its current HEAD and
+    /// remove only its untracked, non-ignored paths.
+    pub const DISCARD_WORKING_TREE: &str = "DiscardWorkingTree";
     pub const GET_CHECKOUT_FILE_DIFF_TEXT: &str = "GetCheckoutFileDiffText";
     // Agent accounts (ControlRpc, relay-forwardable — CLI logins are per-device).
     pub const LIST_AGENT_ACCOUNTS: &str = "ListAgentAccounts";
@@ -241,6 +276,9 @@ pub mod methods {
     pub const UPLOAD_CHUNK: &str = "UploadChunk";
     pub const UPLOAD_COMMIT: &str = "UploadCommit";
     pub const READ_ATTACHMENT_CHUNK: &str = "ReadAttachmentChunk";
+    /// Store an agent's HTML page and show it inline in that chat's live
+    /// turn (`show_visual`). Local only: the calling agent runs on this device.
+    pub const PUBLISH_VISUAL: &str = "PublishVisual";
     /// Lazy full-tool-output fetch from the R2 sidecar by doc-resident ref
     /// (chat2-sync A3). Edge-direct from any device — never relay-forwarded.
     pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";
@@ -250,6 +288,24 @@ pub mod methods {
     /// Run a release check now instead of at the next scheduled one; the
     /// result arrives on the UpdateStatus stream.
     pub const CHECK_FOR_UPDATES: &str = "CheckForUpdates";
+    /// Device-local agent CLI update lifecycle. The stream emits the complete
+    /// ordered status list initially and after every transition.
+    pub const WATCH_HARNESS_UPDATES: &str = "WatchHarnessUpdates";
+    pub const CHECK_HARNESS_UPDATES: &str = "CheckHarnessUpdates";
+    pub const APPLY_HARNESS_UPDATE: &str = "ApplyHarnessUpdate";
+    pub const CANCEL_HARNESS_UPDATE: &str = "CancelHarnessUpdate";
+    pub const DISMISS_HARNESS_UPDATE: &str = "DismissHarnessUpdate";
+    pub const SET_HARNESS_UPDATE_POLICY: &str = "SetHarnessUpdatePolicy";
+}
+
+/// Stable capability error codes transported without provider stderr.
+pub mod capability_errors {
+    pub const PULL_REQUESTS_CLI_UNAVAILABLE: &str = "pull_requests.cli_unavailable";
+    pub const PULL_REQUESTS_AUTHENTICATION: &str = "pull_requests.authentication";
+    pub const PULL_REQUESTS_RATE_LIMITED: &str = "pull_requests.rate_limited";
+    pub const PULL_REQUESTS_TIMEOUT: &str = "pull_requests.timeout";
+    pub const PULL_REQUESTS_DECODE: &str = "pull_requests.decode";
+    pub const PULL_REQUESTS_COMMAND_FAILED: &str = "pull_requests.command_failed";
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -258,6 +314,9 @@ pub enum RpcError {
     UnknownMethod(String),
     #[error("bad params: {0}")]
     BadParams(String),
+    /// Stable machine-readable capability failure preserved across transports.
+    #[error("capability error: {0}")]
+    Capability(String),
     #[error("{0}")]
     Failed(String),
     #[error("transport: {0}")]
@@ -282,7 +341,13 @@ pub struct ClientFrame {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServerFrame {
     pub id: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `"ok": null` is a reply whose value is `null` (for example an absent
+    /// `Option`), distinct from a frame without `ok`.
+    #[serde(
+        default,
+        deserialize_with = "present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ok: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
@@ -290,6 +355,13 @@ pub struct ServerFrame {
     pub item: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+}
+
+fn present_value<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// What a service returns for one invocation.
@@ -361,7 +433,10 @@ mod tests {
             method: &str,
             _params: serde_json::Value,
         ) -> Result<RpcReply, RpcError> {
-            if method != methods::WATCH_CHECKOUT_CHANGE_REQUEST {
+            if !matches!(
+                method,
+                methods::WATCH_CHECKOUT_CHANGE_REQUEST | methods::WATCH_HARNESS_UPDATES | "Silent"
+            ) {
                 return Err(RpcError::UnknownMethod(method.into()));
             }
             let guard = DropSignal(self.dropped.lock().unwrap().take());
@@ -370,6 +445,15 @@ mod tests {
                 drop(guard);
                 item
             });
+            if method == methods::WATCH_HARNESS_UPDATES {
+                // Update watches send an initial status snapshot, then may stay
+                // quiet indefinitely. Legacy peers do not send a readiness frame.
+                return Ok(RpcReply::Stream(
+                    futures::stream::once(async { serde_json::json!([]) })
+                        .chain(stream)
+                        .boxed(),
+                ));
+            }
             Ok(RpcReply::Stream(stream.boxed()))
         }
     }
@@ -391,6 +475,9 @@ mod tests {
                 }
                 "Never" => Ok(RpcReply::Stream(futures::stream::pending().boxed())),
                 "Boom" => Err(RpcError::Failed("boom".into())),
+                "Capability" => Err(RpcError::Capability(
+                    capability_errors::PULL_REQUESTS_AUTHENTICATION.into(),
+                )),
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
         }
@@ -428,6 +515,16 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RpcError::Failed(m) if m == "boom"));
+
+        let err = client
+            .call("Capability", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            RpcError::Capability(code)
+                if code == capability_errors::PULL_REQUESTS_AUTHENTICATION
+        ));
     }
 
     #[tokio::test]
@@ -471,6 +568,83 @@ mod tests {
             .await
             .expect("server stream cancelled")
             .expect("drop signal");
+    }
+
+    #[tokio::test]
+    async fn scoped_subscription_returns_before_first_item_and_cancels_silence() {
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let service = Arc::new(CancelAwareService {
+            dropped: Mutex::new(Some(dropped_tx)),
+        });
+        let client = memory_client(service.clone());
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.subscribe_scoped("Silent", serde_json::Value::Null),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        while service.dropped.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+        drop(stream);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_one_device_update_watch_preserves_the_other() {
+        let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        let first = memory_client(Arc::new(CancelAwareService {
+            dropped: Mutex::new(Some(first_tx)),
+        }));
+        let second = memory_client(Arc::new(CancelAwareService {
+            dropped: Mutex::new(Some(second_tx)),
+        }));
+        let first_watch = first
+            .subscribe_checked(methods::WATCH_HARNESS_UPDATES, serde_json::Value::Null)
+            .await
+            .unwrap();
+        let second_watch = second
+            .subscribe_checked(methods::WATCH_HARNESS_UPDATES, serde_json::Value::Null)
+            .await
+            .unwrap();
+
+        drop(first_watch);
+        tokio::time::timeout(std::time::Duration::from_secs(1), first_rx)
+            .await
+            .expect("first device's quiet stream cancelled")
+            .expect("first drop signal");
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        drop(second_watch);
+        tokio::time::timeout(std::time::Duration::from_secs(1), second_rx)
+            .await
+            .expect("second device's quiet stream cancelled")
+            .expect("second drop signal");
+    }
+
+    #[tokio::test]
+    async fn unary_null_reply_resolves_the_call() {
+        let client = memory_client(Arc::new(TestService));
+        let reply = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.call("Echo", serde_json::Value::Null),
+        )
+        .await
+        .expect("a null reply is a reply")
+        .unwrap();
+        assert_eq!(reply, serde_json::Value::Null);
+        let frame: ServerFrame = serde_json::from_str(r#"{"id":1,"ok":null}"#).unwrap();
+        assert_eq!(frame.ok, Some(serde_json::Value::Null));
+        let frame: ServerFrame = serde_json::from_str(r#"{"id":1,"done":true}"#).unwrap();
+        assert_eq!(frame.ok, None);
     }
 
     #[tokio::test]

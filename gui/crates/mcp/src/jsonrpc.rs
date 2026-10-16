@@ -21,17 +21,36 @@ const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const LATEST_PROTOCOL: &str = "2025-06-18";
 
 const INSTRUCTIONS: &str = "\
-Zeron runs coding agents in chats, each hosted on a device inside a project \
-(a folder on that device). These tools operate the local Zeron engine: \
+Zeron runs coding agents in chats, each hosted on a device, optionally in a project \
+(a folder on that specific device). These tools operate the local Zeron engine: \
 discover devices/projects/chats, create chats with a chosen harness and \
 model, read transcripts, and send messages between chats.\n\
 \n\
 Chats are referenced by full id, a unique id prefix, or an exact title. Use \
 `whoami` to learn which chat you are speaking from; messages you send are \
 attributed to it and a chat cannot message itself. For request/response \
-with another chat, call `send_message` with `wait: true` (or `wait_for_turn` \
-later) — it returns the assistant's reply once that chat's turn finishes. \
-If a chat is `awaitingInput`, answer it with `respond_to_input`.";
+with a single chat, `send_message` with `wait: true` returns its reply. \
+For parallel delegation, use `create_chats` with a prompt for each chat or \
+`send_messages` for existing chats. These batch tools launch requests concurrently \
+even if your harness executes tool calls sequentially. Alternatively, launch ALL \
+chats/messages with `wait: false` first, then use `wait_for_turn` to collect replies. \
+Do not wait for one worker before launching the next independent worker. \
+Use `kind: chat` in `create_chat` or each `create_chats` request for a standalone \
+session visible in Sessions; it cannot have a parent. Use `kind: side` for a child \
+with an explicit parent or your origin chat. Omitted kind keeps legacy defaults: \
+side with an origin/parent, standalone otherwise. Side chats cannot create chats. \
+Discover hosts with `list_devices`, then `list_projects {device}`, \
+`list_harnesses {device}` and `list_models {device, harness}`. A project fixes \
+its host; with both project and device it must belong to that device. Use listed \
+ids when names/paths repeat. Without project or device, creation uses the local engine. \
+If a chat is `awaitingInput`, answer it with `respond_to_input`.\n\
+\n\
+When a chart, table, diagram, dashboard, or 3D view would say more than prose and \
+`show_visual` is available, write a Luau visual script and show it with `show_visual` before \
+your final reply. Zeron renders it with its own native interface and enforces its style: \
+content sits directly on the chat with no cards or boxed panels, text uses the interface font \
+and type scale, and colors are theme tokens that work on frosted glass or opaque, light or dark. \
+The reader sees the visual above that reply, so don't announce or restate it.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;

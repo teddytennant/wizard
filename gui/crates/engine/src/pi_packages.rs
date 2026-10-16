@@ -80,7 +80,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn pi_cli() -> Option<PathBuf> {
-    zeron_harness::AcpHarness::pi().cli_path()
+    zeron_harness::PiHarness::new().resolve_executable().ok()
 }
 
 /// The configured personal packages plus whether `pi` can run here.

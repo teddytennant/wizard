@@ -132,12 +132,12 @@ async fn fake_device_room() -> (String, tokio::task::JoinHandle<()>) {
 // ---------------------------------------------------------------------------
 
 /// Instant mock harness so a forwarded QueueCommand fully executes on the target.
-struct InstantHarness;
+struct InstantHarness(HarnessId);
 
 #[async_trait]
 impl Harness for InstantHarness {
     fn id(&self) -> HarnessId {
-        HarnessId::Mock
+        self.0
     }
     fn display_name(&self) -> &str {
         "Instant"
@@ -161,7 +161,7 @@ impl Harness for InstantHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         Ok(futures::stream::iter([
             Ok(AgentEvent::SessionStarted {
-                harness: HarnessId::Mock,
+                harness: self.0,
                 model: "instant-1".into(),
                 tools: vec![],
                 cwd: "/tmp".into(),
@@ -183,8 +183,12 @@ impl Harness for InstantHarness {
 }
 
 fn registry() -> Arc<HarnessRegistry> {
+    registry_for(HarnessId::Mock)
+}
+
+fn registry_for(harness: HarnessId) -> Arc<HarnessRegistry> {
     let registry = HarnessRegistry::new();
-    registry.register(Arc::new(InstantHarness));
+    registry.register(Arc::new(InstantHarness(harness)));
     Arc::new(registry)
 }
 
@@ -526,7 +530,7 @@ async fn unsupported_remote_change_request_watch_keeps_the_shared_device_link() 
             Arc::new(StaticToken("test-user".into())),
         ),
         legacy.clone(),
-        Arc::new(|_| {}),
+        Arc::new(|_| true),
     );
 
     let core = assemble(&dirs.path().join("new"), "new-device");
@@ -796,9 +800,43 @@ async fn target_device_id_routes_over_the_relay() {
         "remote folder listing must come from B's filesystem: {names:?}"
     );
 
+    // Worktree preferences and their filesystem validation belong to B.
+    let a_settings = core_a.repos.worktree_settings();
+    let custom_worktrees = dirs.path().join("b-custom-worktrees");
+    let saved = client
+        .call(
+            methods::SET_WORKTREE_SETTINGS,
+            serde_json::json!({
+                "targetDeviceId": "device-b",
+                "useCustomDirectory": true,
+                "customDirectory": custom_worktrees,
+            }),
+        )
+        .await
+        .expect("save worktree location on B");
+    let remote_settings = client
+        .call(
+            methods::GET_WORKTREE_SETTINGS,
+            serde_json::json!({
+                "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect("read worktree location on B");
+    assert_eq!(saved, remote_settings);
+    assert_eq!(
+        core_a.repos.worktree_settings(),
+        a_settings,
+        "A's preferences are unchanged"
+    );
+    assert_eq!(
+        std::path::PathBuf::from(saved["effectiveDirectory"].as_str().unwrap()),
+        custom_worktrees.canonicalize().unwrap()
+    );
+
     // Streaming proxy: WatchDocMessages against B's doc from A's IPC surface.
     let mut stream = client
-        .subscribe(
+        .subscribe_scoped(
             methods::WATCH_DOC_MESSAGES,
             serde_json::json!({ "chatId": "chat-remote", "targetDeviceId": "device-b" }),
         )
@@ -817,9 +855,23 @@ async fn target_device_id_routes_over_the_relay() {
         }
     }
 
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while core_b.doc_host.sync_resources()["retainedBy"]["views"]
+            .as_u64()
+            .unwrap()
+            != 0
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("quiet remote transcript released its view");
+
     // Unary forward with side effects: QueueCommand lands (and executes) on B.
     let command = serde_json::to_value(SessionCommandPayload::Run {
         request: RunRequest {
+            mcp: None,
             prompt: "run remotely".into(),
             harness: None,
             model: None,
@@ -1022,6 +1074,7 @@ async fn target_device_id_routes_over_the_relay() {
             .as_str()
             .expect("remote setup worktree"),
     );
+    assert!(setup_worktree.starts_with(custom_worktrees.canonicalize().unwrap()));
     tokio::time::sleep(Duration::from_millis(250)).await;
     let mut setup_stream = client
         .subscribe(
@@ -1166,6 +1219,15 @@ async fn target_device_id_routes_over_the_relay() {
 /// unary calls and SubscribeTerminal proxies its stream through the relay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_stream_proxies_over_the_relay() {
+    exercise_terminal_relay(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn projectless_terminal_stream_proxies_over_the_relay() {
+    exercise_terminal_relay(true).await;
+}
+
+async fn exercise_terminal_relay(projectless: bool) {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -1174,26 +1236,54 @@ async fn terminal_stream_proxies_over_the_relay() {
     let cwd = dirs.path().join("work");
     std::fs::create_dir_all(&cwd).expect("cwd");
 
-    // Engine B hosts its device room; its chat row (via its space) pins the
-    // terminal cwd.
+    // Engine B hosts its device room and resolves the terminal cwd from its row.
     let core_b = assemble(&dirs.path().join("b"), "device-b");
+    if !projectless {
+        core_b
+            .workspace
+            .create_space(
+                "space-term",
+                "device-b",
+                &cwd.to_string_lossy(),
+                None,
+                false,
+            )
+            .expect("space row on B");
+    }
     core_b
         .workspace
-        .create_space(
-            "space-term",
-            "device-b",
-            &cwd.to_string_lossy(),
+        .create_chat(
+            "chat-term",
+            if projectless {
+                None
+            } else {
+                Some("space-term")
+            },
+            Some("device-b"),
             None,
-            false,
+            None,
         )
-        .expect("space row on B");
-    core_b
-        .workspace
-        .create_chat("chat-term", Some("space-term"), None, None, None)
         .expect("chat row on B");
     let _host = core_b.start_host_relay(&relay_url);
 
     let core_a = assemble(&dirs.path().join("a"), "device-a");
+    // A conflicting local row makes accidental local dispatch observable even
+    // though both engines in this test share the process's home directory.
+    core_a
+        .workspace
+        .create_chat(
+            "chat-term",
+            None,
+            Some("device-b"),
+            None,
+            Some(
+                dirs.path()
+                    .join("missing-on-a")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        )
+        .expect("decoy chat row on A");
     let mut link_config =
         LinkCacheConfig::new(relay_url.clone(), Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
@@ -1226,9 +1316,29 @@ async fn terminal_stream_proxies_over_the_relay() {
         }
     };
     let terminal_id = session["id"].as_str().expect("terminal id").to_string();
+    let expected_cwd = if projectless {
+        // B's own scratch folder for the chat, created when the terminal opened.
+        let chat = core_b.workspace.chat("chat-term").unwrap().unwrap();
+        let chat_cwd = chat.cwd.clone().unwrap();
+        assert!(
+            zeron_proto::projectless::is_scratch_cwd(&chat_cwd),
+            "{chat_cwd}"
+        );
+        assert_eq!(chat.space_id, None);
+        assert!(core_b.workspace.read_spaces().unwrap().is_empty());
+        let name = chat_cwd.rsplit('/').next().unwrap();
+        dirs.path()
+            .join("b")
+            .join("scratch")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        cwd.to_string_lossy().into_owned()
+    };
     assert_eq!(
         session["cwd"].as_str(),
-        Some(&*cwd.to_string_lossy()),
+        Some(expected_cwd.as_str()),
         "cwd from B's chat row"
     );
 
@@ -1271,11 +1381,34 @@ async fn terminal_stream_proxies_over_the_relay() {
 
     client
         .call(
+            methods::RESIZE_TERMINAL,
+            serde_json::json!({
+                "terminalId": terminal_id,
+                "cols": 132,
+                "rows": 40,
+                "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect("remote resize");
+    client
+        .call(
             methods::CLOSE_TERMINAL,
             serde_json::json!({ "terminalId": terminal_id, "targetDeviceId": "device-b" }),
         )
         .await
         .expect("remote close");
+    client
+        .call(
+            methods::WRITE_TERMINAL,
+            serde_json::json!({
+                "terminalId": terminal_id,
+                "data": BASE64.encode("x"),
+                "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect_err("closed remote terminal rejects writes");
 
     core_a.shutdown().await;
     core_b.shutdown().await;
@@ -1352,6 +1485,36 @@ async fn workspace_file_surface_proxies_over_the_relay() {
         .await
         .expect("remote search");
     assert_eq!(matches[0]["path"], "src/remote.rs");
+
+    let warm = client
+        .call(
+            methods::WARM_WORKSPACE_SEARCH,
+            serde_json::json!({
+                "chatId": "chat-files",
+                "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect("remote search warm-up");
+    assert!(matches!(warm["state"].as_str(), Some("building" | "ready")));
+
+    let content = client
+        .call(
+            methods::SEARCH_WORKSPACE_CONTENT,
+            serde_json::json!({
+                "chatId": "chat-files",
+                "query": "REMOTE",
+                "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect("remote content search");
+    assert!(
+        content["matches"]
+            .as_array()
+            .is_some_and(|matches| matches.iter().any(|m| m["path"] == "src/remote.rs"))
+            || content["indexing"] == true
+    );
 
     let read = client
         .call(
@@ -1757,4 +1920,236 @@ async fn queue_watch_and_single_consumption_route_to_the_remote_chat_host() {
 
     core_a.shutdown().await;
     core_b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_entry_mutations_are_forwarded_to_the_owning_plain_folder() {
+    let (relay_url, _relay) = fake_device_room().await;
+    let dirs = tempfile::tempdir().unwrap();
+    let host = assemble(&dirs.path().join("host"), "mutation-host");
+    let _host_relay = host.start_host_relay(&relay_url);
+    let viewer = assemble(&dirs.path().join("viewer"), "mutation-viewer");
+    let mut config = LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
+    config.probe_timeout = Duration::from_secs(5);
+    viewer.set_links(LinkCache::new(config));
+    let folder = dirs.path().join("plain-folder");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("original.txt"), "host only").unwrap();
+    host.workspace
+        .create_space(
+            "mutation-space",
+            "mutation-host",
+            &folder.to_string_lossy(),
+            None,
+            false,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(viewer.rpc_service());
+    let page = client
+        .call(
+            methods::LIST_WORKSPACE_DIRECTORY,
+            serde_json::json!({"spaceId":"mutation-space","targetDeviceId":"mutation-host"}),
+        )
+        .await
+        .unwrap();
+    let entry = &page["entries"][0];
+    assert!(page["checkoutId"].as_str().unwrap().starts_with("folder-"));
+    let moved=client.call(methods::MOVE_WORKSPACE_ENTRY,serde_json::json!({
+        "spaceId":"mutation-space","targetDeviceId":"mutation-host","operationId":"remote-move",
+        "expectedCheckoutId":page["checkoutId"],"sourcePath":"original.txt","destinationPath":"renamed.txt",
+        "expectedSourceRevision":entry["mutationRevision"],"expectedKind":"file"
+    })).await.unwrap();
+    assert_eq!(moved["status"], "applied");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("renamed.txt")).unwrap(),
+        "host only"
+    );
+    let deleted=client.call(methods::DELETE_WORKSPACE_ENTRY,serde_json::json!({
+        "spaceId":"mutation-space","targetDeviceId":"mutation-host","operationId":"remote-delete",
+        "expectedCheckoutId":page["checkoutId"],"path":"renamed.txt",
+        "expectedSourceRevision":moved["entry"]["mutationRevision"],"expectedKind":"file","recursive":false
+    })).await.unwrap();
+    assert_eq!(deleted["status"], "applied");
+    assert!(!folder.join("renamed.txt").exists());
+    viewer.shutdown().await;
+    host.shutdown().await;
+}
+
+/// Full MCP discovery/create/converse flow over two real engines, a shared
+/// registry and the same device relay used by the routing tests above.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_standalone_session_executes_on_the_selected_device() {
+    use serde_json::json;
+    use zeron_mcp::{Origin, Tools, Zeron};
+
+    let (relay_url, relay) = fake_device_room().await;
+    let dirs = tempfile::tempdir().unwrap();
+    let a = assemble(&dirs.path().join("a"), "device-a");
+    // Mock is deliberately disabled in production catalogs. Offer a scripted
+    // Codex adapter on B so MCP exercises normal availability validation.
+    let remote_dir = dirs.path().join("b");
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    std::fs::write(remote_dir.join("device-id"), "device-b").unwrap();
+    let profile = zeron_engine::EngineProfile::development(&remote_dir, "dev-org", "dev-user");
+    let remote_store = zeron_sync::DocsStore::open(profile.store_root()).unwrap();
+    let b = EngineCore::assemble_with_profile(
+        profile,
+        registry_for(HarnessId::Codex),
+        HarnessId::Codex,
+        None,
+    )
+    .unwrap();
+    let registry = zeron_sync::registry::mock_server::MockRegistryServer::start().await;
+    a.workspace.connect_registry_url(&registry.url());
+    b.workspace.connect_registry_url(&registry.url());
+    let host = b.start_host_relay(&relay_url);
+    let mut config = LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
+    config.probe_timeout = Duration::from_secs(5);
+    a.set_links(LinkCache::new(config));
+    let client = zeron_rpc::memory_client(a.rpc_service());
+    let tools = Tools::new(Arc::new(Zeron::with_client(
+        client,
+        Origin {
+            chat_id: Some("coordinator".into()),
+            device_id: Some("device-a".into()),
+        },
+    )));
+    a.workspace
+        .create_chat("coordinator", None, Some("device-a"), None, None)
+        .unwrap();
+    let folder = dirs.path().join("remote-project");
+    std::fs::create_dir_all(&folder).unwrap();
+    b.workspace
+        .create_space(
+            "remote-project",
+            "device-b",
+            folder.to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let devices = tools.call("list_devices", json!({})).await.unwrap();
+        let projects = tools
+            .call("list_projects", json!({"device":"device-b"}))
+            .await;
+        if devices["devices"].as_array().unwrap().len() == 2
+            && projects
+                .as_ref()
+                .is_ok_and(|p| p["projects"].as_array().unwrap().len() == 1)
+            && tools
+                .call("list_harnesses", json!({"device":"device-b"}))
+                .await
+                .is_ok()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "discovery did not converge"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let projects = tools
+        .call("list_projects", json!({"device":"device-b"}))
+        .await
+        .unwrap();
+    let project = projects["projects"][0]["id"].as_str().unwrap();
+    tools
+        .call(
+            "list_models",
+            json!({"device":"device-b", "harness":"codex"}),
+        )
+        .await
+        .unwrap();
+    let created = tools
+        .call(
+            "create_chat",
+            json!({
+                "kind":"chat", "device":"device-b", "project":project,
+                "harness":"codex", "title":"Remote MCP session", "prompt":"execute on B",
+                "wait":true, "timeout_secs":30
+            }),
+        )
+        .await
+        .unwrap();
+    let chat_id = created["chatId"].as_str().unwrap();
+    assert_eq!(created["kind"], "chat");
+    assert!(created["parentChatId"].is_null());
+    assert_eq!(created["deviceId"], "device-b");
+    assert_eq!(created["turn"]["outcome"], "completed", "{created}");
+    assert_eq!(created["turn"]["replies"][0]["text"], "remote reply");
+    assert_eq!(created["turn"]["replies"][0]["deviceId"], "device-b");
+    let chat = b.workspace.chat(chat_id).unwrap().unwrap();
+    assert_eq!(chat.space_id.as_deref(), Some(project));
+    assert!(
+        chat.parent_chat_id.is_none(),
+        "eligible for Sessions on every client"
+    );
+    assert!(
+        a.sessions.session_status(chat_id).is_none(),
+        "A must not execute the prompt"
+    );
+    assert!(
+        b.sessions.session_status(chat_id).is_some(),
+        "B actually ran the harness"
+    );
+    let read = tools
+        .call("read_chat", json!({"chat":chat_id}))
+        .await
+        .unwrap();
+    assert!(
+        read["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "assistant"
+                && m["text"] == "remote reply"
+                && m["deviceId"] == "device-b")
+    );
+    let sent = tools
+        .call(
+            "send_message",
+            json!({
+                "chat":chat_id, "text":"a second remote turn", "wait":true, "timeout_secs":30
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent["turn"]["outcome"], "completed", "{sent}");
+    assert_eq!(
+        sent["turn"]["replies"].as_array().unwrap().len(),
+        1,
+        "only the new turn"
+    );
+    assert_eq!(sent["turn"]["replies"][0]["deviceId"], "device-b");
+    let waited = tools
+        .call("wait_for_turn", json!({"chat":chat_id,"timeout_secs":2}))
+        .await
+        .unwrap();
+    assert_eq!(waited["turn"]["outcome"], "completed");
+    let interrupted = tools
+        .call("interrupt_chat", json!({"chat":chat_id}))
+        .await
+        .unwrap();
+    let interrupt_id = interrupted["commandId"].as_str().unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        // Peer-relay delivery marks the processed-command ledger directly;
+        // the command row itself arrives separately through session-doc sync.
+        if remote_store.is_processed(interrupt_id).unwrap() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "interrupt must reach B's command ledger"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+    drop(host);
+    relay.abort();
 }

@@ -95,18 +95,18 @@ const DIFF_TEXT_SIZE_RATIO: f32 = DIFF_TEXT_SIZE / crate::typography::CODE_FONT_
 
 /// Size of the painted diff body text, and the size the column measurement in
 /// [`DiffHorizontalGeometry::resolve`] must use: they desync otherwise.
-fn diff_text_size(theme: &Theme) -> f32 {
+pub(crate) fn diff_text_size(theme: &Theme) -> f32 {
     crate::typography::clamp_font_size(theme.code_font_size * DIFF_TEXT_SIZE_RATIO)
 }
 
 /// The row box and the painted line box must agree, or code clips once the
 /// user moves the code font size off [`DIFF_TEXT_SIZE`].
-fn diff_line_height(theme: &Theme) -> f32 {
+pub(crate) fn diff_line_height(theme: &Theme) -> f32 {
     diff_text_size(theme) * (DIFF_LINE_HEIGHT / DIFF_TEXT_SIZE)
 }
 
-const UNIFIED_CODE_PADDING_LEFT: f32 = 12.0;
-const SPLIT_CODE_PADDING_LEFT: f32 = 6.0;
+pub(crate) const UNIFIED_CODE_PADDING_LEFT: f32 = 12.0;
+pub(crate) const SPLIT_CODE_PADDING_LEFT: f32 = 6.0;
 /// Breathing room after the widest source line when scrolled fully right.
 const CODE_PADDING_RIGHT: f32 = 24.0;
 
@@ -335,7 +335,7 @@ fn max_shaped_text_width(
 
 /// Count terminal-style display columns, including tab stops and wide
 /// Unicode glyphs. This is only a floor; actual shaped runs determine the extent.
-fn visual_columns(text: &str) -> usize {
+pub(crate) fn visual_columns(text: &str) -> usize {
     text.chars().fold(0usize, |columns, ch| {
         if ch == '\t' {
             columns + (DIFF_TAB_SIZE - columns % DIFF_TAB_SIZE)
@@ -1076,7 +1076,7 @@ fn excerpt_side(
     }))
 }
 
-fn excerpt_highlights(file: &FileDiff, language: Lang) -> Option<DiffHighlights> {
+pub(crate) fn excerpt_highlights(file: &FileDiff, language: Lang) -> Option<DiffHighlights> {
     if !zeron_syntax::supports_language(language) {
         return None;
     }
@@ -1488,7 +1488,7 @@ fn sticky_file_header(
 }
 
 /// Offset a sticky header upward as the next file header enters its slot.
-fn sticky_header_push_offset(next_header_y: Option<f32>) -> f32 {
+pub(crate) fn sticky_header_push_offset(next_header_y: Option<f32>) -> f32 {
     next_header_y
         .map(|y| (y - FILE_HEADER_HEIGHT).min(0.0))
         .unwrap_or(0.0)
@@ -1515,16 +1515,16 @@ impl FileHeaderPresentation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct StickyFileHeaderPaint {
-    rest_bg: gpui::Hsla,
-    hover_bg: gpui::Hsla,
-    border: gpui::Hsla,
-    frost_tint: Option<gpui::Hsla>,
+pub(crate) struct StickyFileHeaderPaint {
+    pub(crate) rest_bg: gpui::Hsla,
+    pub(crate) hover_bg: gpui::Hsla,
+    pub(crate) border: gpui::Hsla,
+    pub(crate) frost_tint: Option<gpui::Hsla>,
 }
 
 /// Resolve the sticky header from the diff's content plane, not the elevated
 /// overlay plane used by menus and popovers.
-fn sticky_file_header_paint(theme: &Theme) -> StickyFileHeaderPaint {
+pub(crate) fn sticky_file_header_paint(theme: &Theme) -> StickyFileHeaderPaint {
     if theme.is_frost() {
         let tint_alpha = match theme.appearance {
             crate::theme::Appearance::Dark => STICKY_FILE_HEADER_TINT_ALPHA_DARK,
@@ -1603,7 +1603,6 @@ struct RefMenu {
     /// Tracked on the card — puts it on the keyboard dispatch path while the
     /// search input holds focus (the structure every working picker uses).
     focus: FocusHandle,
-    list_scroll: gpui::ScrollHandle,
     _search_events: Subscription,
 }
 
@@ -1679,6 +1678,9 @@ pub struct Changes {
     scoped_task: Option<Task<()>>,
     scope_menu: Popup<()>,
     ref_menu: Popup<RefMenu>,
+    /// The ref menu's list scroll and rail. Lives outside [`RefMenu`] so the
+    /// rail can reach it mutably while the card plays its exit.
+    ref_menu_scroll: crate::settings::widgets::PageScroll,
     /// Only ever one: a second `+` moves the card rather than stacking two
     /// half-written notes.
     draft: Option<CommentDraft>,
@@ -1697,9 +1699,23 @@ pub struct Changes {
 }
 
 /// Events the host (the right pane's surface strip) listens for.
+#[derive(Debug, Clone)]
+pub struct DiscardWorkingTreeRequest {
+    pub chat_id: String,
+    pub checkout_id: String,
+    pub expected_checksum: String,
+    pub target_device_id: Option<String>,
+    pub file_count: usize,
+}
+
 pub enum ChangesEvent {
     /// A History row was clicked — open this commit as its own diff tab.
     OpenCommit(GitHistoryCommit),
+    /// Open the post-change path in the workspace file browser.
+    OpenFile(String),
+    /// The working-tree trash button was clicked. The shell owns the global
+    /// confirmation dialog and only then dispatches the destructive RPC.
+    DiscardWorkingTree(DiscardWorkingTreeRequest),
 }
 
 impl gpui::EventEmitter<ChangesEvent> for Changes {}
@@ -1759,6 +1775,7 @@ impl Changes {
             scoped_task: None,
             scope_menu: Popup::default(),
             ref_menu: Popup::default(),
+            ref_menu_scroll: Default::default(),
             draft: None,
             hover: None,
             comment_key: 0,
@@ -1932,6 +1949,24 @@ impl Changes {
             DiffScope::Branch | DiffScope::LatestTurn | DiffScope::Commit => self.scoped.clone(),
             DiffScope::History => None,
         }
+    }
+
+    fn discard_request(&self, cx: &App) -> Option<DiscardWorkingTreeRequest> {
+        if self.scope != DiffScope::WorkingTree {
+            return None;
+        }
+        let diff = self.resolved(cx)?;
+        if diff.truncated || (diff.files.is_empty() && diff.patch.trim().is_empty()) {
+            return None;
+        }
+        let chat = self.state.read(cx).selected_chat_row()?;
+        Some(DiscardWorkingTreeRequest {
+            chat_id: chat.id.clone(),
+            checkout_id: diff.checkout_id,
+            expected_checksum: diff.checksum,
+            target_device_id: self.desired_target(cx),
+            file_count: diff.files.len(),
+        })
     }
 
     /// Scope discriminant folded into the parse key, so a scope or base
@@ -2517,6 +2552,14 @@ impl Changes {
             })
     }
 
+    fn fold_all_label(&self) -> &'static str {
+        if self.all_collapsed() {
+            "Expand all files"
+        } else {
+            "Collapse all files"
+        }
+    }
+
     /// Collapse every file section, or expand them all when everything is
     /// already shut (the toolbar's fold button, t3code parity). Steady-state
     /// writes — no per-row tween arming, the whole list just snaps. List
@@ -2953,9 +2996,9 @@ impl Changes {
             search,
             active,
             focus: cx.focus_handle(),
-            list_scroll: gpui::ScrollHandle::new(),
             _search_events: search_events,
         });
+        self.ref_menu_scroll.reset();
         // Focusable before first paint (the add-space palette's proven order).
         window.focus(&handle, cx);
         cx.notify();
@@ -2994,7 +3037,7 @@ impl Changes {
                 let delta = if key == popover::MenuKey::Up { -1 } else { 1 };
                 if let Some(menu) = self.ref_menu.open_mut() {
                     menu.active = popover::menu_step(Some(menu.active), count, delta).unwrap_or(0);
-                    menu.list_scroll.scroll_to_item(menu.active);
+                    self.ref_menu_scroll.scroll.scroll_to_item(menu.active);
                     cx.notify();
                 }
             }
@@ -3571,6 +3614,32 @@ impl Changes {
                         .child(SharedString::from(format!("−{dels}"))),
                 )
             })
+            .child(
+                div()
+                    .id(("diff-open-file", ix))
+                    .flex_none()
+                    .size(px(crate::surface_chrome::CONTROL_SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                    .hover(|s| s.bg(theme.ink(0.08)))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(ChangesEvent::OpenFile(path.clone()));
+                    }))
+                    .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Open in file browser")).into())
+                    .tooltip_show_delay(Duration::from_millis(350))
+                    .child(
+                        crate::icons::icon(crate::icons::DOCUMENT)
+                            .size(px(crate::surface_chrome::ICON_SIZE))
+                            .text_color(theme.text_muted),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -3637,9 +3706,10 @@ impl Changes {
     fn header_button(
         id: &'static str,
         icon_path: &'static str,
+        label: &'static str,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
-        Self::header_toggle(id, icon_path, false, theme)
+        Self::header_toggle(id, icon_path, label, false, theme)
     }
 
     /// [`Self::header_button`] with a latched look: an `active` toggle holds
@@ -3648,6 +3718,7 @@ impl Changes {
     fn header_toggle(
         id: &'static str,
         icon_path: &'static str,
+        label: &'static str,
         active: bool,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
@@ -3678,6 +3749,8 @@ impl Changes {
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                 window.prevent_default()
             })
+            .tooltip(move |_, cx| cx.new(|_| DiffHeaderTooltip(label)).into())
+            .tooltip_show_delay(Duration::from_millis(350))
             .child(
                 crate::icons::icon(icon_path)
                     .size(px(crate::surface_chrome::ICON_SIZE))
@@ -3695,6 +3768,7 @@ impl Changes {
         Self::header_toggle(
             "changes-split",
             crate::icons::SPLIT_COLUMNS,
+            "Split view",
             self.mode.is_split(),
             theme,
         )
@@ -3709,6 +3783,7 @@ impl Changes {
         Self::header_toggle(
             "changes-wrap",
             crate::icons::WRAP_TEXT,
+            "Wrap long lines",
             self.wrap_lines,
             theme,
         )
@@ -3716,8 +3791,6 @@ impl Changes {
             cx.stop_propagation();
             this.toggle_wrap(cx);
         }))
-        .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Wrap long lines")).into())
-        .tooltip_show_delay(Duration::from_millis(350))
         .into_any_element()
     }
 
@@ -3766,11 +3839,16 @@ impl Changes {
                 .child(self.split_toggle(&theme, cx))
                 .child(self.wrap_toggle(&theme, cx))
                 .child(
-                    Self::header_button("changes-fold-all", crate::icons::FOLD_VERTICAL, &theme)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.toggle_collapse_all(cx);
-                        })),
+                    Self::header_button(
+                        "changes-fold-all",
+                        crate::icons::FOLD_VERTICAL,
+                        self.fold_all_label(),
+                        &theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_collapse_all(cx);
+                    })),
                 )
                 .into_any_element();
         }
@@ -3881,29 +3959,56 @@ impl Changes {
                 .children(history_fetch_button)
                 .children(history_view_button)
                 .child(
-                    Self::header_button("history-refresh", crate::icons::REFRESH, &theme).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.history_pane(cx)
-                                .update(cx, |history, cx| history.refresh(cx));
-                        }),
-                    ),
+                    Self::header_button(
+                        "history-refresh",
+                        crate::icons::REFRESH,
+                        "Refresh",
+                        &theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.history_pane(cx)
+                            .update(cx, |history, cx| history.refresh(cx));
+                    })),
                 )
                 .into_any_element()
         } else {
+            let discard = self.discard_request(cx);
+            let discard_enabled = discard.is_some();
+            let discard_button = Self::header_button(
+                "changes-discard-working-tree",
+                crate::icons::TRASH_BIN_MINIMALISTIC,
+                "Discard changes",
+                &theme,
+            )
+            .when(!discard_enabled, |button| button.opacity(0.35))
+            .when_some(discard, |button, request| {
+                button.on_click(cx.listener(move |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(ChangesEvent::DiscardWorkingTree(request.clone()));
+                }))
+            });
             div()
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap(px(crate::surface_chrome::CONTROL_GAP))
+                .when(scope == DiffScope::WorkingTree, |element| {
+                    element.child(discard_button)
+                })
                 .child(self.split_toggle(&theme, cx))
                 .child(self.wrap_toggle(&theme, cx))
                 .child(
-                    Self::header_button("changes-fold-all", crate::icons::FOLD_VERTICAL, &theme)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.toggle_collapse_all(cx);
-                        })),
+                    Self::header_button(
+                        "changes-fold-all",
+                        crate::icons::FOLD_VERTICAL,
+                        self.fold_all_label(),
+                        &theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_collapse_all(cx);
+                    })),
                 )
                 .into_any_element()
         };
@@ -4085,17 +4190,13 @@ impl Changes {
 
     fn render_ref_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let theme = &theme.for_popup();
-        let (search, active, focus, list_scroll) = {
+        let (search, active, focus) = {
             let Some(menu) = self.ref_menu.get() else {
                 return div().into_any_element();
             };
-            (
-                menu.search.clone(),
-                menu.active,
-                menu.focus.clone(),
-                menu.list_scroll.clone(),
-            )
+            (menu.search.clone(), menu.active, menu.focus.clone())
         };
+        let list_scroll = self.ref_menu_scroll.scroll.clone();
         let rows = self.ref_menu_rows(cx);
         let current = self.base_ref.clone();
         let branches = self.branches.clone();
@@ -4113,19 +4214,23 @@ impl Changes {
                 }))
                 .into_any_element()
         } else {
-            div()
-                .id("changes-ref-list")
+            let rail = crate::settings::widgets::rail(
+                &mut self.ref_menu_scroll,
+                "changes-ref-scrollbar",
+                theme,
+                cx,
+                |changes| &mut changes.ref_menu_scroll,
+            );
+            let list = popover::menu_scroll_list("changes-ref-list", &list_scroll)
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
                 .max_h(px(240.0))
-                .overflow_y_scroll()
-                .track_scroll(&list_scroll)
                 .children(rows.into_iter().enumerate().map(|(row_ix, branch_ix)| {
                     let name = branches[branch_ix].clone();
                     let selected = current.as_deref() == Some(name.as_str());
                     let label = name.clone();
-                    popover::menu_row_nav(
+                    popover::picker_row(
                         theme,
                         selected,
                         row_ix == active,
@@ -4145,7 +4250,15 @@ impl Changes {
                             .text_size(px(12.0))
                             .child(SharedString::from(label)),
                     )
+                }));
+            popover::menu_scroll_host("changes-ref-list-host")
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if this.ref_menu_scroll.set_list_hovered(*hovered) {
+                        cx.notify();
+                    }
                 }))
+                .child(popover::faded_menu_list(&list_scroll, list))
+                .children(rail)
                 .into_any_element()
         };
 
@@ -4225,17 +4338,17 @@ impl Changes {
 }
 
 /// Green for additions — sampled from the reference diff (soft emerald).
-fn add_color(theme: &Theme) -> gpui::Hsla {
+pub(crate) fn add_color(theme: &Theme) -> gpui::Hsla {
     theme.diff_add // emerald-400
 }
 
 /// Red for deletions — softer than the theme danger, per the reference diff.
-fn del_color(theme: &Theme) -> gpui::Hsla {
+pub(crate) fn del_color(theme: &Theme) -> gpui::Hsla {
     theme.diff_del // red-400
 }
 
 /// One notice row ("New file", "Binary file — contents not shown", …).
-fn notice_row(notice: String, theme: &Theme) -> AnyElement {
+pub(crate) fn notice_row(notice: String, theme: &Theme) -> AnyElement {
     div()
         .h(px(NOTICE_HEIGHT))
         .w_full()
@@ -4250,7 +4363,7 @@ fn notice_row(notice: String, theme: &Theme) -> AnyElement {
 }
 
 /// One `@@ … @@` hunk-header row on the bluish-grey wash.
-fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
+pub(crate) fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
     div()
         .h(px(HUNK_HEADER_HEIGHT))
         .w_full()
@@ -4320,6 +4433,91 @@ fn code_text_viewport(
         }
         None => viewport.into_any_element(),
     }
+}
+
+/// Read-only unified row for PR diffs; reuse the Changes pane's gutters,
+/// source text, font settings, markers and semantic colors. The caller owns
+/// virtualization and the shared horizontal viewport.
+pub(crate) fn readonly_diff_line(
+    line: &DiffLine,
+    spans: &[zeron_syntax::HighlightSpan],
+    theme: &Theme,
+    gutter_px: f32,
+) -> AnyElement {
+    diff_line_row(line, spans, theme, gutter_px, DiffCodeWidth::Clipped, None)
+}
+
+/// Read-only unified row whose code plane scrolls with `scroll` while the
+/// gutters stay put. Every row shares one extent, so a whole multi-file
+/// stream moves as one horizontal plane.
+pub(crate) fn readonly_scrolled_diff_line(
+    line: &DiffLine,
+    spans: &[zeron_syntax::HighlightSpan],
+    theme: &Theme,
+    gutter_px: f32,
+    text_width: f32,
+    scroll: &gpui::ScrollHandle,
+    row: usize,
+) -> AnyElement {
+    diff_line_row(
+        line,
+        spans,
+        theme,
+        gutter_px,
+        DiffCodeWidth::Scrollable(DiffHorizontalMetrics {
+            max_text_width: text_width,
+            max_gutter_width: gutter_px,
+        }),
+        Some(DiffCodeScroll {
+            handle: scroll.clone(),
+            id: format!("pr-code-{row}").into(),
+        }),
+    )
+}
+
+/// Read-only split row using the same cells and divider as the Changes pane.
+pub(crate) fn readonly_split_line(
+    left: Option<(&DiffLine, &[zeron_syntax::HighlightSpan])>,
+    right: Option<(&DiffLine, &[zeron_syntax::HighlightSpan])>,
+    theme: &Theme,
+    gutter_px: f32,
+    text_width: f32,
+    scroll: &gpui::ScrollHandle,
+    row: usize,
+) -> AnyElement {
+    let width = DiffCodeWidth::Scrollable(DiffHorizontalMetrics {
+        max_text_width: text_width,
+        max_gutter_width: gutter_px,
+    });
+    let cell = |side: Option<(&DiffLine, &[zeron_syntax::HighlightSpan])>, old: bool| {
+        let content = side
+            .map(|(line, spans)| {
+                let runs = render::runs_for_syntax_line_with_plain(
+                    &line.text,
+                    spans,
+                    &font(theme.font_mono.clone()),
+                    theme.text.opacity(0.92),
+                    theme,
+                );
+                split_line_cell(
+                    line,
+                    if old { line.old_no } else { line.new_no },
+                    runs,
+                    theme,
+                    gutter_px,
+                    width,
+                    Some(DiffCodeScroll {
+                        handle: scroll.clone(),
+                        id: format!("pr-split-code-{row}-{old}").into(),
+                    }),
+                )
+            })
+            .unwrap_or_else(split_filler);
+        content
+            .debug_selector(move || format!("pr-split-cell-{row}-{old}"))
+            .into_any_element()
+    };
+    split_row(cell(left, true), cell(right, false), false, theme).into_any_element()
 }
 
 /// One +/−/context/meta diff line: coloured accent bar, dual line-number

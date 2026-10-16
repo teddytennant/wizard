@@ -17,11 +17,15 @@ use zeron_sync::DocsStore;
 
 pub mod agent_accounts;
 pub mod auth;
+mod change_request_store;
 pub mod change_requests;
 pub mod chat2_host;
 mod chat_persistence;
 pub mod diff_sync;
 pub mod doc_host;
+mod fs_watch;
+pub mod harness_updates;
+pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
@@ -43,16 +47,19 @@ mod transcript_history;
 pub mod uploads;
 pub mod wizard_auth;
 pub mod wizard_plugins;
+pub mod voice;
 pub mod workspace_files;
 pub mod workspace_host;
+pub mod workspace_search;
+mod worktree_settings;
 
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership};
 pub use change_requests::{ChangeRequestCacheKey, CheckoutChangeRequests};
 pub use diff_sync::{
-    CheckoutDiffSync, DiffFileTextPair, DiffSidecar, DiffSnapshot, TurnSnapshot,
-    capture_commit_diff, capture_diff, capture_diff_against, capture_turn_diff, merge_base,
-    read_diff_file_text, snapshot_tree, working_diff_base,
+    CheckoutDiffSync, DiffFileTextPair, DiffSidecar, DiffSnapshot, TreeSnapshot, TurnSnapshot,
+    capture_commit_diff, capture_diff, capture_diff_against, capture_turn_diff,
+    discard_working_tree, merge_base, read_diff_file_text, snapshot_tree, working_diff_base,
 };
 pub use doc_host::{ChatDocHandle, DocHost, DocHostConfig, EdgeConfig};
 pub use instance_lock::InstanceLock;
@@ -76,6 +83,7 @@ pub use workspace_files::WorkspaceFiles;
 pub use workspace_host::{
     DEFAULT_ORG_ID, DEFAULT_USER_ID, WORKSPACE_DOC_ID, WorkspaceHost, WorkspaceHostConfig,
 };
+pub use workspace_search::WorkspaceSearch;
 
 pub(crate) const LEGACY_UNKNOWN_DEVICE_NAME: &str = "unknown-device";
 
@@ -146,6 +154,7 @@ pub struct EngineCore {
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
     pub agent_accounts: AgentAccounts,
+    pub harness_updates: harness_updates::HarnessUpdateCoordinator,
     pub device_id: String,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
@@ -222,7 +231,7 @@ impl EngineCore {
         std::fs::create_dir_all(data_dir)?;
         let legacy_uploads_root = profile.claim_legacy_uploads_root()?;
         let device_id = load_or_create_device_id(data_dir)?;
-        // This device's harness enablement (Settings → Agents) rides the
+        // This device's harness enablement (Settings → Providers) rides the
         // engine data dir — per-device, like the CLI installs it gates.
         registry.load_prefs(data_dir);
         let store = Arc::new(DocsStore::open(profile.store_root())?);
@@ -246,6 +255,7 @@ impl EngineCore {
                 org_id: profile.org_id().to_string(),
                 user_id: profile.user_id().to_string(),
                 edge: edge.clone(),
+                local_only: matches!(profile.scope(), WorkspaceScope::Local),
             },
         )?;
         doc_host.set_workspace(workspace.clone());
@@ -258,6 +268,7 @@ impl EngineCore {
         }
         doc_host.spawn_transcript_salvage(profile.store_root().join("journals"));
         let repos = Repos::new(data_dir, &device_id);
+        sessions.set_scratch_root(repos.scratch_root());
         doc_host.set_repos(repos.clone());
         let change_requests = CheckoutChangeRequests::start(repos.clone(), &device_id);
         let workspace_files =
@@ -304,7 +315,13 @@ impl EngineCore {
                 uploads.clone(),
             )
         });
-        let agent_accounts = AgentAccounts::new(agent_accounts_config);
+        // Logins started from another device publish their callback port to
+        // the P2P service, which serves it to that device alone.
+        let agent_accounts =
+            AgentAccounts::with_callback_routes(agent_accounts_config, previews.callback_routes());
+        let harness_updates =
+            harness_updates::HarnessUpdateCoordinator::new(data_dir, registry.clone());
+        harness_updates.start();
         sessions.set_titles(TitleGenerator::new(
             workspace.clone(),
             registry.clone(),
@@ -332,6 +349,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             agent_accounts,
+            harness_updates,
             device_id,
             local_import,
             workspace_scope: profile.scope(),
@@ -459,12 +477,11 @@ impl EngineCore {
             zeron_rpc::HostRelayConfig::new(edge_url, self.device_id.clone(), Arc::new(auth));
         let doc_host = self.doc_host.clone();
         let on_nudge: zeron_rpc::NudgeHandler = Arc::new(move |chat_id: String| {
-            // Opening the doc joins its room + syncs; drain fires on the change
-            // subscription — the command executes with no standing per-chat socket.
-            match doc_host.open(&chat_id) {
-                Ok(_) => tracing::info!(chat = %chat_id, "nudge: chat doc opened"),
+            match doc_host.enqueue_wakeup(&chat_id) {
+                Ok(()) => true,
                 Err(err) => {
-                    tracing::warn!(chat = %chat_id, error = %err, "nudge: open failed")
+                    tracing::warn!(chat = %chat_id, %err, "nudge: durable admission failed; withholding ACK");
+                    false
                 }
             }
         });
@@ -488,7 +505,8 @@ impl EngineCore {
             self.workspace_scope,
         )
         .with_auth(self.auth())
-        .with_previews(self.previews.clone());
+        .with_previews(self.previews.clone())
+        .with_harness_updates(self.harness_updates.clone());
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
         }
@@ -524,6 +542,7 @@ impl EngineCore {
         if let Some(peers) = self.ssh_peers() {
             peers.shutdown();
         }
+        self.harness_updates.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally
         // releases the next queued row. Freeze first so quitting never starts
         // recovered work while the engine is being torn down.
@@ -907,6 +926,9 @@ impl Engine {
             stop_tx,
         });
         let server = serve_ipc(config.ipc_port, service).await?;
+        // Only a port this process actually serves goes to agents: the
+        // injected MCP server must dial back into THIS engine.
+        runtime.core().sessions.set_ipc_port(config.ipc_port);
 
         tokio::select! {
             result = shutdown_signal() => result?,
@@ -1199,6 +1221,46 @@ fn native_friendly_device_name() -> Option<String> {
     None
 }
 
+#[cfg(all(test, windows))]
+mod identity_lock_retry_tests {
+    use super::*;
+
+    /// A concurrent holder of the lock file (share_mode(0)) fails the open
+    /// with ERROR_SHARING_VIOLATION, which Rust reports as
+    /// ErrorKind::Uncategorized, not PermissionDenied. acquire must retry
+    /// through that error until the holder releases; before the fix the
+    /// retry loop never matched it and startup failed outright.
+    #[test]
+    fn acquire_retries_through_sharing_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device-id.lock");
+
+        // Hold the file exclusively for 50ms, then release. The retry loop
+        // has a 200 x 5ms budget, so the timing is comfortable.
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let holder = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(&path)
+                .unwrap();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                drop(holder);
+            });
+        }
+
+        let lock = DeviceIdentityLock::acquire(dir.path());
+        assert!(
+            lock.is_ok(),
+            "acquire did not retry through the sharing violation"
+        );
+    }
+}
+
 #[cfg(test)]
 mod device_name_tests {
     use super::select_local_device_name;
@@ -1376,8 +1438,17 @@ impl DeviceIdentityLock {
             let file = loop {
                 match options.open(&path) {
                     Ok(file) => break file,
+                    // share_mode(0) means a concurrent holder fails the open
+                    // with ERROR_SHARING_VIOLATION (raw os error 32), which
+                    // Rust maps to ErrorKind::Uncategorized, not
+                    // PermissionDenied. Retry through both.
                     Err(err)
-                        if err.kind() == std::io::ErrorKind::PermissionDenied && retries > 0 =>
+                        if (err.raw_os_error()
+                            == Some(
+                                windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32,
+                            )
+                            || err.kind() == std::io::ErrorKind::PermissionDenied)
+                            && retries > 0 =>
                     {
                         retries -= 1;
                         std::thread::sleep(std::time::Duration::from_millis(5));

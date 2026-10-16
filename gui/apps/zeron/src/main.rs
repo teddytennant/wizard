@@ -151,13 +151,45 @@ fn workos_client_id_from_env(edge_token: &Option<String>) -> Option<String> {
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// glibc gives threads their own arenas (up to 8 × cores) and on free returns
+/// only the top of each heap, so churn freed mid-heap stays resident: a
+/// headless engine held 6.6GB in 129 arenas after a day. `malloc_trim` also
+/// releases the free pages inside every arena, so long-running modes call it
+/// once a minute. Capping arenas instead (`M_ARENA_MAX=2`) reclaimed less and
+/// cost ~6x the engine's CPU in arena-lock contention while chats streamed
+/// (docs/memory-plan.md).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn spawn_malloc_trimmer() {
+    const PERIOD: std::time::Duration = std::time::Duration::from_secs(60);
+    let spawned = std::thread::Builder::new()
+        .name("malloc-trim".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(PERIOD);
+                let started = std::time::Instant::now();
+                // SAFETY: malloc_trim takes no pointers and locks each arena
+                // itself, so it is safe to call from any thread at any time.
+                let released = unsafe { libc::malloc_trim(0) } != 0;
+                tracing::debug!(released, elapsed = ?started.elapsed(), "malloc_trim");
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "malloc trimmer not started");
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--noop-browser")) {
+        return Ok(());
+    }
     #[cfg(windows)]
     attach_parent_console();
     let cli = Cli::parse();
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
         zeron_update::windows::wait_for_exit(pid)?;
+    } else if matches!(&cli.command, None | Some(Command::Headless)) {
+        zeron_update::windows::cleanup_previous_image();
     }
     // Long-running modes log at info, one-shot CLI commands at warn (RUST_LOG
     // overrides either).
@@ -236,6 +268,8 @@ fn main() -> anyhow::Result<()> {
                 "application panic");
             default_hook(info);
         }));
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        spawn_malloc_trimmer();
     }
 
     match cli.command {
@@ -267,7 +301,15 @@ fn main() -> anyhow::Result<()> {
             runtime.block_on(sync_cli(engine_config_from_env().ipc_port))
         }
         Some(Command::Mcp) => {
-            let runtime = tokio::runtime::Runtime::new()?;
+            // One bridge per agent session, and it only relays: stdio
+            // requests out to the engine over IPC and replies back. Two
+            // workers keep a burst of parallel tool calls (large replies to
+            // encode) close to per-core speed without a worker per core in
+            // every agent's bridge.
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()?;
             runtime.block_on(zeron_mcp::run(zeron_mcp::McpConfig::from_env()))
         }
         #[cfg(target_os = "linux")]

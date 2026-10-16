@@ -128,6 +128,14 @@ pub struct Space {
     /// (sha256(deviceId ‖ NUL ‖ git_dir)) — diff grouping key for root sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_id: Option<String>,
+    /// Owner-stamped when git: identity shared by every clone and worktree of
+    /// one repository — its trunk's root commit (`commit:<sha>`, which
+    /// survives renames, transfers and remote spellings), else for a shallow
+    /// or empty history the normalized origin remote (`host/owner/repo`),
+    /// else `local:` + a device-scoped hash of the common git dir. Opaque to
+    /// readers: projects with equal ids group together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -225,14 +233,22 @@ pub struct Chat {
     /// dials the room the registry names. Per-chat and instantly revertible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_gen: Option<u32>,
-    /// The chat whose agent created this one (via the Zeron MCP server):
-    /// a parent → child link for orchestration trees. Absent for chats a
-    /// human started; a dangling id (parent deleted) is tolerated.
+    /// The chat this one hangs off: the conversation a side chat was forked
+    /// from, or the chat whose agent spawned this one through the Zeron MCP
+    /// server. Children stay out of the main sidebar and list under their
+    /// parent instead. Absent for top-level chats; a dangling id (parent
+    /// deleted) is tolerated rather than cascaded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_chat_id: Option<String>,
 }
 
 impl Chat {
+    /// A session the user sees in chat lists: neither another chat's worker
+    /// (`parent_chat_id`) nor a hidden voice orchestrator.
+    pub fn is_top_level(&self) -> bool {
+        self.parent_chat_id.is_none() && !crate::voice::is_orchestrator_chat(&self.id)
+    }
+
     /// True when this chat syncs over the chat2 dumb relay.
     pub fn on_chat2(&self) -> bool {
         self.room_gen.unwrap_or(1) >= 2
@@ -300,6 +316,11 @@ pub struct Session {
     pub status: SessionStatus,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    /// Subagents of this chat streaming right now. Rides the session row (and
+    /// its staleness window) so every device's sidebar can badge a chat it
+    /// has not opened; read it through `view::running_subagents`.
+    #[serde(default)]
+    pub running_subagents: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -423,6 +444,54 @@ pub struct FolderListing {
     pub truncated: bool,
 }
 
+/// Device-local preferences, used only when creating a new worktree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorktreeSettings {
+    pub use_custom_directory: bool,
+    /// Remembered even while the custom location is disabled.
+    pub custom_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSettingsStatus {
+    pub settings: WorktreeSettings,
+    pub default_directory: String,
+    pub effective_directory: String,
+    /// An explicit host environment override takes precedence over preferences.
+    pub environment_override: Option<String>,
+}
+
+/// `SearchHomeFolders`: folders anywhere under the host's home whose names
+/// match `query`, for the new-project picker. An empty query only starts the
+/// host's home search index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHomeFoldersRequest {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeFolderMatch {
+    /// Absolute path on the host.
+    pub path: String,
+    /// Home-relative, `/`-separated (what the picker shows).
+    pub relative: String,
+    pub is_repo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeFolderSearchResult {
+    pub matches: Vec<HomeFolderMatch>,
+    /// The host's home index was still scanning; results may be incomplete.
+    pub indexing: bool,
+}
+
 /// A browse root beyond home: a mounted drive/volume (or the system root).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -478,6 +547,10 @@ pub struct ListWorkspaceDirectoryRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceDirectoryPage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_capabilities: Option<WorkspaceMutationCapabilities>,
     pub directory: String,
     pub entries: Vec<WorkspaceEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -488,6 +561,8 @@ pub struct WorkspaceDirectoryPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_revision: Option<String>,
     pub path: String,
     pub name: String,
     pub kind: WorkspaceEntryKind,
@@ -526,6 +601,68 @@ pub struct WorkspaceFileSearchMatch {
     pub name: String,
     pub kind: WorkspaceEntryKind,
     pub score: i64,
+}
+
+/// Plain-text search over a workspace's file contents (smart case). Binary
+/// and oversized files are skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchWorkspaceContentRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_file_limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceContentMatch {
+    /// Workspace-relative, `/`-separated.
+    pub path: String,
+    /// 1-based.
+    pub line: u64,
+    /// 0-based byte column of the first match in the original line.
+    pub column: u64,
+    /// The matched line, leading whitespace trimmed, at most 512 bytes.
+    pub preview: String,
+    /// `[start, end)` byte ranges of the matches within `preview`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceContentSearchResult {
+    pub matches: Vec<WorkspaceContentMatch>,
+    /// More matches exist, or the host's time budget ran out.
+    pub truncated: bool,
+    /// The host's index was still scanning; results may be incomplete.
+    pub indexing: bool,
+}
+
+/// Start (or keep alive) the host's search index for a workspace, so the
+/// chat's first search finds it built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarmWorkspaceSearchRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceSearchIndexState {
+    /// The initial scan is still running; searches may be incomplete.
+    Building,
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarmWorkspaceSearchResult {
+    pub state: WorkspaceSearchIndexState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -612,6 +749,10 @@ pub enum WorkspaceReadOnlyReason {
     TooLarge,
     PermissionDenied,
     NotRegularFile,
+    /// A file read by absolute path beyond the chat's workspace root: reads
+    /// are allowed, writes never are. Older peers never see this variant —
+    /// only a new UI asks for an absolute path — so the wire stays additive.
+    OutsideWorkspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -694,6 +835,8 @@ pub struct WorkspaceFileChanges {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceFileChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     pub kind: WorkspaceFileChangeKind,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -793,6 +936,26 @@ pub enum ChangeRequestState {
     Merged,
 }
 
+/// Whether a change request can be merged without resolving conflicts first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeRequestMergeability {
+    Mergeable,
+    Conflicting,
+    Unknown,
+}
+
+/// Aggregate review decision reported for a change request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeRequestReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+    #[default]
+    Unknown,
+}
+
 /// Compact provider-neutral change request metadata for checkout surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -804,6 +967,177 @@ pub struct ChangeRequestSummary {
     pub state: ChangeRequestState,
     pub base_ref: String,
     pub head_ref: String,
+}
+
+/// Relationship filter for one repository; never widens repository scope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeRequestFilter {
+    #[default]
+    Authored,
+    All,
+    Reviewing,
+}
+
+/// Provider-neutral change request metadata for global listing surfaces.
+///
+/// Unlike [`ChangeRequestSummary`], this contract is not tied to a checkout
+/// and therefore identifies the repository instead of requiring branch refs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeRequestListItem {
+    pub provider: String,
+    #[serde(default)]
+    pub author: ChangeRequestActor,
+    pub repository: String,
+    /// Current source commit, captured with the CI rollup in one provider request.
+    #[serde(default)]
+    pub head_ref_oid: String,
+    #[serde(default)]
+    pub ci: crate::change_request_assessment::ChangeRequestCi,
+    /// None means an older host or unavailable viewer relationship metadata.
+    #[serde(default)]
+    pub viewer_did_author: Option<bool>,
+    #[serde(default)]
+    pub viewer_review_requested: Option<bool>,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: ChangeRequestState,
+    pub is_draft: bool,
+    /// `Unknown` when the provider reports no decision.
+    #[serde(default)]
+    pub review_decision: ChangeRequestReviewDecision,
+    pub additions: u64,
+    pub deletions: u64,
+    pub mergeability: ChangeRequestMergeability,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One page of a repository-scoped listing, newest updates first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestPage {
+    pub items: Vec<ChangeRequestListItem>,
+    /// Opaque provider cursor for the following page; `None` on the last one.
+    pub next_cursor: Option<String>,
+    /// Every match for the query, when the provider reports it.
+    pub total_count: Option<u64>,
+    /// When the engine fetched this page from the provider. A page served
+    /// from the engine's on-disk copy carries its original time, so clients
+    /// can show it at once and refresh it when it has aged. Absent from
+    /// engines that predate the copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<DateTime<Utc>>,
+}
+
+/// Read-only GitHub detail response. Optional collections tolerate absent provider data.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestDetail {
+    pub title: String,
+    pub body: String,
+    pub url: String,
+    pub number: u64,
+    pub author: ChangeRequestActor,
+    pub base_ref_name: String,
+    pub base_ref_oid: String,
+    pub head_ref_name: String,
+    pub head_ref_oid: String,
+    pub ci: crate::change_request_assessment::ChangeRequestCi,
+    pub viewer_did_author: Option<bool>,
+    pub viewer_review_requested: Option<bool>,
+    pub state: String,
+    pub is_draft: bool,
+    pub review_decision: String,
+    pub mergeable: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub comments: Vec<ChangeRequestComment>,
+    pub reviews: Vec<ChangeRequestComment>,
+    /// None means unavailable (including an older engine), not no feedback.
+    pub review_threads: Option<Vec<ChangeRequestReviewThread>>,
+    pub files: Vec<ChangeRequestFile>,
+    pub status_check_rollup: Vec<ChangeRequestCheck>,
+    /// The signed-in GitHub account, so clients can tell which comments and
+    /// reviews are the viewer's. Absent from older engines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewer_login: Option<String>,
+}
+
+impl ChangeRequestDetail {
+    pub fn activity_comments(&self) -> impl Iterator<Item = &ChangeRequestComment> {
+        self.comments.iter().chain(&self.reviews).chain(
+            self.review_threads
+                .iter()
+                .flatten()
+                .flat_map(|thread| &thread.comments),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestReviewThread {
+    pub id: String,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub path: String,
+    pub line: Option<u64>,
+    pub start_line: Option<u64>,
+    pub original_line: Option<u64>,
+    pub original_start_line: Option<u64>,
+    pub diff_side: String,
+    pub start_diff_side: Option<String>,
+    pub comments: Vec<ChangeRequestComment>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestActor {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestComment {
+    pub id: String,
+    pub url: String,
+    pub reply_to: Option<ChangeRequestCommentReference>,
+    /// Provided by GitHub for the authenticated viewer, independent of PR authorship.
+    pub viewer_did_author: bool,
+    pub author: ChangeRequestActor,
+    pub body: String,
+    pub state: String,
+    pub created_at: String,
+    pub submitted_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestCommentReference {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestFile {
+    pub path: String,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestCheck {
+    pub name: String,
+    pub context: String,
+    pub status: String,
+    pub conclusion: String,
+    pub state: String,
+    pub details_url: String,
+    pub target_url: String,
 }
 
 /// Latest successful change request resolution for one checkout and branch.
@@ -891,6 +1225,16 @@ pub struct AgentAccount {
     pub active: bool,
     #[serde(default)]
     pub usage_windows: Vec<AgentUsageWindow>,
+    /// Epoch millis the `usage_windows` were fetched. The engine serves the
+    /// last good probe (persisted across restarts) while a refresh runs, so
+    /// windows may be minutes old; `None` = never fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_fetched_at: Option<i64>,
+    /// Why the last usage probe failed ("Rate limited — retrying in 2m",
+    /// "Sign in again", …), shown instead of a bare "Usage unavailable" — or
+    /// beside stale windows. `None` when the last probe succeeded or none ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -899,12 +1243,22 @@ pub struct AgentAccount {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<AgentAuthKind>,
     /// False for a live login whose credentials we could not read (e.g. macOS
-    /// Keychain denied) — shown, but not re-activatable.
+    /// Keychain denied) or whose account couldn't be identified — shown, but
+    /// not re-activatable. Always false for Hermes: Hermes owns its
+    /// credential pool (it picks and rotates entries itself), so zeron lists
+    /// it read-only — no switch, no remove; accounts are added through
+    /// `hermes auth add`.
     #[serde(default)]
     pub switchable: bool,
     /// Epoch millis of the slot's last snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_at: Option<i64>,
+    /// The upstream login this row belongs to inside an agent that keeps one
+    /// login PER model provider (OpenCode's `openai`, Pi's `anthropic`,
+    /// Hermes' `nous`). Rows sharing it form one single-choice group — at
+    /// most one of them is in use. `None` for single-login agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -936,16 +1290,24 @@ pub struct AgentAccountWarning {
 #[serde(rename_all = "camelCase")]
 pub struct AgentLoginStart {
     pub login_id: String,
+    /// Empty when the sign-in page is only known later (a poll carries it).
     pub url: String,
     pub mode: AgentLoginMode,
+    /// The loopback port the login's OAuth redirect lands on, on the device
+    /// running the login. A requester on ANOTHER device forwards that same
+    /// port on its own loopback to it, so its browser finishes the redirect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentLoginMode {
-    /// Claude: the user pastes the OAuth code back into the app.
+    /// Claude's fallback when no loopback port could be bound: the user
+    /// pastes the OAuth code back into the app.
     PasteCode,
-    /// Codex: the CLI's loopback callback completes in the browser; poll until done.
+    /// A loopback callback completes the sign-in in the browser (every
+    /// provider's default); poll until done.
     Browser,
 }
 
@@ -959,6 +1321,10 @@ pub struct AgentLoginPoll {
     /// agent had to install first); the app opens it once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// [`AgentLoginStart::callback_port`] for a page that arrived with this
+    /// poll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1120,11 +1486,33 @@ pub enum ConnectivityState {
     Connected,
 }
 
+/// Additive per-chat admission status; legacy peers omit it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatSyncState {
+    Local,
+    Waiting,
+    Connecting,
+    Synced,
+    Offline,
+    StorageError,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatConnectivity {
     pub chat_id: String,
+    #[serde(default)]
+    pub sync_state: ChatSyncState,
+    /// Grace-filtered per-chat health; true does not prove live delivery.
     pub connected: bool,
+    /// This chat can currently deliver over its room or HTTP fallback.
+    /// Older engines omit it, so consumers conservatively assume false.
+    #[serde(default)]
+    pub delivery_live: bool,
     /// Local update batches not yet acked by the chat's edge room.
     #[serde(default)]
     pub pending_pushes: u64,
@@ -1134,6 +1522,32 @@ pub struct ChatConnectivity {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn outside_workspace_reads_round_trip_without_breaking_older_reasons() {
+        let reason = WorkspaceReadOnlyReason::OutsideWorkspace;
+        assert_eq!(serde_json::to_value(reason).unwrap(), "outsideWorkspace");
+        assert_eq!(
+            serde_json::from_value::<WorkspaceReadOnlyReason>(serde_json::json!("symlink"))
+                .unwrap(),
+            WorkspaceReadOnlyReason::Symlink,
+            "older peers keep parsing every reason they knew"
+        );
+    }
+
+    #[test]
+    fn legacy_chat_connectivity_has_no_live_delivery_proof() {
+        let chat: ChatConnectivity = serde_json::from_value(serde_json::json!({
+            "chatId": "remote",
+            "connected": true,
+            "syncState": "synced"
+        }))
+        .unwrap();
+        assert!(!chat.delivery_live);
+        let mut live = chat;
+        live.delivery_live = true;
+        assert_eq!(serde_json::to_value(live).unwrap()["deliveryLive"], true);
+    }
 
     #[test]
     fn checkout_change_request_status_round_trips_all_states_as_camel_case() {
@@ -1170,6 +1584,121 @@ mod tests {
                 status
             );
         }
+    }
+
+    #[test]
+    fn change_request_list_item_round_trips_all_states_as_camel_case() {
+        for (state, encoded_state) in [
+            (ChangeRequestState::Open, "open"),
+            (ChangeRequestState::Closed, "closed"),
+            (ChangeRequestState::Merged, "merged"),
+        ] {
+            let item = ChangeRequestListItem {
+                provider: "github".into(),
+                author: Default::default(),
+                head_ref_oid: String::new(),
+                ci: Default::default(),
+                viewer_did_author: None,
+                viewer_review_requested: None,
+                repository: "private-owner/private-repo".into(),
+                number: 123,
+                title: "Add pull request dashboard".into(),
+                url: "https://github.com/private-owner/private-repo/pull/123".into(),
+                state,
+                is_draft: true,
+                review_decision: ChangeRequestReviewDecision::ChangesRequested,
+                additions: 42,
+                deletions: 7,
+                mergeability: ChangeRequestMergeability::Conflicting,
+                created_at: Utc.with_ymd_and_hms(2026, 8, 10, 9, 30, 0).unwrap(),
+                updated_at: Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap(),
+            };
+
+            let value = serde_json::to_value(&item).unwrap();
+            assert_eq!(value["repository"], "private-owner/private-repo");
+            assert_eq!(value["state"], encoded_state);
+            assert_eq!(value["isDraft"], true);
+            assert_eq!(value["reviewDecision"], "changesRequested");
+            assert_eq!(value["additions"], 42);
+            assert_eq!(value["deletions"], 7);
+            assert_eq!(value["mergeability"], "conflicting");
+            assert_eq!(value["createdAt"], "2026-08-10T09:30:00Z");
+            assert_eq!(value["updatedAt"], "2026-08-19T12:00:00Z");
+            assert!(value.get("baseRef").is_none());
+            assert!(value.get("headRef").is_none());
+            assert_eq!(
+                serde_json::from_value::<ChangeRequestListItem>(value).unwrap(),
+                item
+            );
+        }
+    }
+
+    #[test]
+    fn change_request_mergeability_round_trips_all_states() {
+        for (state, encoded) in [
+            (ChangeRequestMergeability::Mergeable, "mergeable"),
+            (ChangeRequestMergeability::Conflicting, "conflicting"),
+            (ChangeRequestMergeability::Unknown, "unknown"),
+        ] {
+            let value = serde_json::to_value(state).unwrap();
+            assert_eq!(value, encoded);
+            assert_eq!(
+                serde_json::from_value::<ChangeRequestMergeability>(value).unwrap(),
+                state
+            );
+        }
+    }
+
+    #[test]
+    fn change_request_review_decision_round_trips_and_defaults_when_absent() {
+        for (decision, encoded) in [
+            (ChangeRequestReviewDecision::Approved, "approved"),
+            (
+                ChangeRequestReviewDecision::ChangesRequested,
+                "changesRequested",
+            ),
+            (
+                ChangeRequestReviewDecision::ReviewRequired,
+                "reviewRequired",
+            ),
+            (ChangeRequestReviewDecision::Unknown, "unknown"),
+        ] {
+            let value = serde_json::to_value(decision).unwrap();
+            assert_eq!(value, encoded);
+            assert_eq!(
+                serde_json::from_value::<ChangeRequestReviewDecision>(value).unwrap(),
+                decision
+            );
+        }
+
+        let mut value = serde_json::to_value(ChangeRequestListItem {
+            provider: "github".into(),
+            author: Default::default(),
+            head_ref_oid: String::new(),
+            ci: Default::default(),
+            viewer_did_author: None,
+            viewer_review_requested: None,
+            repository: "acme/zeron".into(),
+            number: 1,
+            title: "No decision".into(),
+            url: "https://github.com/acme/zeron/pull/1".into(),
+            state: ChangeRequestState::Open,
+            is_draft: false,
+            review_decision: ChangeRequestReviewDecision::Approved,
+            additions: 1,
+            deletions: 0,
+            mergeability: ChangeRequestMergeability::Mergeable,
+            created_at: Utc.with_ymd_and_hms(2026, 8, 10, 9, 30, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap(),
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("reviewDecision");
+        assert_eq!(
+            serde_json::from_value::<ChangeRequestListItem>(value)
+                .unwrap()
+                .review_decision,
+            ChangeRequestReviewDecision::Unknown
+        );
     }
 
     #[test]
@@ -1264,6 +1793,21 @@ mod tests {
     }
 
     #[test]
+    fn warm_workspace_search_flattens_its_target() {
+        // Early clients also sent a `pin` flag; it is ignored now.
+        let request: WarmWorkspaceSearchRequest =
+            serde_json::from_value(serde_json::json!({ "chatId": "chat-1", "pin": true })).unwrap();
+        assert_eq!(request.target.chat_id.as_deref(), Some("chat-1"));
+        assert_eq!(
+            serde_json::to_value(WarmWorkspaceSearchResult {
+                state: WorkspaceSearchIndexState::Building,
+            })
+            .unwrap(),
+            serde_json::json!({ "state": "building" })
+        );
+    }
+
+    #[test]
     fn workspace_write_outcomes_have_stable_tags() {
         let written = WriteWorkspaceFileOutcome::Written {
             file: WorkspaceFileWriteResult {
@@ -1313,6 +1857,7 @@ mod tests {
             sequence: 4,
             resync_required: false,
             changes: vec![WorkspaceFileChange {
+                operation_id: None,
                 kind: WorkspaceFileChangeKind::Renamed,
                 path: "src/new.rs".into(),
                 old_path: Some("src/old.rs".into()),
@@ -1325,6 +1870,129 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<WorkspaceFileChanges>(value).unwrap(),
             changes
+        );
+    }
+}
+
+/// Host capabilities; absent fields keep older peers read-only for mutations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMutationCapabilities {
+    #[serde(default)]
+    pub move_entry: bool,
+    #[serde(default)]
+    pub delete_entry: bool,
+}
+
+/// Rename and move share the same no-replacement operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveWorkspaceEntryRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+    pub operation_id: String,
+    pub expected_checkout_id: String,
+    pub source_path: String,
+    pub destination_path: String,
+    pub expected_source_revision: String,
+    pub expected_kind: WorkspaceEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteWorkspaceEntryRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+    pub operation_id: String,
+    pub expected_checkout_id: String,
+    pub path: String,
+    pub expected_source_revision: String,
+    pub expected_kind: WorkspaceEntryKind,
+    /// Explicit consent to delete the directory's current contents.
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum WorkspaceMutationOutcome {
+    #[serde(rename_all = "camelCase")]
+    Applied {
+        operation_id: String,
+        checkout_id: String,
+        change: WorkspaceFileChange,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<WorkspaceEntry>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Rejected {
+        operation_id: String,
+        reason: WorkspaceMutationRejection,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceMutationRejection {
+    InvalidPath,
+    WorkspaceChanged,
+    SourceMissing,
+    SourceChanged,
+    DestinationExists,
+    InvalidDestination,
+    PermissionDenied,
+    Unsupported,
+    Busy,
+    PartialFailure,
+}
+
+#[cfg(test)]
+mod mutation_contract_tests {
+    use super::*;
+    #[test]
+    fn old_peers_remain_readable_without_mutation_support() {
+        let page: WorkspaceDirectoryPage = serde_json::from_value(serde_json::json!({
+            "directory":"", "entries":[{"path":"a", "name":"a", "kind":"file", "ignored":false, "readOnly":false}],
+            "truncated":false
+        })).unwrap();
+        assert_eq!(page.checkout_id, None);
+        assert_eq!(page.mutation_capabilities, None);
+        assert_eq!(page.entries[0].mutation_revision, None);
+        let change: WorkspaceFileChange =
+            serde_json::from_value(serde_json::json!({"kind":"removed", "path":"a"})).unwrap();
+        assert_eq!(change.operation_id, None);
+    }
+    #[test]
+    fn mutation_requests_and_outcomes_round_trip() {
+        let request = serde_json::json!({"chatId":"chat", "operationId":"op", "expectedCheckoutId":"checkout", "sourcePath":"a", "destinationPath":"b", "expectedSourceRevision":"rev", "expectedKind":"file"});
+        let decoded: MoveWorkspaceEntryRequest = serde_json::from_value(request.clone()).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+        for (key, value) in request.as_object().unwrap() {
+            assert_eq!(&encoded[key], value);
+        }
+        let delete: DeleteWorkspaceEntryRequest = serde_json::from_value(serde_json::json!({"chatId":"chat", "operationId":"op", "expectedCheckoutId":"checkout", "path":"a", "expectedSourceRevision":"rev", "expectedKind":"directory", "recursive":true})).unwrap();
+        assert_eq!(
+            serde_json::from_value::<DeleteWorkspaceEntryRequest>(
+                serde_json::to_value(&delete).unwrap()
+            )
+            .unwrap(),
+            delete
+        );
+        let outcome = WorkspaceMutationOutcome::Rejected {
+            operation_id: "op".into(),
+            reason: WorkspaceMutationRejection::DestinationExists,
+            message: "Destination exists".into(),
+        };
+        assert_eq!(
+            serde_json::from_value::<WorkspaceMutationOutcome>(
+                serde_json::to_value(&outcome).unwrap()
+            )
+            .unwrap(),
+            outcome
+        );
+        assert!(
+            serde_json::from_value::<WorkspaceMutationRejection>(serde_json::json!("overwrite"))
+                .is_err()
         );
     }
 }

@@ -43,6 +43,8 @@ struct FakeOpencode {
     /// Leading 500s to answer `POST /session` with (the opencode
     /// lazy-migration crash class: first access 500s, retry succeeds).
     fail_session_creates: Arc<Mutex<u32>>,
+    /// Answer `POST …/abort` with a 500 (a wedged server).
+    fail_aborts: Arc<Mutex<bool>>,
 }
 
 impl FakeOpencode {
@@ -62,6 +64,7 @@ impl FakeOpencode {
             )),
             first_prompt_had_subscriber: Arc::new(Mutex::new(None)),
             fail_session_creates: Arc::new(Mutex::new(0)),
+            fail_aborts: Arc::new(Mutex::new(false)),
         };
         let accept = fake.clone();
         tokio::spawn(async move {
@@ -239,6 +242,10 @@ impl FakeOpencode {
             ("GET", "/session/ses_resume") => ("200 OK", json!({ "id": "ses_resume" })),
             ("GET", p) if p.starts_with("/session/") => ("404 Not Found", json!({})),
             ("POST", p) if p.ends_with("/prompt_async") => ("204 No Content", json!({})),
+            ("POST", p) if p.ends_with("/abort") && *self.fail_aborts.lock().unwrap() => (
+                "500 Internal Server Error",
+                json!({ "name": "UnknownError", "data": { "message": "abort failed" } }),
+            ),
             ("POST", p) if p.ends_with("/abort") => ("200 OK", json!(true)),
             ("POST", p) if p.contains("/permission/") || p.contains("/question/") => {
                 ("200 OK", json!(true))
@@ -254,6 +261,7 @@ impl FakeOpencode {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        mcp: None,
         prompt: prompt.into(),
         harness: None,
         model: None,
@@ -273,6 +281,8 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
     let (steer_tx, steering) = mpsc::channel(8);
     let token = CancellationToken::new();
     let controls = RunControls {
+        realtime: None,
+        execution_lease: None,
         request_input: Box::new(move |questions| {
             let (tx, rx) = oneshot::channel();
             let answers: Vec<UserInputAnswer> = questions
@@ -287,6 +297,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
         }),
         steering,
         interrupt: token.clone(),
+        turn: Default::default(),
     };
     (controls, steer_tx, token)
 }
@@ -566,6 +577,8 @@ async fn steer_queues_mid_turn_and_delivers_at_idle() {
         .send(SteerMessage {
             prompt: "also do this".into(),
             message_id: None,
+            attachments: Vec::new(),
+            config: None,
         })
         .await
         .unwrap();
@@ -618,6 +631,273 @@ async fn interrupt_aborts_and_settles_interrupted() {
             ..
         })
     ));
+}
+
+/// Start a run on `driver` with a turn stop wired in, and wait until its
+/// first turn streams.
+async fn stoppable_turn(
+    fake: &FakeOpencode,
+    driver: OpencodeHarness,
+) -> (
+    futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    mpsc::Sender<SteerMessage>,
+    zeron_harness::TurnControl,
+) {
+    let (mut controls, steer, _token) = controls();
+    let turn = zeron_harness::TurnControl::default();
+    controls.turn = turn.clone();
+    assert!(driver.stops_turn_in_place());
+    let mut stream = driver
+        .run(request("hi"), controls)
+        .await
+        .expect("run starts");
+    let _ = next_event(&mut stream).await;
+    let _ = next_event(&mut stream).await;
+    assistant_message(fake, "ses_test", "msg_1");
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_t", "messageID": "msg_1", "sessionID": "ses_test",
+            "type": "text", "text": "working",
+        }},
+    }));
+    assert_eq!(
+        next_event(&mut stream).await,
+        AgentEvent::TextDelta {
+            text: "working".into()
+        }
+    );
+    (stream, steer, turn)
+}
+
+/// A stop the server never acknowledged must not leave the session taking
+/// prompts: the turn may still be running. The runtime goes, its mailbox
+/// closed before the stop reads settled.
+async fn assert_torn_down(
+    stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    steer: &mpsc::Sender<SteerMessage>,
+) {
+    let events = drain_to_done(stream).await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                error: None,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+    assert!(
+        steer.is_closed(),
+        "the mailbox closes before the stop settles"
+    );
+    let end = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("stream ends");
+    assert!(end.is_none(), "the runtime is gone: {end:?}");
+}
+
+#[tokio::test]
+async fn a_stop_the_server_rejects_tears_the_runtime_down() {
+    let fake = FakeOpencode::start().await;
+    *fake.fail_aborts.lock().unwrap() = true;
+    let (mut stream, steer, turn) = stoppable_turn(&fake, harness(&fake)).await;
+    turn.stop_turn();
+    wait_posts(&fake, "/session/ses_test/abort", 1).await;
+    assert_torn_down(&mut stream, &steer).await;
+}
+
+#[tokio::test]
+async fn a_stop_the_server_never_settles_tears_the_runtime_down() {
+    let fake = FakeOpencode::start().await;
+    let driver = harness(&fake).with_graces(Duration::from_millis(200), Duration::from_millis(100));
+    let (mut stream, steer, turn) = stoppable_turn(&fake, driver).await;
+    turn.stop_turn();
+    wait_posts(&fake, "/session/ses_test/abort", 1).await;
+    // Accepted, but no idle ever follows.
+    assert_torn_down(&mut stream, &steer).await;
+}
+
+#[tokio::test]
+async fn an_acknowledged_stop_drops_late_output_and_keeps_the_session() {
+    let fake = FakeOpencode::start().await;
+    let (mut stream, steer, turn) = stoppable_turn(&fake, harness(&fake)).await;
+    turn.stop_turn();
+    wait_posts(&fake, "/session/ses_test/abort", 1).await;
+    // The stopped turn's output still in flight when the abort landed.
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_late", "messageID": "msg_1", "sessionID": "ses_test",
+            "type": "text", "text": "late",
+        }},
+    }));
+    idle(&fake, "ses_test");
+    let events = drain_to_done(&mut stream).await;
+    assert_eq!(
+        events,
+        vec![AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            result: None,
+            error: None,
+            session_id: Some("ses_test".into()),
+        }],
+        "the stopped turn's late output is dropped"
+    );
+
+    // The same session takes the next prompt.
+    steer
+        .send(SteerMessage::text("carry on"))
+        .await
+        .expect("the mailbox stays open");
+    let prompts = wait_posts(&fake, "/session/ses_test/prompt_async", 2).await;
+    assert_eq!(prompts[1]["parts"][0]["text"], "carry on");
+    assistant_message(&fake, "ses_test", "msg_2");
+    idle(&fake, "ses_test");
+    let events = drain_to_done(&mut stream).await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn images_sent_mid_turn_ride_the_queued_prompt() {
+    let fake = FakeOpencode::start().await;
+    let (controls, steer, _token) = controls();
+    let mut stream = harness(&fake)
+        .run(request("hi"), controls)
+        .await
+        .expect("run starts");
+    let _ = next_event(&mut stream).await;
+    let _ = next_event(&mut stream).await;
+    assistant_message(&fake, "ses_test", "msg_1");
+    // A running tool holds the steers for the turn's end (no preempt).
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_tool", "messageID": "msg_1", "sessionID": "ses_test",
+            "type": "tool", "tool": "bash", "callID": "call_1",
+            "state": { "status": "running", "input": { "command": "sleep 1" } },
+        }},
+    }));
+    let _ = next_event(&mut stream).await; // ToolStarted
+    for (text, image) in [("first", "/tmp/one.png"), ("second", "/tmp/two.png")] {
+        steer
+            .send(SteerMessage {
+                prompt: text.into(),
+                message_id: None,
+                attachments: vec![image.into()],
+                config: None,
+            })
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_tool", "messageID": "msg_1", "sessionID": "ses_test",
+            "type": "tool", "tool": "bash", "callID": "call_1",
+            "state": { "status": "completed", "input": { "command": "sleep 1" }, "output": "" },
+        }},
+    }));
+    idle(&fake, "ses_test");
+
+    let prompts = wait_posts(&fake, "/session/ses_test/prompt_async", 2).await;
+    let parts = prompts[1]["parts"].as_array().expect("parts");
+    let text = parts
+        .iter()
+        .find(|p| p["type"] == "text")
+        .and_then(|p| p["text"].as_str())
+        .unwrap();
+    assert!(text.contains("first") && text.contains("second"), "{text}");
+    let images: Vec<&str> = parts
+        .iter()
+        .filter(|p| p["type"] == "file")
+        .filter_map(|p| p["url"].as_str())
+        .collect();
+    assert_eq!(images, ["file:///tmp/one.png", "file:///tmp/two.png"]);
+}
+
+/// A model switch reaches the live server: from the next prompt between
+/// turns, and mid-turn from the prompt of the message it was sent with —
+/// never merged into a prompt sent with the previous model.
+#[tokio::test]
+async fn a_model_switch_rides_the_next_prompt() {
+    let fake = FakeOpencode::start().await;
+    let (controls, steer, _token) = controls();
+    let mut opening = request("hi");
+    opening.model = Some("prov/model-a".into());
+    let driver = harness(&fake);
+    let mut switched = request("");
+    switched.model = Some("prov/model-b".into());
+    assert!(driver.reconfigures_in_place(&opening, &switched));
+    let mut stream = driver
+        .run(opening.clone(), controls)
+        .await
+        .expect("run starts");
+    let _ = next_event(&mut stream).await;
+    let _ = next_event(&mut stream).await;
+    assistant_message(&fake, "ses_test", "msg_1");
+    idle(&fake, "ses_test");
+    drain_to_done(&mut stream).await;
+
+    let send = |text: &str, config: Option<&RunRequest>| SteerMessage {
+        config: config.cloned().map(Box::new),
+        ..SteerMessage::text(text)
+    };
+    steer.send(send("on b", Some(&switched))).await.unwrap();
+    wait_posts(&fake, "/session/ses_test/prompt_async", 2).await;
+    assistant_message(&fake, "ses_test", "msg_2");
+    // A running tool holds what follows for the turn's end.
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_tool", "messageID": "msg_2", "sessionID": "ses_test",
+            "type": "tool", "tool": "bash", "callID": "call_1",
+            "state": { "status": "running", "input": { "command": "sleep 1" } },
+        }},
+    }));
+    steer.send(send("still b", None)).await.unwrap();
+    steer.send(send("back on a", Some(&opening))).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fake.emit(json!({
+        "type": "message.part.updated",
+        "properties": { "part": {
+            "id": "prt_tool", "messageID": "msg_2", "sessionID": "ses_test",
+            "type": "tool", "tool": "bash", "callID": "call_1",
+            "state": { "status": "completed", "input": { "command": "sleep 1" }, "output": "" },
+        }},
+    }));
+    idle(&fake, "ses_test");
+    wait_posts(&fake, "/session/ses_test/prompt_async", 3).await;
+    assistant_message(&fake, "ses_test", "msg_3");
+    idle(&fake, "ses_test");
+    let prompts = wait_posts(&fake, "/session/ses_test/prompt_async", 4).await;
+    let sent: Vec<(String, String)> = prompts
+        .iter()
+        .map(|p| {
+            (
+                p["parts"][0]["text"].as_str().unwrap_or("").to_owned(),
+                p["model"]["modelID"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("hi".to_owned(), "model-a".to_owned()),
+            ("on b".to_owned(), "model-b".to_owned()),
+            ("still b".to_owned(), "model-b".to_owned()),
+            ("back on a".to_owned(), "model-a".to_owned()),
+        ]
+    );
 }
 
 #[tokio::test]
