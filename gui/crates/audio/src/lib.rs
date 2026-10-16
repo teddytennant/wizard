@@ -1,7 +1,12 @@
 //! Desktop-only bounded audio. PCM is ephemeral; no logs, files or network I/O.
 #[cfg(feature = "aec")]
 pub mod aec;
+#[cfg(feature = "native")]
+pub mod devices;
 pub mod dsp;
+#[cfg(feature = "native")]
+pub mod duplex;
+pub mod gate;
 #[cfg(feature = "native")]
 pub mod native;
 #[cfg(all(feature = "aec", feature = "native"))]

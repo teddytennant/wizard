@@ -7,13 +7,19 @@ publish.workspace = true
 
 [features]
 default = ["native"]
-native = ["dep:cpal"]
+native = ["dep:cpal", "dep:pulseaudio", "dep:futures"]
 aec = ["dep:webrtc-audio-processing"]
 
 [dependencies]
 zeron-proto.workspace = true
 base64 = "0.22"
 crossbeam-queue = "0.3"
-cpal = { version = "=0.18.2", optional = true }
+# PulseAudio's protocol (pure Rust, served by PipeWire too) names every
+# source, so a call can skip monitors when choosing its microphone.
+cpal = { version = "=0.18.2", optional = true, features = ["pulseaudio"] }
 webrtc-audio-processing = { version = "~2.1.0", features = ["bundled"], optional = true }
 thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pulseaudio = { version = "0.3", optional = true }
+futures = { workspace = true, optional = true }

@@ -6,7 +6,7 @@ use cpal::{
 };
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 const MAX_RING_SAMPLES: usize = 38_400;
 fn ring_samples(rate: u32) -> usize {
@@ -25,6 +25,9 @@ pub struct AudioIo {
     pub capture: Arc<ArrayQueue<f32>>,
     pub reference: Arc<ArrayQueue<f32>>,
     playout: Arc<ArrayQueue<OutputSample>>,
+    /// Output gain as f32 bits, applied in the callback so a duck is heard
+    /// at once rather than after the samples already queued.
+    gain: Arc<AtomicU32>,
     pub failed: Arc<AtomicBool>,
     pub muted: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
@@ -38,6 +41,14 @@ impl AudioIo {
         let host = cpal::default_host();
         let input_device = host.default_input_device().ok_or(AudioError::Device)?;
         let output_device = host.default_output_device().ok_or(AudioError::Device)?;
+        Self::open_devices(&input_device, &output_device, generation)
+    }
+
+    pub fn open_devices(
+        input_device: &cpal::Device,
+        output_device: &cpal::Device,
+        generation: u64,
+    ) -> Result<Self, AudioError> {
         let input_config = input_device
             .default_input_config()
             .map_err(|_| AudioError::Device)?;
@@ -51,6 +62,7 @@ impl AudioIo {
         let playout = Arc::new(ArrayQueue::new(ring_samples(output_rate)));
         let failed = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
+        let gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let generation = Arc::new(AtomicU64::new(generation));
         let ic: StreamConfig = input_config.clone().into();
         let oc: StreamConfig = output_config.clone().into();
@@ -64,7 +76,7 @@ impl AudioIo {
         macro_rules! input {
             ($t:ty) => {
                 input_stream::<$t>(
-                    &input_device,
+                    input_device,
                     ic,
                     capture.clone(),
                     failed.clone(),
@@ -75,12 +87,13 @@ impl AudioIo {
         macro_rules! output {
             ($t:ty) => {
                 output_stream::<$t>(
-                    &output_device,
+                    output_device,
                     oc,
                     playout.clone(),
                     reference.clone(),
                     failed.clone(),
                     generation.clone(),
+                    gain.clone(),
                 )?
             };
         }
@@ -112,6 +125,7 @@ impl AudioIo {
             capture,
             reference,
             playout,
+            gain,
             failed,
             muted,
             generation,
@@ -151,6 +165,45 @@ impl AudioIo {
         }
         Ok(())
     }
+    /// Queue 24 kHz mono samples for playout in the current generation.
+    /// Nothing is queued when they do not all fit; see [`Self::playout_room`].
+    pub fn enqueue_samples(&mut self, samples: &[f32]) -> Result<(), AudioError> {
+        let generation = self.generation.load(Ordering::Acquire);
+        self.scratch.clear();
+        for sample in samples {
+            self.output_resampler.push(*sample, &mut self.scratch);
+        }
+        if self.scratch.len() > self.playout.capacity() - self.playout.len() {
+            return Err(AudioError::Overflow);
+        }
+        for value in &self.scratch {
+            self.playout
+                .push(OutputSample {
+                    generation,
+                    value: *value,
+                })
+                .map_err(|_| AudioError::Overflow)?;
+        }
+        Ok(())
+    }
+
+    /// How many more 24 kHz samples [`Self::enqueue_samples`] accepts now,
+    /// leaving a little slack for resampler rounding.
+    pub fn playout_room(&self) -> usize {
+        let free = self.playout.capacity() - self.playout.len();
+        (free as u64 * 24_000 / self.output_rate as u64).saturating_sub(4) as usize
+    }
+
+    /// Output samples still waiting for the device.
+    pub fn playout_queued(&self) -> usize {
+        self.playout.len()
+    }
+
+    pub fn set_gain(&self, gain: f32) {
+        self.gain
+            .store(gain.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+    }
+
     pub fn mute(&self, value: bool) {
         self.muted.store(value, Ordering::Release);
         while self.capture.pop().is_some() {}
@@ -215,6 +268,7 @@ fn output_stream<T>(
     reference: Arc<ArrayQueue<f32>>,
     failed: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    gain: Arc<AtomicU32>,
 ) -> Result<Stream, AudioError>
 where
     T: SizedSample + FromSample<f32>,
@@ -225,11 +279,12 @@ where
         .build_output_stream(
             config,
             move |samples: &mut [T], _| {
+                let gain = f32::from_bits(gain.load(Ordering::Acquire));
                 for frame in samples.chunks_exact_mut(channels) {
                     let value = ring
                         .pop()
                         .filter(|s| s.generation == generation.load(Ordering::Acquire))
-                        .map_or(0.0, |s| s.value);
+                        .map_or(0.0, |s| s.value * gain);
                     for sample in frame {
                         *sample = T::from_sample(value);
                     }
