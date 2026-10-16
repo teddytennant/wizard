@@ -134,7 +134,7 @@ impl PiHarness {
         // standalone Node installed for it goes ahead of an older one.
         if let Some(bin) = crate::node_bootstrap::standalone_bin() {
             let current = cmd
-                .as_std()
+                .as_std_mut()
                 .get_envs()
                 .find(|(k, _)| *k == "PATH")
                 .and_then(|(_, v)| v.map(|v| v.to_os_string()))
