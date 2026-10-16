@@ -614,7 +614,8 @@ which rate was used, in this order of precedence:
 
 | `price_source` | Meaning |
 |----------------|---------|
-| `config` | `usd_per_mtok_in` / `usd_per_mtok_out` from your provider config. You typed these, so they win over everything else |
+| `billed` | The provider said what it charged (xAI's `cost_in_usd_ticks`, or `cost`), and every call in the turn did. No rate is involved |
+| `config` | `usd_per_mtok_in` / `usd_per_mtok_out` from your provider config. You typed these, so they win over every estimate below |
 | `local` | A self-hosted backend (llama.cpp, Ollama). Tokens cost electricity, so `$0.0000` is the honest figure |
 | `table` | Wizard's built-in list-price table matched the model id |
 | `fallback` | A metered model the table does not know. Priced at the most expensive rate Wizard knows and flagged `*`, because an unknown model rendered as free would be the most misleading thing this column could say |

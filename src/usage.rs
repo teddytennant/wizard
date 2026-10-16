@@ -50,6 +50,12 @@ pub struct UsageTracker {
     turn_cache_write: AtomicU64,
     session_reasoning: AtomicU64,
     turn_reasoning: AtomicU64,
+    /// Model calls of the current turn, and how many of them came with the
+    /// provider's own bill. The turn is priced from the bill only when the
+    /// two agree.
+    turn_calls: AtomicU64,
+    turn_billed_calls: AtomicU64,
+    turn_billed_ticks: AtomicU64,
 }
 
 impl UsageTracker {
@@ -60,6 +66,9 @@ impl UsageTracker {
     /// Record the usage of one model call. `None` fields (backend reported
     /// nothing) leave the counters untouched.
     pub fn record(&self, prompt_tokens: Option<u64>, completion_tokens: Option<u64>) {
+        if prompt_tokens.is_some() || completion_tokens.is_some() {
+            self.turn_calls.fetch_add(1, Ordering::Relaxed);
+        }
         if let Some(prompt) = prompt_tokens {
             self.session_prompt.fetch_add(prompt, Ordering::Relaxed);
             self.turn_prompt.fetch_add(prompt, Ordering::Relaxed);
@@ -116,6 +125,14 @@ impl UsageTracker {
             .fetch_add(reasoning_tokens, Ordering::Relaxed);
     }
 
+    /// Record what the provider billed for the call just passed to
+    /// [`record`](Self::record) or [`record_delegated`](Self::record_delegated),
+    /// in ticks of 1e-10 USD.
+    pub fn record_billed(&self, ticks: u64) {
+        self.turn_billed_calls.fetch_add(1, Ordering::Relaxed);
+        self.turn_billed_ticks.fetch_add(ticks, Ordering::Relaxed);
+    }
+
     /// Record the usage of one *delegated* model call — a subagent run the
     /// parent paid for (`spawn_subagent`, or one of `/ultra`'s candidates and
     /// judges).
@@ -138,6 +155,7 @@ impl UsageTracker {
     /// each re-send the same prefix, which is precisely what a prompt cache
     /// is for.
     pub fn record_delegated(&self, prompt_tokens: u64, completion_tokens: u64) {
+        self.turn_calls.fetch_add(1, Ordering::Relaxed);
         self.session_prompt
             .fetch_add(prompt_tokens, Ordering::Relaxed);
         self.turn_prompt.fetch_add(prompt_tokens, Ordering::Relaxed);
@@ -187,6 +205,19 @@ impl UsageTracker {
         self.turn_cache_read.store(0, Ordering::Relaxed);
         self.turn_cache_write.store(0, Ordering::Relaxed);
         self.turn_reasoning.store(0, Ordering::Relaxed);
+        self.turn_calls.store(0, Ordering::Relaxed);
+        self.turn_billed_calls.store(0, Ordering::Relaxed);
+        self.turn_billed_ticks.store(0, Ordering::Relaxed);
+    }
+
+    /// What the provider billed for the current turn in USD, when every call
+    /// in it came with a bill. One call without one and the turn is
+    /// estimated instead, since the bill alone would under-state it.
+    pub fn turn_billed_usd(&self) -> Option<f64> {
+        let calls = self.turn_calls.load(Ordering::Relaxed);
+        (calls > 0 && self.turn_billed_calls.load(Ordering::Relaxed) == calls).then(|| {
+            self.turn_billed_ticks.load(Ordering::Relaxed) as f64 * crate::llm::USD_PER_TICK
+        })
     }
 
     /// `(prompt, completion)` tokens of the current turn.
@@ -279,6 +310,9 @@ impl UsageTracker {
         self.turn_cache_write.store(0, Ordering::Relaxed);
         self.session_reasoning.store(0, Ordering::Relaxed);
         self.turn_reasoning.store(0, Ordering::Relaxed);
+        self.turn_calls.store(0, Ordering::Relaxed);
+        self.turn_billed_calls.store(0, Ordering::Relaxed);
+        self.turn_billed_ticks.store(0, Ordering::Relaxed);
     }
 }
 
@@ -335,6 +369,9 @@ pub struct UsageRecord {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PriceSource {
+    /// The provider reported what it billed for the turn (xAI's
+    /// `cost_in_usd_ticks`), so no rate was needed at all.
+    Billed,
     /// `usd_per_mtok_in` / `usd_per_mtok_out` from the provider's config.
     /// The user typed these, so they win over everything below.
     Config,
@@ -1335,6 +1372,30 @@ mod tests {
 
         tracker.clear_session();
         assert_eq!(tracker.session_reasoning_tokens(), 0);
+    }
+
+    /// A turn's bill is the sum of every call's, its own and its subagents',
+    /// and one call without a bill means there is no bill for the turn.
+    #[test]
+    fn tracker_sums_billed_cost_only_when_every_call_has_one() {
+        let tracker = UsageTracker::new();
+        assert_eq!(tracker.turn_billed_usd(), None);
+
+        tracker.record(Some(2_521), Some(672));
+        tracker.record_billed(24_976_400);
+        tracker.record_delegated(1_000, 100);
+        tracker.record_billed(10_000_000);
+        let billed = tracker.turn_billed_usd().expect("every call billed");
+        assert!((billed - 0.003_497_64).abs() < 1e-12, "{billed}");
+
+        tracker.record_delegated(1_000, 100);
+        assert_eq!(tracker.turn_billed_usd(), None);
+
+        tracker.begin_turn();
+        assert_eq!(tracker.turn_billed_usd(), None);
+        tracker.record(Some(10), Some(1));
+        tracker.record_billed(5);
+        assert!(tracker.turn_billed_usd().is_some());
     }
 
     #[test]

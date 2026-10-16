@@ -763,6 +763,9 @@ impl Host for SubRun<'_> {
             tracker.record_delegated(prompt, completion);
             tracker.record_cache(usage.cache.read, usage.cache.write);
             tracker.record_reasoning(usage.reasoning.unwrap_or(0));
+            if let Some(ticks) = usage.billed_ticks {
+                tracker.record_billed(ticks);
+            }
         }
         if usage.prompt.is_some() {
             *self.reading() = usage.prompt;
@@ -807,6 +810,9 @@ impl Host for SubRun<'_> {
                 tracker.record_delegated(compacted.usage.prompt, compacted.usage.completion);
                 tracker.record_cache(compacted.usage.cache_read, compacted.usage.cache_write);
                 tracker.record_reasoning(compacted.usage.reasoning);
+                if let Some(ticks) = compacted.usage.billed_ticks() {
+                    tracker.record_billed(ticks);
+                }
             }
             sink.usage(compacted.usage.prompt, compacted.usage.completion)
                 .await;
