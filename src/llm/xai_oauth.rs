@@ -1022,6 +1022,24 @@ impl TokenSource for XaiTokenSource {
     }
 }
 
+/// `wizard xai-token`: the current access token as one JSON line, refreshed
+/// first when it expires within the usual leeway. Wizard GUI's voice mode
+/// reads it this way instead of handling the token file itself.
+pub async fn print_access_token() -> Result<i32> {
+    let source = XaiTokenSource::new()?;
+    let token = source
+        .bearer()
+        .await?
+        .ok_or_else(|| anyhow!("not signed in to xAI; run `wizard --login xai` first"))?;
+    let line = serde_json::json!({
+        "version": 1,
+        "accessToken": token,
+        "expiresAt": jwt_exp(&token),
+    });
+    println!("{line}");
+    Ok(0)
+}
+
 /// Host of the Grok CLI proxy that reports subscription usage.
 ///
 /// This is not `api.x.ai`. The weekly percent lives on the same proxy the

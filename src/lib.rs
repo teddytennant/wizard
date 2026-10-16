@@ -208,6 +208,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         return usage::run_cli(since.as_deref());
     }
 
+    // A fresh xAI bearer for Wizard GUI's voice mode. Reads and refreshes
+    // ~/.wizard/xai_oauth.json under its lock; never loads config.
+    if let Some(cli::Command::XaiToken) = &cli.command {
+        return llm::xai_oauth::print_access_token().await;
+    }
+
     // The desktop app is Wizard GUI, built from gui/ and shipped as its own
     // release asset; this only starts it.
     if let Some(cli::Command::Gui { native: _ }) = &cli.command {

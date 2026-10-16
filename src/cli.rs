@@ -356,6 +356,13 @@ pub enum Command {
         json: bool,
     },
 
+    /// Print a fresh xAI OAuth access token as JSON (`{"version": 1,
+    /// "accessToken": ..., "expiresAt": <unix seconds>}`), refreshing it
+    /// first when it expires soon. Wizard GUI's voice mode asks here, so the
+    /// single-use refresh token is only ever spent under Wizard's own lock.
+    #[command(hide = true)]
+    XaiToken,
+
     /// Inspect and roll back self-extensions recorded in
     /// ~/.wizard/evolution.jsonl.
     Evolve {
@@ -1785,6 +1792,17 @@ mod tests {
             panic!("expected schedule disable");
         };
         assert_eq!(name, "nightly");
+    }
+
+    #[test]
+    fn xai_token_parses_and_stays_out_of_help() {
+        let cli = parse(&["xai-token"]).expect("xai-token parses");
+        assert!(matches!(cli.command, Some(Command::XaiToken)));
+        let help = Cli::command().render_long_help().to_string();
+        assert!(
+            !help.contains("xai-token"),
+            "a GUI plumbing command, not a user one"
+        );
     }
 
     #[test]
