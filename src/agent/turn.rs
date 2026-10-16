@@ -2218,6 +2218,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }
     }
 
@@ -2299,6 +2300,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }]
     }
 
@@ -2320,6 +2322,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }]
     }
 
@@ -2518,6 +2521,7 @@ mod tests {
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
                 reasoning_eval_count: None,
+                billed_ticks: None,
             }],
             // The compaction pass's own summary call.
             vec![final_chunk(ChatMessage::assistant("everything so far"))],

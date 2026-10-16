@@ -399,6 +399,7 @@ fn delta_chunk(event: &Value) -> Option<ChatChunk> {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     })
 }
 
@@ -419,6 +420,7 @@ fn final_chunk(usage: &Value, stop: Option<&str>, message: Option<ChatMessage>) 
         prompt_eval_count: Some(count("input_tokens") + cache.read + cache.write),
         cache,
         reasoning_eval_count: usage["output_tokens_details"]["thinking_tokens"].as_u64(),
+        billed_ticks: None,
     }
 }
 

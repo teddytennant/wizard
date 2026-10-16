@@ -1586,6 +1586,19 @@ pub struct ChatChunk {
     /// is what Anthropic and every local backend do.
     #[serde(default)]
     pub reasoning_eval_count: Option<u64>,
+    /// What the provider itself billed for the call, in ticks of 1e-10 USD
+    /// (xAI's `usage.cost_in_usd_ticks`), when it reports a bill (final chunk
+    /// only). Wins over any price Wizard would estimate from the counts.
+    #[serde(default)]
+    pub billed_ticks: Option<u64>,
+}
+
+/// USD per billed tick. See [`ChatChunk::billed_ticks`].
+pub const USD_PER_TICK: f64 = 1e-10;
+
+/// A USD amount as billed ticks, rounded to the nearest one.
+pub fn usd_to_ticks(usd: f64) -> u64 {
+    (usd / USD_PER_TICK).round() as u64
 }
 
 /// Reconcile a provider's completion count with its reasoning count, so what

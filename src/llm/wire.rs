@@ -999,6 +999,13 @@ struct Usage {
     /// counted separately everywhere downstream.
     #[serde(default)]
     total_tokens: Option<u64>,
+    /// What xAI billed for the call, in its own unit of 1e-10 USD.
+    #[serde(default)]
+    cost_in_usd_ticks: Option<u64>,
+    /// The same bill in USD. xAI echoes it on some responses, and OpenRouter
+    /// reports its charge here.
+    #[serde(default)]
+    cost: Option<f64>,
 }
 
 /// `usage.completion_tokens_details` (subset): the breakdown of
@@ -1074,6 +1081,15 @@ impl Usage {
             self.total_tokens,
         )
     }
+
+    /// The provider's own bill for the call in ticks, when it reported one.
+    fn billed_ticks(&self) -> Option<u64> {
+        self.cost_in_usd_ticks.or_else(|| {
+            self.cost
+                .filter(|usd| usd.is_finite() && *usd >= 0.0)
+                .map(crate::llm::usd_to_ticks)
+        })
+    }
 }
 
 /// Per-index accumulator for a streamed tool call.
@@ -1127,6 +1143,8 @@ struct SseState<S> {
     /// Reasoning tokens the model generated (a subset of `eval_count`), when
     /// the endpoint reports them. See [`Usage::reasoning_tokens`].
     reasoning_tokens: Option<u64>,
+    /// The provider's bill for the call. See [`ChatChunk::billed_ticks`].
+    billed_ticks: Option<u64>,
     /// Last `finish_reason` seen ("stop", "length", "tool_calls", ...).
     done_reason: Option<String>,
     /// Saw `data: [DONE]` or EOF — drain the buffer, then emit the final chunk.
@@ -1212,6 +1230,7 @@ fn build_final<S>(state: &SseState<S>) -> ChatChunk {
             write: state.cache_write_tokens.unwrap_or(0),
         },
         reasoning_eval_count: state.reasoning_tokens,
+        billed_ticks: state.billed_ticks,
     }
 }
 
@@ -1227,6 +1246,7 @@ fn text_chunk(content: String, thinking: bool) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -1244,6 +1264,7 @@ fn image_chunk(images: Vec<Image>) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -1265,6 +1286,7 @@ where
         cached_prompt_tokens: None,
         cache_write_tokens: None,
         reasoning_tokens: None,
+        billed_ticks: None,
         done_reason: None,
         saw_done: false,
         terminated: false,
@@ -1322,6 +1344,9 @@ where
                     }
                     if let Some(completion) = usage.completion_tokens() {
                         state.eval_count = Some(completion);
+                    }
+                    if let Some(billed) = usage.billed_ticks() {
+                        state.billed_ticks = Some(billed);
                     }
                 }
                 if let Some(choice) = chunk.choices.into_iter().next() {
@@ -1879,6 +1904,41 @@ mod tests {
         let last = last.expect("a final chunk");
         assert_eq!(last.eval_count, Some(4));
         assert_eq!(last.reasoning_eval_count, None);
+    }
+
+    /// A real grok-4.7 usage object, plus the two thinner shapes: `cost`
+    /// alone, and neither.
+    #[test]
+    fn billed_cost_is_read_from_ticks_or_usd() {
+        let parse = |raw: &str| serde_json::from_str::<Usage>(raw).expect("usage parses");
+        let xai = parse(
+            r#"{"completion_tokens":672,"prompt_tokens":2521,"total_tokens":3193,"completion_tokens_details":{"reasoning_tokens":574,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0},"prompt_tokens_details":{"text_tokens":2521,"audio_tokens":0,"image_tokens":0,"cached_tokens":1152},"cost":0.00249764,"num_sources_used":0,"cost_in_usd_ticks":24976400}"#,
+        );
+        assert_eq!(xai.billed_ticks(), Some(24_976_400));
+        assert_eq!(
+            parse(r#"{"prompt_tokens":10,"completion_tokens":4,"cost":0.00249764}"#).billed_ticks(),
+            Some(24_976_400)
+        );
+        assert_eq!(
+            parse(r#"{"prompt_tokens":10,"completion_tokens":4}"#).billed_ticks(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn billed_cost_reaches_the_final_chunk_over_sse() {
+        let parts: Vec<Result<Vec<u8>>> = vec![Ok(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":2521,\"completion_tokens\":672,\"total_tokens\":3193,\"cost_in_usd_ticks\":24976400}}\n\ndata: [DONE]\n\n"
+                .to_vec(),
+        )];
+        let mut chunks = decode_sse(stream::iter(parts));
+        let mut last = None;
+        while let Some(chunk) = chunks.next().await {
+            last = Some(chunk.expect("chunk decodes"));
+        }
+        let last = last.expect("a final chunk");
+        assert!(last.done);
+        assert_eq!(last.billed_ticks, Some(24_976_400));
     }
 
     /// DeepSeek is the reason this adapter reads three spellings rather than
