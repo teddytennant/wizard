@@ -1070,6 +1070,7 @@ fn text_chunk(text: String, thinking: bool) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -1107,6 +1108,7 @@ fn build_final<S>(state: &mut SseState<S>) -> ChatChunk {
             write: 0,
         },
         reasoning_eval_count: state.reasoning_tokens,
+        billed_ticks: None,
     }
 }
 

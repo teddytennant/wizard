@@ -1358,6 +1358,7 @@ mod tests {
                 prompt_eval_count: Some(STUB_PROMPT),
                 cache: STUB_CACHE,
                 reasoning_eval_count: None,
+                billed_ticks: None,
             };
             Ok(Box::pin(futures_util::stream::once(
                 async move { Ok(chunk) },

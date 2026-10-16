@@ -1166,6 +1166,7 @@ fn build_final<S>(state: &SseState<S>) -> ChatChunk {
         prompt_eval_count: state.prompt_tokens.total(),
         cache: state.prompt_tokens.split(),
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -1181,6 +1182,7 @@ fn text_chunk(content: String, thinking: bool) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 

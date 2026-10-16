@@ -268,6 +268,7 @@ fn final_chunk(content: &str) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -291,6 +292,7 @@ fn image_chunk(images: Vec<Image>) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -347,6 +349,7 @@ fn calls_image_tool() -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -770,6 +773,7 @@ fn tool_call_chunk(name: &str, arguments: Value) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -3003,6 +3007,7 @@ fn multi_tool_chunk(names: &[&str]) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 
@@ -3295,6 +3300,7 @@ fn delta_chunk(content: &str, thinking: bool) -> ChatChunk {
         prompt_eval_count: None,
         cache: CacheTokens::NONE,
         reasoning_eval_count: None,
+        billed_ticks: None,
     }
 }
 

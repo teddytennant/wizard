@@ -165,6 +165,7 @@ impl LlmProvider for OneAnswer {
             prompt_eval_count: Some(11),
             cache: CacheTokens { read: 3, write: 2 },
             reasoning_eval_count: None,
+            billed_ticks: None,
         };
         Ok(futures_util::StreamExt::boxed(futures_util::stream::iter(
             vec![Ok(chunk)],

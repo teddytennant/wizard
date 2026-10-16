@@ -1562,6 +1562,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }
     }
 
@@ -1820,6 +1821,7 @@ mod tests {
                 prompt_eval_count: None,
                 cache: CacheTokens::NONE,
                 reasoning_eval_count: None,
+                billed_ticks: None,
             }],
             vec![chunk("done", false, true)],
         ]);
@@ -2217,6 +2219,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }]]);
         let client: Arc<dyn LlmProvider> = provider.clone();
 
@@ -2326,6 +2329,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }
     }
 
@@ -2342,6 +2346,7 @@ mod tests {
             prompt_eval_count: None,
             cache: CacheTokens::NONE,
             reasoning_eval_count: None,
+            billed_ticks: None,
         }
     }
 
