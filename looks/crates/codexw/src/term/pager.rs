@@ -1,5 +1,5 @@
 // OWNER: pager
-//! Alt-screen guard for overlays (transcript pager, `/diff`, pickers). The mechanics live on
+//! Alt-screen guard for overlays (transcript pager, pickers). The mechanics live on
 //! `InlineTerminal::{enter,leave}_alt_screen`; this guard pairs them so an early return cannot
 //! leave the terminal on the alternate screen.
 

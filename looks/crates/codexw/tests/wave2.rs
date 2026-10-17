@@ -166,7 +166,7 @@ fn ctrl_g_does_nothing_while_a_popup_or_view_is_open() {
     ctrl(&mut h, 'g');
     assert!(!h.app.editor_requested, "slash popup open");
     let mut h = started(7);
-    h.type_str("/skills");
+    h.type_str("/keymap");
     h.key(KeyCode::Enter);
     h.draw();
     ctrl(&mut h, 'g');
@@ -674,7 +674,7 @@ fn a_refused_rewind_puts_the_prompt_back_with_wizards_reason() {
 }
 
 #[test]
-fn slash_rewind_opens_the_picker_and_a_bad_argument_says_usage() {
+fn slash_rewind_opens_the_picker_and_other_arguments_go_to_wizard() {
     let (mut h, home) = with_session(&[(1, "q")]);
     say(&mut h, "q");
     slash(&mut h, "/rewind");
@@ -683,19 +683,7 @@ fn slash_rewind_opens_the_picker_and_a_bad_argument_says_usage() {
     h.draw();
     slash(&mut h, "/rewind abc");
     let _ = std::fs::remove_dir_all(&home);
-    assert!(h.screen.text().contains("■ Usage: /rewind [turn]"));
-}
-
-#[test]
-fn rewind_is_not_in_the_popup_but_resolves_when_typed() {
-    let mut h = started(7);
-    h.type_str("/rew");
-    h.draw();
-    assert!(
-        !h.screen.text().contains("go back to before"),
-        "hidden from the popup"
-    );
-    assert!(codexw::commands::lookup("rewind").is_some());
+    assert_eq!(h.sent(), vec![Request::Prompt("/rewind abc".into())]);
 }
 
 // ---- hook cells -------------------------------------------------------------------------------
@@ -783,22 +771,20 @@ fn an_edit_approval_draws_the_edited_cell_above_the_prompt_and_only_once() {
 // ---- slash commands mapped to wizard or answered locally ---------------------------------------
 
 #[test]
-fn goal_side_memories_agents_and_compact_run_as_wizard_commands_without_an_echo() {
+fn wizard_commands_go_as_typed_without_an_echo() {
     let mut h = started(7);
-    for (typed, sent) in [
-        ("/goal ship the fix", "/goal ship the fix"),
-        ("/goal", "/goal"),
-        ("/side what is a monad", "/btw what is a monad"),
-        ("/btw a quick one", "/btw a quick one"),
-        ("/memories read notes", "/memory read notes"),
-        ("/memories", "/memory"),
-        ("/agent", "/agents"),
-        ("/subagents", "/agents"),
-        ("/compact", "/compact"),
-        ("/usage", "/usage"),
+    for typed in [
+        "/goal ship the fix",
+        "/goal",
+        "/btw a quick one",
+        "/memory read notes",
+        "/agents",
+        "/compact",
+        "/usage",
+        "/side what is a monad",
     ] {
         slash(&mut h, typed);
-        assert_eq!(h.sent(), vec![Request::Prompt(sent.into())], "{typed}");
+        assert_eq!(h.sent(), vec![Request::Prompt(typed.into())], "{typed}");
     }
     assert!(
         !h.screen.full_text().contains("› /goal"),
@@ -807,105 +793,11 @@ fn goal_side_memories_agents_and_compact_run_as_wizard_commands_without_an_echo(
 }
 
 #[test]
-fn what_wizard_cannot_do_is_said_plainly_and_nothing_is_sent() {
+fn ctrl_slash_starts_a_btw_question() {
     let mut h = started(7);
-    slash(&mut h, "/goal clear");
-    assert!(
-        h.screen
-            .text()
-            .contains("■ '/goal clear' is not supported by wizard."),
-        "{}",
-        h.screen.text()
-    );
-    slash(&mut h, "/side");
-    assert!(
-        h.screen
-            .text()
-            .contains("■ '/side' needs a question in wizard")
-    );
-    slash(&mut h, "/fork");
-    assert!(
-        h.screen
-            .text()
-            .contains("■ '/fork' is not supported by wizard.")
-    );
+    ctrl(&mut h, '/');
+    assert_eq!(h.app.pane.composer.text(), "/btw ");
     assert!(h.sent().is_empty());
-}
-
-#[test]
-fn ps_echoes_the_command_and_asks_wizard_for_its_background_tasks() {
-    let mut h = started(7);
-    slash(&mut h, "/ps");
-    assert_eq!(h.sent(), vec![Request::Prompt("/bashes".into())]);
-    let t = h.screen.text();
-    assert!(t.contains("/ps\n\nBackground terminals"), "{t}");
-    let st = h.screen.style_of("/ps").unwrap();
-    assert_eq!(st.fg, Some(ratatui::style::Color::Indexed(5)));
-}
-
-#[test]
-fn mcp_lists_the_servers_from_wizards_config() {
-    let home = std::env::temp_dir().join(format!("cxw-mcp-{}", std::process::id()));
-    std::fs::create_dir_all(home.join(".wizard")).unwrap();
-    std::fs::write(
-        home.join(".wizard/mcp.toml"),
-        "[[server]]\nname = \"playwright\"\ntransport = \"stdio\"\ncommand = \"npx\"\n",
-    )
-    .unwrap();
-    let mut h = harness_with(
-        120,
-        36,
-        AppOpts {
-            placeholder: Some(7),
-            home: Some(home.display().to_string()),
-            ..Default::default()
-        },
-    );
-    h.draw();
-    slash(&mut h, "/mcp");
-    let t = h.screen.text();
-    let _ = std::fs::remove_dir_all(&home);
-    assert!(
-        t.contains("/mcp\n\n🔌  MCP Tools\n\n  • playwright\n    • Transport: stdio\n"),
-        "{t}"
-    );
-    slash(&mut h, "/mcp nope");
-    assert!(h.screen.text().contains("■ Usage: /mcp [verbose]"));
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn hooks_opens_the_events_screen_like_the_capture_and_escape_closes_it() {
-    let mut h = started(7);
-    slash(&mut h, "/hooks");
-    let rows = h.screen.rows();
-    let top = rows
-        .iter()
-        .position(|r| r.trim() == "Hooks")
-        .expect("title");
-    let want = reference("popups-07-hooks");
-    let wtop = want.iter().position(|r| r.trim() == "Hooks").unwrap();
-    for i in 0..16 {
-        assert_eq!(rows[top + i], want[wtop + i], "row {i}");
-    }
-    h.key(KeyCode::Esc);
-    h.draw();
-    assert!(!h.screen.text().contains("Lifecycle hooks"));
-}
-
-#[test]
-fn debug_config_prints_the_layers() {
-    let mut h = started(7);
-    slash(&mut h, "/debug-config");
-    let t = h.screen.text();
-    assert!(
-        t.contains("/debug-config\n\nConfig layer stack (lowest precedence first):"),
-        "{t}"
-    );
-    assert!(t.contains("Requirements:\n  <none>"), "{t}");
 }
 
 #[test]
@@ -1223,16 +1115,4 @@ fn shift_up_and_down_step_the_reasoning_effort_like_alt_period_and_comma() {
     h.app
         .on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
     assert_eq!(h.sent(), vec![Request::SetEffort("low".into())]);
-}
-
-#[test]
-fn ctrl_slash_asks_for_a_question_the_way_side_does() {
-    let mut h = started(7);
-    ctrl(&mut h, '/');
-    h.draw();
-    assert!(
-        h.screen
-            .text()
-            .contains("■ '/side' needs a question in wizard")
-    );
 }

@@ -166,152 +166,15 @@ fn a_second_question_mark_keeps_the_overlay_and_esc_does_too() {
 }
 
 #[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_popup_matches_start_06_07_08_at_120() {
+fn unknown_command_goes_to_wizard_as_typed() {
     let mut h = start(120, 36, 7);
-    h.type_str("/");
-    h.draw();
-    assert_matches(&h, "120x36", "start-06-slash");
-    h.type_str("mo");
-    h.draw();
-    assert_matches(&h, "120x36", "start-07-slash-filtered");
-
-    let mut h = start(120, 36, 7);
-    h.type_str("/");
-    for _ in 0..12 {
-        h.key(KeyCode::Down);
-    }
-    h.draw();
-    assert_matches(&h, "120x36", "start-08-slash-scrolled");
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_popup_end_of_list_and_wrap_around() {
-    let mut h = start(120, 36, 7);
-    h.type_str("/");
-    for _ in 0..30 {
-        h.key(KeyCode::Down);
-    }
-    h.draw();
-    assert_matches(&h, "120x36", "popups-00-slash-end");
-
-    let mut h = start(120, 36, 7);
-    h.type_str("/");
-    h.key(KeyCode::Up);
-    h.draw();
-    assert_matches(&h, "120x36", "xh-10-slash-up-wrap");
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_popup_wraps_descriptions_at_narrow_widths() {
-    for (cols, rows, size) in [
-        (150u16, 42u16, "150x42"),
-        (80, 24, "80x24"),
-        (60, 20, "60x20"),
-    ] {
-        let mut h = start_like(cols, rows, size, "start-06-slash");
-        h.type_str("/");
-        h.draw();
-        assert_matches(&h, size, "start-06-slash");
-    }
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_popup_is_clipped_when_taller_than_the_screen() {
-    let mut h = start_like(40, 20, "40x20", "start-06-slash");
-    h.type_str("/");
-    h.draw();
-    assert_matches(&h, "40x20", "start-06-slash");
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_filters_match_the_captures() {
-    for (typed, name) in [
-        ("/st", "xh-10-slash-st"),
-        ("/p", "xh-10-slash-p"),
-        ("/qu", "xh-10-slash-qu"),
-    ] {
-        let mut h = start(120, 36, 7);
-        h.type_str(typed);
-        h.draw();
-        assert_matches(&h, "120x36", name);
-    }
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn tab_completes_and_the_command_becomes_a_cyan_element() {
-    let mut h = start(120, 36, 7);
-    h.type_str("/re");
-    h.key(KeyCode::Tab);
-    h.draw();
-    assert_matches(&h, "120x36", "xh-10-slash-re-tab");
-    let style = h.screen.style_of("/review").unwrap();
-    assert_eq!(style.fg, ansi(6));
-    assert!(!style.add_modifier.contains(Modifier::BOLD));
-}
-
-#[test]
-#[cfg_attr(
-    not(reference_captures),
-    ignore = "needs the reference/ captures, not in this repository; see build.rs"
-)]
-fn slash_element_esc_and_leading_space() {
-    let mut h = start(120, 36, 7);
-    h.type_str("/review ");
-    h.draw();
-    assert_matches(&h, "120x36", "xg-14-slash-element");
-
-    let mut h = start(120, 36, 7);
-    h.type_str("/mo");
-    h.key(KeyCode::Esc);
-    h.draw();
-    assert_matches(&h, "120x36", "xg-14-slash-esc");
-    h.type_str("d");
-    h.draw();
-    assert_matches(&h, "120x36", "xg-14-slash-token-changed");
-
-    let mut h = start(120, 36, 7);
-    h.type_str(" /model");
-    h.draw();
-    assert_matches(&h, "120x36", "xg-14-slash-leading-space");
-}
-
-#[test]
-fn unknown_command_prints_an_info_cell_and_keeps_the_draft() {
-    let mut h = start(120, 36, 7);
-    h.type_str("/nonsense");
+    h.type_str("/nonsense now");
     enter(&mut h);
     h.draw();
+    assert_eq!(h.sent(), vec![Request::Prompt("/nonsense now".into())]);
     let r = h.screen.rows();
-    assert!(
-        r.iter().any(|l| l
-            == "• Unrecognized command '/nonsense'. Type \"/\" for a list of supported commands.")
-    );
-    assert!(r.iter().any(|l| l == "› /nonsense"));
-    assert!(h.sent().is_empty(), "nothing goes to the backend");
+    assert!(!r.iter().any(|l| l.contains("Unrecognized command")));
+    assert!(!r.iter().any(|l| l.contains("› /nonsense")));
 }
 
 #[test]
@@ -847,15 +710,15 @@ fn esc_while_a_steer_is_pending_interrupts_and_sends_it() {
 fn commands_not_allowed_during_a_task_say_so() {
     let mut h = start(120, 36, 0);
     running(&mut h, "go fake:slow");
-    h.type_str("/new");
+    h.type_str("/theme");
     enter(&mut h);
     h.draw();
     let r = h.screen.rows();
     assert!(
         r.iter()
-            .any(|l| l == "■ '/new' is disabled while a task is in progress.")
+            .any(|l| l == "■ '/theme' is disabled while a task is in progress.")
     );
-    assert_eq!(h.screen.style_of("■ '/new'").unwrap().fg, ansi(1));
+    assert_eq!(h.screen.style_of("■ '/theme'").unwrap().fg, ansi(1));
 }
 
 #[test]

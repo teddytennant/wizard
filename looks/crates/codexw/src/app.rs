@@ -75,7 +75,7 @@ pub struct ExitInfo {
     pub session_id: String,
 }
 
-/// What a `/new` or `/clear` is waiting for from the backend's next `Ready`.
+/// What a `/clear` or a session load is waiting for from the backend's next `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionSwitch {
     pub clear: bool,
@@ -388,10 +388,7 @@ impl<W: Write> App<W> {
                 self.on_ready();
             }
             Event::Commands(c) => {
-                self.pane.composer.backend_commands = c
-                    .iter()
-                    .map(|c| (c.name.clone(), c.description.clone()))
-                    .collect();
+                self.pane.composer.commands = c.clone();
                 self.commands = c.clone();
             }
             Event::ConfigChanged(c) => {
@@ -822,11 +819,13 @@ impl<W: Write> App<W> {
             {
                 self.step_effort(key.code == KeyCode::Up);
             }
-            // ctrl-/ toggles a side conversation; wizard's version needs a question
+            // ctrl-/ starts a side question; wizard's `/btw` needs the question
             KeyCode::Char('/' | '7')
                 if ctrl && self.pane.view.is_none() && !self.pane.composer.popup_active() =>
             {
-                self.run_slash("/side");
+                if self.pane.composer.is_empty() {
+                    self.pane.composer.insert_text("/btw ");
+                }
             }
             KeyCode::Esc if self.pane.view.is_none() => {
                 if self.running {
@@ -996,7 +995,6 @@ impl<W: Write> App<W> {
             }
             AppAction::ChangeModel { model, effort } => self.change_model(model, effort),
             AppAction::StartFresh => self.start_fresh(),
-            AppAction::RenameSession(n) => self.rename_session(n),
             AppAction::Decide {
                 id,
                 allow,
@@ -1030,7 +1028,6 @@ impl<W: Write> App<W> {
             AppAction::StatusLineSet { items, colors } => self.set_status_line(items, colors),
             AppAction::TitleSet(items) => self.set_title_items(items),
             AppAction::ShowStatic { title, lines } => self.open_static(&title, lines),
-            AppAction::InsertText(t) => self.pane.composer.insert_text(&t),
             AppAction::Quit => self.should_exit = true,
         }
     }
@@ -1087,14 +1084,6 @@ impl<W: Write> App<W> {
     pub fn clear_and_new(&mut self) {
         self.switch = Some(SessionSwitch {
             clear: true,
-            load: false,
-        });
-        let _ = self.tx.send(Request::NewSession);
-    }
-
-    pub fn new_session_cmd(&mut self) {
-        self.switch = Some(SessionSwitch {
-            clear: false,
             load: false,
         });
         let _ = self.tx.send(Request::NewSession);
@@ -1476,7 +1465,7 @@ pub fn display_path(p: &std::path::Path, home: Option<&str>) -> String {
     }
 }
 
-/// Plain history lines (the old session's summary after `/new`).
+/// Plain history lines (the old session's summary after `/clear`).
 #[derive(Debug)]
 pub struct SummaryCell {
     pub lines: Vec<String>,

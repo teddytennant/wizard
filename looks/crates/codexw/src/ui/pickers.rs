@@ -1,18 +1,15 @@
 // OWNER: pickers (model picker, resume picker, selection list)
 //! Selection popups and the session pickers (spec C.7, A.15).
 //!
-//! `selection` is the list view every popup shares, `resume` the full-screen session picker,
-//! `status_card` the `/status` cell. This file wires them to the app: `/model` and its effort
-//! step, `/resume`, the startup resume flows.
+//! `selection` is the list view every popup shares, `resume` the full-screen session picker.
+//! This file wires them to the app: `/model` and its effort step, `/resume`, the startup resume
+//! flows.
 
-pub mod hooks;
 pub mod keymap;
 pub mod multi_select;
 pub mod names;
-pub mod prompt;
 pub mod resume;
 pub mod selection;
-pub mod status_card;
 pub mod theme;
 
 use std::io::Write;
@@ -24,22 +21,6 @@ use crate::app::App;
 use crate::ui::AppAction;
 use crate::ui::history_cells::{ErrorCell, InfoCell};
 use selection::{ItemAction, ListSelectionView, SelectionItem, SelectionParams};
-
-/// A cell of ready-made lines, wrapped to the width without a hanging indent.
-#[derive(Debug)]
-pub struct PlainLinesCell {
-    pub lines: Vec<ratatui::text::Line<'static>>,
-}
-
-impl crate::ui::HistoryCell for PlainLinesCell {
-    fn display_lines(&self, width: u16) -> Vec<ratatui::text::Line<'static>> {
-        let opts = crate::wrap::WrapOpts::new(width.max(1) as usize);
-        self.lines
-            .iter()
-            .flat_map(|l| crate::wrap::word_wrap_line(l, &opts))
-            .collect()
-    }
-}
 
 /// What `codexw resume` asked for before the chat starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,90 +278,6 @@ impl<W: Write> App<W> {
             });
         }
         let _ = self.tx.send(Request::LoadSession(id));
-    }
-
-    /// `/rename [name]`: name this session (client-only, kept in a sidecar file).
-    pub fn rename_command(&mut self, rest: &str) {
-        if rest.is_empty() {
-            let view = prompt::PromptView::new(
-                "Name thread",
-                "Type a name and press Enter",
-                None,
-                Arc::new(AppAction::RenameSession),
-            );
-            self.pane.push_view(Box::new(view));
-            self.request_draw();
-        } else {
-            self.rename_session(rest.to_string());
-        }
-    }
-
-    pub fn rename_session(&mut self, name: String) {
-        use ratatui::style::Stylize;
-        use ratatui::text::{Line, Span};
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            self.push_cell(Box::new(ErrorCell {
-                text: "Thread name cannot be empty.".into(),
-            }));
-            return;
-        }
-        let Some(home) = self.home.clone() else {
-            self.push_cell(Box::new(ErrorCell {
-                text: "Could not find a home directory to keep the name in.".into(),
-            }));
-            return;
-        };
-        if self.session_id.is_empty() {
-            self.push_cell(Box::new(ErrorCell {
-                text: "Rename is available once the session has started.".into(),
-            }));
-            return;
-        }
-        if let Err(e) = names::set(&home, &self.session_id, &name) {
-            self.push_cell(Box::new(ErrorCell {
-                text: format!("Failed to rename the session: {e}"),
-            }));
-            return;
-        }
-        let hint = names::resume_hint(Some(&name), &self.session_id);
-        let line = Line::from(vec![
-            Span::from("• Session renamed to "),
-            Span::from(name).cyan(),
-            Span::from(". To resume this session run "),
-            Span::from(hint).cyan(),
-        ]);
-        self.push_cell(Box::new(PlainLinesCell { lines: vec![line] }));
-    }
-
-    /// `/status`: the card (spec B.13.4).
-    pub fn push_status_card(&mut self) {
-        let cfg = &self.config;
-        let provider = cfg
-            .models
-            .iter()
-            .find(|m| m.id == cfg.model)
-            .map(|m| m.provider.clone())
-            .filter(|p| !p.is_empty());
-        let chat = cfg.mode == "chat";
-        let data = status_card::StatusData {
-            model: self.model_name(),
-            effort: cfg.effort.clone(),
-            provider,
-            directory: self.cwd_display(),
-            permissions: if chat {
-                "Chat mode (no file or shell tools)".into()
-            } else {
-                "Full Access".into()
-            },
-            approval: "never (wizard does not ask)".into(),
-            agents: status_card::agents_summary(&self.opts.cwd),
-            mode: Some(cfg.mode.clone()).filter(|m| !m.is_empty()),
-            session: Some(self.session_id.clone()).filter(|s| !s.is_empty()),
-            usage: self.usage.clone(),
-            version: self.config.version().to_string(),
-        };
-        self.push_cell(Box::new(status_card::StatusCell { data }));
     }
 
     /// The startup picker was dismissed, or `--last` found nothing: carry on with the new session.

@@ -16,7 +16,6 @@ pub mod images;
 pub mod keymap;
 pub mod line_utils;
 pub mod markdown;
-pub mod outputs;
 pub mod rewind;
 pub mod skills;
 pub mod slash;

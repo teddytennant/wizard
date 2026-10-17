@@ -1,4 +1,4 @@
-//! Skills wizard can load, for the `$` and `@` popups and `/skills`. Wizard keeps each one as
+//! Skills wizard can load, for the `$` and `@` popups. Wizard keeps each one as
 //! `<root>/<name>/SKILL.md` with a YAML front matter (`name`, `description`); ACP does not list
 //! them, so codexw reads the same two roots wizard does for a user: `~/.wizard/skills` and the
 //! project's `.wizard/skills`. A project skill shadows a user skill of the same name.

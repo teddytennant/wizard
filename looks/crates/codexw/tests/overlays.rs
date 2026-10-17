@@ -1,10 +1,9 @@
-//! Screen-level behaviour of the pager, backtrack, `/diff` and approval views on the headless
+//! Screen-level behaviour of the pager, backtrack and approval views on the headless
 //! terminal: the alternate screen is entered for overlays only and left again, the inline view
 //! comes back intact, and approvals answer the backend and print their decision cells.
 
 use agent_core::{Config, Event, PermissionRequest, Request, StopReason, ToolKind};
-use codexw::app::AppOpts;
-use codexw::testing::{Harness, harness, harness_with};
+use codexw::testing::{Harness, harness};
 use crossterm::event::KeyCode;
 use ratatui::style::{Modifier, Style};
 use serde_json::json;
@@ -258,146 +257,6 @@ fn backtrack_steps_back_through_user_messages() {
     h.key(KeyCode::Char('q'));
     h.draw();
     assert!(!h.screen.in_alt_screen());
-}
-
-fn git_fixture(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("cxw-diff-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("src")).unwrap();
-    let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
-            .current_dir(&dir)
-            .args(["-c", "user.email=a@b", "-c", "user.name=x"])
-            .args(args)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        assert!(ok, "git {args:?}");
-    };
-    std::fs::write(
-        dir.join("src/lib.rs"),
-        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
-    )
-    .unwrap();
-    git(&["init", "-q", "-b", "main"]);
-    git(&["add", "-A"]);
-    git(&["commit", "-qm", "init"]);
-    dir
-}
-
-fn have_git() -> bool {
-    std::process::Command::new("git")
-        .arg("--version")
-        .output()
-        .is_ok()
-}
-
-#[test]
-fn diff_shows_tracked_and_untracked_changes() {
-    if !have_git() {
-        return;
-    }
-    let dir = git_fixture("changes");
-    std::fs::write(
-        dir.join("src/lib.rs"),
-        "pub fn add(a: i32, b: i32) -> i32 {\n    a.wrapping_add(b)\n}\npub fn extra() {}\n",
-    )
-    .unwrap();
-    std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
-    let mut h = harness_with(
-        120,
-        36,
-        AppOpts {
-            cwd: dir.clone(),
-            placeholder: Some(6),
-            ..Default::default()
-        },
-    );
-    ready(&mut h);
-    h.app.open_diff();
-    h.draw();
-    assert!(h.screen.in_alt_screen());
-    let rows = h.screen.rows();
-    assert!(rows[0].starts_with("/ D I F F / / /"));
-    assert_eq!(rows[1], "diff --git a/src/lib.rs b/src/lib.rs");
-    assert!(rows.iter().any(|r| r == "+    a.wrapping_add(b)"));
-    assert!(
-        rows.iter()
-            .any(|r| r == "diff --git a/untracked.txt b/untracked.txt")
-    );
-    assert!(rows.iter().any(|r| r == "new file mode 100644"));
-    assert_eq!(rows[34], " q to quit", "static overlay: no edit-prev hint");
-    // git's colours survive: bold header, red removal, green addition
-    let st = h.screen.style_of("diff --git a/src/lib.rs").unwrap();
-    assert!(has(st, Modifier::BOLD));
-    assert!(
-        h.screen
-            .style_of("+    a.wrapping_add(b)")
-            .unwrap()
-            .fg
-            .is_some()
-    );
-    h.key(KeyCode::Char('q'));
-    h.draw();
-    assert!(!h.screen.in_alt_screen());
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn diff_of_a_clean_tree_says_no_changes() {
-    if !have_git() {
-        return;
-    }
-    let dir = git_fixture("clean");
-    let mut h = harness_with(
-        120,
-        36,
-        AppOpts {
-            cwd: dir.clone(),
-            placeholder: Some(6),
-            ..Default::default()
-        },
-    );
-    ready(&mut h);
-    h.app.open_diff();
-    h.draw();
-    let rows = h.screen.rows();
-    assert_eq!(rows[1], "No changes detected.");
-    assert_eq!(rows[2], "~");
-    assert!(has(
-        h.screen.style_of("No changes detected.").unwrap(),
-        Modifier::ITALIC
-    ));
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn diff_outside_a_repository_says_so() {
-    if !have_git() {
-        return;
-    }
-    let dir = std::env::temp_dir().join(format!("cxw-nogit-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut h = harness_with(
-        120,
-        36,
-        AppOpts {
-            cwd: dir.clone(),
-            placeholder: Some(6),
-            ..Default::default()
-        },
-    );
-    ready(&mut h);
-    h.app.open_diff();
-    h.draw();
-    // a temp dir under a repository (unlikely) would show a diff instead; accept either
-    let t = h.screen.text();
-    assert!(
-        t.contains("not inside a git repository")
-            || t.contains("No changes detected.")
-            || t.contains("diff --git")
-    );
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 // ---- approvals --------------------------------------------------------------------------------

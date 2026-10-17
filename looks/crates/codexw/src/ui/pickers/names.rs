@@ -1,6 +1,5 @@
-//! Session names. Wizard keeps no thread names, so `/rename` is client-only: a JSON map from
-//! session id to name in `~/.config/codexw/names.json`, read by the resume picker and the exit
-//! hint.
+//! Session names given by older codexw builds: a JSON map from session id to name in
+//! `~/.config/codexw/names.json`, read by the resume picker and the exit hint.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,17 +27,6 @@ pub fn id_for(home: &str, name: &str) -> Option<String> {
         .map(|(id, _)| id)
 }
 
-pub fn set(home: &str, id: &str, name: &str) -> std::io::Result<()> {
-    let mut map = load(home);
-    map.insert(id.to_string(), name.to_string());
-    let p = path(home);
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let text = serde_json::to_string_pretty(&map).map_err(std::io::Error::other)?;
-    std::fs::write(p, text + "\n")
-}
-
 /// `codexw resume, then select my-thread (<uuid>)`, or `codexw resume <uuid>` when unnamed.
 pub fn resume_hint(name: Option<&str>, id: &str) -> String {
     match name {
@@ -56,8 +44,8 @@ mod tests {
         let home = std::env::temp_dir().join(format!("cxw-names-{}", std::process::id()));
         let h = home.to_str().unwrap();
         assert_eq!(get(h, "a"), None);
-        set(h, "a", "my-thread").unwrap();
-        set(h, "b", "other").unwrap();
+        std::fs::create_dir_all(path(h).parent().unwrap()).unwrap();
+        std::fs::write(path(h), r#"{"a": "my-thread", "b": "other"}"#).unwrap();
         assert_eq!(get(h, "a").as_deref(), Some("my-thread"));
         assert_eq!(id_for(h, "other").as_deref(), Some("b"));
         assert_eq!(

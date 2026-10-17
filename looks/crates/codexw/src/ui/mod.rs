@@ -107,8 +107,6 @@ pub enum AppAction {
         model: Option<String>,
         effort: Option<String>,
     },
-    /// Name this session (`/rename`).
-    RenameSession(String),
     /// The startup resume picker was dismissed: carry on with a new session.
     StartFresh,
     /// Answer an `Event::Permission`.
@@ -154,8 +152,6 @@ pub enum AppAction {
     TitleSet(Vec<String>),
     /// A syntax theme picked in `/theme`: use it and save it.
     SyntaxThemeSelected(String),
-    /// Put text in the composer at the cursor, as if typed (`/skills`, `List skills`).
-    InsertText(String),
     Quit,
 }
 
@@ -188,7 +184,7 @@ pub trait BottomView: Debug + Send {
     }
 }
 
-/// What an alt-screen overlay (pager, `/diff`, resume picker) tells the app.
+/// What an alt-screen overlay (pager, resume picker) tells the app.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OverlayResult {
     Pending,

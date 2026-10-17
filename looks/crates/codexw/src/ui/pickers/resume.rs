@@ -75,7 +75,7 @@ pub struct SessionRow {
     pub id: String,
     /// The first prompt.
     pub title: String,
-    /// A name given with `/rename`.
+    /// A name given with an older codexw's `/rename`.
     pub name: Option<String>,
     pub cwd: String,
     pub created: Option<i64>,
@@ -114,7 +114,7 @@ pub struct ResumeOpts {
     /// `~/.wizard/sessions`, for created times and transcript previews.
     pub sessions_dir: Option<PathBuf>,
     pub density: Density,
-    /// Session id to name, from `/rename`.
+    /// Session id to name, from an older codexw's `/rename`.
     pub names: std::collections::BTreeMap<String, String>,
     /// Where Ctrl+O saves the density.
     pub config_path: Option<PathBuf>,

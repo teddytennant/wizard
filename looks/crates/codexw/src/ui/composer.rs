@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use agent_core::SlashCommand;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -25,7 +26,7 @@ use super::key_hint::{ctrl, plain, shift};
 use super::mention_popup::{FileIndex, MentionPopup, Picked};
 use super::paste_burst::{CharDecision, FlushResult, PasteBurst};
 use super::skill_popup::SkillPopup;
-use super::slash_popup::{SlashItem, SlashPopup, has_command_prefix, wizard_item};
+use super::slash_popup::{SlashPopup, has_command_prefix};
 use super::textarea::{TextArea, TextAreaState};
 use crate::commands;
 use crate::skills::Skill;
@@ -199,9 +200,8 @@ pub struct Composer {
     burst_enabled: bool,
     cwd: PathBuf,
     file_index: Option<Arc<FileIndex>>,
-    /// Commands wizard advertised, `(name, description)`: typed, they go to wizard rather than
-    /// being unrecognized, and the popup lists the ones codexw has no entry for.
-    pub backend_commands: Vec<(String, String)>,
+    /// Commands wizard advertised; the popup lists them with the shared ones and codexw's.
+    pub commands: Vec<SlashCommand>,
 }
 
 impl std::fmt::Debug for Composer {
@@ -428,29 +428,6 @@ fn parse_slash_name(line: &str) -> Option<(&str, &str, usize)> {
     Some((name, rest, rest_start + 1))
 }
 
-/// Commands that take text after their name (spec C.6.2).
-fn supports_inline_args(name: &str) -> bool {
-    matches!(
-        name,
-        "review"
-            | "rename"
-            | "new"
-            | "clear"
-            | "fork"
-            | "plan"
-            | "goal"
-            | "ide"
-            | "keymap"
-            | "mcp"
-            | "raw"
-            | "usage"
-            | "pets"
-            | "side"
-            | "btw"
-            | "resume"
-    )
-}
-
 impl Composer {
     pub fn new(placeholder: &'static str) -> Self {
         Self {
@@ -475,7 +452,7 @@ impl Composer {
             burst: PasteBurst::default(),
             burst_enabled: false,
             cwd: std::env::current_dir().unwrap_or_default(),
-            backend_commands: Vec::new(),
+            commands: Vec::new(),
             file_index: None,
         }
     }
@@ -687,12 +664,6 @@ impl Composer {
     pub fn insert_text(&mut self, text: &str) {
         self.editor.insert_str(text);
         self.sync_bash_mode_from_text();
-        self.sync_popups();
-    }
-
-    /// `/mention`: put an `@` in the draft so the file popup opens.
-    pub fn insert_at_mention(&mut self) {
-        self.editor.insert_str("@");
         self.sync_popups();
     }
 
@@ -1273,7 +1244,6 @@ impl Composer {
             &self.editor.element_ranges(),
             &self.pending_pastes,
         );
-        let starts_with_space = text_now.starts_with(' ');
         let mut text = expanded.trim().to_string();
         if self.bang {
             // History and the app see the command with its `!`.
@@ -1284,15 +1254,6 @@ impl Composer {
         }
         if text.is_empty() {
             return ComposerEvent::None;
-        }
-        if !self.bang && !starts_with_space && !queue {
-            if let Some((name, _, _)) = parse_slash_name(&text) {
-                if !name.contains('/') && !self.knows(name) {
-                    return ComposerEvent::Info(format!(
-                        "Unrecognized command '/{name}'. Type \"/\" for a list of supported commands."
-                    ));
-                }
-            }
         }
         let chars = text.chars().count();
         if chars > MAX_USER_INPUT_TEXT_CHARS {
@@ -1322,38 +1283,25 @@ impl Composer {
         text.starts_with('!')
     }
 
-    /// A command name codexw has, or one wizard advertised.
-    fn knows(&self, name: &str) -> bool {
-        commands::lookup(name).is_some() || self.backend_commands.iter().any(|(c, _)| c == name)
+    fn menu(&self) -> Vec<SlashCommand> {
+        commands::menu(&self.commands)
     }
 
-    /// wizard's commands codexw has no entry of its own for.
-    fn wizard_items(&self) -> Vec<SlashItem> {
-        self.backend_commands
+    /// Commands that take text after their name: the ones with an argument hint.
+    fn takes_args(&self, name: &str) -> bool {
+        self.menu()
             .iter()
-            .filter(|(name, _)| commands::lookup(name).is_none())
-            .map(|(name, desc)| wizard_item(name, desc))
-            .collect()
+            .any(|c| c.name == name && !c.input_hint.is_empty())
     }
 
-    /// The draft names, exactly, a wizard command codexw has no entry for (`/mode`), so Enter
-    /// runs it instead of the popup's prefix match (`/model`).
-    fn typed_backend_only(&self) -> bool {
-        let text = self.editor.text();
-        let first = text.lines().next().unwrap_or("");
-        parse_slash_name(first).is_some_and(|(name, _, _)| {
-            commands::lookup(name).is_none() && self.backend_commands.iter().any(|(c, _)| c == name)
-        })
-    }
-
-    /// The first line as a command to run now: `/name` or `/name args` for a known command.
+    /// The first line as a command to run now: `/name` or `/name args`.
     fn slash_command_text(&self, text: &str) -> Option<String> {
         if text.starts_with(' ') {
             return None;
         }
         let first_line = text.lines().next().unwrap_or("");
         let (name, _, _) = parse_slash_name(first_line)?;
-        if name.contains('/') || !self.knows(name) {
+        if name.contains('/') {
             return None;
         }
         // Text after the name goes along as arguments; the app decides what a command does
@@ -1377,17 +1325,15 @@ impl Composer {
     }
 
     fn dispatch_slash(&mut self, cmd_text: String) -> ComposerEvent {
-        let name = parse_slash_name(&cmd_text).map(|(n, _, _)| n.to_string());
-        if let Some(spec) = name.as_deref().and_then(commands::lookup) {
-            if self.task_running && !spec.during_task {
+        if let Some((name, _, _)) = parse_slash_name(&cmd_text) {
+            if self.task_running && !commands::during_task(name) {
                 // The draft stays so the command can be sent once the task ends.
-                self.record_slash_history(&cmd_text, spec.name);
+                self.record_slash_history(&cmd_text, name);
                 return ComposerEvent::Error(format!(
-                    "'/{}' is disabled while a task is in progress.",
-                    spec.name
+                    "'/{name}' is disabled while a task is in progress."
                 ));
             }
-            self.record_slash_history(&cmd_text, spec.name);
+            self.record_slash_history(&cmd_text, name);
         }
         self.set_text("");
         ComposerEvent::Command(cmd_text)
@@ -1436,9 +1382,7 @@ impl Composer {
         }
         if plain(KeyCode::Enter).is_press(key) {
             match popup.selected() {
-                Some(sel) if !self.typed_backend_only() => {
-                    return self.command_popup_enter(&sel.name);
-                }
+                Some(sel) => return self.command_popup_enter(&sel.name),
                 _ => return self.handle_key_without_popup(key),
             }
         }
@@ -1465,11 +1409,6 @@ impl Composer {
             return ComposerEvent::None;
         };
         if let Some(sel) = popup.selected() {
-            if sel.name == "skills" {
-                self.record_slash_history("/skills", "skills");
-                self.set_text("");
-                return ComposerEvent::Command("/skills".into());
-            }
             if self.complete_keeping_draft_tail_as_args(&sel.name) {
                 return ComposerEvent::None;
             }
@@ -1511,9 +1450,9 @@ impl Composer {
         }
     }
 
-    /// `/re` + `view the diff` completes to `/review view the diff` for commands with arguments.
+    /// `/re` + `view the diff` completes to `/resume view the diff` for commands with arguments.
     fn complete_keeping_draft_tail_as_args(&mut self, name: &str) -> bool {
-        if !supports_inline_args(name) {
+        if !self.takes_args(name) {
             return false;
         }
         let text = self.editor.text().to_string();
@@ -1560,19 +1499,15 @@ impl Composer {
             }
         }
         let cmd = format!("/{name}");
-        let spec_name = commands::lookup(name).map_or(name, |s| s.name);
-        if let Some(spec) = commands::lookup(name) {
-            if self.task_running && !spec.during_task {
-                // From the popup the draft is gone; the error says why nothing ran.
-                self.record_slash_history(&cmd, spec_name);
-                self.set_text("");
-                return ComposerEvent::Error(format!(
-                    "'/{}' is disabled while a task is in progress.",
-                    spec.name
-                ));
-            }
+        if self.task_running && !commands::during_task(name) {
+            // From the popup the draft is gone; the error says why nothing ran.
+            self.record_slash_history(&cmd, name);
+            self.set_text("");
+            return ComposerEvent::Error(format!(
+                "'/{name}' is disabled while a task is in progress."
+            ));
         }
-        self.record_slash_history(&cmd, spec_name);
+        self.record_slash_history(&cmd, name);
         self.set_text("");
         ComposerEvent::Command(cmd)
     }
@@ -1866,7 +1801,7 @@ impl Composer {
                     if name.is_empty() {
                         rest.is_empty()
                     } else {
-                        has_command_prefix(name, &self.wizard_items())
+                        has_command_prefix(name, &self.menu())
                     }
                 }
                 None => false,
@@ -1887,10 +1822,8 @@ impl Composer {
             _ => {
                 if editing_name {
                     if let Some(f) = filter {
-                        self.popup = Popup::Command(SlashPopup::with_extra(
-                            f.trim_start_matches('/'),
-                            self.wizard_items(),
-                        ));
+                        self.popup =
+                            Popup::Command(SlashPopup::new(f.trim_start_matches('/'), self.menu()));
                     }
                 }
             }
@@ -1923,7 +1856,7 @@ impl Composer {
             if !space_after {
                 return None;
             }
-            commands::lookup(name).map(|_| 0..end)
+            self.menu().iter().any(|c| c.name == name).then_some(0..end)
         })();
         let slash_elements: Vec<Range<usize>> = self
             .editor
@@ -2341,13 +2274,23 @@ mod tests {
         assert_eq!(c.text(), "x");
     }
 
+    fn advertised(rows: &[(&str, &str)]) -> Vec<SlashCommand> {
+        rows.iter()
+            .map(|(name, description)| SlashCommand {
+                name: (*name).into(),
+                description: (*description).into(),
+                input_hint: String::new(),
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_wizard_command_is_run_as_typed_and_an_unknown_one_is_refused() {
+    fn wizard_commands_and_unknown_ones_are_run_as_typed() {
         let mut c = comp();
-        c.backend_commands = vec![
-            ("mode".into(), "pick or switch personality mode".into()),
-            ("help".into(), "show available commands".into()),
-        ];
+        c.commands = advertised(&[
+            ("mode", "pick or switch personality mode"),
+            ("help", "show available commands"),
+        ]);
         type_str(&mut c, "/mode");
         assert_eq!(
             c.handle_key(k(KeyCode::Enter), false),
@@ -2358,20 +2301,20 @@ mod tests {
             c.handle_key(k(KeyCode::Enter), false),
             ComposerEvent::Command("/help".into())
         );
-        type_str(&mut c, "/frobnicate");
-        assert!(matches!(
+        type_str(&mut c, "/frobnicate now");
+        assert_eq!(
             c.handle_key(k(KeyCode::Enter), false),
-            ComposerEvent::Info(t) if t.starts_with("Unrecognized command '/frobnicate'")
-        ));
+            ComposerEvent::Command("/frobnicate now".into())
+        );
     }
 
     #[test]
-    fn the_popup_lists_wizard_commands_after_codexs() {
+    fn the_popup_lists_wizard_commands_once() {
         let mut c = comp();
-        c.backend_commands = vec![
-            ("mode".into(), "pick or switch personality mode".into()),
-            ("model".into(), "pick or switch the model".into()),
-        ];
+        c.commands = advertised(&[
+            ("mode", "pick or switch personality mode"),
+            ("model", "pick or switch the model"),
+        ]);
         type_str(&mut c, "/mo");
         let rows = draw(&mut c, 120, &ctx());
         let model = rows
@@ -2382,7 +2325,7 @@ mod tests {
             .iter()
             .position(|r| r.contains("/mode "))
             .expect("/mode");
-        assert!(model < mode, "{rows:?}");
+        assert!(mode < model, "wizard's order\n{rows:?}");
         assert!(
             rows[mode].contains("pick or switch personality mode"),
             "{rows:?}"
@@ -2483,10 +2426,7 @@ mod tests {
         assert!(c.popup_active());
         let rows = draw(&mut c, 120, &ctx());
         assert_eq!(rows[1], "› /mo");
-        assert_eq!(
-            rows[3],
-            "  /model  choose what model and reasoning effort to use"
-        );
+        assert_eq!(rows[3], "  /model  pick or switch the model");
         assert_eq!(
             c.handle_key(k(KeyCode::Enter), false),
             ComposerEvent::Command("/model".into())
@@ -2496,18 +2436,15 @@ mod tests {
     }
 
     #[test]
-    fn nonsense_command_has_no_popup_and_submit_says_so_and_keeps_the_draft() {
+    fn nonsense_command_has_no_popup_and_goes_out_as_typed() {
         let mut c = comp();
         type_str(&mut c, "/nonsense");
         assert!(!c.popup_active());
-        match c.handle_key(k(KeyCode::Enter), false) {
-            ComposerEvent::Info(m) => assert_eq!(
-                m,
-                "Unrecognized command '/nonsense'. Type \"/\" for a list of supported commands."
-            ),
-            e => panic!("{e:?}"),
-        }
-        assert_eq!(c.text(), "/nonsense");
+        assert_eq!(
+            c.handle_key(k(KeyCode::Enter), false),
+            ComposerEvent::Command("/nonsense".into())
+        );
+        assert!(c.is_empty());
     }
 
     #[test]
@@ -2526,7 +2463,7 @@ mod tests {
         let mut c = comp();
         type_str(&mut c, "/re");
         c.handle_key(k(KeyCode::Tab), false);
-        assert_eq!(c.text(), "/review ");
+        assert_eq!(c.text(), "/resume ");
         assert!(!c.popup_active());
         assert_eq!(c.editor.element_ranges(), vec![0..7]);
         let area = Rect::new(0, 0, 60, 5);
@@ -2544,7 +2481,7 @@ mod tests {
         c.sync_popups();
         assert!(c.popup_active());
         c.handle_key(k(KeyCode::Tab), false);
-        assert_eq!(c.text(), "/review view the diff");
+        assert_eq!(c.text(), "/resume view the diff");
     }
 
     #[test]
@@ -2562,16 +2499,16 @@ mod tests {
     #[test]
     fn command_disabled_during_a_task_is_an_error_and_keeps_a_typed_draft() {
         let mut c = comp();
-        type_str(&mut c, "/new");
+        type_str(&mut c, "/theme");
         // Dismiss the popup so Enter takes the typed path.
         c.handle_key(k(KeyCode::Esc), true);
         match c.handle_key(k(KeyCode::Enter), true) {
             ComposerEvent::Error(m) => {
-                assert_eq!(m, "'/new' is disabled while a task is in progress.")
+                assert_eq!(m, "'/theme' is disabled while a task is in progress.")
             }
             e => panic!("{e:?}"),
         }
-        assert_eq!(c.text(), "/new");
+        assert_eq!(c.text(), "/theme");
     }
 
     #[test]

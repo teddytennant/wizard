@@ -1,6 +1,6 @@
-//! Slash commands that need more than a message: the pickers and cells behind `/skills`,
-//! `/theme`, `/raw`, `/copy` and the rest. `commands.rs` holds the table and the dispatch;
-//! each command that opens something lands here as an `impl App` method.
+//! Slash commands that need more than a message: the pickers and cells behind `/theme`,
+//! `/rewind`, `/copy` and the rest. `commands.rs` holds the dispatch; each command that opens
+//! something lands here as an `impl App` method.
 
 use std::io::Write;
 
@@ -15,35 +15,6 @@ use crate::ui::pickers::selection::{
 const USE_THEME_COLORS: &str = "status-line-use-theme-colors";
 
 impl<W: Write> App<W> {
-    /// `/skills`: Codex's two-row menu. Listing opens the `$` popup; wizard has no per-skill
-    /// switch, so the second row says so instead of faking a toggle.
-    pub fn skills_command(&mut self) {
-        let items = vec![
-            SelectionItem::new(
-                "List skills",
-                ItemAction::Close(AppAction::InsertText("$".into())),
-            )
-            .described("Tip: press @ to open this list directly."),
-            SelectionItem::new(
-                "Enable/Disable Skills",
-                ItemAction::Close(AppAction::Error(
-                    "Enabling and disabling skills is not supported by wizard. Skills load from ~/.wizard/skills and .wizard/skills; move a folder out to turn it off."
-                        .into(),
-                )),
-            )
-            .described("Enable or disable skills."),
-        ];
-        let params = SelectionParams {
-            title: Some("Skills".into()),
-            subtitle: Some("Choose an action".into()),
-            items,
-            ..Default::default()
-        };
-        self.pane
-            .push_view(Box::new(ListSelectionView::new(params)));
-        self.request_draw();
-    }
-
     /// Enter on a prompt in the backtrack preview (or `/rewind <n>`): find the wizard turn it
     /// started and ask before rewinding, since wizard also puts the edited files back.
     pub fn rewind_prompt(&mut self, nth: usize, text: String) {
@@ -149,15 +120,15 @@ impl<W: Write> App<W> {
         }
     }
 
-    /// `/rewind [turn]`: the backtrack picker, or straight to the confirmation for a wizard turn.
-    pub fn rewind_command(&mut self, rest: &str) {
+    /// `/rewind`: the backtrack picker. `/rewind <turn>` asks first, then runs the rewind flow;
+    /// anything else goes to wizard as typed.
+    pub fn rewind_command(&mut self, text: &str, rest: &str) {
         if rest.is_empty() {
             self.backtrack();
-            return;
-        }
-        match rest.parse::<u64>() {
-            Ok(turn) => self.confirm_rewind(turn, String::new()),
-            Err(_) => self.say_error("Usage: /rewind [turn]"),
+        } else if let Ok(turn) = rest.parse::<u64>() {
+            self.confirm_rewind(turn, String::new());
+        } else {
+            self.wizard_command(text.trim().to_string());
         }
     }
 
@@ -202,60 +173,9 @@ impl<W: Write> App<W> {
         self.request_draw();
     }
 
-    /// A line of history made of ready-made rows, after the echoed command when there is one.
-    pub fn push_output(&mut self, echo: Option<&str>, lines: Vec<ratatui::text::Line<'static>>) {
-        use ratatui::style::Color;
-        use ratatui::text::{Line, Span};
-        let mut all: Vec<Line<'static>> = Vec::new();
-        if let Some(c) = echo {
-            all.push(Line::from(Span::styled(
-                c.to_string(),
-                ratatui::style::Style::default().fg(Color::Magenta),
-            )));
-            all.push(Line::default());
-        }
-        all.extend(lines);
-        self.push_cell(Box::new(crate::ui::pickers::PlainLinesCell { lines: all }));
-    }
-
     /// Run a wizard slash command as a command turn: no echo, the answer comes back as a notice.
     pub fn wizard_command(&mut self, cmd: String) {
         let _ = self.tx.send(agent_core::Request::Prompt(cmd));
-    }
-
-    /// `/mcp [verbose]`: the servers wizard is configured with.
-    pub fn mcp_command(&mut self, rest: &str) {
-        let verbose = match rest.to_ascii_lowercase().as_str() {
-            "" => false,
-            "verbose" => true,
-            _ => {
-                self.say_error("Usage: /mcp [verbose]");
-                return;
-            }
-        };
-        let servers = self
-            .home
-            .as_deref()
-            .map(crate::outputs::mcp_servers)
-            .unwrap_or_default();
-        let echo = if verbose { "/mcp verbose" } else { "/mcp" };
-        self.push_output(Some(echo), crate::outputs::mcp_lines(&servers, verbose));
-    }
-
-    /// `/hooks`: the events screen.
-    pub fn hooks_command(&mut self) {
-        let (global, project) = crate::outputs::hook_tables(self.home.as_deref(), &self.opts.cwd);
-        self.pane
-            .push_view(Box::new(crate::ui::pickers::hooks::HooksView::new(
-                global, project,
-            )));
-        self.request_draw();
-    }
-
-    /// `/debug-config`: the config files in play.
-    pub fn debug_config_command(&mut self) {
-        let lines = crate::outputs::debug_config_lines(self.home.as_deref(), &self.opts.cwd);
-        self.push_output(Some("/debug-config"), lines);
     }
 
     /// `/copy` and Ctrl+O: the last answer to the clipboard.

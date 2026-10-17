@@ -12,9 +12,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
-use std::borrow::Cow;
+use agent_core::SlashCommand;
 
-use crate::commands::{COMMANDS, HIDDEN};
 use crate::style::palette;
 use crate::wrap::{WrapOpts, width_of, word_wrap_line};
 
@@ -288,66 +287,12 @@ pub fn render_rows(
 
 // ---- the command list -----------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashItem {
-    pub name: Cow<'static, str>,
-    pub description: Cow<'static, str>,
-    /// Typed names only: `/quit` for `/exit`, `/btw` for `/side`.
-    pub alias: bool,
-}
-
-/// A command wizard advertised that codexw has no entry of its own for, listed after Codex's.
-pub fn wizard_item(name: &str, description: &str) -> SlashItem {
-    SlashItem {
-        name: Cow::Owned(name.to_string()),
-        description: Cow::Owned(description.to_string()),
-        alias: false,
-    }
-}
-
-/// Popup order (spec C.6.1) with the typed-only aliases next to the command they stand for.
-pub fn all_items() -> Vec<SlashItem> {
-    let mut out = Vec::new();
-    for c in COMMANDS {
-        if c.name == "exit" {
-            if let Some((n, d)) = HIDDEN.iter().find(|(n, _)| *n == "quit") {
-                out.push(SlashItem {
-                    name: Cow::Borrowed(n),
-                    description: Cow::Borrowed(d),
-                    alias: true,
-                });
-            }
-        }
-        out.push(SlashItem {
-            name: Cow::Borrowed(c.name),
-            description: Cow::Borrowed(c.description),
-            alias: false,
-        });
-        if c.name == "side" {
-            if let Some((n, d)) = HIDDEN.iter().find(|(n, _)| *n == "btw") {
-                out.push(SlashItem {
-                    name: Cow::Borrowed(n),
-                    description: Cow::Borrowed(d),
-                    alias: true,
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Commands matching `query` (the text after the slash), Codex's then `extra`: all of them in
-/// presentation order when empty, otherwise exact matches then prefix matches, case-insensitive.
-pub fn matching_items(query: &str, extra: &[SlashItem]) -> Vec<(SlashItem, usize)> {
-    let mut items = all_items();
-    items.extend(extra.iter().cloned());
+/// Commands in `items` matching `query` (the text after the slash): all of them in menu order
+/// when empty, otherwise exact matches then prefix matches, case-insensitive.
+pub fn matching_items(query: &str, items: &[SlashCommand]) -> Vec<(SlashCommand, usize)> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
-        return items
-            .into_iter()
-            .filter(|i| !i.alias)
-            .map(|i| (i, 0))
-            .collect();
+        return items.iter().map(|i| (i.clone(), 0)).collect();
     }
     let n = q.chars().count();
     let mut exact = Vec::new();
@@ -355,30 +300,19 @@ pub fn matching_items(query: &str, extra: &[SlashItem]) -> Vec<(SlashItem, usize
     for i in items {
         let name = i.name.to_lowercase();
         if name == q {
-            exact.push((i, n));
+            exact.push((i.clone(), n));
         } else if name.starts_with(&q) {
-            prefix.push((i, n));
+            prefix.push((i.clone(), n));
         }
     }
     exact.extend(prefix);
     exact
 }
 
-/// Names in Codex's popup order filtered by `query` (text after the slash).
-pub fn visible_commands(query: &str) -> Vec<String> {
-    matching_items(query, &[])
-        .into_iter()
-        .map(|(i, _)| i.name.into_owned())
-        .collect()
-}
-
-/// True when some command, alias or `extra` entry included, starts with `name`.
-pub fn has_command_prefix(name: &str, extra: &[SlashItem]) -> bool {
+/// True when some command in `items` starts with `name`.
+pub fn has_command_prefix(name: &str, items: &[SlashCommand]) -> bool {
     let n = name.to_lowercase();
-    all_items()
-        .iter()
-        .chain(extra)
-        .any(|i| i.name.starts_with(&n))
+    items.iter().any(|i| i.name.starts_with(&n))
 }
 
 // ---- the popup ------------------------------------------------------------------------------
@@ -387,20 +321,16 @@ pub fn has_command_prefix(name: &str, extra: &[SlashItem]) -> bool {
 pub struct SlashPopup {
     filter: String,
     state: ScrollState,
-    /// wizard's commands, after Codex's.
-    extra: Vec<SlashItem>,
+    /// The `/` menu, in order.
+    items: Vec<SlashCommand>,
 }
 
 impl SlashPopup {
-    pub fn new(filter: &str) -> Self {
-        Self::with_extra(filter, Vec::new())
-    }
-
-    pub fn with_extra(filter: &str, extra: Vec<SlashItem>) -> Self {
+    pub fn new(filter: &str, items: Vec<SlashCommand>) -> Self {
         let mut p = SlashPopup {
             filter: String::new(),
             state: ScrollState::default(),
-            extra,
+            items,
         };
         p.set_filter(filter);
         p
@@ -417,8 +347,8 @@ impl SlashPopup {
         self.state.ensure_visible(n, MAX_POPUP_ROWS.min(n));
     }
 
-    fn matches(&self) -> Vec<(SlashItem, usize)> {
-        matching_items(&self.filter, &self.extra)
+    fn matches(&self) -> Vec<(SlashCommand, usize)> {
+        matching_items(&self.filter, &self.items)
     }
 
     fn rows(&self) -> Vec<PopupRow> {
@@ -444,7 +374,7 @@ impl SlashPopup {
         self.state.ensure_visible(n, MAX_POPUP_ROWS.min(n));
     }
 
-    pub fn selected(&self) -> Option<SlashItem> {
+    pub fn selected(&self) -> Option<SlashCommand> {
         let m = self.matches();
         self.state
             .selected_idx
@@ -487,6 +417,41 @@ mod tests {
     use super::*;
     use ratatui::style::Color;
 
+    /// What wizard advertises, cut down, then the shared commands and codexw's extras.
+    fn menu() -> Vec<SlashCommand> {
+        let advertised: Vec<SlashCommand> = [
+            ("model", "pick or switch the model"),
+            ("mode", "pick or switch personality mode"),
+            ("plan", "toggle plan mode"),
+            ("compact", "compact the conversation"),
+            ("status", "show session status and token usage"),
+            ("rewind", "go back to before an earlier message"),
+            (
+                "ui",
+                "switch look: /ui wizard|codex|grok|opencode|pi|jcode|claude",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, description)| SlashCommand {
+            name: name.into(),
+            description: description.into(),
+            input_hint: String::new(),
+        })
+        .collect();
+        crate::commands::menu(&advertised)
+    }
+
+    fn popup(filter: &str) -> SlashPopup {
+        SlashPopup::new(filter, menu())
+    }
+
+    fn visible(query: &str) -> Vec<String> {
+        matching_items(query, &menu())
+            .into_iter()
+            .map(|(i, _)| i.name)
+            .collect()
+    }
+
     fn dump(p: &SlashPopup, w: u16) -> Vec<String> {
         let h = p.required_height(w);
         let area = Rect::new(0, 0, w, h);
@@ -504,61 +469,41 @@ mod tests {
     }
 
     #[test]
-    fn empty_filter_lists_popup_order_without_aliases() {
-        let names = visible_commands("");
+    fn empty_filter_lists_the_whole_menu_in_order() {
+        let names: Vec<String> = menu().into_iter().map(|c| c.name).collect();
+        assert_eq!(visible(""), names);
         assert_eq!(names[0], "model");
-        assert!(!names.iter().any(|n| n == "quit"));
-        assert!(!names.iter().any(|n| n == "btw"));
-        assert!(names.iter().any(|n| n == "exit"));
-        let pos = |n: &str| names.iter().position(|x| *x == n).unwrap();
-        assert!(pos("status") < pos("title"));
+        assert!(names.iter().any(|n| n == "quit"));
     }
 
     #[test]
     fn filter_is_prefix_with_exact_first() {
-        assert_eq!(visible_commands("mo"), vec!["model"]);
-        assert_eq!(visible_commands("st"), vec!["status", "statusline", "stop"]);
-        assert_eq!(
-            visible_commands("p"),
-            vec![
-                "permissions",
-                "plan",
-                "pets",
-                "plugins",
-                "ps",
-                "personality"
-            ]
-        );
-        assert_eq!(visible_commands("qu"), vec!["quit"]);
-        assert_eq!(visible_commands("ar"), vec!["archive"]);
-        assert_eq!(visible_commands("MO"), vec!["model"]);
-        assert!(visible_commands("nonsense").is_empty());
+        assert_eq!(visible("mo"), vec!["model", "mode"]);
+        assert_eq!(visible("mode"), vec!["mode", "model"]);
+        assert_eq!(visible("st"), vec!["status", "statusline"]);
+        assert_eq!(visible("qu"), vec!["quit"]);
+        assert_eq!(visible("MO"), vec!["model", "mode"]);
+        assert!(visible("nonsense").is_empty());
         // Substring and fuzzy matches are not used.
-        assert!(!visible_commands("ac").iter().any(|n| n == "compact"));
-        // An exact match jumps ahead of longer prefix matches.
-        assert_eq!(visible_commands("pet")[0], "pets");
-        assert_eq!(visible_commands("status")[0], "status");
+        assert!(!visible("ac").iter().any(|n| n == "compact"));
     }
 
     #[test]
     fn slash_st_snapshot() {
-        // command_popup_filter_reset_after_scroll, narrowed to the three rows.
-        let p = SlashPopup::new("st");
-        let rows = dump(&p, 72);
+        let rows = dump(&popup("st"), 72);
         assert_eq!(
             rows,
             vec![
-                "  /status      show current session configuration and token usage",
+                "  /status      show session status and token usage",
                 "  /statusline  configure which items appear in the status line",
-                "  /stop        stop all background terminals",
             ]
         );
     }
 
     #[test]
     fn first_row_is_one_accent_run_and_prefix_is_bold() {
-        let p = SlashPopup::new("st");
-        let area = Rect::new(0, 0, 72, 3);
+        let p = popup("st");
+        let area = Rect::new(0, 0, 72, 2);
         let mut buf = Buffer::empty(area);
         p.render(area, &mut buf);
         let accent = palette().accent();
@@ -590,52 +535,52 @@ mod tests {
 
     #[test]
     fn eight_items_at_120_and_selection_scrolls_one_row_at_a_time() {
-        let mut p = SlashPopup::new("");
+        let mut p = popup("");
         assert_eq!(p.required_height(120), 8);
         let rows = dump(&p, 120);
-        assert_eq!(
-            rows[0],
-            "  /model         choose what model and reasoning effort to use"
-        );
-        // The name column is the widest name over all rows, `/experimental`, plus two.
-        assert!(rows[1].starts_with("  /fast          1.5x speed, increased usage"));
-        assert!(rows[2].starts_with("  /ide           include current selection"));
+        // The name column is the widest name over all rows, `/statusline`, plus two.
+        assert_eq!(rows[0], "  /model       pick or switch the model");
+        assert_eq!(rows[1], "  /mode        pick or switch personality mode");
         for _ in 0..12 {
             p.move_down();
         }
         let rows = dump(&p, 120);
-        assert!(rows.last().unwrap().starts_with("  /review "), "{rows:?}");
-        assert!(rows[0].starts_with("  /vim "), "{rows:?}");
+        assert!(rows.last().unwrap().starts_with("  /theme "), "{rows:?}");
+        assert!(rows[0].starts_with("  /rewind "), "{rows:?}");
     }
 
     #[test]
     fn up_from_the_top_wraps_to_the_last_row() {
-        let mut p = SlashPopup::new("");
+        let mut p = popup("");
         p.move_up();
-        assert_eq!(p.selected().unwrap().name, "ui");
+        assert_eq!(p.selected().unwrap().name, "copy");
         p.move_down();
         assert_eq!(p.selected().unwrap().name, "model");
     }
 
     #[test]
     fn long_descriptions_wrap_under_the_name_column() {
-        let p = SlashPopup::new("");
-        // At 80 columns `/ide` wraps to a second line (spec C.3: 9 lines).
-        assert_eq!(p.required_height(80), 9);
-        let rows = dump(&p, 80);
-        assert!(rows[3].trim_start().starts_with("your IDE"), "{rows:?}");
+        let p = popup("");
+        assert_eq!(p.required_height(60), 9);
+        let rows = dump(&p, 60);
+        assert!(
+            rows[6].starts_with("  /ui          switch look:"),
+            "{rows:?}"
+        );
+        assert!(rows[7].starts_with(&" ".repeat(15)), "{rows:?}");
+        assert!(rows[7].trim_end().ends_with("claude"), "{rows:?}");
     }
 
     #[test]
     fn no_rows_shows_a_dim_italic_placeholder() {
-        let p = SlashPopup::new("zzz");
+        let p = popup("zzz");
         assert_eq!(p.required_height(80), 1);
         assert_eq!(dump(&p, 80), vec!["  no matches"]);
     }
 
     #[test]
     fn filter_change_resets_selection() {
-        let mut p = SlashPopup::new("");
+        let mut p = popup("");
         p.move_down();
         p.move_down();
         assert_eq!(p.selected_index(), Some(2));

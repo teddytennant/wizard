@@ -1,6 +1,6 @@
-// OWNER: pager (Ctrl+T transcript, /diff, backtrack preview)
-//! Alt-screen overlays (spec A.11, A.12): the transcript pager, the static pager used by `/diff`
-//! and the full-screen approval details, and the backtrack preview that rides on the transcript.
+// OWNER: pager (Ctrl+T transcript, backtrack preview)
+//! Alt-screen overlays (spec A.11, A.12): the transcript pager, the static pager used by the
+//! full-screen approval details, and the backtrack preview that rides on the transcript.
 //!
 //! Ported from Codex's `pager_overlay.rs` and `app_backtrack.rs`. Codex keeps a list of
 //! renderables; here the document is flattened into rows at the current width, which gives the
@@ -8,14 +8,13 @@
 //! the live tail or the highlight change.
 
 use std::io::Write;
-use std::process::Command;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span};
+use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::app::App;
@@ -691,7 +690,7 @@ impl Overlay for TranscriptOverlay {
 
 // ---- static overlay ---------------------------------------------------------------------------
 
-/// A fixed document under a title: `/diff`, the full-screen approval details.
+/// A fixed document under a title: the full-screen approval details.
 #[derive(Debug)]
 pub struct StaticOverlay {
     view: PagerView,
@@ -741,194 +740,6 @@ impl Overlay for StaticOverlay {
     }
 }
 
-// ---- ANSI text to lines -----------------------------------------------------------------------
-
-/// Parse the SGR sequences of `git diff --color` into styled lines. Every other escape and every
-/// control character is dropped, so file content cannot move the cursor or retitle the window.
-pub fn ansi_lines(text: &str) -> Vec<Line<'static>> {
-    text.lines().map(ansi_line).collect()
-}
-
-fn ansi_line(src: &str) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut style = Style::default();
-    let mut buf = String::new();
-    let mut it = src.chars().peekable();
-    let flush = |buf: &mut String, style: Style, spans: &mut Vec<Span<'static>>| {
-        if !buf.is_empty() {
-            spans.push(Span::styled(std::mem::take(buf), style));
-        }
-    };
-    while let Some(c) = it.next() {
-        match c {
-            '\u{1b}' => {
-                if it.peek() == Some(&'[') {
-                    it.next();
-                    let mut params = String::new();
-                    let mut fin = None;
-                    for p in it.by_ref() {
-                        if p.is_ascii_digit() || p == ';' || p == ':' {
-                            params.push(p);
-                        } else {
-                            fin = Some(p);
-                            break;
-                        }
-                    }
-                    if fin == Some('m') {
-                        flush(&mut buf, style, &mut spans);
-                        style = apply_sgr(style, &params);
-                    }
-                } else {
-                    // OSC and friends: skip to the terminator.
-                    if it.peek() == Some(&']') {
-                        for p in it.by_ref() {
-                            if p == '\u{7}' || p == '\u{1b}' {
-                                break;
-                            }
-                        }
-                    } else {
-                        it.next();
-                    }
-                }
-            }
-            '\t' => buf.push_str("    "),
-            c if c.is_control() => {}
-            c => buf.push(c),
-        }
-    }
-    flush(&mut buf, style, &mut spans);
-    Line::from(spans)
-}
-
-fn apply_sgr(mut style: Style, params: &str) -> Style {
-    let nums: Vec<u32> = if params.is_empty() {
-        vec![0]
-    } else {
-        params
-            .split([';', ':'])
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
-    let mut i = 0;
-    while i < nums.len() {
-        match nums[i] {
-            0 => style = Style::default(),
-            1 => style = style.add_modifier(Modifier::BOLD),
-            2 => style = style.add_modifier(Modifier::DIM),
-            3 => style = style.add_modifier(Modifier::ITALIC),
-            4 => style = style.add_modifier(Modifier::UNDERLINED),
-            7 => style = style.add_modifier(Modifier::REVERSED),
-            9 => style = style.add_modifier(Modifier::CROSSED_OUT),
-            22 => style = style.remove_modifier(Modifier::BOLD | Modifier::DIM),
-            23 => style = style.remove_modifier(Modifier::ITALIC),
-            24 => style = style.remove_modifier(Modifier::UNDERLINED),
-            27 => style = style.remove_modifier(Modifier::REVERSED),
-            n @ 30..=37 => style = style.fg(ansi_color(n - 30)),
-            39 => style.fg = None,
-            n @ 40..=47 => style = style.bg(ansi_color(n - 40)),
-            49 => style.bg = None,
-            n @ 90..=97 => style = style.fg(ansi_color(n - 90 + 8)),
-            n @ 100..=107 => style = style.bg(ansi_color(n - 100 + 8)),
-            n @ (38 | 48) => {
-                let color = match nums.get(i + 1) {
-                    Some(5) => nums
-                        .get(i + 2)
-                        .map(|&v| Color::Indexed(v as u8))
-                        .inspect(|_| i += 2),
-                    Some(2) => {
-                        let c = (nums.get(i + 2), nums.get(i + 3), nums.get(i + 4));
-                        if let (Some(&r), Some(&g), Some(&b)) = c {
-                            i += 4;
-                            Some(Color::Rgb(r as u8, g as u8, b as u8))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(c) = color {
-                    style = if n == 38 { style.fg(c) } else { style.bg(c) };
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    style
-}
-
-fn ansi_color(n: u32) -> Color {
-    Color::Indexed(n as u8)
-}
-
-// ---- git diff ---------------------------------------------------------------------------------
-
-/// Tracked changes, then each untracked file as a diff against `/dev/null`, as Codex's
-/// `get_git_diff` does. `Ok(None)` when `cwd` is not inside a repository.
-pub fn git_diff(cwd: &std::path::Path) -> Result<Option<String>, String> {
-    fn git(cwd: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-        // Repository config must not pick executable helpers, and the diff must not write
-        // anything (no index refresh, no hooks).
-        Command::new("git")
-            .current_dir(cwd)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "core.fsmonitor=false",
-            ])
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output()
-    }
-    let inside = git(cwd, &["rev-parse", "--is-inside-work-tree"]).map_err(|e| e.to_string())?;
-    if !inside.status.success() || !String::from_utf8_lossy(&inside.stdout).starts_with("true") {
-        return Ok(None);
-    }
-    const DIFF: [&str; 6] = [
-        "diff",
-        "--no-textconv",
-        "--no-ext-diff",
-        "--submodule=short",
-        "--ignore-submodules=dirty",
-        "--color",
-    ];
-    let tracked = git(cwd, &DIFF).map_err(|e| e.to_string())?;
-    if !tracked.status.success() {
-        return Err(format!("git diff failed with status {}", tracked.status));
-    }
-    let mut text = String::from_utf8_lossy(&tracked.stdout).into_owned();
-    let others =
-        git(cwd, &["ls-files", "--others", "--exclude-standard"]).map_err(|e| e.to_string())?;
-    for file in String::from_utf8_lossy(&others.stdout)
-        .split('\n')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let mut args = DIFF.to_vec();
-        args.extend(["--no-index", "--", "/dev/null", file]);
-        // `--no-index` exits 1 when the files differ.
-        let out = git(cwd, &args).map_err(|e| e.to_string())?;
-        text.push_str(&String::from_utf8_lossy(&out.stdout));
-    }
-    Ok(Some(text))
-}
-
-/// The lines `/diff` shows for a `git_diff` result.
-pub fn diff_pager_lines(result: Result<Option<String>, String>) -> Vec<Line<'static>> {
-    let text = match result {
-        Ok(Some(t)) => t,
-        Ok(None) => "`/diff` — _not inside a git repository_".to_string(),
-        Err(e) => format!("Failed to compute diff: {e}"),
-    };
-    if text.trim().is_empty() {
-        vec![Line::from("No changes detected.".italic())]
-    } else {
-        ansi_lines(&text)
-    }
-}
-
 // ---- App entry points -------------------------------------------------------------------------
 
 impl<W: Write> App<W> {
@@ -957,12 +768,6 @@ impl<W: Write> App<W> {
         self.rewind_prompt(nth, text);
     }
 
-    /// `/diff`: static pager titled `D I F F`.
-    pub fn open_diff(&mut self) {
-        let lines = diff_pager_lines(git_diff(&self.opts.cwd));
-        self.open_overlay(Box::new(StaticOverlay::new("D I F F", lines)));
-    }
-
     /// A static pager opened by a bottom view (`E X E C`, `P A T C H`).
     pub fn open_static(&mut self, title: &str, lines: Vec<Line<'static>>) {
         self.open_overlay(Box::new(StaticOverlay::new(title, lines)));
@@ -974,6 +779,7 @@ mod tests {
     use super::*;
     use crate::style::{ColorLevel, Palette, set_palette};
     use crate::ui::HistoryCell;
+    use ratatui::style::Color;
 
     #[derive(Debug)]
     struct TestCell {
@@ -1403,31 +1209,5 @@ mod tests {
         let count = |r: &[String]| r.iter().filter(|l| l.contains("word")).count();
         assert!(count(&narrow) > count(&wide));
         assert_eq!(narrow[0].chars().count(), 40);
-    }
-
-    #[test]
-    fn ansi_parser_keeps_sgr_and_drops_everything_else() {
-        let l = ansi_line(
-            "\u{1b}[1mdiff\u{1b}[0m \u{1b}[38;5;2m+x\u{1b}[39m\u{1b}]0;evil\u{7}y\u{1b}[2Jz\tq",
-        );
-        let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "diff +xyz    q");
-        assert!(l.spans[0].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(l.spans[2].style.fg, Some(Color::Indexed(2)));
-    }
-
-    #[test]
-    fn empty_diff_says_so_in_italic() {
-        let l = diff_pager_lines(Ok(Some("\n".into())));
-        assert_eq!(l.len(), 1);
-        assert_eq!(l[0].spans[0].content, "No changes detected.");
-        assert!(l[0].spans[0].style.add_modifier.contains(Modifier::ITALIC));
-        let l = diff_pager_lines(Ok(None));
-        assert_eq!(
-            l[0].spans[0].content,
-            "`/diff` — _not inside a git repository_"
-        );
-        let l = diff_pager_lines(Err("boom".into()));
-        assert_eq!(l[0].spans[0].content, "Failed to compute diff: boom");
     }
 }
