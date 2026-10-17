@@ -5,6 +5,7 @@
 //! `wizard acp` onto this; `backend-claude` maps `claude -p` stream-json onto it.
 //! Frontends never see protocol JSON.
 
+pub mod commands;
 pub mod mock;
 pub mod procs;
 pub mod transcript;
