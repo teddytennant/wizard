@@ -1,0 +1,33 @@
+[package]
+name = "piw"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "piw"
+path = "src/main.rs"
+
+[lib]
+name = "piw"
+path = "src/lib.rs"
+
+[dependencies]
+agent-core.workspace = true
+tuikit.workspace = true
+backend-wizard.workspace = true
+backend-claude.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+similar = "2"
+signal-hook = "0.3"
+libc = "0.2"
+regex = "1"
+fancy-regex = "0.16"

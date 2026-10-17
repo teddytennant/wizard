@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                             1.5K / 256K
+
+            ┌─ Settings ───────────────────────────────────── [✗] ─┐
+            │                                                      │
+            │   / to search                                        │
+            │  ──────────────────────────────────────────────────  │
+            │   Appearance ──────────────────────────────────────  │
+            │  ▸ Compact mode                             off      │
+            │  ▸ Default screen mode               Fullscreen  ›   │
+            │  ▸ Show timestamps                           on      │
+            │  ▸ Timeline sidebar                         off      │
+            │  ▸ Snap prompt to top on send                on      │
+            │  ▸ Disable vim input mode                    on      │
+            │                                                      │
+            │         Tip · Ask Wizard to change a setting         │
+            │                                                      │
+            │     ↑/↓/j/k nav  |  g/G top/btm  |  Space toggle     │
+  ╭─────────│  Enter toggle  |  → expand  |  / search  |  d reset  │─────────╮
+  │ ❯       │                     F2/Esc close                     │         │
+  ╰─────────└──────────────────────────────────────────────────────┘ (high) ─╯
+
+

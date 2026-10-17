@@ -1,0 +1,51 @@
+# Send a status mail using splatting and here-strings.
+  
+$smtp = @{
+    SmtpServer = 'smtp.contoso.example'
+    Port       = 587
+    UseSsl     = $true
+    From       = 'monitor@contoso.example'
+    To         = @('ops@contoso.example', 'oncall@contoso.example')
+}
+
+$disks = Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' |
+    Select-Object DeviceID,
+        @{ Name = 'SizeGB'; Expression = { [math]::Round($_.Size / 1GB, 1) } },
+        @{ Name = 'FreePct'; Expression = { [math]::Round(100 * $_.FreeSpace / $_.Size, 1) } }
+
+$low = $disks | Where-Object FreePct -lt 15
+
+<#
+   Build the body. The expandable here-string below
+   interpolates $env:COMPUTERNAME and the sub-expression.
+#>
+$body = @"
+Host: $env:COMPUTERNAME
+Date: $(Get-Date -Format 'dddd d MMMM yyyy')
+Disks below threshold: $($low.Count)
+
+"Quoted" text and a literal `$dollar stay intact.
+Température OK — 全て正常 👍
+"@
+
+$raw = @'
+This one is literal: $env:PATH is not expanded, "quotes" are fine,
+and backslashes like C:\Windows\System32 need no escaping.
+'@
+
+if ($low.Count -gt 0) {
+    $smtp['Subject'] = "[WARN] Low disk space on $env:COMPUTERNAME"
+    Send-MailMessage @smtp -Body $body
+}
+elseif ($disks.Count -eq 0) {
+    Write-Warning 'No fixed disks found'
+}
+else {
+    Write-Output "All $($disks.Count) disks healthy"   
+}
+
+$hex = 0xFF; $big = 1.5e3; $neg = -42
+switch -Regex ($body) {
+    '^Host:\s+(\w+)' { "Matched host $($Matches[1])"; break }
+    default          { 'no host line' }
+}

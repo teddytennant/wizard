@@ -1,0 +1,59 @@
+;;;; Tiny parser combinators over strings.
+;;;; A parser is a function (string pos) -> (values result new-pos) or NIL.  
+
+(defun p-char (c)
+  (lambda (s pos)
+    (when (and (< pos (length s)) (char= (char s pos) c))
+      (values c (1+ pos)))))
+
+(defun p-satisfy (pred)
+  (lambda (s pos)
+    (when (and (< pos (length s)) (funcall pred (char s pos)))
+      (values (char s pos) (1+ pos)))))
+
+(defun p-many (p)
+  (lambda (s pos)
+    (let ((acc '()))
+      (loop
+        (multiple-value-bind (r np) (funcall p s pos)
+          (if np
+              (setf acc (cons r acc) pos np)
+              (return))))
+      (values (nreverse acc) pos))))
+
+(defun p-seq (&rest ps)
+  (lambda (s pos)
+    (let ((results '()))
+      (dolist (p ps (values (nreverse results) pos))
+        (multiple-value-bind (r np) (funcall p s pos)
+          (unless np (return nil))
+          (push r results)
+          (setf pos np))))))
+
+(defun p-or (&rest ps)
+  (lambda (s pos)
+    (dolist (p ps nil)
+      (multiple-value-bind (r np) (funcall p s pos)
+        (when np (return (values r np)))))))
+
+(defun p-map (fn p)
+  (lambda (s pos)
+    (multiple-value-bind (r np) (funcall p s pos)
+      (when np (values (funcall fn r) np)))))
+
+(defparameter *digit* (p-satisfy #'digit-char-p))
+
+(defparameter *integer*
+  (p-map (lambda (ds) (parse-integer (coerce ds 'string)))
+         (p-seq-flat (p-satisfy #'digit-char-p) (p-many *digit*))))
+
+(defun run-parser (p string)
+  (multiple-value-bind (r pos) (funcall p string 0)
+    (if (and pos (= pos (length string)))
+        r
+        (error "Parse error at ~D in ~S" (or pos 0) string))))
+
+;; => 42, and a deliberately unicode-laden error message
+(print (run-parser *integer* "42"))   
+(handler-case (run-parser *integer* "４２abc")
+  (error (e) (format t "~&échec: ~A ✗~%" e)))

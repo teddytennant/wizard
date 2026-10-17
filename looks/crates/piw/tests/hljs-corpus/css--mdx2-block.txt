@@ -1,0 +1,2 @@
+.a > .b:hover { color: #fff; margin: 0 auto; }
+@media (max-width: 600px) { body { font: 12px/1.5 sans-serif; } }

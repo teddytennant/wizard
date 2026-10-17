@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acme &mdash; Build faster</title>
+  <link rel="stylesheet" href="/css/site.css">
+  <style>
+    :root { --brand: #0b6cf0; --gap: 1.5rem; }
+    * { box-sizing: border-box; }
+    body { font: 16px/1.5 "Inter", system-ui, sans-serif; margin: 0; color: #222; }
+    .hero { padding: calc(var(--gap) * 3) var(--gap); background: linear-gradient(135deg, #e8f0ff 0%, #fff 60%); }
+    .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: 0 0 .5em; }
+    .btn:hover, .btn:focus-visible { background: color-mix(in srgb, var(--brand) 85%, #000); }
+    a[href^="http"]::after { content: " \2197"; }  
+    @media (max-width: 600px) { .hero { padding: var(--gap); } }
+  </style>
+</head>
+<body class=home>
+  <!-- Navigation -->
+  <header>
+    <nav aria-label="Main">
+      <a href="/" class="logo">Acme</a>
+      <ul>
+        <li><a href=/pricing>Pricing</a></li>
+        <li><a href="/docs" target=_blank rel="noopener">Docs</a></li>
+        <li><a href="mailto:hi@example.com?subject=Hello&amp;body=Salut">Contact</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="hero">
+    <h1>Ship in minutes, not weeks</h1>
+    <p>Trusted by 10,000+ teams &mdash; from caf&eacute;s to Fortune&nbsp;500s. 🚀</p>
+    <button class="btn" id="cta" onclick="track('cta', {where: 'hero'}); return false;" disabled>Get started</button>
+    <img src="hero.png" alt="Screenshot of the dashboard" width=640 height="360" loading=lazy>  
+  </main>
+
+  <footer>&copy; 2024 Acme Inc. &middot; <a href="/privacy">Privacy</a>   </footer>
+
+  <script>
+    const cta = document.getElementById('cta');
+    function track(name, props = {}) {
+      navigator.sendBeacon('/t', JSON.stringify({ name, ...props, t: Date.now() }));
+    }
+    window.addEventListener('DOMContentLoaded', () => {
+      cta.disabled = false;
+      console.log(`ready in ${performance.now().toFixed(1)}ms`);
+    });
+  </script>
+</body>
+</html>

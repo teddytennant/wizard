@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+ [1m[38;2;190;210;235mjcode[0m[38;2;80;80;80m · client[39m
+ [38;2;80;80;80mserver: Beach 🏄 · v0.95.0-dev[39m
+ [38;2;80;80;80mclient: Wolf 🐺 · v0.95.0-dev
+[39m [38;2;80;80;80m/model to switch · fake · [1m[38;2;255;150;200mGrok 4.7[0m
+ [38;2;80;80;80m/login to add provider[39m
+ [38;2;80;80;80m○ anthropic[39m
+ [38;2;80;80;80m○ openrouter[39m
+ [38;2;80;80;80m○ openai[39m
+ [38;2;80;80;80m○ cursor[39m
+ [38;2;80;80;80m○ copilot[39m
+[38;2;255;213;128m⚠ grok-4.7 default[38;2;80;80;80m current[38;2;255;213;128m  fake[38;2;80;80;80m · [38;2;255;213;128mapi key[39m
+[38;2;128;203;196m⚠ grok-4.6[39m                [38;2;80;80;80m  fake · api key[39m
+[38;2;128;203;196m⚠ grok-4.7-fast[39m           [38;2;80;80;80m  fake · api key[39m
+[38;2;80;80;80m⚠ http://127.0.0.1:18793/v1; fallback: static provider model list[39m
+[38;2;80;80;80m↑↓ choose · Enter select · Esc cancel · Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next fav
+[38;2;255;80;80m1[38;2;138;180;248m> [39m/model                                                                                                             [38;2;255;193;7m⏳
+[39m                                                                [38;2;140;180;255m [38;2;140;140;150m…/jcodew-cmp/proj[39m [38;2;140;140;150m3.1k/200k [38;2;50;50;60m▱▱▱▱▱▱▱▱▱▱[1m[38;2;100;200;100m 2%[0m [38;2;140;140;150mfake[39m [1m[38;2;255;135;200mGrok 4.7
+
+
+
+
+
+
+
+
+
+
+
+
+

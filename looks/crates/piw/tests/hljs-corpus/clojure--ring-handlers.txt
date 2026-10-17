@@ -1,0 +1,58 @@
+(ns myapp.web.handlers
+  "HTTP handlers for the public API."  
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
+            [cheshire.core :as json]
+            [ring.util.response :refer [response status content-type]])
+  (:import (java.util UUID)
+           (java.time Instant)))
+
+;; ---------------------------------------------------------------
+;; State
+;; ---------------------------------------------------------------
+
+(defonce ^:private db (atom {:users {} :counter 0}))
+
+(def ^:const max-name-length 64) ; longueur max, 最大長
+
+(def email-re #"^[\w.+-]+@[\w-]+\.[\w.]+$")
+
+(defn- json-response
+  "Wraps `body` as a JSON response with the given `code`."
+  ([body] (json-response body 200))
+  ([body code]
+   (-> (response (json/generate-string body))
+       (status code)
+       (content-type "application/json; charset=utf-8"))))
+
+(defn valid-user?
+  [{:keys [name email] :as user}]
+  (and (string? name)
+       (<= 1 (count name) max-name-length)
+       (boolean (re-matches email-re (str email)))))
+
+(defn create-user!
+  [{{:strs [name email]} :params :as req}]
+  (let [user {:id (str (UUID/randomUUID)) :name name :email email
+              :created (str (Instant/now))}]
+    (if (valid-user? user)
+      (do (swap! db update :users assoc (:id user) user)
+          (swap! db update :counter inc)
+          (log/infof "created user %s <%s>" name email)
+          (json-response user 201))
+      (json-response {:error "invalid user" :fields [:name :email]} 422))))
+
+(defn get-user
+  [{{:keys [id]} :path-params}]
+  (if-let [u (get-in @db [:users id])]
+    (json-response u)
+    (json-response {:error (str "no such user: " id)} 404)))
+
+(defn search-users [{:keys [query-params]}]
+  (let [q (str/lower-case (get query-params "q" ""))]
+    (->> (vals (:users @db))
+         (filter #(str/includes? (str/lower-case (:name %)) q))
+         (sort-by :name)
+         (take 20)
+         (map #(select-keys % [:id :name]))
+         json-response)))   

@@ -1,0 +1,52 @@
+;; Configuration loading and validation.
+  
+(ns config.loader
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.spec.alpha :as s]))
+
+(s/def ::port (s/int-in 1 65536))
+(s/def ::host (s/and string? #(re-matches #"[a-z0-9.-]+" %)))
+(s/def ::pool-size pos-int?)
+(s/def ::db (s/keys :req-un [::host ::port] :opt-un [::pool-size]))
+(s/def ::features (s/coll-of keyword? :kind set?))
+(s/def ::config (s/keys :req-un [::db] :opt-un [::features]))
+
+(def defaults
+  {:db {:host "localhost" :port 5432 :pool-size 8}
+   :features #{:metrics :tracing}
+   :banner "Bienvenue — ようこそ"})
+
+(defn- deep-merge
+  [& maps]
+  (apply merge-with
+         (fn [a b] (if (and (map? a) (map? b)) (deep-merge a b) b))
+         maps))
+
+(defn read-edn-file
+  "Returns parsed EDN or nil if the file does not exist."
+  [path]
+  (let [f (io/file path)]
+    (when (.exists f)
+      (with-open [r (java.io.PushbackReader. (io/reader f))]
+        (edn/read {:readers {'env (fn [k] (System/getenv (str k)))}} r)))))
+
+(defn env-override
+  [cfg]
+  (cond-> cfg
+    (System/getenv "DB_HOST") (assoc-in [:db :host] (System/getenv "DB_HOST"))
+    (System/getenv "DB_PORT") (assoc-in [:db :port] (Long/parseLong (System/getenv "DB_PORT")))))
+
+(defn load-config
+  [& {:keys [path] :or {path "config.edn"}}]
+  (let [cfg (-> (deep-merge defaults (read-edn-file path))
+                env-override)]
+    (when-not (s/valid? ::config cfg)
+      (throw (ex-info "Invalid configuration"
+                      {:problems (s/explain-data ::config cfg)   
+                       :path path})))
+    cfg))
+
+(comment
+  (load-config :path "dev/config.edn")
+  (s/explain ::config {:db {:host "Bad Host!" :port 99999}}))

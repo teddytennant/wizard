@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+                     ┌────────────────────────────────────────────────────────────────────── [✗] ─┐
+                     │  Context usage  Usage limit  Session info                                  │
+                     │────────────────────────────────────────────────────────────────────────────│
+                     │  Usage limit                                                               │
+                     │                                                                            │
+                     │  No billing data available.                                                │
+                     │  Wizard does not report account limits over ACP.                           │
+                     │                                                                            │
+                     │  Session usage: no model calls yet in this session.                        │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+  ╭──────────────────│                                                                            │──────────────────╮
+  │ ❯                │       Tab switch  |  ↑/↓ scroll  |  c copy session ID  |  Esc close        │                  │
+  ╰──────────────────└────────────────────────────────────────────────────────────────────────────┘ Grok 4.7 (high) ─╯
+
+

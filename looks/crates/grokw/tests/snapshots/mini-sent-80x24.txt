@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                              19K / 256K
+
+
+     ❯ Edit README.md: change hello to hello there. Then reply       4:53 PM
+       with one short sentence.
+
+
+     I'll update README.md so "hello" becomes "hello there", then    4:53 PM
+     reply in one short sentence.
+
+     ◈ Searched 1 pattern
+
+
+   ⠦ Waiting for response… 0.0s                             1.9s ⇣19.3k [stop]
+
+   Tight on space? Try /compact-mode
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                        │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts

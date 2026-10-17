@@ -1,0 +1,60 @@
+function Get-ServiceReport {
+    <#  
+    .SYNOPSIS
+        Returns a report object for each matching Windows service.
+    .NOTES
+        Requires PowerShell 5.1 or later.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'ByName')]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(ParameterSetName = 'ByName', ValueFromPipeline = $true,
+                   ValueFromPipelineByPropertyName = $true)]
+        [Alias('ServiceName')]
+        [string[]]$Name = '*',
+
+        [Parameter(ParameterSetName = 'ByStatus')]
+        [ValidateSet('Running', 'Stopped', 'Paused')]
+        [string]$Status,
+
+        [switch]$IncludeDependencies
+    )
+
+    begin {
+        $count = 0
+        Write-Verbose 'Starting report'
+    }
+
+    process {
+        foreach ($n in $Name) {
+            $services = if ($PSCmdlet.ParameterSetName -eq 'ByStatus') {
+                Get-Service | Where-Object { $_.Status -eq $Status }
+            } else {
+                Get-Service -Name $n -ErrorAction SilentlyContinue
+            }
+
+            foreach ($svc in $services) {
+                $count++
+                $obj = [pscustomobject]@{
+                    Name      = $svc.Name
+                    Display   = $svc.DisplayName
+                    State     = $svc.Status
+                    StartType = $svc.StartType
+                    Healthy   = ($svc.Status -eq 'Running' -and $svc.StartType -ne 'Disabled')
+                }
+                if ($IncludeDependencies) {
+                    $obj | Add-Member -NotePropertyName Deps -NotePropertyValue @($svc.DependentServices.Name)
+                }
+                $obj
+            }
+        }
+    }
+
+    end {
+        Write-Verbose "Reported $count service(s) — terminé"   
+    }
+}
+
+'Spooler', 'W32Time', 'wuauserv' | Get-ServiceReport -IncludeDependencies |
+    Where-Object { -not $_.Healthy -or $_.State -ne 'Running' } |
+    Format-Table -AutoSize

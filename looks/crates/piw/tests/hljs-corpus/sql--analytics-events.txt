@@ -1,0 +1,35 @@
+-- Funnel analysis over raw events (ClickHouse-flavoured / Postgres compatible)
+SELECT
+    e.user_id,
+    MIN(CASE WHEN e.name = 'page_view'   THEN e.ts END) AS first_view,
+    MIN(CASE WHEN e.name = 'add_to_cart' THEN e.ts END) AS first_cart,
+    MIN(CASE WHEN e.name = 'purchase'    THEN e.ts END) AS first_purchase,
+    COUNT(DISTINCT e.session_id)                         AS sessions,
+    AVG(e.props ->> 'duration_ms')::numeric(10,1)        AS avg_duration
+FROM   events AS e
+WHERE  e.ts >= CURRENT_DATE - 30
+  AND  e.props ->> 'country' IN ('FR', 'DE', 'JP')  
+  AND  e.url ILIKE '%/produits/café%'
+GROUP  BY e.user_id
+HAVING COUNT(*) FILTER (WHERE e.name = 'purchase') > 0;
+
+/* Cohort retention: percent of users active N weeks after signup. */
+WITH cohorts AS (
+    SELECT id AS user_id, date_trunc('week', created_at)::date AS cohort_week
+    FROM   users
+), activity AS (
+    SELECT DISTINCT user_id, date_trunc('week', ts)::date AS active_week
+    FROM   events
+)
+SELECT c.cohort_week,
+       (a.active_week - c.cohort_week) / 7 AS week_n,
+       COUNT(*)                            AS users,
+       ROUND(COUNT(*) * 100.0 / FIRST_VALUE(COUNT(*)) OVER (
+           PARTITION BY c.cohort_week ORDER BY a.active_week), 1) AS retention_pct
+FROM   cohorts c
+JOIN   activity a USING (user_id)
+GROUP  BY c.cohort_week, a.active_week
+ORDER  BY 1, 2;
+
+SELECT 'It''s ' || 'done' AS msg, 3.14159 AS pi, 1_000 AS thousands, NULL AS nothing, TRUE AS flag;
+SELECT `weird name`, [1, 2, 3] AS arr, "quoted ident" FROM t1 CROSS JOIN t2 FULL OUTER JOIN t3 ON 1=1;

@@ -1,0 +1,50 @@
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj[39m
+
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+[39m   [1m[38;5;110mHelp[0m  General  [1;7m Commands [0m  Custom commands
+
+
+   Browse default commands
+
+     /add-dir
+     [38;5;246mAdd a new working directory[39m
+   [38;5;153m❯[39m [38;5;153m/advisor[39m
+     [38;5;246mLet Claude consult a stronger model at key moments[39m
+     /artifact-capabilities
+     [38;5;246mRuntime capabilities a published Artifact page can be granted — behavior static HTML cannot provide on its own, such as the page reading live or connected data, remembering what people do o…[39m
+     /artifact-diagramming
+     [38;5;246mDiagramming know-how for Artifacts - when a picture earns its place, how to draw one that shows the real mechanism, and the inline-SVG mechanics that keep it legible in both themes.[39m
+     /artifacts
+     [38;5;246mBrowse your published and shared artifacts[39m
+     /auto-mode-setup
+     [38;5;246mTeach auto mode about your environment, plus optional rule tweaks[39m
+     /autocompact
+     [38;5;246mSet how full the context gets before auto-summarizing[39m
+     /autofix-pr
+     [38;5;246mMonitor and autofix any issues with the current PR[39m
+     /background
+     [38;5;246mSend this session to the background and free the terminal[39m
+     /batch
+     [38;5;246mResearch and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.[39m
+     /branch
+     [38;5;246mCreate a branch of the current conversation at this point[39m
+     /btw
+     [38;5;246mAsk a quick side question without interrupting the main conversation[39m
+     /bug
+     [38;5;246mReport a bug or share your conversation[39m
+     /cd
+     [38;5;246mMove this session to a new working directory[39m
+     /chrome
+     [38;5;246mOpen Claude in Chrome settings[39m
+     /claude-api
+     [38;5;246mReference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration. TRIGGER — read BEFORE opening the targ…[39m
+     /claude-in-chrome
+     [38;5;246mAutomates your Chrome browser to interact with web pages - clicking elements, filling forms, capturing screenshots, reading console logs, and navigating sites. Opens pages in new tabs withi…[39m
+
+     [38;5;246m↓ 90 more[39m
+
+
+   For more help: ]8;id=sdguk7;https://code.claude.com/docs/en/overview\https://code.claude.com/docs/en/overview]8;;\
+
+   [38;5;246mSomething else? Use /feedback to report bugs or request features.[39m
+

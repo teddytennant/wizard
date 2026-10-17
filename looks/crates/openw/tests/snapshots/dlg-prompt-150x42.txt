@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                               Install plugin                                       esc
+
+                                               scope: local
+
+                                               npm package name
+
+
+
+                                      ┃        enter submit
+                                      ┃  Ask
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

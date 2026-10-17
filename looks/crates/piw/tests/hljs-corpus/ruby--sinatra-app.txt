@@ -1,0 +1,50 @@
+require "sinatra/base"
+require "sequel"
+require "json"
+
+DB = Sequel.connect(ENV.fetch("DATABASE_URL", "sqlite://dev.db"))  
+
+class App < Sinatra::Base
+  configure do
+    set :show_exceptions, false
+    set :public_folder, File.join(__dir__, "public")
+    enable :sessions
+  end
+
+  helpers do
+    def json(payload, status: 200)
+      content_type :json
+      halt status, JSON.generate(payload)
+    end
+
+    def current_user
+      @current_user ||= DB[:users].where(id: session[:uid]).first
+    end
+  end
+
+  before "/api/*" do
+    halt 401, { error: "login required" }.to_json unless current_user
+  end
+
+  get "/" do
+    erb :index, locals: { title: "Accueil — ホーム" }
+  end
+
+  get %r{/posts/(\d+)(?:\.(json|html))?} do |id, fmt|
+    post = DB[:posts].first(id: id.to_i) or halt 404
+    fmt == "json" ? json(post) : erb(:post, locals: { post: post })
+  end
+
+  post "/api/posts" do
+    data = JSON.parse(request.body.read, symbolize_names: true)
+    title = data[:title].to_s.strip
+    json({ error: "title is blank" }, status: 422) if title.empty?
+    id = DB[:posts].insert(title: title, user_id: current_user[:id], created_at: Time.now)
+    json({ id: id, title: title }, status: 201)
+  rescue JSON::ParserError
+    json({ error: "malformed JSON" }, status: 400)
+  end
+
+  error(404) { "Not found: #{request.path_info}" }
+  run! if app_file == $0
+end

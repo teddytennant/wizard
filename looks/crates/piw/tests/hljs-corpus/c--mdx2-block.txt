@@ -1,0 +1,3 @@
+#include <stdio.h>
+#define MAX 10
+int main(void) { int n = 0x1f; printf("%d\n", n); return 0; }

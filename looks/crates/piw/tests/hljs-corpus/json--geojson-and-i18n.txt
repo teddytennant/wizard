@@ -1,0 +1,45 @@
+{
+  "type": "FeatureCollection",
+  "name": "landmarks",
+  "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+  "features": [
+    {
+      "type": "Feature",
+      "id": 1,
+      "properties": {
+        "name": { "en": "Eiffel Tower", "fr": "Tour Eiffel", "ja": "エッフェル塔", "zh": "埃菲尔铁塔" },
+        "height_m": 330,
+        "opened": "1889-03-31",
+        "rating": 4.7,
+        "visited": true,
+        "closed_days": null
+      },
+      "geometry": { "type": "Point", "coordinates": [2.2945, 48.8584] }
+    },
+    {
+      "type": "Feature",
+      "id": 2,
+      "properties": {
+        "name": { "en": "Central Park" },
+        "area_km2": 3.41,
+        "elevation_range": [-1.5e0, 4.8e1],
+        "emoji": "🌳",
+        "motto": "He said \"go\" \\ she said 'stop'"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-73.9812, 40.7681],
+            [-73.9581, 40.8007],
+            [-73.9493, 40.7968],
+            [-73.9730, 40.7644],
+            [-73.9812, 40.7681]
+          ]
+        ]
+      }
+    }
+  ],
+  "bbox": [-73.9812, 40.7644, 2.2945, 48.8584],
+  "meta": { "generated": "2026-10-05T09:30:00Z", "count": 2, "version": 0.1, "deprecated": false }
+}

@@ -1,0 +1,6 @@
+// javascript
+const add = (a, b) => a + b;
+function greet(name = "world") {
+  return `hello ${name}` + 'x' + /re+/g.source;
+}
+class Foo extends Bar { static x = 1; async run() { await this.go(); } }

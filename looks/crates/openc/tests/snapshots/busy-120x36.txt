@@ -1,0 +1,36 @@
+
+            o p e n c  0.1
+            ━━━━━━━━━───────────────────────────────────
+            sonnet-5.5 high · claude 2.1.289
+
+            shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+          ▎ busy now
+
+            ⠙ Bash    cargo test --workspace                                                              1.4s
+              test layout::long_token ... ok
+              test layout::tabs ... ok
+              test layout::resize ... ok
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+            ○ queued: and then bump the changelog
+          ▎
+          ▎ enter queues  up takes the last back  ctrl+s steers
+          ▎
+          ⠿ ask · sonnet-5.5 high · /work/proj · main*                                                        1 queued

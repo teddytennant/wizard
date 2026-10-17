@@ -1,0 +1,52 @@
+---
+# Provision web servers
+- name: Configure web tier
+  hosts: webservers
+  become: yes
+  gather_facts: true
+  vars:
+    http_port: 80
+    packages:
+      - nginx
+      - git
+      - "python3-pip"
+    motd: !!str 2024-01-01
+    max_clients: 0x200
+
+  pre_tasks:  
+    - name: Update apt cache
+      ansible.builtin.apt: update_cache=yes cache_valid_time=3600
+      when: ansible_os_family == "Debian"
+
+  tasks:
+    - name: Install packages
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ packages }}"
+      tags: [packages, setup]
+
+    - name: Render nginx config
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        mode: '0644'
+        validate: nginx -t -c %s   
+      notify: Reload nginx
+
+    - name: Write a script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/healthcheck
+        mode: 0755
+        content: |
+          #!/bin/sh
+          curl -fsS "http://localhost:{{ http_port }}/healthz" || exit 1
+
+    - name: Greeting with unicode
+      ansible.builtin.debug:
+        msg: "Déploiement terminé ✅"
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service: {name: nginx, state: reloaded}

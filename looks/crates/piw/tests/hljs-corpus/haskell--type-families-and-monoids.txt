@@ -1,0 +1,59 @@
+{-# LANGUAGE TypeFamilies, FlexibleContexts, DataKinds #-}
+{-# LANGUAGE DerivingStrategies, GeneralizedNewtypeDeriving #-}  
+module Collection where
+
+import Data.Monoid
+import qualified Data.Set  as Set
+import qualified Data.Map  as Map
+
+-- | Containers with an associated element type.
+class Container f where
+  type Elem f :: *
+  empty  :: f
+  insert :: Elem f -> f -> f
+  toL    :: f -> [Elem f]
+
+instance Ord a => Container (Set.Set a) where
+  type Elem (Set.Set a) = a
+  empty  = Set.empty
+  insert = Set.insert
+  toL    = Set.toList
+
+fromList :: Container f => [Elem f] -> f
+fromList = foldr insert empty
+
+newtype MaxI = MaxI Int
+  deriving stock (Show, Eq)
+  deriving newtype (Ord, Num)
+
+instance Semigroup MaxI where
+  (<>) = max
+
+instance Monoid MaxI where
+  mempty = MaxI minBound
+
+-- | Summary statistics combined with a product of monoids.
+data Stats = Stats
+  { count :: Sum Int
+  , biggest :: MaxI
+  , names :: [String]
+  } deriving Show
+
+instance Semigroup Stats where
+  Stats a b c <> Stats a' b' c' = Stats (a <> a') (b <> b') (c <> c')
+
+instance Monoid Stats where
+  mempty = Stats mempty mempty mempty
+
+stat :: String -> Int -> Stats
+stat n v = Stats (Sum 1) (MaxI v) [n]
+
+summarize :: [(String, Int)] -> Stats
+summarize = foldMap (uncurry stat)
+
+main :: IO ()
+main = do
+  print (toL (fromList [3, 1, 2, 3, 1] :: Set.Set Int))
+  print $ summarize [("naïve", 3), ("café", 9), ("犬", 4)]   
+  let m = Map.fromListWith (++) [(length w, [w]) | w <- words "a bb cc ddd e"]
+  print (Map.toAscList m, 'x', '\n', '\'', "tab\there", 0xFF, 1e-3 :: Double)

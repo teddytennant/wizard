@@ -1,0 +1,50 @@
+# Release manifest
+format_version = 2
+
+[release]
+name = "Café Server"
+version = "3.0.0-rc.1"
+date = 2024-08-06
+yanked = false
+
+notes = """
+Roses are red,
+Violets are blue.
+It's "quoted", with a trailing backslash \
+joined to the next line.
+Unicode: naïve, 日本語, 🎉  
+"""
+
+changelog = '''
+No escapes here: \n stays literal.
+Path: C:\Program Files\App
+'''
+
+short = """one-liner"""
+single = 'it''s'
+empty = ""
+
+[release.checksums]
+linux-x86_64 = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+macos-arm64  = "sha256:60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
+
+[[release.artifacts]]
+file = "server-linux.tar.gz"
+size = 14_829_113
+mirrors = [
+  "https://a.example.org/dl/",  
+  "https://b.example.org/dl/",   # fallback
+]
+
+[[release.artifacts]]
+file = "server-macos.zip"
+size = 12_000_000
+signed = true
+
+[[release.artifacts.verify]]
+tool = "gpg"
+args = ["--verify", "--quiet"]
+
+[schedule]
+window = { start = 02:00:00, end = 04:30:00 }
+days = ["mon", "wed", "fri"]

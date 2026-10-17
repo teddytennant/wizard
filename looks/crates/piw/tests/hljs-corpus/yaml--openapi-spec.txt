@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: Pet Store API
+  description: |
+    Manage pets and their owners.
+
+    Supports **Markdown** in descriptions.
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+servers:
+  - url: https://api.example.com/v1  
+    description: Production
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      summary: Fetch a pet by id
+      tags: [pets]
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'  
+        '404':
+          description: Not found
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: integer, example: 1_000}
+        name: {type: string, example: "Fido \"the Great\""}
+        nickname: {type: string, nullable: true, default: null}
+        weight: {type: number, example: 12.5e0}
+        tag: {type: string, pattern: '^[a-z]+(-[a-z]+)*$'}
+        emoji: {type: string, example: "🐕 犬"}

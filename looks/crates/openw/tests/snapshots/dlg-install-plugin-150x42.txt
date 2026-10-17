@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                               Install plugin                                       esc
+
+                                               Run this in a terminal: wizard plugins install <package>
+                                               wizard picks plugins up the next time it starts, or on
+                                               /reload.
+
+
+                                                                                                  ok
+                                      ┃
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

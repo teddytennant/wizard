@@ -1,0 +1,52 @@
+(ns game.state
+  (:require [clojure.pprint :refer [pprint]]))  
+
+(def initial-state
+  {:player {:pos [0 0] :hp 100 :inventory #{}}
+   :enemies [{:id :e1 :pos [3 4] :hp 20}
+             {:id :e2 :pos [-2 1] :hp 35}]
+   :tick 0
+   :log []})
+
+(defonce world (atom initial-state))
+
+(add-watch world :logger
+           (fn [_key _ref old new]
+             (when (not= (:tick old) (:tick new))
+               (println "tick" (:tick new)))))
+
+(defn move [{:keys [pos] :as p} [dx dy]]
+  (assoc p :pos (mapv + pos [dx dy])))
+
+(defn distance [[x1 y1] [x2 y2]]
+  (Math/sqrt (+ (Math/pow (- x2 x1) 2) (Math/pow (- y2 y1) 2))))
+
+(defn attack-enemies
+  "Damages every enemy within `range` of the player by `dmg`."
+  [state range dmg]
+  (let [ppos (get-in state [:player :pos])]
+    (update state :enemies
+            (fn [es]
+              (->> es
+                   (map (fn [e] (if (<= (distance ppos (:pos e)) range)
+                                  (update e :hp - dmg)
+                                  e)))
+                   (remove #(<= (:hp %) 0))
+                   vec)))))
+
+(defn step [state action]
+  (-> (case (first action)
+        :move   (update state :player move (second action))
+        :attack (attack-enemies state 5.0 (second action))
+        :pickup (update-in state [:player :inventory] conj (second action))
+        state)
+      (update :tick inc)
+      (update :log conj action)))
+
+(doseq [a [[:move [1 1]] [:attack 25] [:pickup :épée] [:move [-3 -3]] [:attack 30]]]
+  (swap! world step a))
+
+(pprint @world)
+(println (str "Ennemis restants: " (count (:enemies @world)) " ⚔️ \"boom\""))   
+(println (re-find #"(\d+)-(\d+)" "range 10-20") (re-seq #"\bhp\b" "hp and hp"))
+(reset! world initial-state)

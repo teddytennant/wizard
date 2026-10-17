@@ -1,0 +1,139 @@
+
+  ┃
+  ┃  go
+  ┃
+
+  ┃
+  ┃  $ cat big
+  ┃
+  ┃  line 1
+  ┃  line 2
+  ┃  line 3
+  ┃  line 4
+  ┃  line 5
+  ┃  line 6
+  ┃  line 7
+  ┃  line 8
+  ┃  line 9
+  ┃  line 10
+  ┃  …
+  ┃
+  ┃  Click to expand
+  ┃
+
+  ┃
+  ┃  $ cat wide
+  ┃
+  ┃  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ┃  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ┃  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ┃  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ┃  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ┃
+
+  ┃
+  ┃  $ ls --color
+  ┃
+  ┃  src  run.sh
+  ┃
+
+  ┃
+  ┃  $ true
+  ┃
+
+  ┃
+  ┃  $ cat bin
+  ┃
+  ┃  PKbinary tail
+  ┃
+
+  ┃
+  ┃  # Running in sub
+  ┃
+  ┃  $ echo $LONG
+  ┃
+  ┃  ok
+  ┃
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /p                                                                                      tab agents  ctrl+p commands

@@ -1,0 +1,58 @@
+Reply with exactly the markdown between BEGIN and END, character for character, with no commentary before or after.
+
+BEGIN
+# Heading one
+## Heading two
+### Heading three
+#### Heading four
+##### Heading five
+###### Heading six
+
+Plain text with **bold**, *italic*, ***both***, ~~strike~~, `inline code`, and a [link](https://example.com/docs) plus a bare https://x.ai/cli link.
+
+> A block quote that goes on for a while so that it has to wrap at the right edge of a narrow terminal window.
+> Second quoted line.
+
+- Bullet one
+- Bullet two
+  - Nested bullet
+    - Third level
+1. First
+2. Second
+   1. Nested ordered
+- [x] Done task
+- [ ] Open task
+
+---
+
+| Name | Qty | Note |
+|:-----|----:|:----:|
+| apples | 3 | fresh |
+| pears | 12 | ripe |
+
+```rust
+fn main() {
+    // comment
+    let x: u32 = 42;
+    println!("{x}");
+}
+```
+
+```python
+def f(a, b=2):
+    return a + b  # sum
+```
+
+```json
+{"name": "grok", "ok": true, "n": 3}
+```
+
+```diff
+- old line
++ new line
+```
+
+```bash
+echo "hi" | grep -v 'x' && ls -la
+```
+END

@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+use strict;
+use warnings;  
+use feature 'say';
+
+# Parse nginx-style access logs and count status codes per host.
+my %seen;
+my @bad = qw(400 401 403 404 500 502 503);
+my %is_bad = map { $_ => 1 } @bad;
+
+while (my $line = <STDIN>) {
+    chomp $line;
+    next if $line =~ /^\s*(?:#|$)/;
+
+    if ($line =~ m{^(\S+) \S+ \S+ \[([^\]]+)\] "(GET|POST|PUT|DELETE) ([^"]*?) HTTP/[\d.]+" (\d{3}) (\d+|-)}) {
+        my ($host, $when, $method, $path, $status, $bytes) = ($1, $2, $3, $4, $5, $6);
+        $seen{$host}{$status}++;
+        $path =~ s/\?.*$//;              # drop query string
+        $path =~ s{/+}{/}g;
+        say "BAD $status $method $path from $host" if $is_bad{$status};
+    }
+    else {
+        warn "unparsed line $.: $line\n";
+    }
+}
+
+for my $host (sort { keys %{ $seen{$b} } <=> keys %{ $seen{$a} } } keys %seen) {
+    my $total = 0;
+    $total += $_ for values %{ $seen{$host} };
+    printf "%-20s %6d  %s\n", $host, $total,
+        join(", ", map { "$_=$seen{$host}{$_}" } sort keys %{ $seen{$host} });
+}
+
+my $summary = <<"END_SUMMARY";
+Hosts seen: @{[ scalar keys %seen ]}
+Naïve check ✓ — 日本語 ok
+END_SUMMARY
+print $summary;

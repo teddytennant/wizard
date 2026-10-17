@@ -1,0 +1,48 @@
+# ~/.gitconfig
+[user]
+	name = Zoë Müller
+	email = zoe@example.org
+	signingkey = ABCD1234EF567890
+[core]
+	editor = nvim
+	autocrlf = input
+	pager = delta
+	excludesfile = ~/.config/git/ignore
+	whitespace = trailing-space,space-before-tab
+[init]
+	defaultBranch = main
+[commit]  
+	gpgsign = true
+	template = ~/.config/git/commit-template.txt
+[alias]
+	co = checkout
+	st = status -sb
+	lg = log --graph --pretty=format:'%C(yellow)%h%Creset -%C(auto)%d%Creset %s %C(green)(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+	last = log -1 HEAD --stat
+	amend = commit --amend --no-edit
+	unstage = reset HEAD --
+	root = rev-parse --show-toplevel
+	sh = "!f() { git show \"${1:-HEAD}\" --stat; }; f"
+	wip = !git add -A && git commit -m \"wip: $(date +%F)\"
+[color "diff"]
+	meta = yellow bold
+	frag = magenta bold
+	old = red
+	new = green
+[pull]
+	rebase = true  
+[push]
+	default = current
+	autoSetupRemote = true
+[merge]
+	conflictstyle = diff3
+[url "git@github.com:"]
+	insteadOf = https://github.com/
+[includeIf "gitdir:~/work/"]
+	path = ~/work/.gitconfig
+[delta]
+	navigate = true    ; use n and N to move between diff sections
+	line-numbers = true
+	syntax-theme = "Monokai Extended"
+[credential "https://git.example.org"]
+	helper = "!f() { echo \"password=$(pass show git/example)\"; }; f"

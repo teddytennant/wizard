@@ -1,0 +1,59 @@
+package server
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+)  
+
+type createUserRequest struct {
+	Name  string   `json:"name"`
+	Email string   `json:"email,omitempty" validate:"required,email"`
+	Tags  []string `json:"tags"`
+}
+
+type apiError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("encode response", "err", err)
+	}
+}
+
+func (s *Server) handleUsers() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+			if err != nil || limit < 1 || limit > 0x64 {
+				limit = 25
+			}
+			users, err := s.store.List(r.Context(), limit)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, apiError{500, "list failed"})
+				return
+			}
+			writeJSON(w, http.StatusOK, users)
+		case http.MethodPost:
+			var req createUserRequest
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+			if err := dec.Decode(&req); err != nil {
+				writeJSON(w, 400, apiError{400, "bad body: " + err.Error()})
+				return
+			}
+			req.Name = strings.TrimSpace(req.Name)
+			if req.Name == "" || strings.ContainsRune(req.Name, '\x00') {
+				writeJSON(w, 422, apiError{422, "name is required — \"nom\" 名前"})
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		}
+	}
+}

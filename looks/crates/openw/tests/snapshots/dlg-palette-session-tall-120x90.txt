@@ -1,0 +1,89 @@
+
+  ┃
+  ┃  hi
+  ┃
+
+     Hello there.
+
+     ▣  Build · No provider selected · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Suggested
+                                  Switch session                              ctrl+x l
+                                  New session                                 ctrl+x n
+                                  Switch model                                ctrl+x m
+                                  Connect provider
+
+                                  Session
+                                  Rename session                                ctrl+r
+                                  Jump to message                             ctrl+x g
+                                  Fork session
+                                  Compact session                             ctrl+x c
+                                  Undo previous message                       ctrl+x u
+                                  Show sidebar                                ctrl+x b
+                                  Disable code concealment                    ctrl+x h
+                                  Show timestamps
+                                  Collapse thinking
+                                  Hide tool details
+                                  Toggle session scrollbar
+                                  Show generic tool output
+                                  Copy last assistant message                 ctrl+x y
+                                  Copy session transcript
+                                  Export session transcript                   ctrl+x x
+                                  Switch session                              ctrl+x l
+                                  New session                                 ctrl+x n
+                                  Open editor                                 ctrl+x e
+                                  Move session Move to another project dir
+
+                                  Prompt
+                                  Stash pop
+                                  Stash list
+                                  Skills
+
+                                  Agent
+                                  Switch model                                ctrl+x m
+                                  Switch agent                                ctrl+x a
+                                  Toggle MCPs
+                                  Variant cycle                                 ctrl+t
+                                  Switch model variant
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · No provider selected Connect a provider
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

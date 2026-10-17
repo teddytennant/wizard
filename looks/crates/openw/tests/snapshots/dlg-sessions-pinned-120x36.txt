@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Sessions                                                                     esc
+
+                    Search
+
+                    Pinned
+                  1 Session 1
+
+                    Today
+                    Session 0
+                    Session 2
+
+                    pin/unpin ctrl+f  delete ctrl+d  rename ctrl+r  switch ctrl+x 1-9
+
+
+
+
+                           ● Tip Type @ followed by a filename to fuzzy search and attach files
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

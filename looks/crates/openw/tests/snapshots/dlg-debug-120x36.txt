@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  hi
+  ┃
+
+     Hello there.
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+                  Debug                                                                            esc
+
+                  Version    0.0 (dev)
+                  Date       2026-09-21T15:13:20.000Z
+                  OS         <machine>
+                  Terminal   <machine>
+                  Session ID ses_1234567890
+                  Model      xai-oauth/grok-4.6
+
+                  Share this when reporting an issue.                                       copy enter
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

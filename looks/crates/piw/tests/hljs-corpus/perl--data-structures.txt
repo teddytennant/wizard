@@ -1,0 +1,44 @@
+use strict;
+use warnings;
+use Data::Dumper;
+$Data::Dumper::Sortkeys = 1;
+$Data::Dumper::Indent   = 1;
+
+my $inventory = {
+    fruit => [ { name => 'apple',  qty => 12, price => 0.45 },
+               { name => 'banana', qty => 0,  price => 0.25 } ],
+    tools => { hammer => { qty => 3, price => 12.99 },
+               saw    => { qty => 1, price => 0x1F } },
+    note  => 'out of "stock" for 梨',
+};
+
+my @in_stock = grep { $_->{qty} > 0 } @{ $inventory->{fruit} };
+my %by_name  = map { $_->{name} => $_ } @in_stock;
+
+push @{ $inventory->{fruit} }, { name => 'cherry', qty => 7, price => 3.1e0 };
+$inventory->{tools}{drill}{qty} //= 2;
+
+my $total = 0;
+foreach my $group (qw(fruit tools)) {
+    my $items = $inventory->{$group};
+    my @list = ref $items eq 'ARRAY' ? @$items : values %$items;
+    $total += $_->{qty} * ($_->{price} // 0) for @list;
+}
+printf "total value: %.2f\n", $total;
+
+my $cb = sub {
+    my ($label, @rest) = @_;
+    return "$label: " . scalar(@rest) . " args, last=$rest[-1] / $#rest";
+};
+print $cb->('args', 1 .. 5), "\n";
+
+my @sorted = sort { $a->[1] <=> $b->[1] or $a->[0] cmp $b->[0] }
+             map  { [ $_, length $_ ] } qw(pear fig apple kiwi);
+print join(',', map { $_->[0] } @sorted), "\n";   
+
+my %h; @h{qw(a b c)} = (1 .. 3);
+while (my ($k, $v) = each %h) { print "$k => $v;" }
+print "\n", Dumper(\%h);
+my $str = 'a.b.c';
+my ($first, @others) = split /\./, $str;
+print "first=${first} others=@{[ scalar @others ]}\n";

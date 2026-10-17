@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  @README.md @src/ what is this?
+  ┃
+  ┃   File  README.md   Directory  src/
+  ┃
+
+     A demo.
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           tab agents  ctrl+p commands

@@ -1,0 +1,56 @@
+;;; Simple thread-safe event queue with a worker pool.
+  
+(defstruct (event (:constructor make-event (kind payload &optional (priority 0))))
+  kind
+  payload
+  (priority 0 :type integer))
+
+(defvar *queue* '())
+(defvar *lock* (bt:make-lock "queue-lock"))
+(defvar *cv* (bt:make-condition-variable :name "queue-cv"))
+(defvar *running* t)
+
+(defun enqueue (event)
+  (bt:with-lock-held (*lock*)
+    (setf *queue* (merge 'list *queue* (list event) #'> :key #'event-priority))
+    (bt:condition-notify *cv*)))
+
+(defun dequeue ()
+  (bt:with-lock-held (*lock*)
+    (loop while (and *running* (null *queue*))
+          do (bt:condition-wait *cv* *lock*))
+    (pop *queue*)))
+
+(defgeneric handle (kind payload)
+  (:method ((kind (eql :greet)) payload)
+    (format t "~&Hello, ~A!~%" payload))
+  (:method ((kind (eql :sum)) payload)
+    (format t "~&Sum: ~D~%" (reduce #'+ payload)))
+  (:method (kind payload)
+    (format t "~&;; unhandled ~S (~S)~%" kind payload)))
+
+(defun worker-loop (id)
+  (loop for ev = (dequeue)
+        while ev
+        do (handler-case (handle (event-kind ev) (event-payload ev))
+             (error (e) (format *error-output* "worker ~D: ~A~%" id e)))))
+
+#| Start N workers and return their thread objects.
+   Shut down with (stop-workers threads). |#
+(defun start-workers (n)
+  (loop for i from 1 to n
+        collect (let ((id i))
+                  (bt:make-thread (lambda () (worker-loop id))
+                                  :name (format nil "worker-~D" id)))))
+
+(defun stop-workers (threads)
+  (setf *running* nil)
+  (bt:with-lock-held (*lock*) (bt:condition-broadcast *cv*))
+  (mapc #'bt:join-thread threads))
+
+(let ((ts (start-workers 2)))
+  (enqueue (make-event :greet "Müller" 5))   
+  (enqueue (make-event :sum '(1 2 3 4.5) 1))
+  (enqueue (make-event :unknown "日本語 🚀"))
+  (sleep 0.2)
+  (stop-workers ts))

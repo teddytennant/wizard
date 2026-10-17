@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                             1.5K / 256K
+
+
+
+
+
+
+           ╭───────────────────────────────────────────────────────╮
+           │Reply with exactly the markdown between BEGIN and END,…│
+           │                                                       │
+           │BEGIN                                                  │
+           │⋮ (52 more lines)                                      │
+           │echo "hi" | grep -v 'x' && ls -la                      │
+           │```                                                    │
+           │END                                                    │
+           ╰─ paste again or double-click to expand ───────────────╯
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 58 lines]                                                     │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+.:shortcuts

@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                                 Connect a provider                               esc
+
+                                                 Search
+
+                                                 Popular
+                                                 xAI (SuperGrok account sign-in)
+                                                 ChatGPT (Plus, Pro or Team account sign-in)
+
+                                      ┃          Providers
+                                      ┃  Ask     Anthropic (API key)
+                                      ┃          OpenAI-compatible (API key or local server)
+                                      ┃  Buil    Local model (Ollama or llama.cpp)
+                                      ╹▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀
+                                                                                                         commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

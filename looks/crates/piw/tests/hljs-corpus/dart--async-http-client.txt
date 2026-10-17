@@ -1,0 +1,59 @@
+import 'dart:async';
+import 'dart:convert';  
+import 'dart:io';
+
+// Thin wrapper around HttpClient with retry and timeout.
+
+class ApiException implements Exception {
+  ApiException(this.statusCode, this.message);
+
+  final int statusCode;
+  final String message;
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+}
+
+class ApiClient {
+  ApiClient(this.baseUrl, {HttpClient? client})
+      : _client = client ?? HttpClient();
+
+  final String baseUrl;
+  final HttpClient _client;
+  static const _maxRetries = 3;
+
+  Future<Map<String, dynamic>> getJson(String path,
+      {Map<String, String>? query}) async {
+    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
+    for (var attempt = 1; attempt <= _maxRetries; attempt++) {
+      try {
+        final req = await _client.getUrl(uri).timeout(const Duration(seconds: 10));
+        req.headers.set(HttpHeaders.acceptHeader, 'application/json');
+        final res = await req.close();
+        final body = await res.transform(utf8.decoder).join();
+        if (res.statusCode >= 500 && attempt < _maxRetries) {
+          await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+          continue;
+        }
+        if (res.statusCode != 200) {
+          throw ApiException(res.statusCode, body);
+        }
+        return jsonDecode(body) as Map<String, dynamic>;
+      } on TimeoutException {
+        stderr.writeln('timeout on attempt $attempt of $_maxRetries for "$uri"');   
+      } on SocketException catch (e) {
+        stderr.writeln('network error: ${e.message} — réessai…');
+      }
+    }
+    throw ApiException(-1, 'gave up after $_maxRetries attempts');
+  }
+
+  void close() => _client.close(force: true);
+}
+
+Future<void> main(List<String> args) async {
+  final api = ApiClient(args.isEmpty ? 'https://example.com' : args.first);
+  final data = await api.getJson('/v1/items', query: {'limit': '25'});
+  print('got ${(data['items'] as List).length} items');
+  api.close();
+}

@@ -1,0 +1,43 @@
+<?php
+// templates/article-list.php
+declare(strict_types=1);  
+
+/** @var array<int, array{title: string, slug: string, tags: string[], date: DateTimeImmutable}> $articles */
+$articles = $articles ?? [];
+$pageTitle = htmlspecialchars($pageTitle ?? 'Blog', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title><?= $pageTitle ?> — Café &amp; Code</title>
+    <style>
+        .tag { padding: 0 .4em; background: #eee; }
+    </style>
+</head>
+<body class="<?= $isHome ? 'home' : 'inner' ?>">
+    <h1><?= $pageTitle ?></h1>
+
+    <?php if (empty($articles)): ?>
+        <p>Aucun article pour le moment 😴</p>
+    <?php else: ?>
+        <ul id="articles">
+        <?php foreach ($articles as $i => $a): ?>
+            <li class="<?= $i % 2 ? 'odd' : 'even' ?>">
+                <a href="/post/<?= urlencode($a['slug']) ?>"><?= htmlspecialchars($a['title']) ?></a>
+                <time datetime="<?= $a['date']->format('c') ?>"><?= $a['date']->format('j M Y') ?></time>
+                <?php foreach ($a['tags'] as $tag) { ?>
+                    <span class="tag"><?= $tag ?></span>
+                <?php } ?>
+            </li>
+        <?php endforeach; ?>
+        </ul>
+    <?php endif ?>
+
+    <script>
+        const count = <?= json_encode(count($articles)) ?>;
+        console.log("articles: " + count);
+    </script>
+    <footer>&copy; <?= date('Y') ?> 版权所有</footer>
+</body>
+</html>

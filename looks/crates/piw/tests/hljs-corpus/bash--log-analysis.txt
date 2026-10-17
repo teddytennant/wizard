@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Summarise an nginx access log: top paths, status classes, slow requests.
+#
+usage() {
+  cat <<EOF
+Usage: ${0##*/} [-n COUNT] [-s SECONDS] LOGFILE...
+  -n  how many rows to print (default: 10)
+  -s  slow-request threshold in seconds (default: 1.5)
+EOF
+}
+
+count=10
+slow=1.5
+while getopts ':n:s:h' opt; do
+  case $opt in
+    n) count=$OPTARG ;;
+    s) slow=$OPTARG ;;
+    h) usage; exit 0 ;;
+    :) echo "option -$OPTARG needs an argument" >&2; exit 2 ;;
+    \?) echo "bad option -$OPTARG" >&2; usage >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+
+echo "== Top $count paths =="
+cat "$@" \
+  | awk '{ print $7 }' \
+  | sed -E 's/\?.*$//; s#/[0-9]+#/:id#g' \
+  | sort | uniq -c | sort -rn | head -n "$count"
+
+echo
+echo "== Status classes =="
+awk '{ printf "%dxx\n", substr($9, 1, 1) }' "$@" | sort | uniq -c
+
+echo
+echo "== Requests slower than ${slow}s =="
+while IFS=' ' read -r ip _ _ _ _ method path _ status bytes _ _ rt; do
+  if (( $(echo "$rt > $slow" | bc -l) )); then
+    printf '%-15s %-6s %-40s %s %6.2fs\n' "$ip" "${method//\"/}" "${path:0:40}" "$status" "$rt"
+  fi
+done < <(zcat -f -- "$@" | grep -v ' 304 ')
+
+total=$(wc -l < <(cat "$@"))
+errors=$(grep -cE '" (4|5)[0-9]{2} ' "$@" | paste -sd+ | bc)
+echo "error ratio: $(bc -l <<< "scale=4; $errors / $total * 100")% of ${total}"

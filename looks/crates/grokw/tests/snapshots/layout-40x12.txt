@@ -1,0 +1,11 @@
+
+  main /tmp/grok-harvest-000000/proj
+ Tip: Run /dashboard (or Ctrl+\) to see
+ and manage all your agents in one
+ place.
+
+ ╭────────────────────────────────────╮
+ │ ❯                                  │
+ ╰───────────────── Grok 4.7 (xhigh) ─╯
+
+                    Wizard  0.0 [alpha]

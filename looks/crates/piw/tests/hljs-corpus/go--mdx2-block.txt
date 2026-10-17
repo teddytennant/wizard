@@ -1,0 +1,8 @@
+package main
+
+import "fmt"
+
+func main() {
+	x := []int{1, 2, 3}
+	for i, v := range x { fmt.Println(i, v) }
+}

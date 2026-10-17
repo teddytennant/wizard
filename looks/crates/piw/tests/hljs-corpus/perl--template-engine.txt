@@ -1,0 +1,51 @@
+package Mini::Template;
+use strict;
+use warnings;
+
+# Tiny {{ var }} / {% if %} template renderer.
+my %FILTERS = (
+    upper => sub { uc shift },
+    lower => sub { lc shift },
+    html  => sub {
+        my $s = shift;
+        $s =~ s/&/&amp;/g;
+        $s =~ s/</&lt;/g;
+        $s =~ s/>/&gt;/g;
+        $s =~ s/"/&quot;/g;
+        return $s;
+    },
+    trunc => sub { my ($s, $n) = @_; length($s) > $n ? substr($s, 0, $n - 1) . '…' : $s },
+);
+
+sub new { my ($class, $src) = @_; bless { src => $src }, $class }
+
+sub render {
+    my ($self, $ctx) = @_;
+    my $out = $self->{src};
+
+    $out =~ s{\{%\s*if\s+(\w+)\s*%\}(.*?)\{%\s*endif\s*%\}}{
+        $ctx->{$1} ? $2 : ''
+    }gse;
+
+    $out =~ s{\{\{\s*([\w.]+)((?:\s*\|\s*\w+(?::\d+)?)*)\s*\}\}}{
+        my ($path, $chain) = ($1, $2);
+        my $val = $ctx;
+        $val = ref $val eq 'HASH' ? $val->{$_} : undef for split /\./, $path;
+        $val = '' unless defined $val;
+        for my $f (split /\s*\|\s*/, $chain) {
+            next unless length $f;
+            my ($name, $arg) = split /:/, $f;
+            $val = $FILTERS{$name}->($val, $arg) if $FILTERS{$name};
+        }
+        $val;
+    }gex;
+    return $out;
+}
+
+my $tpl = Mini::Template->new(<<'TPL');
+<h1>{{ title | upper }}</h1>
+{% if admin %}<b>{{ user.name | html }}</b>{% endif %}
+<p>{{ bio | trunc:12 }}</p>
+TPL
+print $tpl->render({ title => 'héllo', admin => 1, user => { name => '<Zoë & 李>' }, bio => 'A very long biography' });
+1;

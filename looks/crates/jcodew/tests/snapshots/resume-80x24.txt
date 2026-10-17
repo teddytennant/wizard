@@ -1,0 +1,24 @@
+╭ 2 sessions ──────────────────╮╭ Preview ─────────────────────────────────────╮
+│● Fix the flaky parser test  …││Fix the flaky parser test                     │
+│     📁 /tmp/jcodew-cmp/proj  ││📁 /tmp/jcodew-cmp/proj                       │
+│                              ││fake-session-1                                │
+│○ Add a --json flag           ││                                              │
+│     📁 /tmp/jcodew-cmp/proj  ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+╰ Enter in place · ↑↓ · q ─────╯╰──────────────────────────────────────────────╯

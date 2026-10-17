@@ -1,0 +1,54 @@
+import Foundation
+
+/// A type that can be rendered as a one-line summary.
+protocol Summarizable {  
+    var title: String { get }
+    func summary(maxLength: Int) -> String
+}
+
+extension Summarizable {
+    func summary(maxLength: Int = 40) -> String {
+        title.count > maxLength ? String(title.prefix(maxLength - 1)) + "…" : title
+    }
+}
+
+struct Book: Summarizable, Codable, Hashable, Identifiable {
+    let id: UUID
+    var title: String
+    var author: String?
+    var pages: Int = 0
+    var tags: [String] = []
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, author = "writer", pages, tags
+    }
+}
+
+enum Rating: Int, CaseIterable, Comparable {
+    case poor = 1, fair, good, great, superb
+
+    static func < (lhs: Rating, rhs: Rating) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    var stars: String { String(repeating: "★", count: rawValue) }
+}
+
+final class Library {
+    private(set) var books: [UUID: Book] = [:]
+    private let queue = DispatchQueue(label: "library.sync", attributes: .concurrent)
+
+    func add(_ book: Book) {
+        queue.async(flags: .barrier) { [weak self] in
+            self?.books[book.id] = book
+        }
+    }
+
+    func authors() -> [String] {
+        books.values.compactMap(\.author).sorted()
+    }
+
+    func describe(_ id: UUID) -> String {
+        guard let book = books[id] else { return "No book with id \(id)" }
+        let by = book.author.map { " by \($0)" } ?? ""
+        return "\(book.title)\(by) — \(book.pages) pages \(Rating.good.stars)"
+    }
+}

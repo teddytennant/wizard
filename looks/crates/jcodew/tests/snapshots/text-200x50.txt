@@ -1,0 +1,48 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ wizard
+ /model to switch · fake · Grok 4.7
+ v0.0
+ ● fake
+ /tmp/jcodew-cmp/proj
+
+ 1› fake:text                                                                                                                                                                                          │
+
+ Hello from the scripted model. This is a plain reply.
+   5.6s · ↑1k ↓34
+
+2>                                                                                                                                                                                                    ⏳
+                                                                                                                                                 …/jcodew-cmp/proj 1.2k/200k ▱▱▱▱▱▱▱▱▱▱ 1% fake Grok 4.7
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

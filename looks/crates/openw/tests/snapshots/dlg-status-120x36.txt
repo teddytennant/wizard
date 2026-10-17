@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                Status                                               esc
+
+                                mock 0.0
+                                • Model xai-oauth/grok-4.6
+                                • Directory /home/me/proj
+                                • Mode genie
+                                • Effort default
+                       ┃
+                       ┃  Ask   No MCP Servers
+                       ┃
+                       ┃  Buil  No Formatters
+                       ╹▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀
+                                No Plugins                                                commands
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

@@ -1,0 +1,56 @@
+(ns pipeline.core
+  (:require [clojure.core.async :as a :refer [chan go go-loop <! >! <!! >!! close! timeout alts!]]  
+            [clojure.java.io :as io]))
+
+#_(def old-buffer-size 10)
+
+(def ^:dynamic *batch-size* 100)
+
+(defn producer
+  "Puts each line of the file at `path` onto a new channel."
+  [path]
+  (let [out (chan 256)]
+    (a/thread
+      (with-open [rdr (io/reader path)]
+        (doseq [line (line-seq rdr)]
+          (>!! out line)))
+      (close! out))
+    out))
+
+(defn parse-line [line]
+  (let [[ts level & msg] (clojure.string/split line #"\s+")]
+    {:ts ts
+     :level (keyword (clojure.string/lower-case level))
+     :msg (clojure.string/join " " msg)}))
+
+(defn pipeline-stage
+  [in f parallelism]
+  (let [out (chan 64)]
+    (a/pipeline parallelism out (map f) in)
+    out))
+
+(defn batcher
+  "Groups items from `in` into vectors of up to *batch-size*,
+  flushing early after `ms` milliseconds of silence."
+  [in ms]
+  (let [out (chan)]
+    (go-loop [buf []]
+      (let [[v port] (alts! [in (timeout ms)])]
+        (cond
+          (and (nil? v) (= port in)) (do (when (seq buf) (>! out buf)) (close! out))
+          (nil? v)                   (do (when (seq buf) (>! out buf)) (recur []))
+          (>= (count buf) (dec *batch-size*)) (do (>! out (conj buf v)) (recur []))
+          :else                      (recur (conj buf v)))))
+    out))
+
+(defn -main [& [path]]
+  (let [lines  (producer (or path "app.log"))
+        parsed (pipeline-stage lines parse-line 4)
+        errors (a/filter< #(= :error (:level %)) parsed)
+        done   (atom 0)]
+    (loop []
+      (when-let [batch (<!! (batcher errors 500))]
+        (swap! done + (count batch))
+        (println (str "Batch de " (count batch) " erreurs — total " @done " 🔥"))
+        (recur)))   
+    (println "Terminé.")))

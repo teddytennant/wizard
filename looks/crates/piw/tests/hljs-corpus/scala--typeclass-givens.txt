@@ -1,0 +1,47 @@
+package demo
+
+// Scala 3 type class with givens and extension methods
+trait Show[A]:
+  extension (a: A) def show: String
+
+trait Monoid[A]:
+  def empty: A
+  def combine(x: A, y: A): A
+
+object Instances:
+  given Show[Int] with
+    extension (a: Int) def show: String = a.toString
+
+  given Show[String] = new Show[String]:
+    extension (a: String) def show: String = s"\"$a\""
+
+  given [A](using s: Show[A]): Show[List[A]] with
+    extension (xs: List[A]) def show: String = xs.map(_.show).mkString("[", ", ", "]")
+
+  given Monoid[Int] with
+    val empty = 0
+    def combine(x: Int, y: Int) = x + y
+
+  given Monoid[String] with
+    val empty = ""
+    def combine(x: String, y: String) = x + y
+
+  given [A, B](using ma: Monoid[A], mb: Monoid[B]): Monoid[(A, B)] with
+    def empty = (ma.empty, mb.empty)
+    def combine(x: (A, B), y: (A, B)) =
+      (ma.combine(x._1, y._1), mb.combine(x._2, y._2))
+
+import Instances.given
+
+def fold[A](xs: Seq[A])(using m: Monoid[A]): A =
+  xs.foldLeft(m.empty)(m.combine)
+
+enum Color(val rgb: Int):
+  case Red   extends Color(0xFF0000)
+  case Green extends Color(0x00FF00)
+  case Blue  extends Color(0x0000FF)
+
+@main def run(): Unit =
+  println(List(1, 2, 3).show)
+  println(fold(List((1, "a"), (2, "b"), (3, "ç"))))
+  println(Color.values.map(c => f"${c.toString}%-6s #${c.rgb}%06X").mkString(" | "))

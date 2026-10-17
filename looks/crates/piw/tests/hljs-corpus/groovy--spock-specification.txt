@@ -1,0 +1,60 @@
+package com.example.cart
+  
+import spock.lang.Specification
+import spock.lang.Unroll
+import spock.lang.Shared
+
+/**
+ * Behaviour of the shopping cart.
+ * Each feature method follows given / when / then.
+ */
+class CartSpec extends Specification {
+
+    @Shared
+    def catalog = [apple: 0.40, pear: 0.55, melon: 2.99]
+
+    def cart = new Cart() // panier vide, 空のカート
+
+    def "adding an item increases the total"() {
+        given:
+        def price = catalog.apple
+
+        when:
+        cart.add('apple', 3)
+
+        then:
+        cart.items.size() == 1
+        cart.total == price * 3
+    }
+
+    @Unroll
+    def "discount for #qty x #sku is #expected"() {
+        when:
+        cart.add(sku, qty)
+
+        then:
+        cart.discount() == expected
+
+        where:
+        sku     | qty || expected
+        'apple' | 1   || 0.0
+        'apple' | 10  || 0.5
+        'melon' | 2   || 0.0
+        'pear'  | 100 || 5.0
+    }
+
+    def "payment gateway is called once"() {
+        given:
+        def gateway = Mock(PaymentGateway)
+        cart.gateway = gateway   
+        cart.add('pear', 2)
+
+        when:
+        cart.checkout()
+
+        then:
+        1 * gateway.charge({ it.amount > 1.0 }, 'EUR') >> true
+        0 * _
+    }
+
+}

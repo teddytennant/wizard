@@ -1,0 +1,52 @@
+# overlays and small helper functions
+final: prev:
+
+let
+  inherit (prev) lib;
+
+  # recursively merge a list of attribute sets
+  mergeAll = builtins.foldl' (a: b: lib.recursiveUpdate a b) { };
+
+  versions = {
+    python = "3.12";
+    node = "22";
+    go = "1.23";
+  };
+
+  toEnv = attrs: lib.concatStringsSep "\n"
+    (lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg (toString v)}") attrs);
+
+  clamp = lo: hi: x:
+    if x < lo then lo
+    else if x > hi then hi
+    else x;
+in
+{
+  myLib = {
+    inherit mergeAll toEnv clamp;
+    isEven = n: lib.mod n 2 == 0;
+    percent = n: d: if d == 0 then null else n * 100.0 / d;
+  };
+
+  # patched variant of an existing package
+  htop-custom = prev.htop.overrideAttrs (old: {
+    pname = "htop-custom";
+    patches = (old.patches or [ ]) ++ [ ./patches/htop-colours.patch ];
+    configureFlags = old.configureFlags ++ [ "--enable-delayacct" ];
+  });
+
+  scripts = prev.runCommand "scripts" { } ''
+    mkdir -p $out/bin
+    cat > $out/bin/where <<'SH'
+    #!/bin/sh
+    echo "$PWD ✔"
+    SH
+    chmod +x $out/bin/where
+  '';
+
+  pythonEnv = prev.python312.withPackages (ps: with ps; [ numpy pandas ]);
+  testPath = ../tests/./data/sample.json;
+  homeRel = ~/projects/nix;
+  nixpkgsPath = <nixpkgs/lib>;
+  hex = 0;
+}

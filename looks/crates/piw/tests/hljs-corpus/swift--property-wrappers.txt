@@ -1,0 +1,60 @@
+import Foundation
+
+/*
+ Property wrappers used by the settings layer.
+ They persist through UserDefaults and clamp numeric ranges.
+ */
+@propertyWrapper
+struct Clamped<Value: Comparable> {  
+    private var value: Value
+    private let range: ClosedRange<Value>
+
+    init(wrappedValue: Value, _ range: ClosedRange<Value>) {
+        self.range = range
+        self.value = min(max(wrappedValue, range.lowerBound), range.upperBound)
+    }
+
+    var wrappedValue: Value {
+        get { value }
+        set { value = min(max(newValue, range.lowerBound), range.upperBound) }
+    }
+}
+
+@propertyWrapper
+struct Stored<T: Codable> {
+    let key: String
+    let defaultValue: T
+    var store: UserDefaults = .standard
+
+    var wrappedValue: T {
+        get {
+            guard let data = store.data(forKey: key),
+                  let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+                return defaultValue
+            }
+            return decoded
+        }
+        set {
+            store.set(try? JSONEncoder().encode(newValue), forKey: key)
+        }
+    }
+}
+
+struct Settings {
+    @Stored(key: "username", defaultValue: "guest") var username: String
+    @Stored(key: "recent", defaultValue: []) var recent: [String]
+    @Clamped(0...100) var volume: Int = 50
+    @Clamped(0.0...1.0) var opacity: Double = 0.8
+
+    mutating func rememberSearch(_ term: String) {
+		let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !trimmed.isEmpty else { return }
+		recent.removeAll { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+		recent.insert(trimmed, at: 0)
+		if recent.count > 10 { recent.removeLast(recent.count - 10) }
+    }
+}
+
+#if DEBUG
+let debugBanner = #"Raw string with "quotes" and \n kept literal"#
+#endif

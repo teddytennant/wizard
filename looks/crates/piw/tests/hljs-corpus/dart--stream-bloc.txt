@@ -1,0 +1,55 @@
+import 'dart:async';
+  
+/* ----------------------------------------------------------------
+ * A tiny event/state "bloc" built on streams, no packages needed.
+ * Events go in through [add]; states come out of [stream].
+ * ---------------------------------------------------------------- */
+
+sealed class CartEvent {}
+
+class ItemAdded extends CartEvent {
+  ItemAdded(this.sku, this.qty);
+  final String sku;
+  final int qty;
+}
+
+class CartState {
+  const CartState(this.items);  
+  final Map<String, int> items;
+
+  int get total => items.values.fold(0, (a, b) => a + b);
+
+  @override
+  String toString() => 'CartState(${items.length} skus, $total pcs)';
+}
+
+class CartBloc {
+  CartBloc() {
+    _events.stream.asyncMap(_reduce).listen(_states.add, onError: _states.addError);
+  }
+
+  final _events = StreamController<CartEvent>();
+  final _states = StreamController<CartState>.broadcast();
+  CartState _current = const CartState({});
+
+  Stream<CartState> get stream => _states.stream;
+  void add(CartEvent e) => _events.add(e);
+
+  Future<CartState> _reduce(CartEvent e) async {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final next = Map<String, int>.from(_current.items);
+    switch (e) {
+      case ItemAdded(:final sku, :final qty):
+        next.update(sku, (v) => v + qty, ifAbsent: () => qty);
+    }
+    return _current = CartState(next);
+  }
+}
+
+Future<void> main() async {
+  final bloc = CartBloc();
+  final sub = bloc.stream.listen((s) => print('state: $s'));
+  bloc..add(ItemAdded('café-001', 2))..add(ItemAdded('茶-042', 1));
+  await Future<void>.delayed(const Duration(milliseconds: 100));
+  await sub.cancel();
+}

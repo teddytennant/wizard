@@ -1,0 +1,50 @@
+;;; Bank account model using CLOS.
+  
+(defclass account ()
+  ((id      :initarg :id      :reader account-id)
+   (owner   :initarg :owner   :accessor account-owner :initform "unknown")
+   (balance :initarg :balance :accessor account-balance :initform 0
+            :type real
+            :documentation "Current balance in cents.")
+   (history :initform '() :accessor account-history))
+  (:documentation "A plain account with a balance and a transaction log."))
+
+(defclass savings-account (account)
+  ((rate :initarg :rate :accessor account-rate :initform 0.015))
+  (:documentation "An account that accrues interest."))
+
+(define-condition insufficient-funds (error)
+  ((needed    :initarg :needed    :reader needed)
+   (available :initarg :available :reader available))
+  (:report (lambda (c stream)
+             (format stream "Need ~D but only ~D available"
+                     (needed c) (available c)))))
+
+(defgeneric withdraw (account amount)
+  (:documentation "Remove AMOUNT from ACCOUNT or signal INSUFFICIENT-FUNDS."))
+
+(defmethod withdraw ((a account) amount)
+  (when (> amount (account-balance a))
+    (error 'insufficient-funds :needed amount :available (account-balance a)))
+  (decf (account-balance a) amount)
+  (push (list :withdraw amount) (account-history a))
+  a)
+
+(defmethod withdraw :before ((a savings-account) amount)
+  (format t "~&;; savings withdrawal of ~D from ~A~%" amount (account-owner a)))
+
+(defmethod print-object ((a account) stream)
+  (print-unreadable-object (a stream :type t :identity nil)
+    (format stream "~A ~S balance=~D" (account-id a) (account-owner a) (account-balance a))))
+
+(defun apply-interest (acct)
+  (incf (account-balance acct)
+        (round (* (account-balance acct) (account-rate acct)))))
+
+(let ((acct (make-instance 'savings-account :id 42 :owner "Zoë \"ZZ\" Ångström"   
+                                           :balance 100000)))
+  (handler-case (withdraw acct 250000)
+    (insufficient-funds (e)
+      (format t "~&Error: ~A~%" e)))
+  (mapc #'apply-interest (list acct))
+  (print acct))

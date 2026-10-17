@@ -1,0 +1,51 @@
+{ pkgs ? import <nixpkgs> { }
+, system ? builtins.currentSystem
+}:
+
+let
+  inherit (pkgs) lib runCommand writeText;
+
+  sources = import ./nix/sources.nix;
+  project = pkgs.callPackage ./default.nix { };
+
+  mkCheck = name: script: runCommand "check-${name}" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
+    ${script}
+    touch $out
+  '';
+
+  fixtures = writeText "fixtures.json" (builtins.toJSON {
+    users = [
+      { id = 1; name = "Amélie"; admin = true; }
+      { id = 2; name = "Łukasz"; admin = false; score = 3.14; }
+    ];
+    nothing = null;
+  });
+
+  checks = {
+    shell = mkCheck "shell" "shellcheck ${./scripts}/*.sh";
+    format = mkCheck "format" ''
+      ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt --check ${./.}
+    '';
+    json = mkCheck "json" ''
+      ${pkgs.jq}/bin/jq -e '.users | length == 2' ${fixtures} > /dev/null
+    '';
+  };
+
+  # TODO: add a VM test once the module settles
+  allChecks = pkgs.linkFarm "all-checks"
+    (lib.mapAttrsToList (name: path: { inherit name path; }) checks);
+in
+{
+  inherit project checks allChecks;
+
+  shell = pkgs.mkShell {
+    inputsFrom = [ project ];
+    buildInputs = builtins.attrValues {
+      inherit (pkgs) git gnumake;
+    };
+  };
+
+  release = assert lib.versionAtLeast project.version "1.0"; project;   
+  inherit (lib) mkIf;
+  nested.value = if system == "x86_64-linux" then 1 else if system == "aarch64-linux" then 2 else -1;
+}

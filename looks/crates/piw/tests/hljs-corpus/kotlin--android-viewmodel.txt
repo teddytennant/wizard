@@ -1,0 +1,48 @@
+package com.example.notes.ui
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class NotesViewModel @Inject constructor(
+    private val repo: NoteRepository,
+    private val clock: Clock,
+) : ViewModel() {  
+
+    data class UiState(
+        val notes: List<Note> = emptyList(),
+        val query: String = "",
+        val loading: Boolean = true,
+        val error: String? = null,
+    )
+
+    private val query = MutableStateFlow("")
+
+    val state: StateFlow<UiState> = combine(repo.observeAll(), query) { notes, q ->
+        UiState(
+            notes = notes.filter { it.title.contains(q, ignoreCase = true) },
+            query = q,
+            loading = false,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
+
+    fun onQueryChange(value: String) { query.value = value }
+
+    fun delete(note: Note) = viewModelScope.launch {
+        runCatching { repo.delete(note.id) }
+            .onFailure { e -> println("Could not delete \"${note.title}\": ${e.localizedMessage}") }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> pick(vararg items: T?): T? = items.firstOrNull { it != null }
+
+    companion object {
+        const val DEFAULT_PAGE = 20
+        private val TAG = NotesViewModel::class.java.simpleName
+        val GREETING = "Bonjour, 世界! 😀\t\$notEscaped"
+    }
+}

@@ -1,0 +1,45 @@
+/* Forms and attribute selectors */
+input[type="text"],
+input[type='email'],
+input[type=password],
+textarea {  
+  width: 100%;
+  padding: .5rem .75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font: inherit;
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+input:not(:placeholder-shown):invalid {
+  border-color: #dc2626;
+  background: #fef2f2 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='7' fill='%23dc2626'/></svg>") no-repeat right .5rem center;
+}
+
+input[disabled], button[aria-disabled="true"] {
+  opacity: .5;
+  cursor: not-allowed !important;
+}
+
+a[href^="http"]:not([href*="example.com"])::after {
+  content: " \2197";
+  font-size: .8em;
+}
+
+a[href$=".pdf" i],
+a[download] { color: #b91c1c; }
+
+a[lang|="fr"]::before { content: "« "; }
+a[lang|="fr"]::after  { content: " »"; }
+
+li:nth-child(2n+1):not(:last-child) { background: #f9fafb; }
+li:nth-of-type(odd) > a:hover { text-decoration: underline wavy; }
+.form-row:has(> input:required) label::after { content: "*"; color: red; }
+
+::selection { background: #fde68a; color: #1f2937; }
+::placeholder { color: #9ca3af; font-style: italic; }

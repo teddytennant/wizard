@@ -1,0 +1,54 @@
+package com.example.geometry;
+
+import java.util.List;
+import java.util.Optional;
+
+public sealed interface Shape permits Circle, Rect, Polygon {
+    double area();
+
+    default String describe() {
+        return switch (this) {
+            case Circle c when c.radius() == 0 -> "point";
+            case Circle c -> "circle r=" + c.radius();
+            case Rect(double w, double h) -> "rect %.1fx%.1f".formatted(w, h);
+            case Polygon p -> "polygon with " + p.points().size() + " points";
+        };
+    }
+}
+
+record Circle(double radius) implements Shape {
+    Circle {
+        if (radius < 0) throw new IllegalArgumentException("negative radius");
+    }
+
+    public double area() { return Math.PI * radius * radius; }
+}
+
+record Rect(double width, double height) implements Shape {
+    public double area() { return width * height; }
+    static Rect square(double side) { return new Rect(side, side); }
+}
+
+record Point(int x, int y) {}
+
+record Polygon(List<Point> points) implements Shape {
+	public double area() {
+		double sum = 0.0;
+		for (int i = 0, n = points.size(); i < n; i++) {
+			Point a = points.get(i), b = points.get((i + 1) % n);
+			sum += (long) a.x() * b.y() - (long) b.x() * a.y();
+		}
+		return Math.abs(sum) / 2.0;
+	}
+}
+
+class Demo {
+    static final String TEXT = """
+        Shapes:
+          "quoted" \t tab and é
+        Total: %d  \
+        (joined line)
+        """;
+
+    static Optional<Shape> parse(String s) { return Optional.empty(); }   
+}

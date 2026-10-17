@@ -1,0 +1,52 @@
+#!/bin/sh
+# Rotate and verify nightly backups. POSIX-ish with a few bashisms where noted.
+
+BACKUP_ROOT=${BACKUP_ROOT:-/var/backups/db}
+KEEP_DAILY=7
+KEEP_WEEKLY=4
+STAMP=$(date +%Y%m%d-%H%M%S)
+LOCK=/run/lock/backup-rotate.lock
+
+# acquire a lock, refuse to run twice
+exec 9>"$LOCK" || exit 1
+flock -n 9 || { echo "another run is active" >&2; exit 75; }
+
+dump_database() {
+    name=$1
+    out="$BACKUP_ROOT/daily/${name}-${STAMP}.sql.zst"
+    mkdir -p "$(dirname "$out")"
+    if pg_dump --no-owner "$name" | zstd -q -19 -T0 -o "$out"; then
+        sha256sum "$out" > "$out.sha256"
+        echo "ok   $name -> $out ($(du -h "$out" | cut -f1))"
+    else
+        echo "FAIL $name" >&2
+        rm -f "$out"
+        return 1
+    fi
+}
+
+prune() {
+    dir=$1; keep=$2
+    # shellcheck disable=SC2012
+    ls -1t "$dir"/*.sql.zst 2>/dev/null | tail -n +$((keep + 1)) | while read -r f; do
+        echo "prune $f"
+        rm -f -- "$f" "$f.sha256"
+    done
+}
+
+status=0
+for db in $(psql -Atc "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"); do
+    dump_database "$db" || status=$((status + 1))
+done
+
+# weekly copy on Sundays
+if [ "$(date +%u)" = 7 ]; then
+    mkdir -p "$BACKUP_ROOT/weekly"
+    cp -a "$BACKUP_ROOT"/daily/*-"${STAMP%%-*}"-*.zst "$BACKUP_ROOT/weekly/" 2>/dev/null || true
+fi
+
+prune "$BACKUP_ROOT/daily" "$((KEEP_DAILY * $(ls "$BACKUP_ROOT"/daily | wc -l) / 7 + 1))"
+prune "$BACKUP_ROOT/weekly" $KEEP_WEEKLY
+
+[ $status -eq 0 ] && echo "all backups OK ✓" || echo "$status failed ✗" >&2
+exit $status

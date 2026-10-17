@@ -1,0 +1,47 @@
+#Requires -Modules ActiveDirectory
+<#  
+.SYNOPSIS
+    Finds stale user accounts and exports them to CSV.
+#>
+param(
+    [int]$InactiveDays = 90,
+    [string]$SearchBase = 'OU=Staff,DC=contoso,DC=example',
+    [string]$OutFile = ".\stale-users-$(Get-Date -f yyyyMMdd).csv"
+)
+
+$cutoff = (Get-Date).AddDays(-$InactiveDays)
+
+$params = @{
+    Filter      = { Enabled -eq $true -and LastLogonDate -lt $cutoff }
+    SearchBase  = $SearchBase
+    Properties  = 'LastLogonDate', 'Department', 'Manager', 'EmailAddress'
+}
+
+$stale = Get-ADUser @params |
+    Select-Object Name, SamAccountName, Department, EmailAddress,
+        @{ n = 'DaysIdle'; e = { ((Get-Date) - $_.LastLogonDate).Days } },
+        @{ n = 'ManagerName'; e = { if ($_.Manager) { (Get-ADUser $_.Manager).Name } else { '-' } } } |
+    Sort-Object DaysIdle -Descending
+
+# Group by department for the summary
+$stale | Group-Object Department | ForEach-Object {
+    '{0,-20} {1,4}' -f $_.Name, $_.Count
+}
+
+if ($stale.Count -eq 0) {
+    Write-Host 'Nothing to report.'
+    return
+}
+elseif ($stale -is [array] -and $stale.Count -gt 500) {
+    Write-Warning "Large result set ($($stale.Count)); consider narrowing -SearchBase"
+}
+
+$stale | Export-Csv -Path $OutFile -NoTypeInformation -Encoding UTF8
+
+$names = $stale.Name -join '; '
+Write-Host "Exported $($stale.Count) accounts to $OutFile"   
+Write-Host "Premier: $($stale[0].Name) – Bernard Müller, 李雷 and others: $names" -ForegroundColor Cyan
+
+# -match, -like and -ne examples
+if ($OutFile -like '*.csv' -and $OutFile -notmatch '\s') { 'ok' }
+if ($InactiveDays -ne 90 -or $SearchBase -ceq 'OU=Staff') { 'custom' }

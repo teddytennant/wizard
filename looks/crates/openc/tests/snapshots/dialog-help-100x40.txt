@@ -1,0 +1,40 @@
+
+    o p e
+    ━━━━━━    Keys
+    sonnet
+              Everywhere
+    shift+      ctrl+c     interrupt; clear the draft; twice to quit
+                ctrl+d     quit when the composer is empty
+                esc        close; busy: arm interrupt; idle: nav mode
+                ctrl+p     command palette
+                ctrl+t     model, effort and mode
+                shift+tab  cycle permission mode: ask, edits, plan
+                ctrl+o     expand every tool body and thought
+                ctrl+\     toggle the right rail
+                ctrl+l     repaint the screen
+                ctrl+z     suspend to the shell
+                f1         this help
+                pgup       scroll up a page
+                pgdn       scroll down a page
+
+              Composer
+                enter      send; while busy, queue
+                ctrl+j     newline (or \ then enter)
+                           also shift+enter, alt+enter
+                ctrl+s     steer: send now, after the running tool
+                ctrl+r     search history
+                ctrl+g     edit in $VISUAL or $EDITOR
+                ctrl+v     paste a clipboard image
+                tab        accept the popup selection
+                up         empty composer: take back the last queued message
+                home       empty composer: top of the transcript
+                end        empty composer: bottom of the transcript
+
+              Editing
+                up         move in the text; at an edge walk history
+                           also down
+                ctrl+a     start and end of line
+  ▎
+  ▎ Messag    up down scroll   esc close
+  ▎
+        ask · sonnet-5.5 high · /work/proj · main*                                          ctrl+p

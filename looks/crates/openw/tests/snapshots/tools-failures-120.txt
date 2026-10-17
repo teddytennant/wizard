@@ -1,0 +1,79 @@
+
+  ┃
+  ┃  go
+  ┃
+
+  ┃
+  ┃  $ /nonexistentcmd hi
+  ┃
+  ┃  unknown command '/nonexistentcmd' — try /help
+  ┃
+
+     $ rm -rf /
+     ← Edit a.rs
+     ← Write b.rs
+     % WebFetch https://example.com/404
+       HTTP 404 fetching https://example.com/404, a long message that has to wrap onto a second row when it is opened
+
+     ⚙ memory [action=save]
+
+     │ Worker Task — do it
+
+     ⚙ Todo update failed
+
+     ctrl+x down view subagents
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /p                                                                                      tab agents  ctrl+p commands

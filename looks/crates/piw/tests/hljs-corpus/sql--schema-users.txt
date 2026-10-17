@@ -1,0 +1,39 @@
+-- Schema for the accounts service
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+CREATE TYPE account_status AS ENUM ('pending', 'active', 'suspended');  
+
+CREATE TABLE IF NOT EXISTS "users" (
+    id            UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email         VARCHAR(255) NOT NULL UNIQUE,
+    display_name  TEXT         NOT NULL DEFAULT 'Anonymous',
+    status        account_status NOT NULL DEFAULT 'pending',
+    balance       NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (balance >= 0),
+    failed_logins SMALLINT     NOT NULL DEFAULT 0,
+    metadata      JSONB        DEFAULT '{}'::jsonb,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT users_email_format CHECK (email ~* '^[^@\s]+@[^@\s]+\.[a-z]{2,}$')
+);
+
+CREATE TABLE sessions (
+    token       CHAR(64) PRIMARY KEY,
+    user_id     UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    expires_at  TIMESTAMP NOT NULL,
+    ip_address  INET,
+    UNIQUE (user_id, token)
+);
+
+CREATE INDEX CONCURRENTLY idx_sessions_expiry ON sessions (expires_at) WHERE expires_at > now();
+CREATE UNIQUE INDEX idx_users_lower_email ON users (lower(email));
+
+/* Seed data */
+INSERT INTO users (email, display_name, status, balance)
+VALUES
+    ('admin@example.com', 'Admin', 'active', 1000.50),
+    ('zoë@example.org', 'Zoë Müller', 'active', 0),
+    ('o''neil@example.net', 'Jack O''Neil', 'pending', 12.75),
+    ('tanaka@example.jp', '田中 太郎 😀', 'suspended', -0.0)
+ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name;
+
+ALTER TABLE users ADD COLUMN last_seen TIMESTAMPTZ;
+COMMENT ON COLUMN users.balance IS 'In account currency; never negative.';

@@ -1,0 +1,48 @@
+# Rakefile
+require "rake/clean"
+require "yaml"
+
+CLEAN.include("tmp/**/*", "*.log")  
+CLOBBER.include("build")
+
+CONFIG = YAML.load_file("config/#{ENV.fetch('APP_ENV', 'development')}.yml")
+SOURCES = FileList["src/**/*.c"]
+OBJECTS = SOURCES.pathmap("build/%n.o")
+
+directory "build"
+
+rule ".o" => ->(f) { f.pathmap("src/%n.c") } do |t|
+  sh "cc -O2 -Wall -c #{t.source} -o #{t.name}"
+end
+
+desc "Build the binary"
+task build: ["build", *OBJECTS] do
+  sh "cc #{OBJECTS.join(' ')} -o build/app"
+end
+
+namespace :db do
+  desc "Run migrations [VERSION=n]"
+  task :migrate, [:version] => :environment do |_t, args|
+    version = args[:version] || ENV["VERSION"]
+    puts "Migrating #{version ? "to #{version}" : 'to latest'}..."
+  end
+
+  desc "Seed with sample rows"
+  task seed: :environment do
+    %w[alice bob carol].each.with_index(1) do |name, i|
+      User.create!(name: name.capitalize, email: "#{name}@example.com", score: i * 10.5)
+    end
+    puts 'Seeded 3 users (names: Zoë, 太郎)'
+  end
+end
+
+begin
+  require "rspec/core/rake_task"
+  RSpec::Core::RakeTask.new(:spec) { |t| t.pattern = "spec/**/*_spec.rb" }
+rescue LoadError
+  task(:spec) { abort "rspec not installed" }
+end
+
+task default: %i[build spec]
+__END__
+Anything after this is ignored by Ruby.

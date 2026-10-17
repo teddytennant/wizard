@@ -1,0 +1,42 @@
+
+ wizard  v0.0
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help.
+
+ Wizard can explain its own features and look up its docs. Ask it how to use or extend Wizard.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+→ settings       Open settings menu
+  model          <provider/model> — Select model (opens selector UI)
+  tree           Navigate session tree (switch branches)
+  thinking       <level> — Set thinking level
+  scoped-models  Enable/disable models for Ctrl+P cycling
+  (1/33)
+~/proj (main)
+?/?                                                                                                                                fake-model • medium

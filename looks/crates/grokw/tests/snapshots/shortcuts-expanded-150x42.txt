@@ -1,0 +1,41 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                                                   1.5K / 256K
+
+
+                                   ┌─ Keyboard Shortcuts ─────────────────────────────────────────────────── [✗] ─┐
+                                   │                                                                              │
+                                   │   / to search                                                                │
+                                   │──────────────────────────────────────────────────────────────────────────────│
+                                   │  ◆ Essentials                                                                │
+                                   │    ◆ Send                                                            Enter   │
+                                   │    ◆ Focus scrollback                                                  Tab   │
+                                   │    ◆ Cancel turn                                                    Ctrl+c   │
+                                   │    ◆ Cycle mode (Normal / Plan / Always-approve)                 Shift+Tab   │
+                                   │    ◆ Quit                                                  Ctrl+q / Ctrl+d   │
+                                   │    ◆ Command palette                                            Ctrl+p / ?   │
+                                   │    ◆ Keyboard shortcuts                                    Ctrl+. / Ctrl+x   │
+                                   │    ◆ Open the settings modal                         F2 / Ctrl+, / Super+,   │
+                                   │  ◆ Input                                                                     │
+                                   │    ◆ Send now while running (cancels the current tur…  Ctrl+Enter / Ctrl+i   │
+                                   │    ◆ Voice dictation (Ctrl+Space / F8)                     Ctrl+Space / F8   │
+                                   │    ◆ Toggle multiline                                               Ctrl+m   │
+                                   │    ◆ Stash / pop prompt draft                               Ctrl+s / Alt+s   │
+                                   │    ◆ Shell mode (type ! on empty prompt)                                 !   │
+                                   │    ◆ Paste images (and text) from the clipboard                     Ctrl+v   │
+                                   │    ◆ Undo the last prompt edit                                      Ctrl+z   │
+                                   │    ◆ Redo the last undone prompt edit                 Ctrl+Shift+z / Alt+z   │
+                                   │    ◆ Prompt history                                                      ↑   │
+                                   │  › Conversation Navigation (11)                                              │
+                                   │  › Conversation Actions (4)                                                  │
+                                   │  › Panels (5)                                                                │
+                                   │  › Session (4)                                                               │
+                                   │  › Dashboard (17)                                                            │
+                                   │                                                                              │
+                                   │                                                                              │
+                                   │                                                                              │
+                                   │  ↑/↓ nav  |  f filter  |  e/Space/→ expand  |  ← collapse  |  Enter details  │
+  ╭────────────────────────────────│                            / search  |  Esc close                            │────────────────────────────────╮
+  │ ❯                              └──────────────────────────────────────────────────────────────────────────────┘                                │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

@@ -1,0 +1,36 @@
+
+            o p e n c  0.1
+            ━━━━━━━━━───────────────────────────────────
+            sonnet-5.5 high · claude 2.1.289
+
+            shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+
+
+                        Commands                                                         1 of 28
+
+                      ▎ Search commands
+
+                        Actions
+                      ▸ Model, effort and mode                                            ctrl+t
+                        Cycle permission mode: ask, edits, plan                        shift+tab
+                        Expand every tool body and thought                                ctrl+o
+                        Toggle the right rail                                             ctrl+\
+                        Repaint the screen                                                ctrl+l
+                        Suspend to the shell                                              ctrl+z
+                        This help                                                             f1
+                        Search history                                                    ctrl+r
+                        Edit in $VISUAL or $EDITOR                                        ctrl+g
+                        Paste a clipboard image                                           ctrl+v
+
+
+                        enter run   esc close
+
+
+
+
+          ▎
+          ▎ Message claude  /  commands  @  files
+          ▎
+            ask · sonnet-5.5 high · /work/proj · main*                                                          ctrl+p

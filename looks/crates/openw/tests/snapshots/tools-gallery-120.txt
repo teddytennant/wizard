@@ -1,0 +1,149 @@
+
+  ┃
+  ┃  go
+  ┃
+
+  ┃
+  ┃  $ seq 1 30
+  ┃
+  ┃  1
+  ┃  2
+  ┃  3
+  ┃  4
+  ┃  5
+  ┃  6
+  ┃  7
+  ┃  8
+  ┃  9
+  ┃  10
+  ┃  …
+  ┃
+  ┃  Click to expand
+  ┃
+
+     → Read README.md [offset=2, limit=2]
+     ✱ Glob "**/*.rs" in src (2 matches)
+     ✱ Grep "println" in src (2 matches)
+
+  ┃
+  ┃  ← Edit src/main.rs
+  ┃
+  ┃    1 -     println!("hi");
+  ┃    1 +     println!("hello");
+  ┃
+
+  ┃
+  ┃  # Wrote notes.txt
+  ┃
+  ┃   1 Line one
+  ┃   2 Line two
+  ┃   3 Line three
+  ┃
+
+     % WebFetch https://example.com
+
+  ┃
+  ┃  $ ls /nonexistent_dir
+  ┃
+  ┃  [stderr]
+  ┃  ls: cannot access '/nonexistent_dir': No such file or directory
+  ┃  exit code: 2
+  ┃
+
+     ◈ Web Search "rust ratatui layout" (3 results)
+     ◈ X Search "ratatui 0.30" (2 results)
+
+  ┃
+  ┃  $ git status
+  ┃
+  ┃  ## main
+  ┃  ?? notes.txt
+  ┃
+
+  ┃
+  ┃  $ git diff
+  ┃
+  ┃  diff --git a/src/main.rs b/src/main.rs
+  ┃  --- a/src/main.rs
+  ┃  +++ b/src/main.rs
+  ┃  @@ -1,3 +1,3 @@
+  ┃   fn main() {
+  ┃  -    println!("hi");
+  ┃  +    println!("hello");
+  ┃   }
+  ┃
+
+  ┃
+  ┃  # Todos
+  ┃
+  ┃  [✓] Read the code
+  ┃  [•] Fix greeting
+  ┃  [ ] Add tests
+  ┃
+
+     ⚙ memory [action=save, name=test-style, type=project, description=Tests use insta snapshots]
+     ⚙ generate_image [prompt=a lighthouse at dusk, path=generated/lighthouse.png]
+     ⚙ github_create_issue [owner=me, repo=proj, title=Flaky parser test]
+
+     ✓ Explorer Task — Find where the parser lives and report the file
+
+     ctrl+x down view subagents
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           tab agents  ctrl+p commands

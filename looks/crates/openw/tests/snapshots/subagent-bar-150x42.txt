@@ -1,0 +1,41 @@
+
+  ┃
+  ┃  find the parser
+  ┃
+
+     ✱ Grep "x" (1 match)
+     → Read x
+
+     The parser lives in src/parser.rs
+
+     ▣  Build · grok-4.6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  Subagent (1 of 1)                                                                                             Parent up  Prev left  Next right
+  ┃

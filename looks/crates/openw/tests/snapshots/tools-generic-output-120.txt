@@ -1,0 +1,39 @@
+
+  ┃
+  ┃  go
+  ┃
+
+  ┃
+  ┃  # github_create_issue [title=t]
+  ┃
+  ┃  one
+  ┃  two
+  ┃  three
+  ┃  …
+  ┃
+  ┃  Click to expand
+  ┃
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /p                                                                                      tab agents  ctrl+p commands

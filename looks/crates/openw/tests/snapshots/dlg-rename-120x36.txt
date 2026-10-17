@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  Fix the parser
+  ┃
+
+     Done.
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+                                Rename Session                                       esc
+
+                                Fix the parser
+
+
+
+                                enter submit
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

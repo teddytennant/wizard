@@ -1,0 +1,38 @@
+@font-face {
+  font-family: "Source Serif";
+  src: local("Source Serif Pro"),
+       url("../fonts/source-serif.woff2") format("woff2"),
+       url('../fonts/source-serif.woff') format('woff');  
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url(/assets/fonts/noto-cjk.woff2) format("woff2");
+  unicode-range: U+3000-303F, U+4E00-9FFF;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 2cm 1.5cm;
+  @bottom-center { content: counter(page) " / " counter(pages); }
+}
+
+@media print {
+  body { font: 11pt/1.4 "Source Serif", Georgia, serif; color: #000 !important; }
+  nav, .no-print, video { display: none !important; }
+  a[href]::after { content: " (" attr(href) ")"; font-size: 9pt; }
+  h1, h2, h3 { page-break-after: avoid; break-inside: avoid; }
+  pre, blockquote { page-break-inside: avoid; }
+  img { max-width: 100% !important; }
+}
+
+h1 { font-size: 2.488rem; letter-spacing: -0.02em; margin: 0 0 calc(1rem + 2px); }
+h2 { font-size: 1.728rem; }
+blockquote { quotes: "“" "”" "‘" "’"; }
+blockquote::before { content: open-quote; }
+.title { font-family: "Noto CJK", sans-serif; } /* 日本語タイトル */
+.price { width: calc(100% - (2 * var(--gutter, 16px))); background: url( "img/bg@2x.png" ) 0 0 / 50% auto; }

@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           hi
+  ┃  hi
+  ┃                                                                                                           Context
+                                                                                                              11,700 tokens
+     Hello there.                                                                                             6% used
+                                                                                                              $0.00 spent
+     ▣  Build · grok-4.6 · 6.5s
+                                                                                                              LSP
+                                                                                                              LSPs are disabled
+
+
+                                               Export Options                                       esc
+
+                                               Filename:
+
+                                               session-ses_1234.md
+
+
+
+                                                [x]  Include thinking
+                                                [ ]  Include tool details
+                                                [x]  Include assistant metadata
+                                                [ ]  Open without saving
+
+                                               Press space to toggle, return to confirm
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               11.7K (6%)  ctrl+p commands    • wizard 0.0

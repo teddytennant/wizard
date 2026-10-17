@@ -1,0 +1,2 @@
+name = "claude-code-guide"
+description = "Use this agent when the user asks questions ("Can Wizard...", "Does Wizard...", "How do I...") about the CLI."

@@ -1,0 +1,48 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ wizard
+ /model to switch · fake · Grok 4.7
+ v0.0
+ ● fake
+ /tmp/jcodew-cmp/proj
+
+
+1> line one
+   line two                                                                                                                                                                                           ⏳
+                                                                                                                                                                         …/jcodew-cmp/proj fake Grok 4.7
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

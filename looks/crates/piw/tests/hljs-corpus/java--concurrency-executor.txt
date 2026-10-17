@@ -1,0 +1,51 @@
+package com.example.jobs;
+
+import java.util.List;  
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public final class BatchRunner implements AutoCloseable {
+	private static final Logger LOG = Logger.getLogger(BatchRunner.class.getName());
+	private final ExecutorService pool;
+	private final AtomicInteger completed = new AtomicInteger();
+	private volatile boolean shuttingDown;
+
+	public BatchRunner(int threads) {
+		this.pool = Executors.newFixedThreadPool(threads, r -> {
+			Thread t = new Thread(r, "batch-" + System.nanoTime());
+			t.setDaemon(true);
+			return t;
+		});
+	}
+
+	public <T> List<T> runAll(List<Callable<T>> tasks, long timeoutMs) throws InterruptedException {
+		List<Future<T>> futures = pool.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS);
+		List<T> results = new java.util.ArrayList<>(tasks.size());
+		for (Future<T> f : futures) {
+			try {
+				results.add(f.get());
+				completed.incrementAndGet();
+			} catch (ExecutionException e) {
+				LOG.log(Level.WARNING, "Task failed: {0}", e.getCause().getMessage());
+			} catch (CancellationException e) {
+				LOG.warning("Task timed out ⏱");
+			}
+		}
+		return results;
+	}
+
+	public CompletableFuture<Integer> countAsync() {
+		return CompletableFuture
+				.supplyAsync(completed::get, pool)
+				.thenApply(n -> n * 2)
+				.exceptionally(ex -> -1);
+	}
+
+	@Override
+	public void close() {
+		shuttingDown = true;
+		pool.shutdown();
+	}
+}

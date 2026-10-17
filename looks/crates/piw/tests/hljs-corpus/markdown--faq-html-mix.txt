@@ -1,0 +1,51 @@
+<h1 align="center">Acme Widgets</h1>
+
+<div align="center">
+  <img src="https://example.com/banner.png" alt="banner" width="480">
+</div>
+
+## FAQ
+
+**Q: Does it work offline?**
+A: Yes. Everything is stored in `~/.acme/` and synced when you're back online.
+
+**Q: What about *Unicode* filenames?**
+A: Fully supported: `résumé.pdf`, `日本語.txt`, `🚀.md`.
+
+### Quick reference  
+
+Term
+: Definition list style (not in CommonMark, common in extensions)
+
+Setext H2 under a paragraph
+---------------------------
+
+- Item one
+- Item two with a line
+  continuation and trailing spaces  
+  forced break
+- Item three
+
+    indented code block inside a list context
+
+* * *
+
+Some text with <abbr title="HyperText Markup Language">HTML</abbr>, <sup>superscript</sup>, and an entity: &copy; 2024 &mdash; Acme &amp; Co.
+
+<table>
+  <tr><td>**not bold in html**</td><td>cell</td></tr>
+</table>
+
+Image with link: [![Alt text](https://example.com/a.svg "Title")](https://example.com)
+
+Line with \_escaped\_ underscores, snake_case_word, 2*3*4, and a lone * star.
+Auto-numbered:
+1. one
+1. one again
+1. and again
+
+Final reference-style links: [Google][1], [Example][], and [shortcut].
+
+[1]: <https://www.google.com/> 'Google'
+[Example]: https://example.com
+[shortcut]: /relative/path.md

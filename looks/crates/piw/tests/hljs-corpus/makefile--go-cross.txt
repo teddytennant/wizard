@@ -1,0 +1,40 @@
+BINARY   := mytool
+PKG      := ./cmd/$(BINARY)
+GO       ?= go
+VERSION  ?= $(shell git describe --tags --dirty --always)
+COMMIT   := $(shell git rev-parse HEAD)
+DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS  := -s -w \
+	-X main.version=$(VERSION) \
+	-X main.commit=$(COMMIT) \
+	-X 'main.date=$(DATE)'
+
+PLATFORMS := linux/amd64 linux/arm64 darwin/arm64 windows/amd64
+temp = $(subst /, ,$@)
+os   = $(word 1, $(temp))
+arch = $(word 2, $(temp))
+
+.PHONY: build release $(PLATFORMS) test cover fmt vet
+
+build:
+	$(GO) build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) $(PKG)
+
+release: $(PLATFORMS)
+
+$(PLATFORMS):
+	GOOS=$(os) GOARCH=$(arch) CGO_ENABLED=0 \
+			$(GO) build -ldflags "$(LDFLAGS)" \
+			-o dist/$(BINARY)-$(os)-$(arch)$(if $(filter windows,$(os)),.exe) $(PKG)
+
+test:
+	$(GO) test -race -count=1 ./...
+
+cover:
+	$(GO) test -coverprofile=cover.out ./...
+	$(GO) tool cover -html=cover.out -o cover.html
+
+fmt:
+	@test -z "$$(gofmt -l .)" || { echo "gofmt needed"; gofmt -l .; exit 1; }
+
+vet:
+	$(GO) vet ./...

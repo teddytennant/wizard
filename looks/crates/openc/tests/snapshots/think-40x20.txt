@@ -1,0 +1,20 @@
+
+    o p e n c  0.1
+    ━━━━━━━━━───────────────────────
+    sonnet-5.5 high · claude 2.1.289
+
+    shift+tab mode   ctrl+t model
+
+
+  ▎ think about it
+
+    ▸ ◇ thought 1.2s
+
+    The bug is in the lookahead: it
+    consumes one token too many.
+
+    ✓ 3.6s · 640 out · $0.04
+
+  ▎
+  ▎ Message claude
+      ask · sonnet-5.5 · main*  ctx 6%

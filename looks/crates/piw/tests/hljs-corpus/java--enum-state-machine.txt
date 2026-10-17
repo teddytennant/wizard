@@ -1,0 +1,57 @@
+package com.example.workflow;
+
+import java.util.EnumSet;  
+import java.util.Set;
+import java.util.function.Predicate;
+
+/** States a ticket can be in. */
+public enum TicketState {
+    OPEN("Open", 1) {
+        @Override
+        public Set<TicketState> next() {
+            return EnumSet.of(IN_PROGRESS, CLOSED);
+        }
+    },
+    IN_PROGRESS("In progress", 2) {
+        @Override
+        public Set<TicketState> next() {
+            return EnumSet.of(OPEN, REVIEW, CLOSED);
+        }
+    },
+    REVIEW("Review", 3) {
+        @Override
+        public Set<TicketState> next() {
+            return EnumSet.of(IN_PROGRESS, CLOSED);
+        }
+    },
+    CLOSED("Closed", Integer.MAX_VALUE) {
+        @Override
+        public Set<TicketState> next() {
+            return EnumSet.noneOf(TicketState.class);
+        }
+    };
+
+    private final String label;
+    private final int weight;
+
+    TicketState(String label, int weight) {
+        this.label = label;
+        this.weight = weight;
+    }
+
+    public abstract Set<TicketState> next();
+
+    public boolean canMoveTo(TicketState target) {
+        return next().contains(target);
+    }
+
+    public static Predicate<TicketState> heavierThan(int w) {
+        return s -> s.weight > w;
+    }
+
+    @Deprecated(since = "3.1", forRemoval = true)
+    public String legacyCode() { return name().toLowerCase().charAt(0) + "" + ordinal(); }
+
+    // 状態 → état → Zustand
+    public String label() { return label; }
+}

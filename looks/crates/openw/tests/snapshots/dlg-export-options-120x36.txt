@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  hi
+  ┃
+
+     Hello there.
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+                                Export Options                                       esc
+
+                                Filename:
+
+                                session-ses_1234.md
+
+
+
+                                 [x]  Include thinking
+                                 [ ]  Include tool details
+                                 [x]  Include assistant metadata
+                                 [ ]  Open without saving
+
+                                Press space to toggle, return to confirm
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

@@ -1,0 +1,34 @@
+# Image de base — léger 🐳
+FROM node:20-bookworm-slim AS base
+ENV NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+FROM base AS builder  
+ENV NODE_ENV=development
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build && \
+    npm prune --omit=dev
+
+FROM base AS release
+ARG BUILD_DATE
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.revision=$GIT_SHA  
+RUN groupadd --system --gid 1001 app && \
+    useradd --system --uid 1001 --gid app --no-create-home app
+COPY --from=deps --chown=app:app /app/node_modules ./node_modules
+COPY --from=builder --chown=app:app /app/dist ./dist
+COPY --chown=app:app package.json ./
+USER app
+EXPOSE 3000
+VOLUME ["/app/data", "/tmp"]
+HEALTHCHECK --interval=15s --timeout=5s CMD node -e "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+CMD ["node", "dist/server.js"]

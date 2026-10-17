@@ -1,0 +1,60 @@
+<?php
+
+namespace Acme\Support;  
+
+use Closure;
+use Countable;
+use IteratorAggregate;
+use ArrayIterator;
+use Traversable;
+
+trait Macroable
+{
+    /** @var array<string, Closure> */
+    protected static array $macros = [];
+
+    public static function macro(string $name, callable $fn): void
+    {
+        static::$macros[$name] = $fn;
+    }
+
+    public function __call(string $method, array $args): mixed
+    {
+        if (!isset(static::$macros[$method])) {
+            throw new \BadMethodCallException("Method {$method} does not exist.");
+        }
+        return Closure::bind(static::$macros[$method], $this, static::class)(...$args);
+    }
+}
+
+class Collection implements Countable, IteratorAggregate
+{
+    use Macroable;
+
+    public function __construct(protected array $items = []) {}
+
+    public function map(callable $fn): static
+    {
+        return new static(array_map($fn, $this->items, array_keys($this->items)));
+    }
+
+    public function filter(?callable $fn = null): static
+    {
+        return new static($fn ? array_filter($this->items, $fn, ARRAY_FILTER_USE_BOTH) : array_filter($this->items));
+    }
+
+    public function pluck(string $key): static
+    {
+        return $this->map(fn($row) => is_array($row) ? $row[$key] ?? null : $row->$key ?? null);
+    }
+
+    public function count(): int { return count($this->items); }
+    public function getIterator(): Traversable { return new ArrayIterator($this->items); }
+}
+
+Collection::macro('toUpper', function () { return $this->map('strtoupper'); });
+
+$c = (new Collection(['é', 'ü', '日本']))->toUpper();
+echo "Count: {$c->count()}\n";
+$sum = fn(int ...$n): int => array_sum($n);
+echo $sum(1, 2, 3) <=> 6, PHP_EOL;

@@ -1,0 +1,53 @@
+@Grab('org.apache.commons:commons-csv:1.10.0')
+import org.apache.commons.csv.*  
+import java.nio.file.*
+
+/**
+ * Reads every *.csv under the given directory and prints a
+ * summary of rows per file plus the largest value per column.
+ */
+def root = new File(args ? args[0] : '.')
+assert root.directory : "Not a directory: ${root}"
+
+def summaries = []
+root.eachFileRecurse { File f ->
+    if (!f.name.endsWith('.csv')) return
+
+    def rows = 0
+    def maxima = [:].withDefault { Double.NEGATIVE_INFINITY }
+    f.withReader('UTF-8') { reader ->
+        CSVParser.parse(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader()).each { rec ->
+            rows++
+            rec.toMap().each { col, val ->
+                if (val?.isNumber()) {
+                    maxima[col] = Math.max(maxima[col], val.toDouble())
+                }
+            }
+        }
+    }
+    summaries << [file: f.path, rows: rows, maxima: maxima]
+}
+
+summaries.sort { -it.rows }.each { s ->
+    printf("%-40s %6d rows%n", s.file, s.rows)
+    s.maxima.each { k, v ->
+        println "    ${k}: ${v}"
+    }
+}
+
+/* Write a report next to the script;
+ * overwrite any previous run.
+ */
+def report = new File(root, 'report.txt')
+report.withWriter('UTF-8') { w ->
+    w << "Rapport généré le ${new Date().format('dd/MM/yyyy HH:mm')}\n"
+    w << "Files: ${summaries.size()}, total rows: ${summaries*.rows.sum() ?: 0}\n"   
+    summaries.each { w << "- ${it.file} → ${it.rows}\n" }
+}
+
+try {
+    Files.move(report.toPath(), Paths.get(root.path, "report-${System.currentTimeMillis()}.txt"))
+} catch (IOException e) {
+    System.err.println "Could not rotate report: ${e.message} ✗"
+    System.exit(1)
+}

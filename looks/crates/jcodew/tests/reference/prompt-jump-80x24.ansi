@@ -1,0 +1,24 @@
+ [2m[38;2;80;80;80m[48;2;35;40;50m1[38;2;138;180;248m› [38;2;245;245;255mfake:text[0m
+ [38;2;226;181;100m[48;2;38;44;55m2[38;2;196;205;183m› [38;2;250;237;188mfake:long[39m[49m                                                                 [38;2;138;180;248m│[39m
+
+ [38;2;200;200;195mParagraph 1. The quick brown fox jumps over the lazy dog and keeps running [39m   [38;2;136;148;172m╷
+[39m [38;2;200;200;195mthrough the field until the sun goes down.[39m                                    [38;2;136;148;172m│
+[39m                                                                               [38;2;136;148;172m│
+[39m [38;2;200;200;195mParagraph 2. The quick brown fox jumps over the lazy dog and keeps running [39m   [38;2;136;148;172m╵
+[39m [38;2;200;200;195mthrough the field until the sun goes down.[39m
+
+ [38;2;200;200;195mParagraph 3. The quick brown fox jumps over the lazy dog and keeps running [39m
+ [38;2;200;200;195mthrough the field until the sun goes down.[39m
+
+ [38;2;200;200;195mParagraph 4. The quick brown fox jumps over the lazy dog and keeps running [39m
+ [38;2;200;200;195mthrough the field until the sun goes down.[39m
+
+ [38;2;200;200;195mParagraph 5. The quick brown fox jumps over the lazy dog and keeps running [39m
+ [38;2;200;200;195mthrough the field until the sun goes down.[39m
+
+ [38;2;200;200;195mParagraph 6. The quick brown fox jumps over the lazy dog and keeps running [39m
+ [38;2;200;200;195mthrough the field until the sun goes down.[39m
+
+[38;2;102;204;221m⌨ Ctrl+K → jump to the previous prompt[39m
+[38;2;255;80;80m3[38;2;138;180;248m> [39m                                                                           [38;2;255;193;7m⏳
+[39m                        [38;2;140;180;255m [38;2;140;140;150m…/jcodew-cmp/proj[39m [38;2;140;140;150m1.2k/200k [38;2;50;50;60m▱▱▱▱▱▱▱▱▱▱[1m[38;2;100;200;100m 1%[0m [38;2;140;140;150mfake[39m [1m[38;2;255;135;200mGrok 4.7

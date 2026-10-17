@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                                0 / 256K
+
+
+                  ┌─ Commands ───────────────────────── [✗] ─┐
+                  │                                          │
+                  │   search:                                │
+                  │──────────────────────────────────────────│
+                  │   Session ────────────────────────────  █│
+                  │  ◆ New Session                 Ctrl+N   █│
+                  │  ◆ New Session in …  Ctrl+P → worktr…    │
+                  │  ◆ Agent Dashboard         /dashboard    │
+                  │  ◆ Back to Home                 /home    │
+                  │  ◆ Delete This Session        /delete    │
+                  │  ◆ Resume Session             /resume    │
+                  │  ◆ Rename Session            /rename     │
+                  │  ◆ Session Info         /session-info    │
+                  │                                          │
+  ╭───────────────│  ↑/↓ nav  |  Enter select  |  Esc close  │───────────────╮
+  │ ❯             └──────────────────────────────────────────┘               │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

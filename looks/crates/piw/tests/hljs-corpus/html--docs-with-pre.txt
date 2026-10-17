@@ -1,0 +1,48 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>libfoo manual: quick start</title>
+<style>
+pre { background: #f6f8fa; padding: 1em; overflow: auto; tab-size: 4; }
+pre code { font: 13px/1.4 Menlo, Consolas, monospace; }
+table.params td:first-child { font-family: monospace; white-space: nowrap; }
+.note { border-left: 4px solid #f0ad4e; padding-left: .75em; }
+</style>
+</head>
+<body>
+<h1 id="quick">Quick start</h1>  
+<p class="note"><strong>Note:</strong> requires libfoo &ge; 2.1 &amp; a C99 compiler.</p>
+
+<h2>Example</h2>
+<pre><code class="language-c">#include &lt;foo.h&gt;
+
+int main(int argc, char **argv)
+{
+	foo_ctx *ctx = foo_open("data/caf\xc3\xa9.db", FOO_RDONLY);
+	if (!ctx) {
+		fprintf(stderr, "open failed: %s\n", foo_strerror());
+		return 1;
+	}
+	for (int i = 0; i &lt; 10; i++)
+		printf("%02d: %s\n", i, foo_get(ctx, i));
+	return 0;
+}
+</code></pre>
+
+<table class="params" summary="Options">  
+<thead><tr><th>Flag</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>FOO_RDONLY</td><td>Open read&#8209;only</td></tr>
+<tr><td>FOO_SYNC</td><td>Flush after every write <em>(slow)</em></td></tr>
+</tbody>
+</table>
+
+<!-- TODO: document FOO_MMAP
+<p>This paragraph is commented out.</p>
+-->
+<p>Voir aussi: <a href="api.html#foo_open" title="foo_open()">foo_open</a>, <kbd>Ctrl</kbd>+<kbd>C</kbd>.</p>
+<hr />
+<address>Maintained by Søren &lt;soren@example.dk&gt;   </address>
+</body>
+</html>

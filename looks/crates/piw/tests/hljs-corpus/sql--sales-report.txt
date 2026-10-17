@@ -1,0 +1,44 @@
+-- Monthly sales report with running totals and rank
+/*
+ * Owner: analytics
+ * Notes: amounts are stored in cents; categorie "Café & Thé" has accents
+ */
+WITH monthly AS (
+    SELECT
+        date_trunc('month', o.created_at)       AS month,
+        c."customer_id",
+        c."Full Name"                           AS customer_name,
+        SUM(oi.quantity * oi.unit_price_cents) / 100.0 AS revenue
+    FROM orders AS o
+    INNER JOIN order_items oi ON oi.order_id = o.id
+    LEFT  JOIN customers  c  ON c.customer_id = o.customer_id
+    WHERE o.status NOT IN ('cancelled', 'refunded')
+      AND o.created_at >= TIMESTAMP '2024-01-01 00:00:00'
+      AND c.notes NOT LIKE '%O''Brien%'
+    GROUP BY 1, 2, 3
+),
+ranked AS (
+    SELECT
+        m.*,
+        RANK() OVER (PARTITION BY month ORDER BY revenue DESC)             AS rnk,
+        SUM(revenue) OVER (PARTITION BY customer_id ORDER BY month
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total,
+        LAG(revenue, 1, 0) OVER (PARTITION BY customer_id ORDER BY month) AS prev_revenue,
+        ROUND(100.0 * revenue / NULLIF(SUM(revenue) OVER (PARTITION BY month), 0), 2) AS pct_of_month
+    FROM monthly m
+)
+SELECT
+	month,
+	customer_name,
+	revenue,
+	running_total,
+	CASE
+		WHEN prev_revenue = 0 THEN NULL
+		WHEN revenue > prev_revenue * 1.10 THEN 'growing'
+		WHEN revenue < prev_revenue * 0.90 THEN 'shrinking'
+		ELSE 'flat'
+	END AS trend
+FROM ranked
+WHERE rnk <= 10   
+ORDER BY month DESC, rnk ASC
+LIMIT 100 OFFSET 0;

@@ -1,0 +1,54 @@
+#!/usr/bin/env swift
+import Foundation
+
+// A tiny CSV summariser.
+
+struct Row {  
+    let name: String
+    let qty: Int
+    let price: Decimal
+}
+
+enum ParseError: Error {
+    case missingField(line: Int, field: String)
+    case invalidNumber(line: Int, text: String)
+}
+
+func parse(_ text: String) throws -> [Row] {
+    var rows: [Row] = []
+    for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: true).enumerated() {
+        let n = index + 1
+        if line.hasPrefix("#") { continue }
+        let cols = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard cols.count >= 3 else { throw ParseError.missingField(line: n, field: "price") }
+        guard let qty = Int(cols[1].trimmingCharacters(in: .whitespaces)) else {
+            throw ParseError.invalidNumber(line: n, text: cols[1])
+        }
+        guard let price = Decimal(string: cols[2]) else {
+            throw ParseError.invalidNumber(line: n, text: cols[2])
+        }
+        rows.append(Row(name: cols[0], qty: qty, price: price))
+    }
+    return rows
+}
+
+@main
+struct Tool {
+    static func main() {
+        let args = CommandLine.arguments.dropFirst()
+        guard let path = args.first else {
+            FileHandle.standardError.write(Data("usage: tool <file.csv>\n".utf8))
+            exit(EX_USAGE)
+        }
+        do {
+            let text = try String(contentsOfFile: path, encoding: .utf8)
+            let rows = try parse(text)
+            let total = rows.reduce(Decimal.zero) { $0 + Decimal($1.qty) * $1.price }
+            print("Rows: \(rows.count), total: \(total) €")
+        } catch let ParseError.invalidNumber(line, text) {
+            print("line \(line): cannot read \"\(text)\" as a number")
+        } catch {
+            print("failed: \(error)")
+        }
+    }
+}

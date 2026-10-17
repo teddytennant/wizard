@@ -1,0 +1,24 @@
+
+
+ [1m[38;2;190;210;235mjcode[0m[38;2;80;80;80m · client[39m
+ [38;2;80;80;80mserver: Beach 🏄 · v0.95.0-dev[39m
+ [38;2;80;80;80mclient: Bear 🐻 · v0.95.0-dev[39m
+ [38;2;80;80;80m/model to switch · fake · [1m[38;2;255;150;200mGrok 4.7[0m
+ [38;2;80;80;80m/login to add provider[39m
+ [38;2;80;80;80m○ anthropic[39m
+ [38;2;80;80;80m○ openrouter[39m
+[38;2;128;203;196m/?[38;2;80;80;80m  Show help and keyboard shortcuts[39m
+[38;2;128;203;196m/btw[38;2;80;80;80m  Ask a side question in the side panel[39m
+[38;2;255;213;128m/cls  Clear the view only, keeping context[39m
+[38;2;128;203;196m/fix[38;2;80;80;80m  Recover when the model cannot continue[39m
+[38;2;128;203;196m/git[38;2;80;80;80m  Show git status for the session working directory[39m
+[38;2;128;203;196m/log[38;2;80;80;80m  Mark the current location in the jcode logs[39m
+[38;2;128;203;196m/ssh[38;2;80;80;80m  Connect to a remote machine using system SSH[39m
+[38;2;128;203;196m/auth[38;2;80;80;80m  Show authentication status  +110 more[39m
+[38;2;255;80;80m1[38;2;138;180;248m> [39m/                                                                          [38;2;255;193;7m⏳
+[39m                        [38;2;140;180;255m [38;2;140;140;150m…/jcodew-cmp/proj[39m [38;2;140;140;150m3.1k/200k [38;2;50;50;60m▱▱▱▱▱▱▱▱▱▱[1m[38;2;100;200;100m 2%[0m [38;2;140;140;150mfake[39m [1m[38;2;255;135;200mGrok 4.7
+
+
+
+
+

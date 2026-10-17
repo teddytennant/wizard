@@ -1,0 +1,59 @@
+/// <reference types="node" />
+
+export namespace Shapes {
+  export abstract class Shape {
+    protected static count = 0;
+    abstract readonly kind: string;
+
+    constructor(public readonly label: string = 'unnamed') {
+      Shape.count++;
+    }
+
+    abstract area(): number;
+
+    describe(): string {
+      return `${this.kind}(${this.label}) area=${this.area().toFixed(3)}`;
+    }
+
+    static get total(): number {
+      return Shape.count;
+    }
+  }
+
+  export class Circle extends Shape {
+    readonly kind = 'circle';
+    constructor(private r: number, label?: string) {
+      super(label);
+    }
+    area() {
+      return Math.PI * this.r ** 2;
+    }
+  }
+
+  export class Rect extends Shape {
+    readonly kind = 'rect';
+    constructor(private w: number, private h: number, label?: string) {
+      super(label);
+    }
+    area() {
+      return this.w * this.h;
+    }
+  }
+}
+
+export const enum Level {
+  Debug = 10,
+  Info = 20,
+  Warn = 30,
+}
+
+function overload(x: string): string;
+function overload(x: number): number;
+function overload(x: string | number): string | number {
+  return typeof x === 'string' ? x.toUpperCase() : x * 2;
+}
+
+const shapes: Shapes.Shape[] = [new Shapes.Circle(1.5, 'ø'), new Shapes.Rect(2, 3.25)];
+for (const s of shapes) console.log(s.describe());
+console.log(Shapes.Shape.total, overload('héllo'), Level.Warn, 0x1f, 1e-7, 10n ** 20n);
+const el = document.getElementById('app') as HTMLDivElement | null;

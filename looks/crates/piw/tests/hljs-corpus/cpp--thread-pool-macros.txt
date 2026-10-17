@@ -1,0 +1,59 @@
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
+
+#define LOG(level, msg) \
+    do { \
+        if ((level) >= g_log_level) { \
+            std::lock_guard<std::mutex> _lk(g_log_mutex); \
+            std::cerr << "[" #level "] " << __FILE__ << ":" << __LINE__ << " " << (msg) << std::endl; \
+        } \
+    } while (0)
+
+class ThreadPool {
+public:
+    explicit ThreadPool(unsigned n = std::thread::hardware_concurrency())
+    {
+        for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this] { run(); });
+    }
+    ~ThreadPool() { { std::unique_lock lk{mu_}; stopping_ = true; } cv_.notify_all(); }
+    template <class F, class... Args>
+    auto submit(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>>
+    {
+        using R = std::invoke_result_t<F, Args...>;
+        auto task = std::make_shared<std::packaged_task<R()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        auto fut = task->get_future();
+        {
+            std::scoped_lock lk{mu_};
+            tasks_.emplace([task] { (*task)(); });
+        }
+        cv_.notify_one();
+        return fut;
+    }
+private:
+    void run()
+    {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lk{mu_};
+                cv_.wait(lk, [&] { return stopping_ || !tasks_.empty(); });
+                if (stopping_ && tasks_.empty()) return;
+                job = std::move(tasks_.front());
+                tasks_.pop();
+            }
+            job();
+        }
+    }
+    std::vector<std::jthread> workers_;
+    std::queue<std::function<void()>> tasks_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool stopping_ = false;
+};

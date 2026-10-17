@@ -1,0 +1,42 @@
+From: Priya Raman <priya.raman@example.com>
+To: Daniel Okafor <daniel.okafor@example.com>  
+Cc: ops-team@example.com
+Date: Tue, 12 Mar 2024 16:42:07 +0100
+Subject: Re: Friday's deploy window & rollback plan
+Message-ID: <CAF3x9k2=Q7@mail.example.com>
+
+Hi Daniel,
+
+Thanks for the quick turnaround. A few notes before we lock this in:
+
+1. The 22:00 window works for us, but the payments team asks that we
+   avoid 23:30 to 00:15 because of the nightly settlement run.
+2. For the rollback, we should keep the previous image (v3.1.2) tagged
+   as "stable" until Monday. Can you confirm nobody prunes it?
+3. I'll be offline from 18:00 on Friday (flight to Zürich), so Mei will
+   be the point of contact. Her number is +81 3 5555 0142.
+
+Also, one thing I noticed in the runbook: step 7 says "restart all
+workers", but the scheduler must be restarted first or the queue backs
+up. I've fixed it in the wiki.   
+
+Cheers,
+Priya
+
+--
+Priya Raman | Platform Engineering
+Example Corp, Rue de la Paix 12, 75002 Paris 🇫🇷
+
+> On Tue, 12 Mar 2024 at 15:10, Daniel Okafor wrote:
+> Hi Priya,
+>
+> Proposed plan for Friday:
+>   - 22:00  freeze merges
+>   - 22:10  deploy v3.2.0 to staging, smoke tests
+>   - 22:40  promote to production (canary 10%, then 100%)
+>
+> If error rate goes above 2% for five minutes we roll back
+> automatically. Does that sound OK?
+>
+> Thanks,
+> Daniel

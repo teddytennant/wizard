@@ -1,0 +1,24 @@
+┌ Help  0%  ───────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Commands                                                                    │
+│                                                                              │
+│    /help  Show help and keyboard shortcuts                                   │
+│    /?  Show help and keyboard shortcuts                                      │
+│    /commands  Alias for /help                                                │
+│    /model  List or switch models                                             │
+│    /models  Alias for /model                                                 │
+│    /cancel  Cancel the current prompt or operation                           │
+│    /clear  Clear conversation history                                        │
+│    /cls  Clear the view only, keeping context                                │
+│    /version  Show current version                                            │
+│    /diff  Cycle or set diff display mode (off/inline/full)                   │
+│    /resume  Open session picker                                              │
+│    /sessions  Alias for /resume                                              │
+│    /session  Alias for /resume                                               │
+│    /quit  Exit wizard                                                        │
+│                                                                              │
+│  ─────────────────────────────────────────────────                           │
+│                                                                              │
+│  More commands                                                               │
+│                                                                              │
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page ───────────────────┘

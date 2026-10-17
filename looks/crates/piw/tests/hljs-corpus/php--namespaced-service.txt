@@ -1,0 +1,55 @@
+<?php
+
+declare(strict_types=1);  
+
+namespace App\Service;
+
+use App\Entity\{Invoice, Customer};
+use App\Exception\InvalidInvoiceException;
+use Psr\Log\LoggerInterface;
+use function array_map;
+use const PHP_EOL;
+
+/**
+ * Creates and validates invoices.
+ *
+ * @template T of Invoice
+ */
+final class InvoiceService implements InvoiceServiceInterface
+{
+    private const TAX = 0.2;
+    public const STATUS_DRAFT = 'draft';
+
+    public function __construct(
+        private readonly LoggerInterface $logger,
+        private array $handlers = [],
+        protected ?int $limit = null,
+    ) {
+    }
+
+    /* Build an invoice from raw rows. */
+    public function create(Customer $customer, array $rows): Invoice
+    {
+        if (count($rows) === 0) {
+            throw new InvalidInvoiceException("No rows for {$customer->getName()}");
+        }
+
+        $total = array_sum(array_map(fn (array $r): float => $r['qty'] * $r['price'], $rows));
+        $invoice = new Invoice($customer, $total * (1 + self::TAX));
+        $this->logger->info(sprintf('Invoice %s created for %s (%.2f €)', $invoice->id, $customer->name, $total));
+
+        return $invoice;
+    }
+
+    public function label(Invoice $i): string
+    {
+        $status = $i->status ?? self::STATUS_DRAFT;
+        return "Invoice #{$i->id} [{$status}] — {$i->customer->name}'s order: \${$i->total}\tdone" . PHP_EOL;
+    }
+
+    public static function fromEnv(): static
+    {
+        $n = (int) ($_ENV['LIMIT'] ?? 0x10);
+        return new static(new NullLogger(), [], $n > 0 ? $n : null);
+    }
+}

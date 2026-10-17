@@ -1,0 +1,57 @@
+package calc
+
+// Scala 3 braceless syntax: tiny arithmetic expression parser + evaluator
+
+enum Expr:
+  case Num(v: Double)
+  case Var(name: String)
+  case Bin(op: Char, l: Expr, r: Expr)
+  case Neg(e: Expr)
+
+import Expr.*
+
+final class Parser(input: String):
+  private var pos = 0
+
+  private def peek: Option[Char] =
+    skipWs()
+    if pos < input.length then Some(input(pos)) else None
+
+  private def skipWs(): Unit =
+    while pos < input.length && input(pos).isWhitespace do pos += 1
+
+  private def expect(c: Char): Unit =
+    if peek.contains(c) then pos += 1
+    else throw new IllegalArgumentException(s"expected '$c' at $pos but got ${peek.getOrElse("EOF")}")
+
+  def expr(): Expr =
+    var lhs = term()
+    while peek.exists(c => c == '+' || c == '-') do
+      val op = input(pos); pos += 1
+      lhs = Bin(op, lhs, term())
+    lhs
+
+  def term(): Expr =
+    var lhs = factor()
+    while peek.exists("*/%".contains(_)) do
+      val op = input(pos); pos += 1
+      lhs = Bin(op, lhs, factor())
+    lhs
+
+  def factor(): Expr = peek match
+    case Some('-') => pos += 1; Neg(factor())
+    case Some('(') => pos += 1; val e = expr(); expect(')'); e
+    case Some(c) if c.isDigit =>
+      val start = pos
+      while pos < input.length && (input(pos).isDigit || input(pos) == '.') do pos += 1
+      Num(input.substring(start, pos).toDouble)
+    case Some(c) if c.isLetter => val s = pos; while pos < input.length && input(pos).isLetterOrDigit do pos += 1; Var(input.slice(s, pos))
+    case other => throw new IllegalArgumentException(s"unexpected $other")
+
+def eval(e: Expr, env: Map[String, Double] = Map("π" -> math.Pi)): Double = e match
+  case Num(v)       => v
+  case Var(n)       => env.getOrElse(n, Double.NaN)
+  case Neg(x)       => -eval(x, env)
+  case Bin('+', a, b) => eval(a, env) + eval(b, env)
+  case Bin('*', a, b) => eval(a, env) * eval(b, env)
+  case Bin(op, _, _)  => sys.error(s"unsupported operator $op")

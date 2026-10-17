@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="/feed.xsl"?>
+<rss version="2.0"
+     xmlns:atom="http://www.w3.org/2005/Atom"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Le blog de Zoë</title>
+    <link>https://blog.example.org/</link>
+    <atom:link href="https://blog.example.org/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>Notes on Rust, café &amp; coffee ☕</description>  
+    <language>fr-FR</language>
+    <lastBuildDate>Mon, 05 Aug 2024 09:12:44 +0000</lastBuildDate>
+    <ttl>60</ttl>
+
+    <item>
+      <title>Parsing &lt;html&gt; without regexes</title>
+      <link>https://blog.example.org/2024/08/parsing-html/</link>
+      <guid isPermaLink="true">https://blog.example.org/2024/08/parsing-html/</guid>
+      <pubDate>Mon, 05 Aug 2024 08:00:00 +0000</pubDate>
+      <dc:creator><![CDATA[Zoë Müller]]></dc:creator>
+      <category>rust</category>
+      <category>parsing</category>
+      <description><![CDATA[A short look at <b>tokenizers</b> & state machines.]]></description>
+      <content:encoded><![CDATA[
+        <p>Don't use <code>s/<.*?>//g</code>. Here's why:</p>
+        <pre>if (a < b && c > d) { /* ok */ }</pre>  
+      ]]></content:encoded>
+    </item>
+
+    <item>
+      <title>日本語のタイトル &#x1F60A;</title>
+      <link>https://blog.example.org/2024/07/nihongo/</link>
+      <guid isPermaLink="false">post-4821</guid>
+      <pubDate>Fri, 12 Jul 2024 17:30:00 +0000</pubDate>
+      <enclosure url="https://cdn.example.org/ep12.mp3" length="14829113" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

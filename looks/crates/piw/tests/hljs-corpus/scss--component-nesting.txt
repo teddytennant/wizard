@@ -1,0 +1,56 @@
+@use "variables" as *;
+@use "mixins";
+
+$nav-height: 64px;  
+$z-layers: (modal: 1000, dropdown: 500, sticky: 100);
+$font-stack: "Helvetica Neue", Arial, sans-serif;
+
+.navbar {
+	position: sticky;
+	top: 0;
+	z-index: map-get($z-layers, sticky);
+	height: $nav-height;
+	font-family: $font-stack;
+	background: linear-gradient(to right, $brand-1 0%, $brand-2 100%);
+
+	&__brand {
+		font-weight: 700;
+		letter-spacing: .05em;
+		text-transform: uppercase;
+
+		img { height: $nav-height * 0.5; }
+	}
+
+	&__list {
+		display: flex;
+		list-style: none;
+		margin: 0;
+		padding: 0;
+
+		> li {
+			position: relative;
+
+			&:not(:last-child)::after {
+				content: "·";
+				margin: 0 .75em;
+			}
+
+			&.is-active > a { border-bottom: 2px solid currentColor; }
+			&:hover > .dropdown { display: block; }
+		}
+	}
+
+	.dropdown {
+		display: none;
+		z-index: map-get($z-layers, dropdown);
+		min-width: calc(100% + #{$nav-height / 2});
+	}
+
+	@media (max-width: 600px) {
+		&__list { flex-direction: column; }
+		#{&}--compact { height: $nav-height - 16px; }
+	}
+
+	// caf\00e9 menu, 咖啡 ☕
+	@at-root .no-js & { display: none; }
+}

@@ -1,0 +1,60 @@
+Building a CLI in Go
+====================
+
+This guide walks through a small tool. You'll need __Go 1.22__ or newer.
+
+Step 1: Project layout
+----------------------
+
+Create the module:
+
+```bash
+mkdir hello && cd hello
+go mod init example.com/hello
+```
+
+Step 2: The entry point
+
+```go
+package main  
+
+import (
+	"flag"
+	"fmt"
+)
+
+func main() {
+	name := flag.String("name", "World", "who to greet")
+	flag.Parse()
+	fmt.Printf("Hello, %s!\n", *name)
+}
+```
+
+Run it with `go run . -name=Zoë`.
+
+```
+plain fenced block with no language
+  indented line   
+```
+
+````markdown
+A fence containing a fence:
+
+```js
+console.log("nested");
+```
+````
+
+Tips
+----
+
+* Use `go vet ./...` before committing.
+* Prefer **small** interfaces — see [Effective Go][eg].
+* Inline code with backticks: `` `fmt.Println` `` and escaped \`ticks\`.
+
++ A plus-style list item
++ Another one
+
+Text with a URL <https://go.dev/doc/> and an email <hi@example.org>, plus an autolink to www.example.com.
+
+[eg]: https://go.dev/doc/effective_go

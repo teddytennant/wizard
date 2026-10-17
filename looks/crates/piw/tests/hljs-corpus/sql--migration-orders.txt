@@ -1,0 +1,45 @@
+-- Migration 0042: split shipping address out of orders
+-- up
+BEGIN;  
+
+CREATE TABLE addresses (
+	id          BIGSERIAL PRIMARY KEY,
+	line1       VARCHAR(120) NOT NULL,
+	line2       VARCHAR(120),
+	city        VARCHAR(80)  NOT NULL,
+	postcode    VARCHAR(12)  NOT NULL,
+	country     CHAR(2)      NOT NULL DEFAULT 'US',
+	lat         DOUBLE PRECISION,
+	lng         DOUBLE PRECISION,
+	CONSTRAINT chk_country CHECK (country ~ '^[A-Z]{2}$')
+);
+
+ALTER TABLE orders
+	ADD COLUMN shipping_address_id BIGINT REFERENCES addresses(id),
+	DROP COLUMN IF EXISTS legacy_ship_to,
+	ALTER COLUMN total_cents SET DEFAULT 0;
+
+/* Backfill: one address row per distinct legacy string.
+   Rows we cannot parse keep NULL and are logged. */
+INSERT INTO addresses (line1, city, postcode, country)
+SELECT DISTINCT
+	split_part(legacy_ship_to, ',', 1),
+	trim(split_part(legacy_ship_to, ',', 2)),
+	trim(split_part(legacy_ship_to, ',', 3)),
+	COALESCE(NULLIF(trim(split_part(legacy_ship_to, ',', 4)), ''), 'US')
+FROM orders
+WHERE legacy_ship_to IS NOT NULL AND legacy_ship_to <> '';
+
+UPDATE orders o
+SET    shipping_address_id = a.id
+FROM   addresses a
+WHERE  split_part(o.legacy_ship_to, ',', 1) = a.line1;
+
+CREATE INDEX idx_orders_ship ON orders (shipping_address_id);
+INSERT INTO schema_migrations (version, note) VALUES (42, 'Adresse de livraison séparée — 住所');
+
+COMMIT;
+
+-- down
+-- ALTER TABLE orders DROP COLUMN shipping_address_id;
+-- DROP TABLE addresses;

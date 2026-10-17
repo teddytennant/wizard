@@ -1,0 +1,43 @@
+# Changelog
+
+All notable changes to this project are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+- `--color=auto|always|never` flag (#412)
+- Support for `.fgignore` files, with `!negation` patterns
+
+## [2.1.0] - 2024-07-30  
+
+### Changed
+- **Breaking:** `Config::load()` now returns `Result<Config, ConfigError>`
+- Upgraded to Rust 1.78; MSRV is unchanged
+
+### Fixed
+- Panic on invalid UTF-8 in file names (thanks, @renee!)
+- Off-by-one in `--context` when the match is on the last line
+  ```diff
+  -    let end = line + ctx;
+  +    let end = (line + ctx).min(total - 1);
+  ```
+
+### Security
+- Bumped `regex` to 1.10.5 to pick up the fix for [CVE-2024-0000](https://example.org/cve)
+
+## [2.0.0] - 2024-03-02
+
+Initial rewrite. Highlights:  
+
+1. New parser
+2. Streaming output
+   - no more buffering whole files
+   - ~3x faster on the *linux* tree
+3. Dropped Windows 7 support
+
+Contributors: Renée D., 山田 太郎, Zoë M. 🎉
+
+[Unreleased]: https://github.com/example/fastgrep/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/example/fastgrep/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/example/fastgrep/releases/tag/v2.0.0

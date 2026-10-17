@@ -1,0 +1,57 @@
+;;;; string-utils.lisp -- small string helpers
+  
+(defpackage :string-utils
+  (:use :cl)
+  (:export #:split-string #:join-strings #:string-prefix-p #:slugify))
+
+(in-package :string-utils)
+
+#|
+  Helpers written for the report generator.
+  None of these allocate more than they have to,
+  but they are not tuned for huge inputs.
+|#
+
+(defparameter *separators* '(#\Space #\Tab #\Newline)
+  "Characters treated as whitespace by SPLIT-STRING.")
+
+(defun split-string (string &key (separator #\,) (limit nil))
+  "Split STRING at each SEPARATOR. At most LIMIT pieces are returned."
+  (loop with start = 0
+        for pos = (position separator string :start start)
+        for count from 1
+        collect (subseq string start (if (and limit (>= count limit)) nil pos))
+          into pieces
+        while (and pos (or (null limit) (< count limit)))
+        do (setf start (1+ pos))
+        finally (return pieces)))
+
+(defun join-strings (strings &optional (delimiter ", "))
+  (with-output-to-string (out)
+    (loop for (s . rest) on strings
+          do (write-string s out)
+             (when rest (write-string delimiter out)))))
+
+(defun string-prefix-p (prefix string)
+  (let ((n (length prefix)))
+    (and (<= n (length string))
+         (string= prefix string :end2 n))))
+
+(defun slugify (title)
+  (let ((clean (remove-if-not (lambda (c) (or (alphanumericp c) (char= c #\Space)))
+                              (string-downcase title))))
+    (substitute #\- #\Space (string-trim *separators* clean))))
+
+(defmacro with-trimmed ((var string) &body body)
+  `(let ((,var (string-trim *separators* ,string)))
+     ,@body))
+
+(defun report-line (name count)
+  (format nil "~&~20A ~6D  ~,2F%~%" name count (* 100.0 (/ count 7))))
+
+;; Sanity checks
+(assert (equal (split-string "a,b,c") '("a" "b" "c")))   
+(format t "~A~%" (join-strings (list "café" "naïve" "日本語" "🙂") " | "))
+(print (slugify "Hello, World! It's 2024"))
+(print #'slugify)
+(print (list :ok t :value 1.5e3 :char #\x :hex #xFF))

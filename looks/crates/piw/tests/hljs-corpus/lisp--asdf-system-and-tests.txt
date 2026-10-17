@@ -1,0 +1,56 @@
+;;;; my-project.asd
+  
+(asdf:defsystem "my-project"
+  :description "Example system with a test suite"
+  :author "Teddy <teddy@example.com>"
+  :license "MIT"
+  :version "0.3.1"
+  :depends-on ("alexandria" "cl-ppcre" "bordeaux-threads")
+  :serial t
+  :components ((:file "package")
+               (:module "src"
+                :components ((:file "util")
+                             (:file "core" :depends-on ("util"))))
+               (:module "tests"
+                :components ((:file "suite"))))
+  :in-order-to ((test-op (test-op "my-project/tests"))))
+
+;;;; tests/suite.lisp
+
+(in-package :cl-user)
+
+(defvar *failures* 0)
+(defvar *tests* (make-hash-table :test 'eq))
+
+(defmacro deftest (name () &body body)
+  `(setf (gethash ',name *tests*)
+         (lambda ()
+           (handler-case (progn ,@body t)
+             (error (e)
+               (format t "~&  ERROR in ~A: ~A~%" ',name e)
+               nil)))))
+
+(defmacro check (form)
+  `(unless ,form
+     (incf *failures*)
+     (format t "~&  FAIL: ~S~%" ',form)))
+
+(deftest test-arithmetic ()
+  (check (= 4 (+ 2 2)))
+  (check (equal '(1 2 3) (list 1 2 3)))
+  (check (string= "héllo" (string-downcase "HÉLLO"))))
+
+(deftest test-regex ()
+  (check (cl-ppcre:scan "^\\d{3}-\\d{4}$" "555-1234"))
+  (check (equal (cl-ppcre:split "\\s*,\\s*" "a , b,c") '("a" "b" "c"))))
+
+(defun run-all ()
+  (setf *failures* 0)
+  (maphash (lambda (name fn)
+             (format t "~&Running ~A ... ~:[FAILED~;ok~]~%" name (funcall fn)))
+           *tests*)
+  (format t "~&~D failure~:P~%" *failures*)   
+  (zerop *failures*))
+
+#+sbcl (sb-ext:exit :code (if (run-all) 0 1))
+#-sbcl (run-all)

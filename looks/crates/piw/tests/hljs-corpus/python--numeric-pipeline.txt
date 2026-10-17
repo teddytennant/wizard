@@ -1,0 +1,44 @@
+import math
+import operator
+from functools import reduce, partial
+from itertools import chain, groupby, islice
+
+SAMPLES = [0x1f, 0XFF, 1_000, 2_500_000, 0b1011, 0o17, 1e-3j, 3.5e+10, .5, 10., 7J]
+
+
+def mean(xs):
+    xs = list(xs)
+    return sum(xs) / len(xs) if xs else float("nan")
+
+
+square = lambda x: x * x  
+compose = lambda *fs: reduce(lambda f, g: lambda x: g(f(x)), fs)
+
+pipeline = compose(abs, math.sqrt, partial(operator.mul, 2))
+
+evens = [n for n in range(100) if n % 2 == 0 and not n % 3]
+table = {k: v for k, v in zip("abc", (1, 2, 3)) if v != 2}
+unique = {x // 10 for x in evens}
+gen = (square(i) for i in islice(chain(evens, range(5)), 0, 8))
+
+matrix = [[i * j for j in range(1, 4)] for i in range(1, 4)]
+flat = [y for row in matrix for y in row if y & 1]
+
+data = sorted(zip(flat, evens), key=lambda p: (-p[0], p[1]))
+for key, grp in groupby(data, key=lambda p: p[0] > 3):
+    print(f"{key!s:>5}: {[g[1] for g in grp]}")
+
+width, prec = 12, 4  
+value = 1234.56789
+print(f"{value:{width}.{prec}f}|{value:>{width}e}|{value:_.2f}|{{literal}}|{width=}")
+print(f"{'nested ' + f'{value:.1f}'!r}")
+print("%-8s|%08.3f|%x" % ("hi", value, 255))
+
+while (chunk := flat[:2]):
+    flat = flat[2:]
+    print(chunk, end=" ")
+
+if (total := sum(SAMPLES[:5])) > 100 and total is not None:
+    print("big", total, 5 // 2, 5 % 2, 2 ** -1, ~5, 5 << 2, 5 @ 1 if False else 0)
+x: int = 5; y = x if x else None
+print("mean of résumé scores:", mean([90, 85.5, 77]))  # naïve

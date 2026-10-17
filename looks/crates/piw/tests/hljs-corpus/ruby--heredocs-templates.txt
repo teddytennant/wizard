@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+# Generates a deployment script and an nginx config from a hash.
+
+require "erb"
+require "optparse"
+
+options = { env: "staging", port: 8080, hosts: %w[web1 web2 web3] }
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: gen.rb [options]"
+  opts.on("-e", "--env ENV", String, "Environment") { |v| options[:env] = v }
+  opts.on("-p", "--port PORT", Integer, "Port (default 8080)") { |v| options[:port] = v }
+end.parse!
+
+name = "app-#{options[:env]}"
+
+script = <<~BASH
+  #!/bin/bash
+  set -euo pipefail
+  # Deploy #{name} to #{options[:hosts].size} hosts
+  for host in #{options[:hosts].join(" ")}; do
+    ssh "$host" 'sudo systemctl restart #{name}.service'
+    echo "restarted $host ✓"
+  done
+BASH
+
+raw = <<~'RAW'
+  This text keeps #{interpolation} and \n literally.
+RAW
+
+template = ERB.new(<<~NGINX, trim_mode: "-")
+  upstream <%= name %> {
+  <%- options[:hosts].each do |h| -%>
+    server <%= h %>:<%= options[:port] %> max_fails=3;
+  <%- end -%>
+  }
+  # niveau d'accès : été
+NGINX
+
+puts script
+puts raw
+puts template.result(binding)
+
+def shout(text, times: 2) = (text.upcase + "!" * times)
+puts shout("done", times: 3)   
+puts [1, 2, 3].map { _1 * 2 }.inspect, 0xff, 1_000, 3.5e2, 0b11, ?a, :"quoted sym", %i[a b]

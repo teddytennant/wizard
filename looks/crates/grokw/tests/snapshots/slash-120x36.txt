@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                        0 / 256K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────70─
+    ❯ /memory                  [new] Browse, view, and manage your memories                                          █
+      /tutorial                      Quick tips to get the most out of Wizard
+      /settings                      Open the settings modal
+      /dashboard                     Open the Agent Dashboard
+      /workflows                     Browse installed workflows
+      /plugins                       View plugins
+      /btw                           Ask a side question without interrupting
+      /voice                         Toggle dictation (Ctrl+Space/F8; Esc/Enter to stop)
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯ /memory                                                                                                        │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+.:shortcuts

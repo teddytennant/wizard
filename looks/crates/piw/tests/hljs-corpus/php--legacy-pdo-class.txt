@@ -1,0 +1,56 @@
+<?php
+# Old-style data access layer
+
+require_once __DIR__ . '/config.php';  
+
+class Database {
+	private static $instance = null;
+	private $pdo;
+
+	private function __construct() {
+		$dsn = sprintf('mysql:host=%s;dbname=%s;charset=utf8mb4', DB_HOST, DB_NAME);
+		try {
+			$this->pdo = new PDO($dsn, DB_USER, DB_PASS, array(
+				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+			));
+		} catch (PDOException $e) {
+			die('Connexion échouée: ' . $e->getMessage());
+		}
+	}
+
+	public static function get(): self {
+		if (self::$instance === null) {
+			self::$instance = new self();
+		}
+		return self::$instance;
+	}
+
+	public function query(string $sql, array $params = []): array {
+		$stmt = $this->pdo->prepare($sql);
+		$stmt->execute($params);
+		return $stmt->fetchAll();
+	}
+
+	public function findUser($id) {
+		$rows = $this->query("SELECT * FROM users WHERE id = :id LIMIT 1", [':id' => (int)$id]);
+		return $rows ? $rows[0] : false;
+	}
+}
+
+$db = Database::get();
+$user = $db->findUser($_GET['id'] ?? 0);
+
+if (!$user):
+	header('HTTP/1.1 404 Not Found');
+	echo "<p>User not found</p>";
+elseif ($user['active'] == 1 && !empty($user['email'])):
+	echo '<p>Hello, ' . htmlspecialchars($user['name']) . '</p>';
+else:
+	echo "<p>Inactive</p>";
+endif;
+
+$total = 0;
+foreach ($db->query("SELECT price FROM items") as $row) { $total += $row['price']; }
+echo "Total: " . number_format($total, 2, ',', ' ') . " €\n";
+?>

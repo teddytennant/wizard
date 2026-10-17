@@ -1,0 +1,35 @@
+  main /tmp/grok-harvest-000000/proj                                                                          0 / 256K
+
+
+                  ┌─ Settings › Default screen mode ─────────────────────────────────────────── [✗] ─┐
+                  │                                                                                  │
+                  │  Default screen mode                                                             │
+                  │  How plain grok opens next time: Fullscreen (default when unset) or Minimal.     │
+                  │  Writes [ui] screen_mode in config.toml. Restart required. Switch this session   │
+                  │  only with /minimal or /fullscreen.                                              │
+                  │                                                                                  │
+                  │   ●  Fullscreen · Open plain grok in the standard fullscreen TUI. Default when…  │
+                  │   ○  Minimal · Open plain grok in scrollback-native (minimal) mode.              │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │   ↑/↓ nav  |  Enter select  |  double-click select  |  Esc cancel  |  d reset    │ timestamps: on
+ ╭────────────────└──────────────────────────────────────────────────────────────────────────────────┘────────────────╮
+ │ ❯                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯

@@ -1,0 +1,48 @@
+# rustfmt.toml / clippy.toml / deny.toml, réglages communs ✔
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+use_small_heuristics = "Max"
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+format_strings = false
+wrap_comments = true
+comment_width = 80
+
+avoid-breaking-exported-api = false  
+msrv = "1.78.0"
+cognitive-complexity-threshold = 25
+disallowed-names = ["foo", "baz", "quux"]
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "not thread safe" },
+    { path = "std::process::exit", reason = "use anyhow::bail!" },
+]
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+vulnerability = "deny"
+yanked = "warn"
+ignore = [
+    "RUSTSEC-2020-0071",   # time: localtime_r segfault, not reachable
+]
+
+[licenses]
+unlicensed = "deny"
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-DFS-2016"]  
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [{ name = "openssl" }, { name = "native-tls" }]
+
+[sources]
+unknown-registry = "deny"
+allow-git = []

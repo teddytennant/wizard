@@ -1,0 +1,43 @@
+<?php
+// Generates a migration file and a shell helper.
+
+$table  = 'orders';
+$fields = ['id' => 'INT AUTO_INCREMENT', 'total' => 'DECIMAL(10,2)', 'note' => 'VARCHAR(255)'];
+$user   = (object) ['name' => 'Zoë', 'roles' => ['admin', 'dev']];
+$arr    = ['key' => ['nested' => 'value'], 3 => 'three'];
+
+$columns = implode(",\n    ", array_map(
+    fn($name, $type) => "`$name` $type",
+    array_keys($fields),
+    $fields
+));
+
+$sql = <<<SQL
+CREATE TABLE `{$table}` (
+    {$columns},
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- Owner: {$user->name} ({$user->roles[0]}), first: $arr[3], deep: {$arr['key']['nested']}
+SQL;
+
+$script = <<<'BASH'
+#!/bin/bash
+echo "No $interpolation here, \n stays literal"
+mysql -u"$DB_USER" -p"$DB_PASS" < migration.sql
+BASH;
+
+$indented = <<<"EOT"
+    Hello, ${table}!
+      Tab:\t| Unicode: \u{1F600} | Hex: \x41 | Octal: \101
+    EOT;
+
+/* Write files only when running from the CLI. */
+if (PHP_SAPI === 'cli' && !file_exists("{$table}.sql")) {
+    file_put_contents("{$table}.sql", $sql . PHP_EOL);
+    echo 'Écrit: ', strlen($sql), ' octets', "\n";
+}
+
+$n = 1_000_000 + 0b1010 + 0o17 + 0x1F + 1.5e3 + .5;
+$s = 'single \'quoted\' with \\ backslash and $novar';
+printf("%s %05.1f %'*10s\n", $s, $n, 'pad');   
+echo $indented, "\n", $script, "\n";

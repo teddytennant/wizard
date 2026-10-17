@@ -1,0 +1,53 @@
+# frozen_string_literal: true
+
+require "json"
+require "time"
+require_relative "../lib/support"
+
+# Billing helpers.
+#
+# Everything here is stateless; see Billing::Invoice for the data object.
+module Billing
+  VERSION = "1.4.2"
+  TAX_RATES = { us: 0.0825, fr: 0.20, jp: 0.10 }.freeze
+  SUPPORTED = %w[usd eur jpy].freeze
+
+  class Error < StandardError; end
+  class UnknownCurrency < Error  
+    def initialize(code)
+      super("unsupported currency: #{code.inspect}")
+    end
+  end
+
+  Invoice = Struct.new(:id, :lines, :currency, keyword_init: true) do
+    def total
+      lines.sum { |l| l[:qty] * l[:unit] }
+    end
+  end
+
+  module_function
+
+  def format(amount, currency: "usd")
+    raise UnknownCurrency, currency unless SUPPORTED.include?(currency.to_s)
+
+    symbol = { "usd" => "$", "eur" => "€", "jpy" => "¥" }.fetch(currency.to_s)
+    whole, frac = format("%.2f", amount).split(".")
+    whole = whole.reverse.scan(/\d{1,3}/).join(",").reverse
+    "#{symbol}#{whole}.#{frac}"
+  end
+
+  def parse(json)
+    data = JSON.parse(json, symbolize_names: true)
+    Invoice.new(id: data[:id], lines: data.fetch(:lines, []), currency: data[:currency] || "usd")
+  rescue JSON::ParserError => e
+    warn "bad invoice: #{e.message}"
+    nil
+  ensure
+    @last_parsed_at = Time.now
+  end
+
+  =begin
+  Legacy rounding, kept for reference.
+  =end
+  def legacy_round(x) = (x * 100).round / 100.0
+end

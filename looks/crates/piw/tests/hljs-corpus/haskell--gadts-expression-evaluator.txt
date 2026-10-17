@@ -1,0 +1,58 @@
+{-# LANGUAGE GADTs, KindSignatures, RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}  
+module Expr where
+
+import Data.Kind (Type)
+import qualified Data.Map.Strict as M
+import Text.Printf (printf)
+
+-- | A typed expression language. Ill-typed terms cannot be built.
+data Expr :: Type -> Type where
+  IntE  :: Int  -> Expr Int
+  BoolE :: Bool -> Expr Bool
+  StrE  :: String -> Expr String
+  Add   :: Expr Int -> Expr Int -> Expr Int
+  Mul   :: Expr Int -> Expr Int -> Expr Int
+  If    :: Expr Bool -> Expr a -> Expr a -> Expr a
+  Eq    :: (Eq a, Show a) => Expr a -> Expr a -> Expr Bool
+  Len   :: Expr String -> Expr Int
+  Pair  :: Expr a -> Expr b -> Expr (a, b)
+  Fst   :: Expr (a, b) -> Expr a
+
+eval :: Expr a -> a
+eval (IntE n)    = n
+eval (BoolE b)   = b
+eval (StrE s)    = s
+eval (Add a b)   = eval a + eval b
+eval (Mul a b)   = eval a * eval b
+eval (If c t e)  = if eval c then eval t else eval e
+eval (Eq a b)    = eval a == eval b
+eval (Len s)     = length (eval s)
+eval (Pair a b)  = (eval a, eval b)
+eval (Fst p)     = fst (eval p)
+
+pretty :: Expr a -> String
+pretty = \case' where
+  case' e = case e of
+    IntE n   -> show n
+    BoolE b  -> show b
+    StrE s   -> show s
+    Add a b  -> "(" ++ pretty a ++ " + " ++ pretty b ++ ")"
+    Mul a b  -> "(" ++ pretty a ++ " * " ++ pretty b ++ ")"
+    If c t f -> "if " ++ pretty c ++ " then " ++ pretty t ++ " else " ++ pretty f
+    Eq a b   -> pretty a ++ " == " ++ pretty b
+    Len s    -> "len " ++ pretty s
+    Pair a b -> "<" ++ pretty a ++ ", " ++ pretty b ++ ">"
+    Fst p    -> "fst " ++ pretty p
+
+demo :: Expr Int
+demo = If (Eq (Len (StrE "héllo wörld ✓")) (IntE 12))
+          (Add (IntE 0x10) (Mul (IntE 3) (IntE 0o7)))
+          (IntE (-1))   
+
+main :: IO ()
+main = do
+  putStrLn (pretty demo)
+  printf "= %d\n" (eval demo)
+  let env = M.fromList [("π", 3.14159 :: Double), ("e", 2.71828e0)]
+  print (M.toList env)

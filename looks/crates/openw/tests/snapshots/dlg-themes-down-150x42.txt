@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                                 Themes                                           esc
+
+                                                 Search
+
+                                                 matrix
+                                                 mercury
+                                                 monokai
+                                                 nightowl
+                                      ┃          nord
+                                      ┃  Ask     one-dark
+                                      ┃        ● opencode
+                                      ┃  Buil    orng
+                                      ╹▀▀▀▀▀▀    osaka-jade                                              ▀▀▀▀▀▀▀▀
+                                                 palenight                                               commands
+                                                 rosepine
+                                                 solarized
+                                                 synthwave84
+                                                 tokyonight
+                                                 vercel
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+                     ┌────────────────────────────────────────────────────────────────────── [✗] ─┐
+                     │  Context usage  Usage limit  Session info                                  │
+                     │────────────────────────────────────────────────────────────────────────────│
+                     │  Session info   click or drag to copy                                      │
+                     │                                                                            │
+                     │  Shell version:                                                            │
+                     │  0.0 [alpha]                                                               │
+                     │                                                                            │
+                     │  Session ID:                                                               │
+                     │  0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44                                      │
+                     │                                                                            │
+                     │  Working directory:                                                        │
+                     │  /tmp/grok-harvest-000000/proj                                             │
+                     │                                                                            │
+                     │  Model: Grok 4.7                                                           │
+                     │  Mode: genie                                                               │
+                     │  API Backend: mock 0.0                                                     │
+                     │  Turn: 0                                                                   │
+                     │  Context: 1475 / 256000 tokens (1%)                                        │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+                     │                                                                            │
+  ╭──────────────────│       Tab switch  |  ↑/↓ scroll  |  c copy session ID  |  y copy all       │──────────────────╮
+  │ ❯                │                                 Esc close                                  │                  │
+  ╰──────────────────└────────────────────────────────────────────────────────────────────────────┘ Grok 4.7 (high) ─╯
+
+

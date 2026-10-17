@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           hi
+  ┃  hi
+  ┃                                                                                                           Context
+                                                                                                              11,700 tokens
+     Hello there.                                                                                             6% used
+                                                                                                              $0.00 spent
+     ▣  Build · grok-4.6 · 6.5s
+                                                                                                              LSP
+                                                                                                              LSPs are disabled
+
+
+                                                 Commands                                         esc
+
+                                                 Search
+
+                                                 Suggested
+                                                 Switch session                              ctrl+x l
+                                                 New session                                 ctrl+x n
+                                                 Switch model                                ctrl+x m
+
+                                                 Session
+                                                 Rename session                                ctrl+r
+                                                 Jump to message                             ctrl+x g
+                                                 Fork session
+                                                 Compact session                             ctrl+x c
+                                                 Undo previous message                       ctrl+x u
+                                                 Hide sidebar                                ctrl+x b
+                                                 Disable code concealment                    ctrl+x h
+                                                 Show timestamps
+                                                 Expand thinking
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               11.7K (6%)  ctrl+p commands    • wizard 0.0

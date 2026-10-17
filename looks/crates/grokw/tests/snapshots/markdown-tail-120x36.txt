@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.8K / 256K
+
+
+     ❯ Reply with exactly the markdown between BEGIN and END, character for character, with no commentary    5:43 PM
+       before or after.
+        …
+
+                                                            ▲
+     └────────┴─────┴───────┘
+
+     fn main() {
+         // comment
+         let x: u32 = 42;
+         println!("{x}");
+     }
+
+     def f(a, b=2):                                                                                                    █
+         return a + b  # sum                                                                                           █
+                                                                                                                       █
+     {"name": "grok", "ok": true, "n": 3}                                                                              █
+                                                                                                                       █
+     - old line                                                                                                        █
+     + new line                                                                                                        █
+                                                                                                                       █
+     echo "hi" | grep -v 'x' && ls -la                                                                                 █
+                                                                                                                       █
+     Worked for 7.1s                                                                                                   █
+                                                                                                                       █
+
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                                                                │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+.:shortcuts

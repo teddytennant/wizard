@@ -1,0 +1,38 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ wizard
+ /model to switch · fake · Grok 4.7
+ v0.0
+ ● fake
+ /tmp/jcodew-cmp/proj
+
+
+1> /                                                                                                                  ⏳
+/?  Show help and keyboard shortcuts
+/cls  Clear the view only, keeping context
+/cost  show cost
+/diff  Cycle or set diff display mode (off/inline/full)
+/help  Show help and keyboard shortcuts
+/mode  switch mode
+/plan  toggle plan mode
+/quit  Exit wizard  +14 more
+
+
+
+
+
+
+
+

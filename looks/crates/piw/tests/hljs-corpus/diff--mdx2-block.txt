@@ -1,0 +1,6 @@
+--- a/x
++++ b/x
+@@ -1,2 +1,2 @@
+-old line
++new line
+ context

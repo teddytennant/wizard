@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                      28K / 256K
+
+                     ┌────────────────────────────────────────────────────────────────────── [✗] ─┐
+     ❯ Do these in or│  Context usage  Usage limit  Session info                                  │3) Read   5:42 PM
+       README.md. 4) │────────────────────────────────────────────────────────────────────────────│b
+       search ratatui│  Usage limit                                                               │ …
+                     │                                                                            │
+                     │  No billing data available.                                                │
+     Ratatui is a Rus│  Wizard does not report account limits over ACP.                           │
+                     │                                                                            │
+     hello world     │  Session usage (since start or last resume):                               │
+                     │    Input tokens:   492,589 (413,952 cached)                                │
+     • Listed the wor│    Output tokens:  4,642                                                   │                    █
+     • Changed README│    Total tokens:   497,231                                                 │                    █
+     • Found println!│    Cost:           $0.1383                                                 │                    █
+                     │                                                                            │                    █
+     ┌──────┬────────│                                                                            │                    █
+     │ Step │ Result │                                                                            │                    █
+     ├──────┼────────│                                                                            │                    █
+     │ Edit │ hello w│                                                                            │                    █
+     └──────┴────────│                                                                            │                    █
+                     │                                                                            │                    █
+     fn main() {     │                                                                            │                    █
+         println!("hi│                                                                            │                    █
+     }               │                                                                            │                    █
+                     │                                                                            │                    █
+     Worked for 8.8s │                                                                            │                    █
+                     │                                                                            │                    █
+                     │                                                                            │
+  ╭──────────────────│                                                                            │──────────────────╮
+  │ ❯                │       Tab switch  |  ↑/↓ scroll  |  c copy session ID  |  Esc close        │                  │
+  ╰──────────────────└────────────────────────────────────────────────────────────────────────────┘ Grok 4.7 (high) ─╯
+
+

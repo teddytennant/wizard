@@ -1,0 +1,43 @@
+use strict;
+use warnings;
+use utf8;
+binmode(STDOUT, ':encoding(UTF-8)');
+
+my $text = do { local $/; <DATA> };
+
+# normalise whitespace and quotes
+(my $clean = $text) =~ s/[ \t]+/ /g;
+$clean =~ s/\r\n?/\n/g;
+$clean =~ s/“|”/"/g;
+$clean =~ tr/A-Z/a-z/;
+
+my %freq;
+$freq{$1}++ while $clean =~ /\b([a-zà-ÿ']{3,})\b/g;
+
+my @top = (sort { $freq{$b} <=> $freq{$a} || $a cmp $b } keys %freq)[0 .. 4];
+print "$_: $freq{$_}\n" for @top;
+
+my $re = qr/
+    (?<year>\d{4}) - (?<mon>\d\d) - (?<day>\d\d)   # ISO date
+    (?:T(?<time>\d\d:\d\d(?::\d\d)?))?             # optional time
+/x;
+
+for my $d ('2024-03-09', '1999-12-31T23:59:59', 'nope') {
+    if ($d =~ $re) {
+        print "year=$+{year} month=$+{mon} day=$+{day}\n";
+    } else {
+        print "no match: '$d'\n";
+    }
+}
+
+my @words = qw/alpha beta gamma delta/;
+my $joined = join '|', map { quotemeta } @words;
+my $count = () = $text =~ /\b(?:$joined)\b/gi;
+my $titled = join ' ', map { ucfirst lc } split /\s+/, 'hELLO wORLD café';
+(my $copy = $titled) =~ s/(\w+)/<$1>/g;
+print "$count $copy\n";
+
+__DATA__
+Alpha beta, “gamma” and the DELTA.   
+Ünïcode naïveté and the café — 猫 🐈
+2024-01-02 beta beta alpha

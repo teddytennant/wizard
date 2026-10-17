@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Symlink dotfiles into $HOME, backing up anything that is in the way.
+
+set -u
+DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
+BACKUP="$HOME/.dotfiles-backup/$(date +%F)"
+DRY_RUN=false
+VERBOSE=0
+
+declare -A LINKS=(
+  ["zsh/zshrc"]=".zshrc"
+  ["git/gitconfig"]=".gitconfig"
+  ["nvim"]=".config/nvim"
+  ["tmux/tmux.conf"]=".tmux.conf"
+)
+
+color() { local c=$1; shift; printf '\e[%sm%s\e[0m' "$c" "$*"; }
+info()  { echo "$(color 32 '==>') $*"; }
+warn()  { echo "$(color 33 'warn:') $*" >&2; }
+
+run() {
+  if $DRY_RUN; then
+    echo "+ $*"
+  else
+    (( VERBOSE )) && echo "+ $*"
+    "$@"
+  fi
+}
+
+while (( $# )); do
+  case "$1" in
+    -n|--dry-run) DRY_RUN=true ;;
+    -v|--verbose) ((VERBOSE++)) ;;
+    --prefix=*)   DOTFILES="${1#*=}" ;;
+    --) shift; break ;;
+    -*) warn "ignoring unknown flag $1" ;;
+    *)  break ;;
+  esac
+  shift
+done
+
+[[ -d $DOTFILES ]] || { warn "no such directory: $DOTFILES"; exit 1; }
+
+for src in "${!LINKS[@]}"; do
+  dest="$HOME/${LINKS[$src]}"
+  target="$DOTFILES/$src"
+  if [[ -L $dest && $(readlink -f "$dest") == "$target" ]]; then
+    info "already linked: ${LINKS[$src]}"
+    continue
+  fi
+  if [[ -e $dest || -L $dest ]]; then
+    run mkdir -p "$BACKUP/$(dirname "${LINKS[$src]}")"
+    run mv -- "$dest" "$BACKUP/${LINKS[$src]}"
+  fi
+  run mkdir -p "${dest%/*}"
+  run ln -s "$target" "$dest" && info "linked ${LINKS[$src]} → $src"
+done

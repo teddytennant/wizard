@@ -1,0 +1,51 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace Shop.Orders;
+
+/// <summary>
+/// Immutable line item. See <see cref="Order"/> for the aggregate.
+/// </summary>
+public record LineItem(string Sku, int Quantity, decimal UnitPrice)
+{
+    public decimal Total => Quantity * UnitPrice;
+}
+
+public record Order(Guid Id, string Customer, IReadOnlyList<LineItem> Items)
+{
+    #region Totals
+    public decimal Subtotal => Items.Sum(i => i.Total);
+
+    public decimal Tax(decimal rate = 0.0825m) => Math.Round(Subtotal * rate, 2);
+    #endregion
+}
+
+public class OrderService
+{
+    private readonly IOrderRepository _repo;   
+    private const int MaxBatch = 0x40;
+
+    public OrderService(IOrderRepository repo) => _repo = repo;
+
+    /* Fetch every order for a customer, newest first.
+       Returns an empty list rather than null. */
+    public async Task<List<Order>> GetOrdersAsync(string customer, CancellationToken ct = default)
+    {
+        var all = await _repo.LoadAsync(customer, ct).ConfigureAwait(false);
+        return all
+            .Where(o => o.Items.Count > 0 && o.Subtotal >= 1_000.50m)
+            .OrderByDescending(o => o.Subtotal)
+            .Take(MaxBatch)
+            .ToList();
+    }
+
+    public string Describe(Order o)
+    {
+        var path = @"C:\orders\export\""archive""";
+        var note = "Caf\u00e9 \"special\"\t\u2615 注文";
+        return $"Order {o.Id:N} for {o.Customer,-12} total={o.Subtotal:C2} ({o.Items.Count} items) -> {path} {note}";
+    }
+}

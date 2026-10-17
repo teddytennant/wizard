@@ -1,0 +1,59 @@
+import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+
+function Cacheable(ttl = 60): MethodDecorator {
+	return (_target, key, descriptor: PropertyDescriptor) => {
+		const original = descriptor.value;
+		const store = new Map<string, { at: number; value: unknown }>();
+		descriptor.value = async function (this: unknown, ...args: unknown[]) {
+			const k = `${String(key)}:${JSON.stringify(args)}`;
+			const hit = store.get(k);
+			if (hit && Date.now() - hit.at < ttl * 1000) return hit.value;
+			const value = await original.apply(this, args);
+			store.set(k, { at: Date.now(), value });
+			return value;
+		};
+		return descriptor;
+	};
+}
+
+export interface CreateArticleDto {
+	title: string;
+	body: string;
+	tags?: string[];
+	publishAt?: Date | null;
+}
+
+@Injectable()
+export class ArticleService {
+	private readonly log = new Logger(ArticleService.name);
+	private articles: Array<CreateArticleDto & { id: number }> = [];
+
+	create(dto: CreateArticleDto) {
+		const article = { id: this.articles.length + 1, ...dto };
+		this.articles.push(article);
+		this.log.debug(`created #${article.id} “${dto.title}”`);
+		return article;
+	}
+
+	find(id: number) {
+		return this.articles.find((a) => a.id === id);
+	}
+}
+
+@Controller('articles')
+@UseGuards(AuthGuard)
+export class ArticleController {
+	constructor(private readonly service: ArticleService) {}
+
+	@Get(':id')
+	@Cacheable(30)
+	async get(@Param('id') id: string) {
+		return this.service.find(Number(id)) ?? null;
+	}
+
+	@Post()
+	create(@Body() dto: CreateArticleDto) {
+		return this.service.create(dto);
+	}
+}

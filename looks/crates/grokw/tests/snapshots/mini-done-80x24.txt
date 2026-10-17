@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                              19K / 256K
+
+
+     ❯ Edit README.md: change hello to hello there. Then reply       4:53 PM
+       with one short sentence.
+
+                                                                               █
+                                                                               █
+       1  # demo project                                                       █
+       2  hello                                                                █
+       2  hello there                                                          █
+                                                                               █
+     Updated README.md so it now says "hello there".                 4:53 PM   █
+                                                                               █
+     Worked for 6.3s                                                           █
+                                                                               █
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                        │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+.:shortcuts

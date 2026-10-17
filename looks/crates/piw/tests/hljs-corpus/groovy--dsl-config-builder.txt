@@ -1,0 +1,60 @@
+import groovy.json.JsonOutput
+import groovy.transform.ToString  
+
+@ToString(includeNames = true)
+class ServerConfig {
+    String host = 'localhost'
+    int port = 8080
+    List<String> origins = []
+    Map<String, Object> tls = [:]
+
+    void host(String h)    { this.host = h }
+    void port(int p)       { this.port = p }
+    void origin(String o)  { origins << o }
+    void tls(Closure body) {
+        def delegateMap = [:]
+        body.delegate = new TlsBuilder(delegateMap)
+        body.resolveStrategy = Closure.DELEGATE_FIRST
+        body()
+        tls = delegateMap
+    }
+}
+
+class TlsBuilder {
+    private final Map target
+    TlsBuilder(Map target) { this.target = target }
+
+    def methodMissing(String name, args) {
+        target[name] = args.length == 1 ? args[0] : args.toList()
+    }
+}
+
+def server(@DelegatesTo(ServerConfig) Closure spec) {
+    def cfg = new ServerConfig()
+    spec.delegate = cfg
+    spec.resolveStrategy = Closure.DELEGATE_FIRST
+    spec()
+    cfg
+}
+
+def cfg = server {
+    host 'api.example.org'
+    port 8443
+    origin 'https://app.example.org'
+    origin 'https://admin.example.org'
+    tls {
+        cert '/etc/ssl/certs/api.pem'
+        key  '/etc/ssl/private/api.key'
+        protocols 'TLSv1.2', 'TLSv1.3'
+    }
+}
+
+// Interpolated and plain strings side by side
+def banner = "Listening on ${cfg.host}:${cfg.port} (${cfg.origins.size()} origins)"
+def raw    = 'No $interpolation here\n'   
+def slashy = /C:\temp\logs\*.log/
+
+println banner
+println raw.trim()
+println JsonOutput.prettyPrint(JsonOutput.toJson(cfg.properties.subMap(['host', 'port', 'origins'])))
+println "Ünïcödé ✓ — 設定完了"

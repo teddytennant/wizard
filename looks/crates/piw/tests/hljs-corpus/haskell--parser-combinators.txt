@@ -1,0 +1,60 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE InstanceSigs #-}  
+module Parser
+  ( Parser (..)
+  , satisfy
+  , char
+  , many1
+  , sepBy
+  , number
+  ) where
+
+import Control.Applicative
+import Data.Char (isDigit, isSpace)
+
+{- |
+A parser consumes a prefix of the input and returns either
+a failure or a value together with the remaining text.
+-}
+newtype Parser a = Parser { runParser :: String -> Maybe (a, String) }
+
+instance Functor Parser where
+  fmap :: (a -> b) -> Parser a -> Parser b
+  fmap f (Parser p) = Parser $ \s -> case p s of
+    Nothing        -> Nothing
+    Just (a, rest) -> Just (f a, rest)
+
+instance Applicative Parser where
+  pure x = Parser $ \s -> Just (x, s)
+  Parser pf <*> Parser pa = Parser $ \s -> do
+    (f, r1) <- pf s
+    (a, r2) <- pa r1
+    pure (f a, r2)
+
+instance Monad Parser where
+  Parser p >>= f = Parser $ \s -> p s >>= \(a, r) -> runParser (f a) r
+
+instance Alternative Parser where
+  empty = Parser (const Nothing)
+  Parser p <|> Parser q = Parser $ \s -> p s <|> q s
+
+satisfy :: (Char -> Bool) -> Parser Char
+satisfy pr = Parser $ \case
+  (c:cs) | pr c -> Just (c, cs)
+  _             -> Nothing
+
+char :: Char -> Parser Char
+char = satisfy . (==)
+
+many1 :: Parser a -> Parser [a]
+many1 p = (:) <$> p <*> many p
+
+sepBy :: Parser a -> Parser b -> Parser [a]
+sepBy p sep = ((:) <$> p <*> many (sep *> p)) <|> pure []   
+
+-- Skips whitespace, e.g. "  ténèbres ✓"
+spaces :: Parser ()
+spaces = () <$ many (satisfy isSpace)
+
+number :: Parser Int
+number = read <$> many1 (satisfy isDigit) <* spaces   -- no sign, no "1_000"

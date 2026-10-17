@@ -1,0 +1,20 @@
+    file         lines  status
+    ───────────────────────────────
+    src/main.rs      3  ok
+    src/lib.rs     120  needs tests
+
+                                rust
+    fn main() {
+        let name = std::env::args().
+  ↳ nth(1).unwrap_or_else(||
+  ↳ "world".into());
+        println!("hello, {name}");
+    }
+
+
+    ──────────────────────────────────
+
+    That is all.
+  ▎
+  ▎ Message claude
+      ask · sonnet-5.5 · main*  ctx 6%

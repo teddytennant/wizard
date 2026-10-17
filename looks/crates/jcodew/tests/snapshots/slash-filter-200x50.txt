@@ -1,0 +1,48 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ wizard
+ /model to switch · fake · Grok 4.7
+ v0.0
+ ● fake
+ /tmp/jcodew-cmp/proj
+
+
+1> /mo                                                                                                                                                                                                ⏳
+/mode  switch mode
+/model  List or switch models
+/models  Alias for /model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

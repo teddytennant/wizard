@@ -1,0 +1,35 @@
+  main /tmp/grok-harvest-000000/proj                                                                          0 / 256K
+
+
+                  ┌─ Settings ───────────────────────────────────────────────────────────────── [✗] ─┐
+                  │                                                                                  │
+                  │   / to search                                                                    │
+                  │  ──────────────────────────────────────────────────────────────────────────────  │
+                  │   Appearance ──────────────────────────────────────────────────────────────────  │
+                  │  ▸ Compact mode                                                          on      │
+                  │  ▸ Default screen mode                                           Fullscreen  ›   │
+                  │    Reset 'Show timestamps' to default (on)?                                      │
+                  │  ▸ Timeline sidebar                                                     off      │
+                  │  ▸ Snap prompt to top on send                                            on      │
+                  │  ▸ Disable vim input mode                                                on      │
+                  │  ▸ Vim scrollback navigation                                            off      │
+                  │  ▸ Theme                                                         Grok Night  ›   │
+                  │  ▸ Auto dark theme                                               Grok Night  ›   │
+                  │  ▸ Auto light theme                                                Grok Day  ›   │
+                  │  ▸ Render Mermaid diagrams                                             Auto  ›   │
+                  │  ▸ Max thoughts width                                                   120      │
+                  │  ▸ Show thinking blocks                                                  on      │
+                  │  ▸ Respect manual folds                                                 off      │
+                  │  ▸ Group tool calls                                                      on      │
+                  │  ▸ Collapsed edit blocks                                                off      │
+                  │  ▸ Match display refresh rate                                            on      │
+                  │                                                                                  │
+                  │   Mouse ───────────────────────────────────────────────────────────────────────  │
+                  │  ▸ Scroll speed                                                          50      │
+                  │                                                                                  │
+                  │   Tip · Ask Wizard: "change theme to grokday" or "what does compact mode do?"    │
+                  │                                                                                  │
+                  │                y reset  |  n cancel  |  Esc cancel  |  F2 cancel                 │timestamps: off
+ ╭────────────────└──────────────────────────────────────────────────────────────────────────────────┘────────────────╮
+ │ ❯                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯

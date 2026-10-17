@@ -1,0 +1,52 @@
+package collections
+
+import (
+	"cmp"
+	"slices"
+)  
+
+// Number is any built-in numeric type.
+type Number interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64
+}
+
+type Pair[K comparable, V any] struct {
+	Key K
+	Val V
+}
+
+type Set[T comparable] map[T]struct{}
+
+func (s Set[T]) Add(vs ...T) {
+	for _, v := range vs {
+		s[v] = struct{}{}
+	}
+}
+
+func (s Set[T]) Has(v T) bool { _, ok := s[v]; return ok }
+
+func Map[T, U any](xs []T, f func(T) U) []U {
+	out := make([]U, 0, len(xs))
+	for _, x := range xs {
+		out = append(out, f(x))
+	}
+	return out
+}
+
+func Sum[T Number](xs ...T) (total T) {
+	for _, x := range xs {
+		total += x
+	}
+	return
+}
+
+func SortedKeys[M ~map[K]V, K cmp.Ordered, V any](m M) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+var runes = []rune{'a', '\n', 'é', '世', 0x1F600, 0o17, 0b101, 1_000_000, 3.5e-3, 2i}

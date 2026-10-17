@@ -1,0 +1,59 @@
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef VERSION
+#define VERSION "0.0.0-dev"
+#endif
+
+#ifdef _WIN32
+#  define PATH_SEP '\\'
+#else
+#  define PATH_SEP '/'
+#endif
+
+struct options {
+	const char *input;
+	int         verbose;
+	unsigned    width;
+	double      scale;
+};
+
+static const struct option long_opts[] = {
+	{ "width",   required_argument, NULL, 'w' },
+	{ "scale",   required_argument, NULL, 's' },
+	{ "verbose", no_argument,       NULL, 'v' },
+	{ "help",    no_argument,       NULL, 'h' },
+	{ 0 }
+};
+
+static void usage(const char *prog)
+{
+	fprintf(stderr,
+		"Usage: %s [-v] [-w COLS] [-s FACTOR] INPUT\n"
+		"  version %s — built \"%s\" %s\n",
+		prog, VERSION, __DATE__, __TIME__);
+}
+
+int main(int argc, char **argv)
+{
+	struct options o = { .width = 80, .scale = 1.0e0 };
+	int c;
+
+	while ((c = getopt_long(argc, argv, "w:s:vh", long_opts, NULL)) != -1) {
+		switch (c) {
+		case 'w': o.width = (unsigned)strtoul(optarg, NULL, 0); break;
+		case 's': o.scale = strtod(optarg, NULL); break;
+		case 'v': o.verbose++; break;
+		case 'h': usage(argv[0]); return 0;
+		default:  usage(argv[0]); return 2;
+		}
+	}
+	if (optind >= argc) { usage(argv[0]); return 2; }
+	o.input = argv[optind];
+
+	const char *base = strrchr(o.input, PATH_SEP);
+	printf("input=%s width=%u scale=%.3f\n", base ? base + 1 : o.input, o.width, o.scale);
+	return EXIT_SUCCESS;
+}

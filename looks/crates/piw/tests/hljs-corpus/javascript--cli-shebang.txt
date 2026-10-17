@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const USAGE = `usage: wc-lite [-l] [-w] [-c] <file...>
+
+  -l   count lines
+  -w   count words
+  -c   count bytes
+`;
+
+function parseArgs(argv) {
+  const flags = new Set();
+  const files = [];
+  for (const arg of argv) {
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(USAGE);
+      process.exit(0);
+    } else if (/^-[lwc]+$/.test(arg)) {
+      for (const ch of arg.slice(1)) flags.add(ch);
+    } else if (arg.startsWith('-')) {
+      console.error(`wc-lite: unknown option '${arg}'`);
+      process.exit(2);
+    } else {
+      files.push(arg);
+    }
+  }
+  if (flags.size === 0) ['l', 'w', 'c'].forEach((f) => flags.add(f));
+  return { flags, files };
+}
+
+function count(buf) {
+  const text = buf.toString('utf8');
+  return {
+    l: (text.match(/\n/g) || []).length,
+    w: text.split(/\s+/).filter(Boolean).length,
+    c: buf.length,
+  };
+}
+
+const { flags, files } = parseArgs(process.argv.slice(2));
+let status = 0;
+
+for (const file of files) {
+  try {
+    const stats = count(fs.readFileSync(file));
+    const cols = ['l', 'w', 'c'].filter((f) => flags.has(f)).map((f) => String(stats[f]).padStart(8));
+    console.log(cols.join('') + ' ' + path.basename(file));
+  } catch (e) {
+    console.error('wc-lite: %s: %s', file, e.code === 'ENOENT' ? 'no such file' : e.message);
+    status = 1;
+  }
+}
+process.exitCode = status;

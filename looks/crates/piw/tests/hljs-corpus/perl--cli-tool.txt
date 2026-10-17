@@ -1,0 +1,55 @@
+#!/usr/bin/env perl
+use 5.010;
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use File::Find;
+use File::Basename qw(basename dirname);
+use Pod::Usage;
+
+my %opt = (depth => 3, ext => [], verbose => 0);
+GetOptions(
+    'depth|d=i' => \$opt{depth},
+    'ext|e=s@'  => $opt{ext},
+    'verbose|v+' => \$opt{verbose},
+    'help|h'    => sub { pod2usage(-verbose => 1) },
+) or pod2usage(2);
+
+my @roots = @ARGV ? @ARGV : ('.');
+my $ext_rx = @{ $opt{ext} }
+    ? '\.(?:' . join('|', map { quotemeta } @{ $opt{ext} }) . ')$'
+    : '.';
+
+my (@hits, %bytes);
+find({
+    wanted => sub {
+        return unless -f $_;
+        return unless $_ =~ /$ext_rx/;
+        my $depth = () = $File::Find::name =~ m{/}g;
+        return if $depth > $opt{depth};
+        push @hits, $File::Find::name;
+        $bytes{ dirname($File::Find::name) } += -s _;
+    },
+    no_chdir => 1,
+}, @roots);
+
+say "found ", scalar(@hits), " files";
+for my $dir (sort { $bytes{$b} <=> $bytes{$a} } keys %bytes) {
+    my $kb = $bytes{$dir} / 1024;
+    printf "%8.1f KiB  %s\n", $kb, $dir;
+}
+say STDERR "debug: roots=@roots" if $opt{verbose} > 1;
+
+exit(@hits ? 0 : 1);
+
+__END__
+
+=head1 NAME
+
+findsize - total file sizes per directory
+
+=head1 SYNOPSIS
+
+findsize [-d N] [-e ext]... [dir ...]
+
+=cut

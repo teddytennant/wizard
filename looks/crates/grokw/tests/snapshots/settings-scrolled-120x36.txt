@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+                  ┌─ Settings ───────────────────────────────────────────────────────────────── [✗] ─┐
+                  │                                                                                  │
+                  │   / to search                                                                    │
+                  │  ──────────────────────────────────────────────────────────────────────────────  │
+                  │  ▸ Auto light theme                                                Grok Day  ›   │
+                  │  ▸ Render Mermaid diagrams                                             Auto  ›   │
+                  │  ▸ Max thoughts width                                                   120      │
+                  │  ▸ Show thinking blocks                                                  on      │
+                  │  ▸ Respect manual folds                                                 off      │
+                  │  ▸ Group tool calls                                                      on      │
+                  │  ▸ Collapsed edit blocks                                                off      │
+                  │  ▸ Match display refresh rate                                            on      │
+                  │                                                                                  │
+                  │   Mouse ───────────────────────────────────────────────────────────────────────  │
+                  │  ▸ Scroll speed                                                          50      │
+                  │  ▸ Scroll input                                                 Auto-detect  ›   │
+                  │  ▸ Scroll lines                                                           3      │
+                  │  ▸ Invert scroll                                                        off      │
+                  │  ▸ Text selection                                          Flash after copy  ›   │
+                  │                                                                                  │
+                  │   Editor & Input ──────────────────────────────────────────────────────────────  │
+                  │  ▸ Combine queued prompts                                               off      │
+                  │  ▸ Follow-up behavior                                                 Queue  ›   │
+                  │  ▸ Confirm before rewind                                                 on      │
+                  │                                                                                  │
+                  │   Tip · Ask Wizard: "change theme to grokday" or "what does compact mode do?"    │
+                  │                                                                                  │
+  ╭───────────────│    ↑/↓/j/k nav  |  g/G top/btm  |  Space toggle  |  Enter toggle  |  → expand    │───────────────╮
+  │ ❯             │                      / search  |  d reset  |  F2/Esc close                       │               │
+  ╰───────────────└──────────────────────────────────────────────────────────────────────────────────┘ok 4.7 (high) ─╯
+
+

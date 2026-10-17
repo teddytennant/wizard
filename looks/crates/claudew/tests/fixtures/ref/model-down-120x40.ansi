@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.300[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[39m [38;5;246m◐ medium · /effort[38;5;153m ▔
+[39m   [1m[38;5;153mSelect model[0m
+   [38;5;246mSwitch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, [39m
+   [38;5;246mspecify with --model.[39m
+
+     [38;5;246m1.  [39mDefault (recommended)  [38;5;246mSonnet 5.5 · Efficient for routine tasks[39m
+     [38;5;246m2.  [39mOpus 5.5               [38;5;246mFor complex work and everyday tasks[39m
+     [38;5;246m3.  [39mFable 5.1              [38;5;246mFor your toughest challenges[39m
+     [38;5;246m4.  [39mSonnet 5.5             [38;5;246mMost efficient for simpler tasks[39m
+     [38;5;246m5.  [38;5;114mHaiku 5.5[39m [38;5;114m✔[39m            [38;5;246mFastest for quick answers[39m
+   [38;5;153m❯[39m [38;5;246m6.  [38;5;153mHaiku 4.5[39m              [38;5;246mFastest for quick answers[39m
+     [38;5;246m7.  [39mSonnet 5               [38;5;246mEfficient for routine tasks[39m
+     [38;5;246m8.  [39mOpus 5                 [38;5;246mBest for everyday, complex tasks[39m
+     [38;5;246m9.  [39mFable 5                [38;5;246mMost capable for your hardest and longest-running tasks[39m
+   [38;5;246m↓[39m [38;5;246m10. [39mOpus 4.8               [38;5;246mBest for everyday, complex tasks[39m
+      [38;5;246m… +3 models[39m
+
+   [38;5;239m○ Effort not supported for Haiku 4.5[39m
+
+   [38;5;246mEnter to set as default · s to use this session only · Esc to cancel[39m

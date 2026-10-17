@@ -1,0 +1,55 @@
+package com.acme.shop
+
+import akka.actor.typed.{ActorRef, Behavior}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import scala.concurrent.duration._
+
+object Cart {
+  sealed trait Command
+  final case class AddItem(sku: String, qty: Int, replyTo: ActorRef[Reply]) extends Command
+  final case class Remove(sku: String) extends Command
+  case object Checkout extends Command
+  private case object Timeout extends Command
+
+  sealed trait Reply
+  final case class Added(sku: String, total: Int) extends Reply
+  final case class Rejected(reason: String) extends Reply
+
+  private val MaxItems = 99
+
+  def apply(owner: String): Behavior[Command] =
+    Behaviors.withTimers { timers =>
+      timers.startSingleTimer(Timeout, 15.minutes)
+      active(owner, Map.empty)
+    }
+
+  private def active(owner: String, items: Map[String, Int]): Behavior[Command] =
+    Behaviors.receive { (ctx: ActorContext[Command], msg: Command) =>
+      msg match {
+        case AddItem(sku, qty, replyTo) if qty <= 0 =>
+          replyTo ! Rejected(s"quantity must be positive, got $qty")
+          Behaviors.same
+
+        case AddItem(sku, qty, replyTo) =>
+          val next = items.updated(sku, items.getOrElse(sku, 0) + qty)
+          if (next.values.sum > MaxItems) {
+            replyTo ! Rejected("cart is full")
+            Behaviors.same
+          } else {
+            ctx.log.info(s"$owner added $qty x $sku ✔")
+            replyTo ! Added(sku, next.values.sum)
+            active(owner, next)
+          }
+
+        case Remove(sku) =>
+          active(owner, items - sku)
+
+        case Checkout =>
+          ctx.log.info("checking out {} lines", items.size)
+          Behaviors.stopped
+
+        case Timeout => // abandoned
+          Behaviors.stopped
+      }
+    }
+}

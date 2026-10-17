@@ -1,0 +1,54 @@
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
+/// Build a `BTreeMap` from `key => value` pairs.
+macro_rules! btree {
+    () => { ::std::collections::BTreeMap::new() };
+    ($($k:expr => $v:expr),+ $(,)?) => {{
+        let mut m = ::std::collections::BTreeMap::new();
+        $( m.insert($k, $v); )+
+        m
+    }};
+}
+
+macro_rules! impl_unit {
+    ($($name:ident = $factor:literal),* $(,)?) => {
+        $(
+            #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+            pub struct $name(pub f64);
+            impl $name {
+                pub const FACTOR: f64 = $factor;
+                pub fn to_base(self) -> f64 { self.0 * Self::FACTOR }
+            }
+        )*
+    };
+}
+
+impl_unit!(Meters = 1.0, Kilometers = 1_000.0, Miles = 1609.344);
+
+const TEMPLATE: &str = r#"{"name": "{name}", "path": "C:\Users\{name}\notes", "re": "\d+\.\d*"}"#;
+const DELIM: &str = r##"contains "# inside"##;
+const BYTES: &[u8] = b"\x00\x7f\xffraw\n";
+const MULTI: &str = "first line \
+                     continued, with a tab\t and a quote \" and unicode \u{1F980} ✓";
+
+fn render(name: &str, stats: &BTreeMap<&str, u32>) -> Result<String, std::fmt::Error> {
+    let mut out = TEMPLATE.replace("{name}", name);
+    out.push('\n');
+    for (k, v) in stats {
+        writeln!(out, "  {k:<8}= {v:>5} ({pct:.1}%)", pct = *v as f64 / 3.5)?;
+    }
+    write!(&mut out, "{:#06x} {:#b} {:e}", 255, 5u8, 1234.5f32)?;
+    Ok(out)
+}
+
+fn main() {
+    let stats = btree! { "wins" => 12, "losses" => 3, "draws" => 7 };
+    match render("Zoë", &stats) {
+        Ok(s) => println!("{s}\n{DELIM}\n{MULTI}"),
+        Err(e) => eprintln!("render failed: {e:?}"),
+    }
+    let d = Miles(26.2).to_base() / Kilometers::FACTOR;
+    assert!((d - 42.164).abs() < 1e-3, "marathon is {d} km");
+    dbg!(BYTES.len(), 'a' as u32, '\'', '\u{00e9}');
+}

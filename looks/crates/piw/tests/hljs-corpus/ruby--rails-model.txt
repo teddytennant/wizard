@@ -1,0 +1,49 @@
+class User < ApplicationRecord
+  has_many :posts, dependent: :destroy
+  has_many :comments, through: :posts
+  belongs_to :organization, optional: true
+
+  enum :role, { member: 0, editor: 1, admin: 2 }, default: :member
+
+  validates :email, presence: true, uniqueness: { case_sensitive: false },
+                    format: { with: /\A[^@\s]+@[^@\s]+\z/i }  
+  validates :name, length: { in: 2..80 }
+  validate :name_not_reserved
+
+  before_save :normalize_email
+  after_create_commit -> { WelcomeMailer.with(user: self).hello.deliver_later }
+
+  scope :active, -> { where(deleted_at: nil).where("last_seen_at > ?", 30.days.ago) }
+  scope :by_role, ->(role) { where(role: role) if role.present? }
+
+  RESERVED = %w[admin root system].freeze
+
+  def display_name
+    name.presence || email.split("@").first.titleize
+  end
+
+  def can_edit?(post)
+    admin? || (editor? && post.organization_id == organization_id) || post.user_id == id
+  end
+
+  def stats
+    {
+      posts: posts.count,
+      comments: comments.count,
+      joined: created_at.strftime("%B %-d, %Y"),
+      tagline: "Membre depuis #{created_at.year} — 会員"
+    }
+  end
+
+  private
+
+  def normalize_email
+    self.email = email.strip.downcase
+  end
+
+  def name_not_reserved
+    return unless RESERVED.include?(name.to_s.downcase)
+
+    errors.add(:name, :exclusion, message: "is reserved")
+  end
+end

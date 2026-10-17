@@ -1,0 +1,56 @@
+/* Result<T, E> with a handful of combinators. */
+
+export type Ok<T> = { readonly ok: true; readonly value: T };  
+export type Err<E> = { readonly ok: false; readonly error: E };
+export type Result<T, E = Error> = Ok<T> | Err<E>;
+
+export const ok = <T>(value: T): Ok<T> => ({ ok: true, value });
+export const err = <E>(error: E): Err<E> => ({ ok: false, error });
+ 
+export function map<T, U, E>(r: Result<T, E>, f: (t: T) => U): Result<U, E> {
+  return r.ok ? ok(f(r.value)) : r;
+}
+
+export function andThen<T, U, E>(r: Result<T, E>, f: (t: T) => Result<U, E>): Result<U, E> {
+  return r.ok ? f(r.value) : r;
+}
+
+export function unwrapOr<T, E>(r: Result<T, E>, fallback: T): T {
+  return r.ok ? r.value : fallback;
+}
+
+export function tryCatch<T>(fn: () => T): Result<T, unknown> {
+  try {
+    return ok(fn());
+  } catch (e) {
+    return err(e);
+  }
+}
+
+type ParseError =
+  | { kind: 'empty' }
+  | { kind: 'nan'; input: string }
+  | { kind: 'range'; min: number; max: number; got: number };
+
+export function parsePort(input: string): Result<number, ParseError> {
+  const s = input.trim();
+  if (s === '') return err({ kind: 'empty' });
+  const n = Number(s);
+  if (Number.isNaN(n)) return err({ kind: 'nan', input: s });
+  if (n < 1 || n > 65_535) return err({ kind: 'range', min: 1, max: 65535, got: n });
+  return ok(n);
+}
+
+export function describe(e: ParseError): string {
+  switch (e.kind) {
+    case 'empty':
+      return 'port is empty';
+    case 'nan':
+      return `“${e.input}” is not a number`;
+    case 'range':
+      return `port ${e.got} outside ${e.min}..${e.max}`;
+  }
+}
+
+const result = andThen(parsePort(' 8080 '), (p) => (p === 80 ? err({ kind: 'empty' } as const) : ok(p)));
+console.log(unwrapOr(map(result, (p) => `:${p}`), '(none)'));

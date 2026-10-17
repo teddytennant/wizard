@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                Connect xAI                                          esc
+
+                                Run this in a terminal: wizard --login xai
+                                Opens your browser for the xAI sign-in and stores the
+                                token under ~/.wizard.
+                                Then restart wizard so it picks up the new credentials.
+
+                       ┃
+                       ┃  Ask                                                      ok
+                       ┃
+                       ┃  Build · grok-4.6 xai-oauth
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                       tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

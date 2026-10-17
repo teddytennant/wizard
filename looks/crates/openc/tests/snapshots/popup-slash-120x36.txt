@@ -1,0 +1,36 @@
+
+            o p e n c  0.1
+            ━━━━━━━━━───────────────────────────────────
+            sonnet-5.5 high · claude 2.1.289
+
+            shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+           ▸ /mode   switch permission mode
+             /model  switch model
+             /mouse  [on|off] toggle mouse capture
+          ▎
+          ▎ /mo
+          ▎
+            ask · sonnet-5.5 high · /work/proj · main*                                                          ctrl+p

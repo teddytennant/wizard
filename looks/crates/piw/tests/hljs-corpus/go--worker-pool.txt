@@ -1,0 +1,59 @@
+// Package pool runs jobs on a bounded set of goroutines.
+package pool
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+)  
+
+const (
+	defaultWorkers = 8
+	maxQueue       = 1 << 10
+)
+
+var ErrClosed = errors.New("pool: closed")
+
+type Job func(ctx context.Context) error
+
+type Pool struct {
+	jobs   chan Job
+	wg     sync.WaitGroup
+	done   atomic.Int64
+	failed atomic.Int64
+	mu     sync.Mutex
+	errs   []error
+}
+
+/*
+New starts n workers. If n <= 0, defaultWorkers is used.
+*/
+func New(ctx context.Context, n int) *Pool {
+	if n <= 0 {
+		n = defaultWorkers
+	}
+	p := &Pool{jobs: make(chan Job, maxQueue)}
+	for i := 0; i < n; i++ {
+		p.wg.Add(1)
+		go p.worker(ctx, i)
+	}
+	return p
+}
+
+func (p *Pool) worker(ctx context.Context, id int) {
+	defer p.wg.Done()
+	for job := range p.jobs {
+		start := time.Now()
+		if err := job(ctx); err != nil {
+			p.failed.Add(1)
+			p.mu.Lock()
+			p.errs = append(p.errs, fmt.Errorf("worker %d: %w (after %v)", id, err, time.Since(start)))
+			p.mu.Unlock()
+			continue
+		}
+		p.done.Add(1)
+	}
+}

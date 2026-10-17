@@ -1,0 +1,59 @@
+(ns shapes.core)
+  
+(defprotocol Shape
+  "Operations on 2D shapes."
+  (area [this] "Area in square units.")
+  (perimeter [this]))
+
+(defrecord Circle [r]
+  Shape
+  (area [_] (* Math/PI r r))
+  (perimeter [_] (* 2 Math/PI r)))
+
+(defrecord Rect [w h]
+  Shape
+  (area [_] (* w h))
+  (perimeter [_] (* 2 (+ w h))))
+
+(defmulti render :format)
+
+(defmethod render :text [{:keys [shape]}]
+  (str (.getSimpleName (class shape)) " area=" (format "%.2f" (area shape))))
+
+(defmethod render :json [{:keys [shape]}]
+  (str "{\"area\": " (area shape) ", \"kind\": \"" (.getSimpleName (class shape)) "\"}"))
+
+(defmethod render :default [_] "unsupported format")
+
+(defmacro unless
+  "Inverse of `if`."
+  [test & body]
+  `(when (not ~test) ~@body))
+
+(defmacro with-timing
+  [label & body]
+  `(let [start# (System/nanoTime)
+         result# (do ~@body)]
+     (println ~label "took" (/ (- (System/nanoTime) start#) 1e6) "ms")
+     result#))
+
+(defn memo-area
+  "Memoised area, keyed on the shape's field map."
+  []
+  (let [cache (atom {})]
+    (fn [shape]
+      (or (@cache shape)
+          (let [a (area shape)]
+            (swap! cache assoc shape a)
+            a)))))
+
+(def shapes [(->Circle 1.5) (->Rect 2 3) (map->Rect {:w 4 :h 0.5})])
+
+(doseq [s shapes :let [m (memo-area)]]
+  (println (render {:format :text :shape s}) (m s)))   
+
+(with-timing "render all"
+  (mapv #(render {:format :json :shape %}) shapes))
+
+(def greetings {:fr "Bonjour à tous" :ja "こんにちは" :emoji "👋" :esc "tab\t newline\n quote\""})
+(unless (empty? greetings) (println (vals greetings) \a \newline \space))

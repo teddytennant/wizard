@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                    ▀                   █
+                                                              █   █ █ ▀▀▀█ █▀▀█ █▀▀▀ █▀▀█
+                                                              █ █ █ █  ▄▀  █▀▀█ █    █  █
+                                                              ▀▀▀▀▀ ▀ ▀▀▀▀ ▀  ▀ ▀    ▀▀▀▀
+
+
+                                      ┃
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+                                          ● Tip Type @ followed by a filename to fuzzy search and attach files
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

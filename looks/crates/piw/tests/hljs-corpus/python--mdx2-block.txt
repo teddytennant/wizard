@@ -1,0 +1,7 @@
+import os
+class A(B):
+    @property
+    def x(self) -> int:
+        """doc"""
+        return f"{self.y!r}" + 'a' if self else None
+async def g(): await h(*args, **kw)

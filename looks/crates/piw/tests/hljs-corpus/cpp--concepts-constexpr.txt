@@ -1,0 +1,59 @@
+#include <array>
+#include <concepts>
+#include <cstdint>
+#include <iostream>
+#include <variant>
+
+namespace math {
+
+template <typename T>
+concept Numeric = std::integral<T> || std::floating_point<T>;
+
+template <Numeric T>
+constexpr T clamp(T v, T lo, T hi) noexcept
+{
+	return v < lo ? lo : (hi < v ? hi : v);
+}
+
+template <std::size_t N>
+consteval auto make_squares()
+{
+	std::array<std::uint64_t, N> a{};
+	for (std::size_t i = 0; i < N; ++i) a[i] = static_cast<std::uint64_t>(i) * i;
+	return a;
+}
+
+template <typename T, std::size_t Rows, std::size_t Cols>
+struct Matrix {
+	std::array<T, Rows * Cols> data{};
+	constexpr T& operator()(std::size_t r, std::size_t c) { return data[r * Cols + c]; }
+	constexpr const T& operator()(std::size_t r, std::size_t c) const { return data[r * Cols + c]; }
+	static constexpr bool square = (Rows == Cols);
+};
+
+}  // namespace math
+
+template <typename... Ts>
+struct overloaded : Ts... { using Ts::operator()...; };
+template <typename... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+using Value = std::variant<int, double, std::string>;
+
+int main()
+{
+	constexpr auto squares = math::make_squares<8>();
+	static_assert(squares[7] == 49, "squares table is wrong");
+
+	math::Matrix<double, 2, 2> m;
+	m(0, 0) = 1.5; m(1, 1) = -2.25e-3;
+
+	Value vals[] = {42, 3.14159, std::string{"héllo"}};
+	for (const Value& v : vals) {
+		std::visit(overloaded{
+			[](int i) { std::cout << "int " << i << '\n'; },
+			[](double d) { std::cout << "double " << d << '\n'; },
+			[](const std::string& s) { std::cout << "string " << s << '\n'; },
+		}, v);
+	}
+	std::cout << std::boolalpha << math::Matrix<int, 3, 3>::square << ' ' << sizeof(m) << '\n';
+}

@@ -1,0 +1,29 @@
+
+   main /tmp/grok-harvest-000000/proj
+
+                                     ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄
+                                     ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀
+                                     ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀
+                                     ⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀
+                                     ⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀
+                                     ⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀
+                                     ⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+
+                   New worktree                                 ctrl+w
+                   Resume session                               ctrl+r
+                   Changelog
+                   Quit                                         ctrl+q
+
+                   Grok 4.7 is here!
+                   Select 'Grok 4.7' under /model.
+
+
+
+
+   Tip: Use @ to attach files like @src/main.rs.
+
+  ╭───────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                                 │
+  ╰──────────────────────────────────────────────────────────────── Grok 4.7 (xhigh) ─╯
+
+                                                                    Wizard  0.0 [alpha]

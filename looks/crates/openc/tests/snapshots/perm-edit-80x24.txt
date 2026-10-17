@@ -1,0 +1,24 @@
+
+    o p e n c  0.1
+    ━━━━━━━━━───────────────────────────────────
+    sonnet-5.5 high · claude 2.1.289
+
+    shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+  ▎ perm edit
+
+    I'll update the greeting.
+
+
+
+
+
+  ─ Edit src/main.rs ─────────────────────────────────────────────────────────
+        fn main() {
+      -     println!("hi");
+      +     let name = "world";
+      +     println!("hello, {name}");
+        }
+    Allow?   y yes   a yes, for src/**   n no   e tell why   d full diff
+      ⠏ ask · sonnet-5.5 high · /work/proj · main*                      ctrl+p

@@ -1,0 +1,50 @@
+"""Retry helpers for flaky network calls.
+
+Usage::
+
+    @retry(times=3, delay=0.5, exceptions=(ConnectionError, TimeoutError))
+    def fetch(url): ...
+"""
+from __future__ import annotations
+
+import functools
+import logging
+import random
+import time
+from typing import Any, Callable, TypeVar
+
+log = logging.getLogger(__name__)  
+F = TypeVar("F", bound=Callable[..., Any])
+
+MAX_BACKOFF = 1_000  # milliseconds
+JITTER = 1e-3
+
+
+def retry(times: int = 3, delay: float = 0.5, exceptions: tuple[type[BaseException], ...] = (Exception,)) -> Callable[[F], F]:
+    '''Return a decorator that retries *times* before giving up.'''
+
+    def decorator(fn: F) -> F:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            last: BaseException | None = None
+            for attempt in range(1, times + 1):
+                try:
+                    return fn(*args, **kwargs)
+                except exceptions as exc:  # noqa: PERF203
+                    last = exc
+                    wait = min(delay * 2 ** (attempt - 1), MAX_BACKOFF) + random.random() * JITTER  
+                    log.warning("attempt %d/%d failed: %s (retrying in %.2fs)", attempt, times, exc, wait)
+                    time.sleep(wait)
+            raise RuntimeError(f"gave up after {times} tries: {last!r}") from last
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
+
+
+@retry(times=5, delay=0.25, exceptions=(ConnectionError,))
+def fetch_banner(host: str, port: int = 0x1f90) -> bytes:
+    """Fetch the greeting line, e.g. ``b"220 caf\u00e9 ready\r\n"``."""
+    print = log.info  # shadowing the builtin on purpose
+    print("connecting to %s:%d", host, port)
+    return b"220 caf\xc3\xa9 ready\r\n"  # tr\u00e8s bien 🚀

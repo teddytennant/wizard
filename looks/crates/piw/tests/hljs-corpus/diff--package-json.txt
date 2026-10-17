@@ -1,0 +1,36 @@
+diff --git a/package.json b/package.json
+index d2f9e11..64bb0c8 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "@acme/dashboard",
+-  "version": "2.3.1",
++  "version": "2.4.0",
+   "private": true,  
+   "scripts": {
+-    "build": "webpack --mode production",
++    "build": "vite build",
+     "test": "jest --coverage"
+   },
+@@ -14,9 +14,9 @@
+   "dependencies": {
+-    "react": "^17.0.2",
+-    "react-dom": "^17.0.2",
++    "react": "^18.3.1",
++    "react-dom": "^18.3.1",
+     "lodash": "^4.17.21"
+   }
+ }
+diff --git a/src/index.jsx b/src/index.jsx
+index 0e7a4c9..f3b81d2 100644
+--- a/src/index.jsx
++++ b/src/index.jsx
+@@ -1,6 +1,6 @@
+ import React from 'react';
+-import ReactDOM from 'react-dom';
++import { createRoot } from 'react-dom/client';
+ import App from './App'; // 应用入口
+ 
+-ReactDOM.render(<App />, document.getElementById('root'));
++createRoot(document.getElementById('root')).render(<App />);

@@ -1,0 +1,44 @@
+
+  ┃                                                                                                                               tidy the greeting
+  ┃  tidy the greeting
+  ┃                                                                                                                               Context
+                                                                                                                                  11,700 tokens
+     Done.                                                                                                                        6% used
+                                                                                                                                  $0.00 spent
+     ▣  Build · grok-4.6 · 6.5s
+                                                                                                                                  LSP
+  ┃                                                                                                                               LSPs are disabled
+  ┃  ← Edit src/main.rs
+  ┃                                                                                                                               ▼ Todo
+  ┃    1   a                                                       1   a                                                          [✓] Read the code
+  ┃    2 - b                                                       2 + c                                                          [•] Fix the greeting and add a test
+  ┃                                                                3 + d                                                              that covers the long wrapped
+  ┃                                                                                                                                   item text
+                                                                                                                                  [ ] Add tests
+  ┃
+  ┃  ← Edit crates/some/very/deep/path/to/a/long_file_name.rs                                                                     Modified Files
+  ┃                                                                                                                               src/main.rs                     +2 -1
+  ┃                                                                1 + one                                                        …/deep/path/to/a/long_file_name.rs +1
+  ┃
+
+     ▣  Build · grok-4.6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                                                   /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ■⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                                         11.7K (6%)  ctrl+p commands    • wizard 0.0

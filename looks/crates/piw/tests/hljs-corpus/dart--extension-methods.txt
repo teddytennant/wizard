@@ -1,0 +1,56 @@
+// Extension methods on core types.
+  
+extension StringX on String {
+  /// Capitalises the first rune, leaving the rest alone.
+  String get capitalized =>
+      isEmpty ? this : '${this[0].toUpperCase()}${substring(1)}';
+
+  bool get isBlank => trim().isEmpty;
+
+  /// Truncates to [max] characters, appending an ellipsis.
+  String truncate(int max, {String ellipsis = '…'}) {
+    if (length <= max) return this;
+    return '${substring(0, max - ellipsis.length)}$ellipsis';
+  }
+
+  String get snakeCase => replaceAllMapped(
+        RegExp(r'([a-z0-9])([A-Z])'),
+        (m) => '${m[1]}_${m[2]!.toLowerCase()}',
+      );
+}
+
+extension IterableX<T> on Iterable<T> {
+  T? firstWhereOrNull(bool Function(T) test) {
+    for (final e in this) {
+      if (test(e)) return e;
+    }
+    return null;
+  }
+
+  Map<K, List<T>> groupBy<K>(K Function(T) key) {
+    final out = <K, List<T>>{};
+    for (final e in this) {
+      (out[key(e)] ??= []).add(e);
+    }
+    return out;
+  }
+}
+
+extension DurationX on Duration {
+  /// Formats as `1h 02m 03s`.
+  String get pretty {
+    final h = inHours;
+    final m = inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = inSeconds.remainder(60).toString().padLeft(2, '0');
+    return h > 0 ? '${h}h ${m}m ${s}s' : '${m}m ${s}s';
+  }
+}
+
+void main() {
+  print('hello world'.capitalized);   
+  print('userNameField'.snakeCase); // user_name_field
+  print('日本語のテキスト、とても長い文字列です'.truncate(8));
+  final words = ['apple', 'avocado', 'banana', 'blueberry', 'cherry'];
+  print(words.groupBy((w) => w[0]));
+  print(const Duration(hours: 1, minutes: 2, seconds: 3).pretty);
+}

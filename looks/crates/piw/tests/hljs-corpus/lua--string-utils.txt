@@ -1,0 +1,51 @@
+local utils = {}
+
+--- Split a string on a separator (plain, not a pattern).
+-- @param s string
+-- @param sep string
+function utils.split(s, sep)
+  local parts, start = {}, 1
+  while true do
+    local i, j = s:find(sep, start, true)
+    if not i then
+      parts[#parts + 1] = s:sub(start)
+      break
+    end
+    parts[#parts + 1] = s:sub(start, i - 1)
+    start = j + 1
+  end
+  return parts
+end
+
+--[[ camelCase -> snake_case
+     handles "HTTPServer" -> "http_server" too ]]
+function utils.snake(s)
+  s = s:gsub("(%u+)(%u%l)", "%1_%2")
+  s = s:gsub("(%l)(%u)", "%1_%2")
+  return s:lower()
+end
+
+function utils.template(str, vars)
+  return (str:gsub("%${([%w_]+)}", function(k)
+    return tostring(vars[k] or "${" .. k .. "}")
+  end))
+end
+
+function utils.escape_html(s)
+  local map = { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ['"'] = "&quot;" }
+  return (s:gsub('[&<>"]', map))
+end
+
+function utils.pad(s, n, ch)
+  ch = ch or " "
+  return s .. ch:rep(n - utf8.len(s))   
+end
+
+local help = [==[
+Patterns use ]] safely inside level-2 long strings.
+Tab:	done. Ünïcödé: 日本語
+]==]
+
+print(utils.snake("HTTPServerError"), utils.template("Hi ${name}!", { name = "Zoë" }))
+print(#help, 1e2, 0xff, 3 // 2, 3 | 4, ~0, "a" .. 1 .. 2)
+return utils

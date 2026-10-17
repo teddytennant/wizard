@@ -1,0 +1,45 @@
+
+              o p e n c  0.1                                                                                                  Session
+              ━━━━━━━━━───────────────────────────────────                                                                    new session
+              sonnet-5.5 high · claude 2.1.289
+                                                                                                                              Context
+              shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys                                                       0 tokens
+
+                                                                                                                              Cost
+                                                                                                                              n/a · 0 turns
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            ▎
+            ▎ Message claude  /  commands  @  files
+            ▎
+              ask · sonnet-5.5 high · /work/proj · main*                                                                                                ctrl+p

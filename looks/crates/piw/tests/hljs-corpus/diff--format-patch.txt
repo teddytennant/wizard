@@ -1,0 +1,44 @@
+From 5e0c7a1d9b3f4a6e8c2d1b0f9a7e6d5c4b3a2918 Mon Sep 17 00:00:00 2001
+From: Renée Dupont <renee@example.org>
+Date: Tue, 6 Aug 2024 14:32:07 +0200
+Subject: [PATCH 2/3] net: handle EAGAIN in the write loop
+
+A short write on a non-blocking socket returned -EAGAIN and the caller
+treated it as fatal, which closed healthy connections under load.
+Retry after the poll wakes us instead.
+
+Reported-by: 山田 太郎 <taro@example.jp>
+Signed-off-by: Renée Dupont <renee@example.org>
+---
+ src/net/conn.c | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/src/net/conn.c b/src/net/conn.c
+index a1b2c3d..e4f5a6b 100644
+--- a/src/net/conn.c
++++ b/src/net/conn.c
+@@ -212,11 +212,19 @@ static int conn_write_all(struct conn *c, const char *buf, size_t len)
+ {
+ 	size_t off = 0;
+ 
+ 	while (off < len) {
+ 		ssize_t n = write(c->fd, buf + off, len - off);
+-		if (n < 0)
+-			return -errno;
++		if (n < 0) {
++			if (errno == EINTR)
++				continue;
++			if (errno == EAGAIN || errno == EWOULDBLOCK) {
++				if (conn_wait_writable(c, 250 /* ms */) < 0)
++					return -ETIMEDOUT;
++				continue;
++			}
++			return -errno;
++		}
+ 		off += (size_t)n;
+ 	}
+ 	return 0;
+ }
+-- 
+2.45.2
+

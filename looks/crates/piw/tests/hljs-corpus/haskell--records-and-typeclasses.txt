@@ -1,0 +1,59 @@
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DeriveGeneric, DeriveFunctor #-}  
+{-# OPTIONS_GHC -Wall -Wno-orphans #-}
+module Inventory (Item (..), Inventory, Pretty (..), restock, lowStock) where
+
+import           Data.List        (sortBy, foldl')
+import           Data.Ord         (comparing, Down (..))
+import qualified Data.Map         as Map
+import           GHC.Generics     (Generic)
+
+-- | One line of stock.
+data Item = Item
+  { itemSku   :: !String          -- ^ unique identifier
+  , itemName  :: String
+  , itemQty   :: !Int
+  , itemPrice :: Double
+  } deriving (Show, Eq, Ord, Generic)
+
+type Inventory = Map.Map String Item
+
+class Pretty a where
+  pretty :: a -> String
+  prettyList :: [a] -> String
+  prettyList xs = unlines (map pretty xs)
+  {-# MINIMAL pretty #-}
+
+instance Pretty Item where
+  pretty Item{..} =
+    itemSku ++ "\t" ++ itemName ++ "\t" ++ show itemQty ++ " @ " ++ show itemPrice
+
+instance Pretty a => Pretty (Maybe a) where
+  pretty Nothing  = "<none>"
+  pretty (Just x) = pretty x
+
+-- | Add stock, creating the item if it is new.
+restock :: Item -> Inventory -> Inventory
+restock new = Map.insertWith merge (itemSku new) new
+  where
+    merge n o = o { itemQty = itemQty o + itemQty n, itemPrice = itemPrice n }
+
+lowStock :: Int -> Inventory -> [Item]
+lowStock threshold inv
+  | threshold <= 0 = []
+  | otherwise      = sortBy (comparing itemQty <> comparing (Down . itemPrice)) low
+  where
+    low = [ i | i <- Map.elems inv, itemQty i < threshold ]
+
+totalValue :: Inventory -> Double
+totalValue = foldl' (\acc Item{..} -> acc + fromIntegral itemQty * itemPrice) 0 . Map.elems
+
+main :: IO ()
+main = do
+  let inv = foldr restock Map.empty
+              [ Item "A1" "Crème brûlée kit" 3 12.5
+              , Item "B2" "抹茶パウダー" 40 7.25
+              , Item "A1" "Crème brûlée kit" 2 13.0 ]
+  putStr (prettyList (lowStock 10 inv))   
+  putStrLn $ "Total: " ++ show (totalValue inv) ++ " \"EUR\"\t🎁"
+  print (pretty (Map.lookup "ZZ" inv))

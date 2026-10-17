@@ -1,0 +1,34 @@
+     ▎ first thing
+
+       Done.
+
+     ▎ tools please
+
+       I'll look around first.                                                                               ┃
+                                                                                                             ┃
+       ▸ Bash    ls -la                                                                  ✓ 0.0s · 4 lines    ┃
+       ▸ Read    README.md                                                                      ✓ 2 lines    ┃
+       ▸ Search  println                                                                       ✓ 1 result    ┃
+       ▾ Edit    src/main.rs                                                                      ✓ +2 -1    ┃
+           fn main() {                                                                                       ┃
+         -     println!("hi");                                                                               ┃
+         +     let name = "world";                                                                           ┃
+         +     println!("hello, {name}");                                                                    ┃
+           }                                                                                                 ┃
+       ▾ Write   notes.txt                                                                           ✓ +1    ┃
+           1 + todo: add tests                                                                               ┃
+                                                                                                             ┃
+       Done. I changed the greeting in src/main.rs and noted a follow up in notes.txt.                       ┃
+     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+       ▾ Todos 1/3 · ◐ Fix greeting
+           ✓ Read the code
+           ◐ Fix greeting
+           ○ Add tests
+     ─ Rewind ───────────────────────────────────────────────────────────────────────────────────────────
+       to just before  "tools please"
+      ▸ 1  conversation and files  drop what came after, put back 2 files (src/main.rs, notes.txt), +4 …
+        2  conversation only       drop what came after, keep the files as they are
+        3  files only              put back 2 files (src/main.rs, notes.txt), +4 -1
+        4  just edit this message  nothing is undone; the text goes to the composer
+       ↑↓ move   enter choose   esc cancel
+  NAV   ask · sonnet-5.5 high · /work/proj · main*                          ctx 6% ━─────── · $0.04 · ctrl+p

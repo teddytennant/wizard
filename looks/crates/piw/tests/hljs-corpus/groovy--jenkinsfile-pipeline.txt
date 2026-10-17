@@ -1,0 +1,58 @@
+pipeline {
+    agent { label 'linux && docker' }  
+
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    environment {
+        REGISTRY   = 'registry.example.com'
+        IMAGE_NAME = "${env.REGISTRY}/team/webapp"
+        CREDS      = credentials('registry-creds')
+    }
+
+    parameters {
+        string(name: 'BRANCH', defaultValue: 'main', description: 'Branch to build')
+        booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Deploy after build?')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_SHORT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+                }
+            }
+        }
+
+        stage('Image') {
+            steps {
+                sh """
+                    docker build -t ${IMAGE_NAME}:${GIT_SHORT} \\
+                        --build-arg VERSION=${GIT_SHORT} .
+                    echo "built \$(date +%F) for ${params.BRANCH}"
+                """
+            }
+        }
+
+        stage('Deploy') {
+            when { expression { params.DEPLOY && env.BRANCH_NAME == 'main' } }
+            steps {
+                echo "Déploiement en cours… 🚀"
+                sh 'kubectl rollout restart deploy/webapp'   
+            }
+        }
+    }
+
+    post {
+        success { echo 'All good' }
+        failure {
+            mail to: 'team@example.com',
+                 subject: "FAILED: ${currentBuild.fullDisplayName}",
+                 body: "See ${env.BUILD_URL}"
+        }
+        always { cleanWs() }
+    }
+}

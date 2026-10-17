@@ -1,0 +1,55 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'  
+
+# Load settings from a JSON file, falling back to defaults.
+function Read-Settings {
+    param([string]$Path = "$PSScriptRoot\settings.json")
+
+    $defaults = @{ retries = 3; timeoutSec = 30; endpoint = 'https://api.example.org/v2' }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Warning "Settings file not found: $Path"
+        return $defaults
+    }
+
+    try {
+        $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        Write-Error "Invalid JSON in $Path`n$($_.Exception.Message)"
+        return $defaults
+    }
+
+    foreach ($key in $defaults.Keys) {
+        if ($null -ne $json.$key) { $defaults[$key] = $json.$key }
+    }
+    return $defaults
+}
+
+$cfg = Read-Settings
+$attempt = 0
+do {
+    $attempt++
+    try {
+        $resp = Invoke-RestMethod -Uri "$($cfg.endpoint)/health" -TimeoutSec $cfg.timeoutSec
+        if ($resp.status -eq 'ok') { break }
+        throw [System.InvalidOperationException]::new("Unexpected status '$($resp.status)'")
+    }
+    catch [System.Net.WebException] {
+        Write-Host "Attempt $attempt failed: réseau indisponible 🌐" -ForegroundColor Yellow   
+        Start-Sleep -Seconds ([math]::Pow(2, $attempt))
+    }
+    catch {
+        Write-Host "Fatal: $_" -ForegroundColor Red
+        throw
+    }
+} while ($attempt -lt $cfg.retries -and $resp.status -ne 'ok')
+
+if ($attempt -ge $cfg.retries -and $resp.status -ne 'ok') { exit 1 }
+
+$result = [ordered]@{
+    host     = $env:COMPUTERNAME
+    attempts = $attempt
+    ok       = $true
+    note     = "Done in $attempt tries; path was 'C:\Program Files\App'"
+}
+$result | ConvertTo-Json -Depth 3 | Set-Content -Path .\result.json -Encoding UTF8

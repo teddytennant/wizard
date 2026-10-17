@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0"
+    xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+    xmlns:fn="http://www.w3.org/2005/xpath-functions"
+    exclude-result-prefixes="fn">
+
+  <xsl:output method="html" indent="yes" encoding="UTF-8"/>
+  <xsl:param name="title" select="'Inventaire'"/>
+  <xsl:variable name="threshold" select="10"/>
+
+  <!-- Root template -->  
+  <xsl:template match="/">
+    <html lang="fr">
+      <head><title><xsl:value-of select="$title"/></title></head>
+      <body>
+        <h1><xsl:value-of select="concat($title, ' &#8211; ', count(//item), ' articles')"/></h1>
+        <table border="1">
+          <xsl:apply-templates select="inventory/item[@qty &lt; $threshold or @flag='low']">
+            <xsl:sort select="@name" data-type="text" order="ascending"/>
+          </xsl:apply-templates>
+        </table>
+      </body>
+    </html>
+  </xsl:template>
+
+  <xsl:template match="item">
+    <tr class="{@status}">  
+      <td><xsl:value-of select="@name"/></td>
+      <td>
+        <xsl:choose>
+          <xsl:when test="@qty = 0">épuisé</xsl:when>
+          <xsl:when test="@qty &gt; 100">plus de 100</xsl:when>
+          <xsl:otherwise><xsl:value-of select="format-number(@qty, '#,##0.00')"/></xsl:otherwise>
+        </xsl:choose>
+      </td>
+      <td><xsl:if test="position() mod 2 = 0">&#9733;</xsl:if></td>
+    </tr>
+  </xsl:template>
+</xsl:stylesheet>

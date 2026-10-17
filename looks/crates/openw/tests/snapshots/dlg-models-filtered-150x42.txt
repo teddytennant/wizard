@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                                 Select model                                     esc
+
+                                                 fast
+
+                                                 grok-4.6-fast                              xai-oauth
+
+                                                 Connect provider ctrl+a  Favorite ctrl+f
+
+                                      ┃
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

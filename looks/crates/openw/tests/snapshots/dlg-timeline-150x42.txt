@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           Write a long, detailed 600-word
+  ┃  Write a long, detailed 600-word story about a crab named Pip and the tide                                story about a cra…
+  ┃
+                                                                                                              Context
+     Once upon a tide.                                                                                        11,700 tokens
+                                                                                                              6% used
+     ▣  Build · grok-4.6 · 6.5s                                                                               $0.00 spent
+
+  ┃                                                                                                           LSP
+  ┃  queued second message                                                                                    LSPs are disabled
+  ┃
+                                   Timeline                                                                     esc
+     Second answer.
+                                   Search
+     ▣  Build · grok-4.6 · 6.5s
+                                   queued second message                                                    3:11 PM
+                                   Write a long, detailed 600-word story about a crab named Pip…            3:09 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               11.7K (6%)  ctrl+p commands    • wizard 0.0

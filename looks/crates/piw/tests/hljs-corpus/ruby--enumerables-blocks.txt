@@ -1,0 +1,58 @@
+# Text statistics using blocks and enumerators.
+require "set"
+
+STOP = %w[the a an of and to in is it].to_set
+WORD = /[[:alpha:]']+/
+
+class Document
+  include Enumerable
+  include Comparable
+
+  attr_reader :title, :body
+
+  def initialize(title, body)  
+    @title = title
+    @body = body
+  end
+
+  def each(&block)
+    return enum_for(:each) unless block_given?
+
+    body.scan(WORD) { |w| yield w.downcase }
+  end
+
+  def <=>(other)
+    count <=> other.count
+  end
+
+  def top(n = 5)
+    reject { |w| STOP.include?(w) }
+      .tally
+      .sort_by { |word, c| [-c, word] }
+      .first(n)
+      .to_h
+  end
+
+  def to_s = "#<Document #{title.inspect} words=#{count}>"
+end
+
+doc = Document.new("Café", "The café is open. Le café est ouvert — 開店中!")
+puts doc
+doc.top(3).each_with_index do |(word, n), i|
+  puts format("%-2d %-10s %3d", i + 1, word, n)
+end
+
+counter = Hash.new { |h, k| h[k] = [] }
+%w[apple avocado banana blueberry cherry].each { |w| counter[w[0]] << w }
+counter.each_pair do |letter, words|
+  puts "#{letter}: #{words.join(', ')}"
+end
+
+lazy = (1..Float::INFINITY).lazy.select(&:even?).map { |x| x**2 }.first(4)
+p lazy
+add = ->(a, b = 1) { a + b }
+mul = proc { |a, b| a * (b || 1) }
+puts add.(2), mul[3, 4], add.curry[5]
+puts "match" if "2024-03-09" =~ /\A(?<y>\d{4})-(?<m>\d\d)-(?<d>\d\d)\z/ && $~[:y].to_i > 2000
+result = if doc.count > 5 then :long else :short end
+puts result.to_proc.call("x") rescue puts "no method: #{$!.class}"

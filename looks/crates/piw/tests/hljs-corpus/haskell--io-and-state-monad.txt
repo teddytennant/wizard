@@ -1,0 +1,59 @@
+module Main where
+  
+import Control.Exception (IOException, catch, bracket)
+import Control.Monad     (forM_, unless, when)
+import Control.Monad.State
+import Data.IORef
+import System.Environment (getArgs)
+import System.IO
+
+type Freq = [(String, Int)]
+
+bump :: String -> State Freq ()
+bump w = modify go
+  where
+    go []                      = [(w, 1)]
+    go ((k, n) : rest)
+      | k == w                 = (k, n + 1) : rest
+      | otherwise              = (k, n) : go rest
+
+countWords :: [String] -> Freq
+countWords ws = execState (mapM_ bump ws) []
+
+tokenize :: String -> [String]
+tokenize = words . map (\c -> if c `elem` ",.;:!?\"'()" then ' ' else c)
+
+readSafe :: FilePath -> IO (Maybe String)
+readSafe path = (Just <$> readFile path) `catch` \e -> do
+  hPutStrLn stderr ("could not read " ++ path ++ ": " ++ show (e :: IOException))
+  return Nothing
+
+{- Pretty-print the top N entries.
+   Uses printf-style padding by hand
+   so there is no extra dependency. -}
+render :: Int -> Freq -> [String]
+render n fs = [ pad 12 w ++ replicate c '#' | (w, c) <- take n sorted ]
+  where
+    sorted = reverse (sortOn' snd fs)
+    pad k s = s ++ replicate (k - length s) ' '
+    sortOn' f = foldr ins []
+      where ins x [] = [x]
+            ins x (y:ys) | f x <= f y = x : y : ys
+                         | otherwise  = y : ins x ys
+
+main :: IO ()
+main = do
+  hSetEncoding stdout utf8
+  args <- getArgs
+  total <- newIORef (0 :: Int)
+  forM_ args $ \path -> do
+    mtxt <- readSafe path
+    case mtxt of
+      Nothing  -> return ()
+      Just txt -> do
+        let ws = tokenize txt
+        modifyIORef' total (+ length ws)
+        mapM_ putStrLn (render 5 (countWords ws))
+  n <- readIORef total
+  when (n == 0) $ putStrLn "Aucun mot trouvé — 何もありません"   
+  unless (n == 0) $ putStrLn ("Total: " ++ show n ++ " words, ratio " ++ show (1.5e-2 :: Double))

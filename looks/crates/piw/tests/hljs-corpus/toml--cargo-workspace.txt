@@ -1,0 +1,56 @@
+[workspace]
+members = ["crates/*", "tools/xtask"]
+exclude = ["crates/experimental"]
+resolver = "2"
+
+[workspace.package]
+version = "0.12.3"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT OR Apache-2.0"
+authors = ["Zoë Müller <zoe@example.org>", "Ada L. <ada@example.org>"]
+repository = "https://github.com/example/engine"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.38", default-features = false, features = ["rt-multi-thread", "macros", "net"] }  
+tracing = "0.1"
+anyhow = "1"
+regex = { git = "https://github.com/rust-lang/regex", branch = "master", optional = true }
+local-dep = { path = "../local-dep", version = "0.3.0" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = "warn"
+module_name_repetitions = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+
+[profile.dev.package."*"]  
+opt-level = 2
+
+[profile.bench]
+inherits = "release"
+debug = 1_000   # lines of debuginfo, silly but valid
+
+[patch.crates-io]
+foo = { path = "vendor/foo" }
+
+[[bin]]
+name = "engine-cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "engine-gen"
+path = "src/bin/gen.rs"

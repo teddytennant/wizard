@@ -1,0 +1,40 @@
+
+       o p e n c  0.1
+       ━━━━━━━━━───────────────────────────────────
+       sonnet-5.5 high · claude 2.1.289
+
+       shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+     ▎ rich output
+
+       Running a few things.
+
+       ▸ Bash    ls --color=always                                                              ✓ 4 lines
+       ▾ Bash    make all                                                                        ✗ exit 2
+         make: *** No rule to make target 'all'.  Stop.
+       ▸ Bash    curl -s api.example.com/items                                                  ✓ 2 lines
+       ▸ Bash    mkdir -p build/out                                                           ✓ no output
+       ▸ Bash    cat logo.png                                                               ✓ binary 37 B
+       ▸ Read    src/render.rs                                                                ✓ 140 lines
+       ▸ Search  wrap(                                                                       ✓ 12 results
+       ▸ Fetch   https://example.com/docs                                                          ✓ 57 B
+       ▸ Tool    brave:browser_click                                                                    ✓
+       ▸ Edit    src/main.rs                                                                     ✗ denied
+         you said: use a flag instead
+
+       That is the full range of output.
+
+
+
+
+
+
+
+
+
+
+     ▎
+     ▎ Message claude  /  commands  @  files
+     ▎
+        ask · sonnet-5.5 high · /work/proj · main*                          ctx 6% ━─────── · $0.04 · ctrl+p

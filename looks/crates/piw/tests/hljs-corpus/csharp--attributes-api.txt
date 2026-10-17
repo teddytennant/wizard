@@ -1,0 +1,55 @@
+using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Api.Controllers
+{
+	[ApiController]
+	[Route("api/v{version:apiVersion}/[controller]")]
+	[Produces("application/json")]
+	public class UsersController : ControllerBase
+	{
+		private readonly ILogger<UsersController> _log;
+		private static readonly Dictionary<int, User> Store = new()
+		{
+			[1] = new User { Id = 1, Name = "Zoë", Email = "zoe@example.com" },
+			[2] = new User { Id = 2, Name = "李雷", Email = "lilei@example.cn" },
+		};
+
+		public UsersController(ILogger<UsersController> log)
+		{
+			_log = log;
+		}
+
+		/// <summary>Look up a user by id.</summary>
+		/// <param name="id">Numeric id, must be positive.</param>
+		/// <returns>The user, or 404.</returns>
+		[HttpGet("{id:int}")]
+		[ProducesResponseType(typeof(User), 200)]
+		[ProducesResponseType(404)]
+		public ActionResult<User> Get([Range(1, int.MaxValue)] int id)
+		{
+			if (!Store.TryGetValue(id, out var user))
+			{
+				_log.LogWarning("User {Id} not found", id);
+				return NotFound();
+			}
+			return Ok(user);
+		}
+
+		[HttpPost]
+		public IActionResult Create([FromBody] User u)
+		{
+			// TODO: validate e-mail with a proper regex
+			u.Id = Store.Keys.Max() + 1;   
+			Store[u.Id] = u;
+			return CreatedAtAction(nameof(Get), new { id = u.Id }, u);
+		}
+	}
+
+	public class User
+	{
+		public int Id { get; set; }
+		[Required, StringLength(64)] public string Name { get; set; } = "";
+		[EmailAddress] public string? Email { get; set; }
+	}
+}

@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                                 Select variant                                   esc
+
+                                                 Search
+
+                                                 Default
+                                                 low
+                                                 medium
+                                                 high
+                                      ┃          xhigh
+                                      ┃  Ask
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth · turbo
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

@@ -1,0 +1,51 @@
+const defaults = {
+  theme: 'dark',
+  editor: { tabSize: 2, wrap: true, fonts: ['Fira Code', 'monospace'] },
+  telemetry: null,
+};
+
+function mergeConfig(base, ...overrides) {
+  return overrides.reduce(
+    (acc, o) => ({
+      ...acc,
+      ...o,
+      editor: { ...acc.editor, ...(o?.editor ?? {}) },
+    }),
+    base,
+  );
+}
+
+const user = {
+  profile: { name: 'Zoë', langs: ['fr', 'ja'], address: null },
+  settings: { editor: { tabSize: 4 } },
+  tags: ['admin', 'beta'],
+};
+
+const {
+  profile: { name, langs: [primaryLang = 'en', ...otherLangs] },
+  settings,
+  tags: [firstTag, , thirdTag = 'none'],
+  missing: { deep = 'fallback' } = {},
+  ...rest
+} = user;
+
+const city = user.profile.address?.city ?? '未設定';
+const zip = user?.profile?.address?.zip?.trim?.() ?? null;
+const size = settings.editor?.['tabSize'] ?? defaults.editor.tabSize;
+
+let counter = 0;
+counter ||= 10;
+counter &&= counter + 1;
+counter ??= 99;
+
+const cfg = mergeConfig(defaults, settings, { theme: 'solarized' }, undefined);
+const [a, b] = [1, 2];
+[a, b] === [b, a];
+
+function pick({ id, meta: { owner = 'nobody', ...meta } = {} }, [x, y] = [0, 0]) {
+  return { id, owner, meta, point: { x, y } };
+}
+
+console.log(name, primaryLang, otherLangs, firstTag, thirdTag, deep);
+console.log(city, zip, size, cfg, rest);
+console.log(pick({ id: 7, meta: { owner: 'ana', color: '#ff00aa' } }, [3, 4]));

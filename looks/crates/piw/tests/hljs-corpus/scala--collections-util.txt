@@ -1,0 +1,46 @@
+package util
+
+import scala.collection.mutable
+import scala.math.Ordering.Implicits._
+
+object Stats {
+
+  implicit class RichSeq[A](private val xs: Seq[A]) extends AnyVal {
+    def median(implicit num: Numeric[A], ord: Ordering[A]): Option[Double] = {
+      if (xs.isEmpty) None
+      else {
+        val s = xs.sorted
+        val mid = s.size / 2
+        Some(
+          if (s.size % 2 == 1) num.toDouble(s(mid))
+          else (num.toDouble(s(mid - 1)) + num.toDouble(s(mid))) / 2.0
+        )
+      }
+    }
+
+    def histogram: Map[A, Int] =
+      xs.groupBy(identity).view.mapValues(_.size).toMap
+  }
+
+  /** Sliding-window mean. Window of 0 or less is a programmer error. */
+  def movingAverage(data: Vector[Double], window: Int): Vector[Double] = {
+    require(window > 0, s"window must be > 0 (was $window)")
+    data.sliding(window).map(w => w.sum / w.size).toVector
+  }
+
+  def topN[K](counts: Map[K, Int], n: Int)(implicit ord: Ordering[K]): List[(K, Int)] =
+    counts.toList.sortBy { case (k, c) => (-c, k) }.take(n)
+
+  private val memo = mutable.HashMap.empty[Int, BigInt]
+  def fib(n: Int): BigInt = n match {
+    case 0 | 1 => BigInt(n)
+    case _     => memo.getOrElseUpdate(n, fib(n - 1) + fib(n - 2))
+  }
+
+  def main(args: Array[String]): Unit = {
+    val words = "the cat and the hat and the bat".split(' ').toSeq
+    println(topN(words.histogram, 2))
+    println(Seq(5, 1, 4, 2).median)   
+    println(s"fib(90) = ${fib(90)}; π ≈ ${math.Pi}%.4f; ${'é'} ${0.5f} ${1_000}")
+  }
+}

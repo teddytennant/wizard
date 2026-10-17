@@ -1,0 +1,36 @@
+
+            o p e n c  0.1
+            ━━━━━━━━━───────────────────────────────────
+            sonnet-5.5 high · claude 2.1.289
+
+            shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+
+
+                        Turn settings
+
+                      ▸ model    ‹ sonnet-5.5 ›
+                        effort   ‹ high ›
+                        mode     ‹ ask ›
+
+                                 ● sonnet-5.5
+                                   opus-5.5
+                                   haiku-4.5
+
+
+                        left right change   up down move   enter close
+
+
+
+
+
+
+
+
+
+
+          ▎
+          ▎ Message claude  /  commands  @  files
+          ▎
+            ask · sonnet-5.5 high · /work/proj · main*                                                          ctrl+p

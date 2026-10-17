@@ -1,0 +1,52 @@
+-- entity component helpers for a small 2D game (LÖVE style)
+local Entity = {}
+Entity.__index = Entity
+
+local next_id = 0
+local registry = setmetatable({}, { __mode = "v" })  -- weak values
+
+function Entity.spawn(kind, props)
+  next_id = next_id + 1
+  local e = setmetatable({
+    id = next_id,
+    kind = kind,
+    pos = { x = props.x or 0, y = props.y or 0 },
+    hp = props.hp or 100,
+    tags = { [props.faction or "neutral"] = true },
+  }, Entity)
+  registry[e.id] = e
+  return e
+end
+
+function Entity:damage(amount, source)
+  self.hp = math.max(0, self.hp - amount)
+  if self.hp == 0 and not self.dead then
+    self.dead = true
+    print(("entity #%d (%s) was slain by %s"):format(self.id, self.kind, source or "?"))
+    return true
+  end
+  return false
+end
+
+local function nearest(from, radius)
+  local best, bestd = nil, radius * radius
+  for _, e in pairs(registry) do
+    if e ~= from and not e.dead then
+      local dx, dy = e.pos.x - from.pos.x, e.pos.y - from.pos.y
+      local d = dx * dx + dy * dy
+      if d < bestd then best, bestd = e, d end
+    end
+  end
+  return best
+end
+
+function Entity:update(dt)
+  local target = nearest(self, 128)
+  if target and self.tags.hostile then
+    self.pos.x = self.pos.x + (target.pos.x - self.pos.x) * dt * 0.5
+    self.pos.y = self.pos.y + (target.pos.y - self.pos.y) * dt * 0.5
+  end
+end
+
+local orc = Entity.spawn("orc", { x = 10, y = 20, faction = "hostile", hp = 0x32 })
+orc:damage(7.5, "Étoile")

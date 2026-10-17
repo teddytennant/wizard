@@ -1,0 +1,55 @@
+import SwiftUI
+
+// MARK: - Model
+
+@MainActor
+final class CounterModel: ObservableObject {  
+    @Published var count = 0
+    @Published private(set) var history: [Int] = []
+
+    func increment(by step: Int = 1) {
+        history.append(count)
+        count += step
+    }
+}
+
+// MARK: - View
+
+struct CounterView: View {
+    @StateObject private var model = CounterModel()
+    @AppStorage("showHistory") private var showHistory = false
+    @Environment(\.colorScheme) private var scheme
+    @State private var animating: Bool = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Count: \(model.count)")
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundColor(scheme == .dark ? .white : Color(red: 0.1, green: 0.1, blue: 0.2))
+                .accessibilityLabel("Current count is \(model.count)")
+
+            HStack {
+                Button("−") { model.increment(by: -1) }
+                Button("＋") { withAnimation(.spring()) { model.increment() } }
+                    .keyboardShortcut("+", modifiers: .command)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Toggle("Show history", isOn: $showHistory)
+                .padding(.horizontal)
+
+            if showHistory {
+                List(model.history, id: \.self) { value in
+                    Text("#\(value)")
+                }
+                .frame(maxHeight: 200)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    CounterView()
+}

@@ -1,0 +1,58 @@
+package com.example.html
+
+@DslMarker
+annotation class HtmlDsl
+
+@HtmlDsl
+open class Tag(val name: String) {  
+    private val children = mutableListOf<Tag>()
+    private val attrs = linkedMapOf<String, String>()
+    var text: String? = null
+
+    protected fun <T : Tag> init(tag: T, block: T.() -> Unit): T {
+        tag.block()
+        children += tag
+        return tag
+    }
+
+    operator fun String.unaryPlus() { text = this }
+    infix fun String.to(value: String) { attrs[this] = value }
+
+    fun render(indent: Int = 0): String = buildString {
+        val pad = "  ".repeat(indent)
+        append("$pad<$name")
+        attrs.forEach { (k, v) -> append(" $k=\"$v\"") }
+        append(">")
+        text?.let { append(it) }
+        if (children.isNotEmpty()) {
+            append('\n')
+            children.forEach { append(it.render(indent + 1)).append('\n') }
+            append(pad)
+        }
+        append("</$name>")
+    }
+}
+
+class Div : Tag("div") {
+    fun p(block: P.() -> Unit) = init(P(), block)
+    fun div(block: Div.() -> Unit) = init(Div(), block)
+}
+class P : Tag("p")
+
+fun html(block: Div.() -> Unit): String = Div().apply(block).render()
+
+fun main() {
+    val page = html {
+        "class" to "card"
+        div {
+            p { +"Hello, ${System.getProperty("user.name") ?: "world"}!" }
+            p { "id" to "last"; +"Prix: 12,50 € — 値段" }
+        }
+    }
+    println(page)
+    val x = 0xFFL + 1_000 + 3.14f
+    val raw = """
+        |first
+        |  second ${x}
+    """.trimMargin()
+}

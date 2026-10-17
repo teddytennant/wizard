@@ -1,0 +1,39 @@
+
+  ┃
+  ┃  go
+  ┃
+
+     → Asked 2 questions
+
+  ┃
+  ┃  # Questions
+  ┃
+  ┃  Which color?
+  ┃  red
+  ┃
+  ┃  How many?
+  ┃  (no answer)
+  ┃
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /p                                                                                      tab agents  ctrl+p commands

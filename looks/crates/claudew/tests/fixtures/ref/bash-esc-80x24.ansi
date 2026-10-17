@@ -1,0 +1,24 @@
+  | a.rs | 3 |
+  | b.rs | 120 |
+
+  [1m**`src/`**[0m
+
+  [[31mDocs[39m]([4mhttps://example.com/docs[0m)
+
+  ```rust
+  fn main() { println!("hi"); }
+
+[38;5;246m✻[39m [38;5;246mCrunched for 1s · done 5:36 PM[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mRun this exact bash command with the Bash tool: git init -q && echo ok. Then [39m
+  [38;5;231mreply with exactly: done[39m
+
+[49m  [38;5;246mRan [1m1[0m[38;5;246m shell command [39m
+[38;5;246m  ⎿  Interrupted · What should Claude do instead?[39m
+
+[38;5;246m✻[39m [38;5;246mChurned for 1s · done 5:36 PM[39m
+                                                            [38;5;246m◐ medium · /effort[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ 
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · ? for shortcuts · ← 1 agent[39m

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>Metrics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4" defer></script>
+  <style>
+    body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: -apple-system, "Segoe UI", sans-serif }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 16px }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px }
+    .card h2 { margin: 0 0 4px; font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: #8b949e }
+    .card .v { font-size: 2rem; font-variant-numeric: tabular-nums }
+    .up { color: #3fb950 } .down { color: #f85149 }  
+    .card:nth-child(2n+1):not(.wide) { grid-column: span 1 }
+    @keyframes pulse { 0% { opacity: 1 } 50% { opacity: .4 } 100% { opacity: 1 } }
+    .live { animation: pulse 2s infinite ease-in-out }
+  </style>
+</head>
+<body>
+  <div class="grid" id="grid">
+    <section class="card"><h2>Requests / s</h2><div class="v live" data-key="rps">&hellip;</div></section>
+    <section class="card"><h2>Error rate</h2><div class="v down" data-key="err">&hellip;</div></section>
+    <section class="card wide"><canvas id="chart" height="120"></canvas></section>
+  </div>
+  <script>
+    "use strict";
+    const fmt = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
+    async function refresh() {
+      try {
+        const res = await fetch("/api/metrics?window=5m", { headers: { "Accept": "application/json" } });  
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { rps, err, series = [] } = await res.json();
+        document.querySelector('[data-key="rps"]').textContent = fmt.format(rps);
+        document.querySelector('[data-key="err"]').textContent = (err * 100).toFixed(2) + "%";
+        window.chart ??= new Chart(document.getElementById("chart"), { type: "line", data: { labels: [], datasets: [{ data: [] }] } });
+        window.chart.data.labels = series.map(p => new Date(p.t * 1e3).toLocaleTimeString());
+        window.chart.data.datasets[0].data = series.map(p => p.v);
+        window.chart.update();
+      } catch (e) { console.error("refresh failed —", e); }
+    }
+    setInterval(refresh, 5_000); refresh();
+  </script>
+</body>
+</html>

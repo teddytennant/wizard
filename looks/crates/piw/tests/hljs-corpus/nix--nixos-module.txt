@@ -1,0 +1,60 @@
+{ config, lib, pkgs, ... }:
+
+with lib;
+
+let
+  cfg = config.services.pinger;
+  settingsFormat = pkgs.formats.toml { };
+  configFile = settingsFormat.generate "pinger.toml" cfg.settings;
+in
+{
+  options.services.pinger = {
+    enable = mkEnableOption "the pinger daemon";
+
+    package = mkOption {
+      type = types.package;
+      default = pkgs.callPackage ./package.nix { };
+      description = "Package providing the <literal>pinger</literal> binary.";
+    };
+
+    interval = mkOption {
+      type = types.ints.between 1 3600;
+      default = 30;
+      description = ''
+        Seconds between probes.
+        Values under 5 may get you rate limited.
+      '';
+    };
+
+    targets = mkOption {
+      type = types.listOf types.str;
+      default = [ "1.1.1.1" "example.org" ];
+    };
+
+    settings = mkOption {
+      type = settingsFormat.type;
+      default = { };
+    };
+  };
+
+  config = mkIf cfg.enable {
+    services.pinger.settings = {
+      interval_secs = cfg.interval;
+      targets = cfg.targets;
+      motd = "ping → 世界";
+    };
+
+    systemd.services.pinger = {
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network-online.target" ];
+      serviceConfig = {
+        ExecStart = "${cfg.package}/bin/pinger --config ${configFile}";
+        DynamicUser = true;
+        Restart = "on-failure";
+        RestartSec = 5;
+      };
+    };
+
+    networking.firewall.allowedUDPPorts = optional (cfg.interval < 10) 33434;   
+  };
+}

@@ -1,0 +1,45 @@
+
+              o p e n c  0.1                                                                                                  Session
+              ━━━━━━━━━───────────────────────────────────                                                                    error please
+              sonnet-5.5 high · claude 2.1.289
+                                                                                                                              Context
+              shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys                                                       ━─────── 6%  11k / 200k
+
+                                                                                                                              Cost
+            ▎ error please                                                                                                    $0.04 · 1 turn
+
+              ▾ Bash    cargo test                                                               ✗ failed · 0.3s
+                error[E0425]: cannot find value `x` in this scope
+                 --> src/main.rs:3:5
+
+              · stream retrying (attempt 2)
+
+              The build failed on an undefined x.
+
+              ✓ 2.4s · 640 out · $0.04
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            ▎
+            ▎ Message claude  /  commands  @  files
+            ▎
+              ask · sonnet-5.5 high · /work/proj · main*                                                                      ctx 6% ━─────── · $0.04 · ctrl+p

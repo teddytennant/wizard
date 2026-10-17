@@ -1,0 +1,54 @@
+// Simple traffic light + pattern matching sample
+using System;
+using System.Collections.Generic;
+
+public enum Light { Red, Green, Yellow, Flashing }
+
+public readonly record struct Transition(Light From, Light To, TimeSpan After);
+
+public class Controller
+{
+    private static readonly IReadOnlyList<Transition> Table = new[]
+    {
+        new Transition(Light.Red,    Light.Green,  TimeSpan.FromSeconds(30)),
+        new Transition(Light.Green,  Light.Yellow, TimeSpan.FromSeconds(25)),
+        new Transition(Light.Yellow, Light.Red,    TimeSpan.FromMilliseconds(4500)),
+    };
+
+    public Light Current { get; private set; } = Light.Red;
+    public event EventHandler<Light>? Changed;
+
+    public string Label(Light l) => l switch
+    {
+        Light.Red      => "STOP",
+        Light.Green    => "GO",
+        Light.Yellow   => "SLOW",
+        _              => "???",
+    };
+
+    public bool Step(TimeSpan elapsed)
+    {
+        foreach (var t in Table)
+        {
+            if (t.From == Current && elapsed >= t.After)
+            {
+                Current = t.To;
+                Changed?.Invoke(this, Current);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static string Classify(object? o) => o switch
+    {
+        null => "nothing",
+        int n when n < 0 => $"negative {n}",
+        int or long => "integer",
+        string { Length: 0 } => "empty string",
+        string s => $"text '{s}'",
+        double d and > 1e6 => "huge",
+        Light { } l => Label(l),
+        _ => "other",
+    };
+}

@@ -1,0 +1,53 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Orders API",
+    "version": "1.0.0",
+    "description": "Create and track orders.\n\nSee https://example.com/docs for more.",
+    "contact": { "name": "API Support", "email": "support@example.com" }
+  },
+  "servers": [
+    { "url": "https://api.example.com/v1", "description": "Production" },
+    { "url": "http://localhost:8080/v1", "description": "Local" }
+  ],
+  "paths": {
+    "/orders/{orderId}": {
+      "get": {
+        "operationId": "getOrder",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^ord_[a-z0-9]{12}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Order" } }
+            }
+          },
+          "404": { "description": "Not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Order": {
+        "type": "object",
+        "required": ["id", "total"],
+        "properties": {
+          "id": { "type": "string" },
+          "total": { "type": "number", "minimum": 0, "multipleOf": 0.01 },
+          "currency": { "type": "string", "enum": ["USD", "EUR", "JPY"], "default": "USD" },
+          "items": { "type": "array", "items": { "type": "object" }, "maxItems": 100 },
+          "note": { "type": "string", "nullable": true }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

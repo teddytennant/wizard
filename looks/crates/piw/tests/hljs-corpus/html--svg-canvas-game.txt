@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snake</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #111; display: flex; align-items: center; justify-content: center; }
+  canvas { border: 2px solid #0f0; image-rendering: pixelated; }
+  #hud { position: fixed; top: 8px; left: 12px; color: #0f0; font: bold 14px monospace; }
+</style>
+</head>
+<body>
+<div id="hud">Score: <span id="score">0</span> &nbsp;|&nbsp; Best: <span id=best>0</span></div>
+<canvas id="c" width="400" height="400" tabindex="0"></canvas>  
+<svg width="0" height="0" style="position:absolute">
+  <defs><filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+</svg>
+<script>
+(function () {
+  var ctx = document.getElementById('c').getContext('2d');
+  var CELL = 20, N = 400 / CELL;
+  var snake = [{ x: 10, y: 10 }], dir = { x: 1, y: 0 }, food = spawn(), score = 0;
+  var best = +localStorage.getItem('snake.best') || 0;
+
+  function spawn() { return { x: Math.floor(Math.random() * N), y: Math.floor(Math.random() * N) }; }
+
+  document.addEventListener('keydown', function (e) {
+    var map = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+    var d = map[e.key];
+    if (d && (d[0] !== -dir.x || d[1] !== -dir.y)) dir = { x: d[0], y: d[1] };
+  });
+
+  function tick() {
+    var head = { x: (snake[0].x + dir.x + N) % N, y: (snake[0].y + dir.y + N) % N };  
+    if (snake.some(function (s) { return s.x === head.x && s.y === head.y; })) { snake = [head]; score = 0; }
+    snake.unshift(head);
+    if (head.x === food.x && head.y === food.y) { score++; food = spawn(); } else snake.pop();
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 400, 400);
+    ctx.fillStyle = '#f33'; ctx.fillRect(food.x * CELL, food.y * CELL, CELL - 1, CELL - 1);
+    ctx.fillStyle = '#0f0';
+    snake.forEach(function (s) { ctx.fillRect(s.x * CELL, s.y * CELL, CELL - 1, CELL - 1); });
+    document.getElementById('score').innerHTML = score;
+    if (score > best) { best = score; localStorage.setItem('snake.best', best); }
+  }
+  setInterval(tick, 1000 / 12); // 🐍
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+# scene glob, side (ref, look, both, drop, block, cursor), row pattern, reason. See compare.py.
+*	ref	^[ ▐▛█▜▝▀▌▘]{9}(?=  \S)	brand mark: Wizard draws its own in the same nine columns
+*	ref	 · ← \d+ agents?(?=\s*$)	agent switcher: the reference counts its background agents in the footer (← opens them); Wizard's ACP reports no background agents
+*	ref	(?<=^.{11})\S+ [0-9.]+( with \w+ effort)? · Wizard \w+\s*$	model line: the reference names its model and plan, Wizard its model and provider
+modes-3	ref	⏵⏵ auto mode on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode cycle: the reference's third stop is auto mode; the replay gives the look two modes, so its third press is back at the first (wz-modes compares Wizard's own four)
+*shortcuts	drop	^\s{40,}[○◐●◉] \w+ · /effort\s*$|^─+$@@^\s{45,}\S.*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
+*shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
+*shortcuts	look	(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
+*shortcuts	cursor		paste images and /keybindings: the table is two rows shorter, so the prompt sits two rows lower
+*shortcuts	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
+*shortcuts	both	(?<=@ for file paths)\s+(edits|modes)(?=\s)	shift+tab cycles Wizard's modes; it has no accept-edits mode
+help	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
+help*	both	https://\S+	docs link: Wizard's, not Anthropic's
+*model*	block	^   Switch between@@^\s*$	model picker text: a pick in Wizard applies to this session only (ACP config options reset on load)
+*model*	both	(?<=effort)( \(default\))? ←/→ to adjust\s*$	effort default: Wizard's efforts include an unnamed provider default, not a marked level
+*model*	both	Enter to (set as default|confirm).*$	model picker keys: no separate default or session-only pick in Wizard
+model-down	both	^   [○◐●◉] .*$	effort per model: Wizard lists one set of efforts, not which models take them
+status	ref	(?<=Status ) +Config +Usage +Stats\s*$	config, usage and stats tabs: Wizard has no settings editor or usage store behind ACP
+resume*	both	^\s+(Ctrl\+A to show all projects ·|to preview|(to )?search · Esc).*$	resume picker keys: no branch filter, preview or rename in Wizard's session list
+resume*	drop	^▔@@^\s+(to preview|(to )?search · Esc).*$	resume picker keys: the reference's longer key line takes two rows, so its panel sits a row higher
+compact	ref	^  ⎿\s+Read main\.rs \(4 lines\)\s*$	compact: Wizard's answer does not list the files it keeps in context
+compact-80x24	drop	^@@^  ⎿\s+Read main\.rs \(4 lines\)\s*$	compact: Wizard's answer does not list the files it keeps in context
+exit*	look	^\$\s*$	exit: the reference is still shutting down when the capture is taken
+exit*	cursor		exit: the reference is still shutting down when the capture is taken
+md-*	both	^[● ] (?=Initialize)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
+bash-*	both	^[● ] (?=Initialize)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
+help-200x50	drop	^▔@@^   (New here\?|Something else\?).*$	powerup tip and /feedback line: Wizard has neither command
+help-commands*-200x50	look	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
+help-commands*-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
+help-80x24	drop	^@@^\s{45,}(ctrl \+ g to edit in|\$EDITOR|/keybindings to|customize)\s*$	paste images and /keybindings: the reference's third column has two entries Wizard does not (no image paste over ACP, fixed keys); at 80x24 that is four rows, and its last four rows go
+help-80x24	cut	1	paste images and /keybindings: four rows more make the reference's panel one row taller than a panel may be, so it loses its Esc line at the bottom
+help-80x24	ref	(?<=^.{55})(ctrl \+ v to paste|images|alt \+ p to switch|model|ctrl \+ s to stash|prompt)\s*$	paste images: the reference's third column has it third, so the entries after it sit two rows lower than Wizard's
+help-80x24	look	(?<=^.{55})(alt \+ p to switch|model|ctrl \+ s to stash|prompt|ctrl \+ g to edit in|\$EDITOR)\s*$	paste images: the reference's third column has it third, so the entries after it sit two rows lower than Wizard's
+help-[12]*	ref	(?<=^.{66})(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
+help-[12]*	look	(?<=^.{66})(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in \$EDITOR)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
+*	pair	You've used \d+% of your weekly limit.*\S@@[○◐●◉] \w+ · /effort	account notice: the reference's account was near its weekly limit while capturing; its notice takes the row where the look shows the effort notice
+status	squeeze-ref	^   (Session name|Session kind|Peer address|Login method|Organization|Email|Cloud sessions|Setting sources|Auto mode server):	status fields Wizard has no counterpart for: account, login, cloud sessions, IPC address, setting sources
+status	squeeze-look	^   (Effort|Mode|Backend):	status fields the reference does not list here: effort, Wizard's mode and the backend
+status	both	(?<=^   Model:             ).+$$	model name: the reference names the model by the alias it was started with (--model haiku), the look by the config's display name
+plan*	drop	>^  ─{20,}\s*$@@^     3\. Tell Wizard what to change\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
+plan*	drop	>^  ─{20,}\s*$@@^        shift\+tab to approve with this feedback\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
+plan*	drop	>^  ─{20,}\s*$@@^   (ctrl\+g to edit in \S+ ·|~/\.claude/plans/).*$	plan file: Wizard keeps the plan in its session, not in a file to open in an editor
+plan*	norm	(?<=^   [❯ ] [12]\. )\S.*\S@@Option	plan approval: Wizard's options are proceed and keep planning; the reference's are its two ways to proceed
+plan*	ref	^  ⎿  /plan to preview\s*$	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
+plan*	look	^● Updated plan\s*$	plan preview: Wizard's /plan toggles plan mode, so the plan's tool row has no line under it and sits a row lower
+wz-status	squeeze-ref	^   (Session name|Session kind|Peer address|Login method|Organization|Email|Cloud sessions|Setting sources|Auto mode server):	status fields Wizard has no counterpart for: account, login, cloud sessions, IPC address, setting sources
+wz-status	squeeze-look	^   (Effort|Mode|Backend):	status fields the reference does not list here: effort, Wizard's mode and the backend
+wz-status	shape	^   Settings  Status(   Config   Usage   Stats)?\s*$	config, usage and stats tabs: Wizard has no settings editor or usage store behind ACP
+wz-*	shape	^▔+( [○◐●◉] \w+ · /effort ▔)?\s*$	effort notice on the panel's edge: the recorded wizard's effort is its unnamed default, which has no notice
+wz-*	shape	You've used \d+% of your weekly limit	account notice: the reference's account was near its weekly limit while capturing
+wz-modes-*	shape-same	^  \S+ [a-z ]+ on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode stops: the reference's presses go to accept edits, plan and auto mode, Wizard's to sovereign, chat and plan; each row is the same form with its own mode's mark and name
+wz-model	shape-1	^   [❯↓ ] ?\d+\.\s{1,2}\S	model rows: the description column starts two after the longest name; the recorded wizard's names are longer
+wz-slash*	shape-1	^  [❯ ] /\S+\s	command rows: the description column starts after the longest command name, which differs
+wz-slash*	shape-ref	^\s{20,}\S	command rows: Claude Code's descriptions wrap to a second row and Wizard's fit in one, so the five-row window holds different rows
+help-[12]*	drop	^▔@@^\s{60,}(ctrl \+ g to edit in \$EDITOR|/keybindings to customize)\s*$	paste images and /keybindings: the reference's third column has two entries Wizard does not (no image paste over ACP, fixed keys), so its table is two rows taller
+light-bash	look	[○◐●◉] \w+ · /effort\s*$	account notice: earlier in this run the reference's weekly-limit notice took the notice row, and its effort notice did not come back
+write-done-80x24	look	^  line\. Then reply with exactly: done\s*$	permission prompt: after the write prompt it showed (one Wizard never raises), the reference's transcript is a row longer above the call; not understood, so not copied
+light-model*	look	 [○◐●◉] \w+ · /effort ▔?\s*$	effort notice on the picker's edge: the light run's reference shows none where the dark run's does; that run met the weekly-limit notice earlier, which looks like the cause, so it is not copied
+queue-esc	both	^  \d+\s*$	the count: on the reference it kept streaming between the queue capture and Esc, and the replay cannot land text in that gap, so the numbers on screen differ
+wz-help-commands-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
+help-80x24	both	(?<=^.{25})(edits|modes)(?=\s)	shift+tab cycles Wizard's modes; it has no accept-edits mode
+plan*-80x24	ref	↓\s*$	plan cut: the reference's three options and plan-file line leave too little room for its plan, so it is cut with ↓; Wizard's two options leave room for all of it
+wz-help-commands-200x50	shape	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
+queue-esc	both	(?<=^\* Verb…) \(.*\)\s*$	timing: how far the queued prompt's turn has got when the capture lands (thinking, tokens) differs from run to run
+resume*-[18]*	scroll-ref	1@@^▔	resume picker keys: the reference's longer key line needs a second row it has no room for, which scrolls its transcript up a row; Wizard's shorter line fits
+clear-120x40	both	[○◐●◉] \w+ · /effort\s*$	effort notice after /clear: whether it is still up depends on how long the compact before it took; the reference shows it at 120x40 only
+wz-model	shape	^   ❯ \d+\.	model rows: ❯ marks the current model, first in the recorded wizard and fifth in the reference
+queue-esc*	drop-look	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner had not come up on the reference when it was captured
+queue-esc*	look	[○◐●◉] \w+ · /effort\s*$	timing: the reference's notice row was empty at that moment, between its weekly-limit notice and its effort notice
+x-plan*	drop	>^  ─{20,}\s*$@@^     3\. Tell Wizard what to change\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
+x-plan*	drop	>^  ─{20,}\s*$@@^        shift\+tab to approve with this feedback\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
+x-plan*	drop	>^  ─{20,}\s*$@@^   (ctrl\+g to edit in \S+ ·|~/\.claude/plans/).*$	plan file: Wizard keeps the plan in its session, not in a file to open in an editor
+x-plan*	norm	(?<=^   [❯ ] [12]\. )\S.*\S@@Option	plan approval: Wizard's options are proceed and keep planning; the reference's are its two ways to proceed
+x-plan*-80x24	ref	↓\s*$	plan cut: the reference's three options and plan-file line leave too little room for its plan, so it is cut with ↓; Wizard's two options leave room for all of it
+x-*	norm	(?<=^  ⏸ )(manual|genie)(?= mode on)@@MODE	modes: the reference starts in manual mode, Wizard in genie, its first mode; the mark and colour are the same
+x-btw	both	(?<=↑/↓ to scroll ).*$$	copy and fork: the look has no clipboard path, and wizard cannot fork a session
+x-*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
+x-rewind	both	^     ↑ \d+ more\s*$	rewind points: the reference counts /plan as one; wizard's /rewind goes back by turn, and /plan is not a turn
+x-rewind	both	^     (\S+\.md \+\d+|No code changes)\s*$	plan file: the reference writes its plan to a file and counts it as a change; wizard keeps the plan in .wizard/plan.md without an edit event
+x-ctrlr	norm	(?<=^  [❯↑↓ ] )\d+[smhd] ago@@N ago	ages: the two runs are seconds apart; the live checks make sure the clock moves
+x-resume-opened	drop-up	+^✻ \S+ for Ns · done H:MM XM\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	done lines: wizard's session record keeps no turn times, so a resumed transcript has none
+x-resume-opened	drop-up	^  ⎿\s\sEnabled plan mode\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
+x-resume-opened	drop-up	+^❯ /plan\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
+x-rewind-confirm	both	^   The conversation will be (forked|truncated here)\.\s*$	rewind: wizard's /rewind cuts the conversation back; it does not fork it
+x-rewind-confirm	both	^   The code will be (unchanged|restored.*)\.\s*$	plan file: the reference wrote its plan to a file after this prompt and counts it as a change; wizard keeps the plan in .wizard/plan.md without an edit event
+x-rewind-confirm	norm	(?<=^   [❯ ] 1\. )(Restore code and conversation|Restore conversation)@@Restore	plan file: the reference has code to restore after this prompt, the look does not, so option 1 names only the conversation
+x-rewind-confirm	drop	^@@^   [ ↓] [345]\. (Restore code|Summarize from here|Summarize up to here)\s*$	restore code only and summarize: wizard's /rewind always restores both, and its /compact summarizes everything, not from or up to a point
+x-rewind-confirm	drop	^@@^     2\. Restore conversation\s*$	restore conversation alone: wizard's /rewind always puts the files back too
+x-rewind-confirm	drop	^@@+^   ⚠ Rewinding does not affect files edited manually or via bash\.\s*$	plan file: the reference has code to restore after this prompt, and the warning comes with it
+x-rewind-confirm	look	^     2\. Never mind\s*$	never mind: the reference lists it sixth, below its window, after the options wizard does not have
+x-resume	both	(?<=^   ❯ )\S.*$	session title: the reference's model names its sessions, wizard titles one by its first prompt
+x-resume	both	(?<=Resume session) \(\d+ of \d+\)	sessions: the reference's count is of every session made here
+x-resume	both	(?<=^     )\d+ (second|minute|hour|day)s? ago · \S+ · [0-9.]+[KMG]?B\s*$	session age and size: the two sessions differ in length and in when they were written
+x-resume	both	^     Ctrl\+A to show all projects.*$	resume picker keys: no branch filter, preview or rename in Wizard's session list
+x-resume-opened	both	^  \S+ (MODE|plan) mode on.*$	plan mode on resume: a resumed wizard session starts out of plan mode; the reference resumes in it
+x-resume	drop	^▔@@^\s+(to )?search · Esc to cancel\s*$	resume picker keys: the reference's longer key line takes two rows, so its panel sits a row higher
+x-rewind-confirm	norm	(?<=^   │ \()\d+[smhd] ago@@N ago	ages: the two runs are seconds apart; the live checks make sure the clock moves
+wz-slash*-[18]*	shape-ref	^\s*$	command rows: Claude Code's two-row descriptions push its five-row window down a row, so the row above it is empty where Wizard's starts
+wz-slash*-[18]*	shape	^  ❯ /\S+\s	command rows: with its window a row lower, the reference's selected command sits a row lower than Wizard's
+queue-esc*	drop	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner comes up at a moment of its own; the look's had not yet when it was captured

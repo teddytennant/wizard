@@ -1,0 +1,53 @@
+package money_test
+
+import (
+	"errors"
+	"testing"
+)  
+
+func TestParse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      string
+		want    int64
+		wantErr error
+	}{
+		{"plain", "12.34", 1234, nil},
+		{"negative", "-0.05", -5, nil},
+		{"thousands", "1,234.50", 123450, nil},
+		{"euro sign", "€9,99", 999, nil},
+		{"yen", "¥1500", 150000, nil},
+		{"empty", "", 0, ErrEmpty},
+		{"garbage", "12.3.4", 0, ErrSyntax},
+		{"emoji", "💰", 0, ErrSyntax},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse(tc.in)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Parse(%q) error = %v, want %v", tc.in, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("Parse(%q) = %d; want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func BenchmarkParse(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = Parse("1,234,567.89")
+	}
+}
+
+/* ExampleFormat shows the canonical output.
+   The comment block spans lines. */
+func ExampleFormat() {
+	fmt.Println(Format(123456, "USD"))
+	// Output: $1,234.56
+}

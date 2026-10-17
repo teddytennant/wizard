@@ -1,0 +1,60 @@
+package cache
+
+import (
+	"container/list"
+	"sync"
+	"time"
+)  
+
+type entry struct {
+	key     string
+	value   []byte
+	expires time.Time
+}
+
+type LRU struct {
+	mu    sync.RWMutex
+	cap   int
+	ll    *list.List
+	items map[string]*list.Element
+	ttl   time.Duration
+}
+
+func NewLRU(capacity int, ttl time.Duration) *LRU {
+	return &LRU{
+		cap:   capacity,
+		ll:    list.New(),
+		items: make(map[string]*list.Element, capacity),
+		ttl:   ttl,
+	}
+}
+
+func (c *LRU) Get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+	e := el.Value.(*entry)
+	if time.Now().After(e.expires) {
+		c.removeElement(el)
+		return nil, false
+	}
+	c.ll.MoveToFront(el)
+	return e.value, true
+}
+
+func (c *LRU) Put(key string, val []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items[key] = c.ll.PushFront(&entry{key, val, time.Now().Add(c.ttl)})
+	if c.ll.Len() > c.cap {
+		c.removeElement(c.ll.Back())
+	}
+}
+
+func (c *LRU) removeElement(el *list.Element) {
+	c.ll.Remove(el)
+	delete(c.items, el.Value.(*entry).key)
+}

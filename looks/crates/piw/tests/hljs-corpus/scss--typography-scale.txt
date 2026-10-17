@@ -1,0 +1,55 @@
+@use "sass:math";
+@use "sass:string";
+
+// Modular type scale
+$ratio: 1.25;  
+$base: 1rem;
+$steps: -2, -1, 0, 1, 2, 3, 4;
+$families: (
+  body: ("Georgia", "Times New Roman", serif),
+  heading: ("Inter", sans-serif),
+  code: ("Fira Code", monospace)
+);
+
+@function scale($step) {
+  @return $base * math.pow($ratio, $step);
+}
+
+@function font-stack($role) {
+  $list: map-get($families, $role);
+  @if not $list { @error "No font stack for `#{$role}`"; }
+  $quoted: ();
+  @each $f in $list {
+    $quoted: append($quoted, if(string.index($f, " "), "\"#{$f}\"", $f), comma);
+  }
+  @return $quoted;
+}
+
+:root {
+  @each $s in $steps {
+    --step-#{if($s < 0, "n#{abs($s)}", $s)}: #{scale($s)};
+  }
+}
+
+h1, h2, h3, h4 {
+  font-family: font-stack(heading);
+  line-height: 1.2;
+  margin: 0 0 .5em;
+}
+
+@for $n from 1 through 4 {
+  h#{$n} { font-size: var(--step-#{5 - $n}); }
+}
+
+.prose {
+  font: #{scale(0)}/#{1.6} font-stack(body);
+  max-width: 65ch;
+
+  p + p { margin-top: 1em; text-indent: 1.5em; }
+  blockquote {
+    border-left: 4px solid rgba(#000, .15);
+    padding-inline: 1em;
+    &::before { content: "“"; }  // « guillemets » and “curly”
+  }
+  code { font-family: font-stack(code); font-size: .9em; }
+}

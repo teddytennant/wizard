@@ -1,0 +1,59 @@
+// Immutable model classes with null-safe parsing.
+  
+class Address {
+  const Address({required this.street, required this.city, this.zip});
+
+  final String street;
+  final String city;
+  final String? zip;
+
+  factory Address.fromJson(Map<String, dynamic> json) => Address(
+        street: json['street'] as String,
+        city: json['city'] as String,
+        zip: json['zip'] as String?,
+      );
+
+  Address copyWith({String? street, String? city, String? zip}) => Address(
+        street: street ?? this.street,
+        city: city ?? this.city,
+        zip: zip ?? this.zip,
+      );
+
+}
+
+class Customer {
+  Customer({required this.id, required this.name, this.address, List<String>? tags})
+      : tags = tags ?? const [];
+
+  final int id;
+  final String name;
+  final Address? address;
+  final List<String> tags;
+  late final String slug = name.toLowerCase().replaceAll(RegExp(r'\s+'), '-');
+
+  static Customer parse(Map<String, dynamic> j) {
+    final addr = j['address'];
+    return Customer(
+      id: j['id'] as int,
+      name: j['name'] as String,
+      address: addr == null ? null : Address.fromJson(addr as Map<String, dynamic>),
+      tags: (j['tags'] as List<dynamic>?)?.cast<String>(),
+    );
+  }
+
+  String describe() {
+    final city = address?.city ?? 'ville inconnue';
+    final zip = address?.zip;
+    return """
+Customer #$id: $name
+  lives in: $city${zip != null ? ' ($zip)' : ''}
+  tags: ${tags.isEmpty ? '(none)' : tags.join(', ')}   
+""";
+  }
+}
+
+void main() {
+  final c = Customer.parse({'id': 7, 'name': 'Zoë Müller', 'tags': ['vip', 'été']});
+  print(c.describe());
+  print(c.slug);
+}

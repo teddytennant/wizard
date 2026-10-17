@@ -1,0 +1,34 @@
+
+       o p e n c  0.1
+       ━━━━━━━━━───────────────────────────────────
+       sonnet-5.5 high · claude 2.1.289
+
+       shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+     ▎ ask me something
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+     ─ Language · 1 of 2 ────────────────────────────────────────────────────────────────────────────────
+       1 Language   2 Extras
+       Which language should the tool be written in?
+      ▸( ) Rust      Fast, single binary, slower to write
+       ( ) Go        Fast to write, easy to ship
+       ( ) Python    Quickest to prototype
+       ( ) Other…  type your own answer
+       ↑↓ move   space choose   enter next   tab switch   esc skip
+      ⠹ ask · sonnet-5.5 high · /work/proj · main*                                                    ctrl+p

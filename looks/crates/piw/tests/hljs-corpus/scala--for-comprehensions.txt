@@ -1,0 +1,50 @@
+package examples
+
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.control.NonFatal
+
+case class User(id: Long, name: String, managerId: Option[Long])
+case class Address(userId: Long, city: String, zip: String)
+
+trait Repo {
+	def user(id: Long): Future[Option[User]]
+	def address(userId: Long): Future[Option[Address]]
+}
+
+class Directory(repo: Repo)(implicit ec: ExecutionContext) {
+
+	/* Look up a user's manager's city, step by step.
+	 * Every lookup may fail or be absent. */
+	def managerCity(id: Long): Future[Option[String]] =
+		for {
+			maybeUser <- repo.user(id)
+			mgrId     =  maybeUser.flatMap(_.managerId)
+			mgr       <- mgrId.fold(Future.successful(Option.empty[User]))(repo.user)
+			addr      <- mgr.fold(Future.successful(Option.empty[Address]))(m => repo.address(m.id))
+		} yield addr.map(_.city)
+
+	def names(ids: List[Long]): Future[List[String]] =
+		Future.traverse(ids)(repo.user).map(_.flatten.map(_.name))
+
+	def pairs(xs: List[Int], ys: List[Int]): List[(Int, Int)] =
+		for {
+			x <- xs
+			y <- ys if (x + y) % 2 == 0 && x != y
+		} yield (x, y)
+
+	def safe[A](fa: => Future[A], default: A): Future[A] =
+		fa.recover { case NonFatal(e) =>
+			System.err.println(s"lookup failed: ${e.getMessage}")
+			default
+		}
+}
+
+object Main extends App {
+	val xs = List(1, 2, 3, 4)
+	val squares = for (x <- xs; if x % 2 == 1) yield x * x
+	println(s"squares=$squares, 1e3=${1e3}, big=${123456789L}, hex=${0xCAFE}")
+	println(raw"no\tescape here ${xs.size}")
+	val city = "Zürich"; val flag = '🇨'
+	println(s"""Multi-line ${city}
+	  | with "quotes" and unicode: 東京 ☃""".stripMargin)
+}

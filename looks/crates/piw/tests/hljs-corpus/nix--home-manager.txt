@@ -1,0 +1,54 @@
+{ config, pkgs, lib, inputs, ... }:
+
+let
+  username = "teddy";
+  homeDir = "/home/${username}";
+  aliases = {
+    ll = "ls -lah";
+    gs = "git status -sb";
+    ".." = "cd ..";
+  };
+  # map a list of names to { name = true; } sets
+  enable = names: lib.genAttrs names (_: { enable = true; });
+  fontSize = 11.5;
+in
+{
+  home = {
+    inherit username;
+    homeDirectory = homeDir;
+    stateVersion = "24.05";
+    packages = with pkgs; [
+      ripgrep fd jq
+      (writeShellScriptBin "hello-nix" ''
+        echo "hi from $USER"
+      '')
+    ];
+    file.".config/htop/htoprc".source = ./dotfiles/htoprc;
+    file.".hushlogin".text = "";
+  };
+
+  programs = enable [ "bat" "fzf" "zoxide" ] // {
+    git = {
+      enable = true;
+      userName = "Zoë Müller";
+      extraConfig = {
+        init.defaultBranch = "main";
+        pull.rebase = true;
+      };
+    };
+
+    fish = {
+      enable = true;
+      shellAliases = aliases // { vi = "nvim"; };
+      interactiveShellInit = ''
+        set -g fish_greeting "🐟 ready"
+      '';
+    };
+
+    alacritty.settings.font.size = fontSize;
+  };
+
+  /* Only on laptops */
+  services.syncthing.enable = lib.mkDefault (builtins.pathExists /etc/laptop);
+  xdg.configFile."nvim".source = config.lib.file.mkOutOfStoreSymlink ~/dotfiles/nvim;
+}

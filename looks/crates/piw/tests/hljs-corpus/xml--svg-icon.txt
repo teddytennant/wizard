@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Weather icon, 64x64 grid -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="64" height="64" viewBox="0 0 64 64" version="1.1">
+  <title>Soleil &amp; nuages ☀</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">  
+      <stop offset="0%" stop-color="#4FC3F7"/>
+      <stop offset="100%" stop-color="#E1F5FE" stop-opacity="0.85"/>
+    </linearGradient>
+    <style type="text/css"><![CDATA[
+      .ray { stroke: #FFB300; stroke-width: 2.5; stroke-linecap: round; }
+      .cloud > path { fill: #fff; filter: drop-shadow(0 1px 1px rgba(0,0,0,.3)); }
+      @media (prefers-color-scheme: dark) { .cloud > path { fill: #ddd } }
+    ]]></style>
+    <clipPath id="round"><circle cx="32" cy="32" r="30"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)" inkscape:label="background">
+    <rect width="64" height="64" fill="url(#sky)"/>
+  </g>
+  <g transform="translate(20 20) rotate(-15)">  
+    <circle r="8" fill="#FFCA28" stroke="#F57F17" stroke-width="1.5e0"/>
+    <line class="ray" x1="0" y1="-12" x2="0" y2="-16"/>
+    <line class="ray" x1="12" y1="0" x2="16" y2="0"/>
+    <line class="ray" x1="-8.5" y1="-8.5" x2="-11.3" y2="-11.3"/>
+  </g>
+  <g class="cloud">
+    <path d="M18 46a8 8 0 0 1 1.6-15.84A11 11 0 0 1 41 32h1a7 7 0 1 1 0 14H18z"/>
+  </g>
+  <text x="32" y="60" font-family="'Helvetica Neue', Arial" font-size="5" text-anchor="middle">晴れ 24°C</text>
+  <use xlink:href="#round" x="0" y="0" opacity=".0"/>
+</svg>

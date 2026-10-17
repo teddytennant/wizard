@@ -1,0 +1,45 @@
+'use strict';
+
+// Slug and log-line helpers used by the importer.
+const SLUG_RE = /[^a-z0-9]+/gi;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z)?$/;
+const LOG_LINE = /^\[(?<level>INFO|WARN|ERROR)\]\s+(?<ts>\S+)\s+(?<msg>.*)$/u;
+
+/*
+ * Turn a title into something safe for a URL.
+ * "Café Münch — 東京 tour!" -> "caf-m-nch-tour"
+ */
+function slugify(title) {
+  return title
+    .normalize('NFKD')
+    .replace(SLUG_RE, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
+function formatRow(row, width = 24) {
+  const name = String(row.name).padEnd(width, '.');
+  const size = `${(row.bytes / 1024).toFixed(1)} KiB`;
+  const flag = row.stale ? ' (stale)' : '';
+  return `${name} ${size.padStart(10)}${flag}`;
+}
+
+function parseLine(line) {
+  const m = LOG_LINE.exec(line);
+  if (!m) return null;
+  const { level, ts, msg } = m.groups;
+  return { level, ts: new Date(ts), msg: msg.trim() };
+}
+
+const banner = `
+  ┌──────────────────────────────┐
+  │  importer v${process.env.npm_package_version || '0.0.0'} 🚀  │
+  └──────────────────────────────┘
+`;
+
+const escaped = 'tab:\t quote:\' dq:\" nl:\\n unicode:é \x41 hex:0xFF';
+const big = 1_000_000 + 0b1010 + 0o17 + 0xdeadBEEF + 1.5e3 + .25;
+
+console.log(banner.trimEnd());
+console.log(formatRow({ name: slugify('Café Münch'), bytes: 20480, stale: true }));
+console.log(escaped, big, ISO_DATE.test('2026-10-05'));

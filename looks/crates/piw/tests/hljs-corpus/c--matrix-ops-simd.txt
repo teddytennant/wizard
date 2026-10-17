@@ -1,0 +1,51 @@
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <float.h>
+#include <assert.h>
+
+typedef struct {
+	int rows, cols;
+	double data[];
+} matrix;
+
+static matrix *mat_alloc(int r, int c)
+{
+	matrix *m = malloc(sizeof(matrix) + sizeof(double) * (size_t)r * c);
+	if (m) { m->rows = r; m->cols = c; }
+	return m;
+}
+
+#define AT(m, i, j) ((m)->data[(size_t)(i) * (m)->cols + (j)])
+
+/* C = A * B, blocked for cache; BS tuned on a 32 KiB L1d */
+#define BS 32
+void mat_mul(matrix *restrict C, const matrix *restrict A, const matrix *restrict B)
+{
+	assert(A->cols == B->rows && C->rows == A->rows && C->cols == B->cols);
+	for (int i = 0; i < C->rows; i++)
+		for (int j = 0; j < C->cols; j++)
+			AT(C, i, j) = 0.0;
+
+	for (int ii = 0; ii < A->rows; ii += BS)
+	for (int kk = 0; kk < A->cols; kk += BS)
+	for (int jj = 0; jj < B->cols; jj += BS)
+		for (int i = ii; i < ii + BS && i < A->rows; i++)
+			for (int k = kk; k < kk + BS && k < A->cols; k++) {
+				double a = AT(A, i, k);
+				for (int j = jj; j < jj + BS && j < B->cols; j++)
+					AT(C, i, j) += a * AT(B, k, j);
+			}
+}
+
+int main(void)
+{
+	matrix *a = mat_alloc(2, 3), *b = mat_alloc(3, 2), *c = mat_alloc(2, 2);
+	for (int i = 0; i < 6; i++) { a->data[i] = i + 1; b->data[i] = 0.5 * (6 - i); }
+	mat_mul(c, a, b);
+	for (int i = 0; i < 2; i++)
+		printf("%8.4f %8.4f\n", AT(c, i, 0), AT(c, i, 1));
+	printf("eps=%g max=%.3e pi≈%.10f\n", DBL_EPSILON, DBL_MAX, M_PI);
+	free(a); free(b); free(c);
+	return 0;
+}

@@ -1,0 +1,56 @@
+API Reference
+=============
+
+Overview
+--------
+
+The service exposes a small REST API. All requests must send
+`Content-Type: application/json`; responses use UTF-8.
+
+### `POST /v1/users`
+
+Create a user.
+
+```http
+POST /v1/users HTTP/1.1
+Host: api.example.com  
+Authorization: Bearer <token>
+
+{"name": "Zoë", "email": "zoe@example.org", "age": 31}
+```
+
+Response:
+
+```json
+{
+  "id": 1042,
+  "name": "Zoë",
+  "created": "2024-08-06T10:15:00Z",
+  "tags": [],
+  "score": 9.5e1
+}
+```
+
+
+### Error codes
+
+Code | Meaning
+--- | ---
+400 | Bad request  
+401 | Missing or *invalid* token
+429 | Rate limited, see `Retry-After`
+
+#### Notes
+
+- Timestamps are ISO&nbsp;8601 in **UTC**.
+- IDs are 64-bit integers; use strings in JavaScript.
+- Pagination: `?page=2&per_page=50`.
+
+<details>
+<summary>Legacy endpoints</summary>
+
+`GET /v0/users` is deprecated. See [the migration guide][migrate].
+
+</details>
+
+[migrate]: https://example.com/docs/migrate  "Migration guide"

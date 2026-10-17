@@ -1,0 +1,24 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.300[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/…/scratchpad/look-claude/proj[39m
+
+
+
+
+
+
+
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[39m [38;5;246m◐ medium · /effort[38;5;153m ▔
+[39m   [1m[38;5;153mSelect model[0m
+   [38;5;246mSwitch between Claude models. Your pick becomes the default for new [39m
+   [38;5;246msessions. For other/previous model names, specify with --model.[39m
+
+   [38;5;246m↑[39m [38;5;246m3.  [39mFable 5.1              [38;5;246mFor your toughest challenges[39m
+     [38;5;246m4.  [39mSonnet 5.5             [38;5;246mMost efficient for simpler tasks[39m
+   [38;5;153m❯[39m [38;5;246m5.  [38;5;114mHaiku 5.5[39m [38;5;114m✔[39m            [38;5;246mFastest for quick answers[39m
+      [38;5;246m… +8 models[39m
+
+   [38;5;174m◐[38;5;246m Medium effort (default)[38;5;239m ←/→ to adjust[39m
+
+   [38;5;246mEnter to set as default · s to use this session only · Esc to cancel[39m

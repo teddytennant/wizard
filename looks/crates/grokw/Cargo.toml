@@ -1,0 +1,32 @@
+[package]
+name = "grokw"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "grokw"
+path = "src/main.rs"
+
+[lib]
+name = "grokw"
+path = "src/lib.rs"
+
+[dependencies]
+agent-core.workspace = true
+tuikit.workspace = true
+backend-wizard.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+similar = "2"
+nucleo-matcher = "0.3"
+signal-hook = "0.3"
+libc = "0.2"

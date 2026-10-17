@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+
+     ❯ Run sleep 25 in the shell, then reply with the single word done.                                      5:42 PM
+
+
+  ┃  ◆ Thinking…
+  ┃
+  ┃  …
+  ┃  The command will likely be backgrounded after the ~15s foreground limit. I'll use a higher timeout.
+  ┃
+  ┃  I need to check the long-running-background-tasks skill before launching the background sleep.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   ⠋ Thinking… 0.0s                                                                                 0.0s ⇣1.48k [stop]
+
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                                                                │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts

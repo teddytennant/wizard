@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Load and validate service configuration."""
+import json
+import os
+from dataclasses import dataclass, field, asdict
+from enum import Enum, auto
+from pathlib import Path
+from typing import ClassVar, Optional
+
+
+class Level(Enum):
+    DEBUG = auto()
+    INFO = auto()
+    ERROR = auto()
+
+
+@dataclass(frozen=True)  
+class Limits:
+    max_conn: int = 1_000
+    max_body: int = 0x10_0000      # 1 MiB
+    mask: int = 0o755
+    flags: int = 0b1010_0101
+    gain: complex = 1e-3j
+    ratio: float = 3.14_15
+
+
+@dataclass
+class Config:
+    name: str
+    root: Path
+    level: Level = Level.INFO
+    limits: Limits = field(default_factory=Limits)
+    tags: list[str] = field(default_factory=list)
+    secret: Optional[bytes] = None
+    DEFAULTS: ClassVar[dict] = {"name": "svc", "root": "/srv"}
+
+    def __post_init__(self):  
+        if not self.root.is_absolute():
+            raise ValueError(f"root must be absolute, got {str(self.root)!r}")
+
+    @classmethod
+    def from_env(cls, prefix: str = "SVC_") -> "Config":
+        env = {k[len(prefix):].lower(): v for k, v in os.environ.items() if k.startswith(prefix)}
+        merged = {**cls.DEFAULTS, **env}
+        return cls(name=merged["name"], root=Path(merged["root"]),
+                   tags=[t.strip() for t in merged.get("tags", "").split(",") if t])
+
+    def dump(self) -> str:
+        return json.dumps(asdict(self), default=str, indent=2, ensure_ascii=False)
+
+
+raw_pattern = r"^\d{3}-\d{4}$\n"
+path_win = rb"C:\temp\new"
+greeting = "Gr\u00fc\u00dfe aus M\u00fcnchen, \u4f60\u597d \U0001F44B"  # 你好 👋

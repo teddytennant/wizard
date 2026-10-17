@@ -1,0 +1,50 @@
+/// Marker for anything that can be serialised.
+abstract interface class Encodable {  
+  Map<String, Object?> toJson();
+}
+
+/// Adds timestamps to any class that mixes it in.
+mixin Timestamped {
+  DateTime createdAt = DateTime.now();
+  DateTime? updatedAt;
+
+  void touch() => updatedAt = DateTime.now();
+}
+
+mixin Loggable on Object {
+  final List<String> _log = [];
+
+  void log(String msg) {
+    _log.add('[${runtimeType}] $msg');
+  }
+
+  List<String> get history => List.unmodifiable(_log);
+}
+
+enum Role {
+  admin('Administrator', 3),
+  editor('Editor', 2),
+  viewer('Viewer', 1);
+
+  const Role(this.label, this.level);
+  final String label;
+  final int level;
+
+  bool canEdit() => level >= 2;
+}
+
+class User with Timestamped, Loggable implements Encodable {
+  User(this.name, {this.role = Role.viewer, this.email});
+
+  final String name;
+  final String? email;
+  Role role;
+
+  @override
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'email': email ?? 'n/a',
+        'role': role.name,
+        'greeting': 'Ça va, $name? \u{1F44B}',   
+      };
+}

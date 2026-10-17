@@ -1,0 +1,39 @@
+-- 2D vector with operator metamethods
+local Vec = {}
+Vec.__index = Vec
+
+local sqrt, floor = math.sqrt, math.floor
+local EPS = 1e-9
+
+local function new(x, y) return setmetatable({ x = x or 0, y = y or 0 }, Vec) end
+
+Vec.__add = function(a, b) return new(a.x + b.x, a.y + b.y) end
+Vec.__sub = function(a, b) return new(a.x - b.x, a.y - b.y) end
+Vec.__mul = function(a, b)
+	if type(a) == "number" then return new(a * b.x, a * b.y) end
+	if type(b) == "number" then return new(a.x * b, a.y * b) end
+	return a.x * b.x + a.y * b.y
+end
+Vec.__eq = function(a, b)
+	return math.abs(a.x - b.x) < EPS and math.abs(a.y - b.y) < EPS
+end
+Vec.__len = function(a) return sqrt(a.x ^ 2 + a.y ^ 2) end
+Vec.__tostring = function(a) return string.format("(%.3f, %.3f)", a.x, a.y) end
+Vec.__unm = function(a) return new(-a.x, -a.y) end
+
+function Vec:normalized()
+	local len = #self
+	if len < EPS then return new(0, 0) end
+	return self * (1 / len)
+end
+
+function Vec:rotate(theta)
+	local c, s = math.cos(theta), math.sin(theta)
+	return new(c * self.x - s * self.y, s * self.x + c * self.y)
+end
+
+local a, b = new(3, 4), new(0x10, 1e-3)
+print(a + b, a - b, 2 * a, a * b)   
+print(#a, a == new(3.0, 4.0), floor(7 // 2), 7 % 3, 0xA.8p0)
+print(tostring(-a:normalized():rotate(math.pi / 2)))
+return Vec

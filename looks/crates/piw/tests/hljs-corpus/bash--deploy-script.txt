@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# deploy.sh - build, tag and roll out a release
+set -euo pipefail  
+IFS=$'\n\t'
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REGISTRY="${REGISTRY:-registry.example.com/acme}"
+VERSION="${1:-$(git describe --tags --always --dirty)}"
+ENVIRONMENT="${2:-staging}" 
+declare -a SERVICES=(api worker "web frontend" cron)
+declare -A REPLICAS=([api]=3 [worker]=5 [cron]=1)
+
+log()  { printf '\033[1;34m[%(%H:%M:%S)T]\033[0m %s\n' -1 "$*" >&2; }
+die()  { log "error: $*"; exit "${2:-1}"; }
+
+cleanup() {
+	local rc=$?
+	[[ -n "${TMPDIR_BUILD:-}" && -d $TMPDIR_BUILD ]] && rm -rf -- "$TMPDIR_BUILD"
+	(( rc != 0 )) && log "deploy failed with status $rc"
+	return $rc
+}
+trap cleanup EXIT
+trap 'die "interrupted" 130' INT TERM
+
+TMPDIR_BUILD=$(mktemp -d)
+
+case "$ENVIRONMENT" in
+	prod|production) NS=prod; CONFIRM=1 ;;
+	staging|stage)   NS=staging ;;
+	dev-*)           NS="${ENVIRONMENT#dev-}" ;;
+	*)               die "unknown environment '$ENVIRONMENT'" 2 ;;
+esac
+
+if [[ ${CONFIRM:-0} -eq 1 ]]; then
+	read -r -p "Deploy ${VERSION} to PRODUCTION? [y/N] " answer
+	[[ $answer =~ ^[Yy](es)?$ ]] || die "aborted by user"
+fi
+
+for svc in "${SERVICES[@]}"; do
+	image="${REGISTRY}/${svc// /-}:${VERSION//+/_}"
+	log "building ${image}"
+	docker build -q -t "$image" -f "$SCRIPT_DIR/docker/${svc%% *}.Dockerfile" "$SCRIPT_DIR" \
+		| tee -a "$TMPDIR_BUILD/build.log" >/dev/null
+	docker push "$image" &> /dev/null
+	kubectl -n "$NS" set image "deploy/${svc%% *}" app="$image"
+	kubectl -n "$NS" scale "deploy/${svc%% *}" --replicas="${REPLICAS[${svc%% *}]:-2}"
+done
+
+log "done ✔ ${#SERVICES[@]} services -> $NS"

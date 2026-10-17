@@ -1,0 +1,42 @@
+-- Data fixes, ticket OPS-4471
+BEGIN;
+
+UPDATE products p
+SET    price      = ROUND(p.price * 1.0825, 2),
+       updated_at = CURRENT_TIMESTAMP,
+       description = REPLACE(description, 'it''s', 'it is')  
+FROM   categories c
+WHERE  c.id = p.category_id
+  AND  c.name = 'Books & "Magazines"'
+  AND  p.price BETWEEN 5 AND 1.5e3;
+
+UPDATE accounts
+   SET status = 'locked'
+ WHERE failed_logins >= 5
+   AND last_login < NOW() - INTERVAL '90 days'
+   AND email IS NOT NULL;
+
+DELETE FROM sessions s
+USING  users u
+WHERE  s.user_id = u.id
+  AND  (u.status = 'suspended' OR s.expires_at < now());
+
+INSERT INTO audit_log (actor, action, payload, created_at)
+SELECT 'system',
+       'bulk-update',
+       json_build_object('rows', count(*), 'note', E'tab\there\nnewline'),
+       now()
+FROM   products
+WHERE  updated_at::date = current_date;
+
+-- Orphans: customers with no orders
+SELECT c.id, c."First Name", c."Last Name"
+FROM   customers c
+WHERE  NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)
+   OR  c.id IN (SELECT customer_id FROM blocked WHERE reason LIKE 'fraud%')
+ORDER  BY c."Last Name" COLLATE "und-x-icu", 0x1F + 7;
+
+CREATE OR REPLACE VIEW v_active_products AS
+    SELECT id, name, price FROM products WHERE active IS TRUE;
+
+COMMIT;

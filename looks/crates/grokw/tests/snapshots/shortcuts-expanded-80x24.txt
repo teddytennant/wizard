@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                             1.5K / 256K
+
+
+            ┌─ Keyboard Shortcuts ─────────────────────────── [✗] ─┐
+            │                                                      │
+            │   / to search                                        │
+            │──────────────────────────────────────────────────────│
+            │    ◆ Focus scrollback                         Tab    │
+            │    ◆ Cancel turn                           Ctrl+c   █│
+            │    ◆ Cycle mode (Normal / Plan / Alwa…  Shift+Tab   █│
+            │    ◆ Quit                         Ctrl+q / Ctrl+d    │
+            │    ◆ Command palette                   Ctrl+p / ?    │
+            │    ◆ Keyboard shortcuts           Ctrl+. / Ctrl+x    │
+            │    ◆ Open the settings mo…  F2 / Ctrl+, / Super+,    │
+            │  ◆ Input                                             │
+            │      ↑/↓ nav  |  f filter  |  e/Space/→ expand       │
+            │      ← collapse  |  Enter details  |  / search       │
+  ╭─────────│                      Esc close                       │─────────╮
+  │ ❯       └──────────────────────────────────────────────────────┘         │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

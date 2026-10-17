@@ -1,0 +1,60 @@
+plugins {
+    id 'java-library'  
+    id 'maven-publish'
+    id 'com.diffplug.spotless' version '6.25.0'
+}
+
+group = 'org.example.analytics'
+version = '2.4.1-SNAPSHOT'
+
+/*
+ * Repositories and dependency versions live here so that
+ * every subproject agrees on them.
+ */
+ext {
+    junitVersion = '5.10.2'
+    libs = [
+        guava  : 'com.google.guava:guava:33.0.0-jre',
+        jackson: 'com.fasterxml.jackson.core:jackson-databind:2.17.0',
+    ]
+}
+
+repositories {
+    mavenCentral()
+    maven { url = uri("https://repo.example.org/releases") }
+}
+
+dependencies {
+    api libs.guava
+    implementation libs.jackson
+    testImplementation "org.junit.jupiter:junit-jupiter:${junitVersion}"
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:all', '-parameters']
+}
+
+test {
+    useJUnitPlatform()
+    maxHeapSize = '1g'
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = false
+    }
+}
+
+tasks.register('printVersion') {
+    group = 'help'
+    description = "Prints $project.name version ${project.version} — 版本信息"   
+    doLast {
+        println "Building ${project.group}:${project.name}:${project.version}"
+    }
+}

@@ -1,0 +1,56 @@
+package com.example.calc
+
+/* Tiny expression tokenizer and evaluator. */
+
+sealed class Token {  
+    data class Num(val value: Double) : Token()
+    data class Op(val symbol: Char) : Token()
+    object LParen : Token()
+    object RParen : Token()
+}
+
+class ParseException(message: String, val position: Int) : Exception("$message at $position")
+
+fun tokenize(src: String): List<Token> {
+    val out = ArrayList<Token>()
+    var i = 0
+    while (i < src.length) {
+        val c = src[i]
+        when {
+            c.isWhitespace() -> i++
+            c.isDigit() || c == '.' -> {
+                val start = i
+                while (i < src.length && (src[i].isDigit() || src[i] == '.')) i++
+                out += Token.Num(src.substring(start, i).toDouble())
+            }
+            c in "+-*/^%" -> { out += Token.Op(c); i++ }
+            c == '(' -> { out += Token.LParen; i++ }
+            c == ')' -> { out += Token.RParen; i++ }
+            else -> throw ParseException("Unexpected '$c' (U+${c.code.toString(16).uppercase()})", i)
+        }
+    }
+    return out
+}
+
+fun apply(op: Char, a: Double, b: Double): Double = when (op) {
+    '+' -> a + b
+    '-' -> a - b
+    '*' -> a * b
+    '/' -> if (b == 0.0) Double.POSITIVE_INFINITY else a / b
+    '^' -> Math.pow(a, b)
+    else -> error("bad op $op")
+}
+
+fun precedence(op: Char) = when (op) {
+    '+', '-' -> 1
+    '*', '/', '%' -> 2
+    '^' -> 3
+    else -> 0
+}
+
+// Usage: evaluate("2 * (3 + 4)") == 14.0
+fun describe(t: Token): String = when (t) {
+    is Token.Num -> "number ${t.value}"
+    is Token.Op -> "operator '${t.symbol}'"
+    Token.LParen, Token.RParen -> "paren"
+}

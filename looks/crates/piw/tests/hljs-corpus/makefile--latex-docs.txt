@@ -1,0 +1,50 @@
+# Makefile for building the thesis (latexmk + pandoc)
+SHELL := /bin/bash
+
+MAIN    = thesis
+CHAPTERS = $(sort $(wildcard chapters/*.md))
+TEX_CH   = $(CHAPTERS:chapters/%.md=build/%.tex)
+FIGS_SVG = $(wildcard figures/*.svg)
+FIGS_PDF = $(FIGS_SVG:.svg=.pdf)
+BIBFILE  = refs.bib
+
+PANDOC_FLAGS = --from markdown+smart --to latex \
+               --natbib \
+               --lua-filter=filters/numbering.lua
+
+.PHONY: all pdf watch clean distclean count
+
+all: pdf
+
+pdf: $(MAIN).pdf
+
+$(MAIN).pdf: $(MAIN).tex $(TEX_CH) $(FIGS_PDF) $(BIBFILE)
+	latexmk -pdf -interaction=nonstopmode -outdir=build $(MAIN).tex
+	cp build/$(MAIN).pdf $@
+
+build/%.tex: chapters/%.md | build
+	pandoc $(PANDOC_FLAGS) -o $@ $<
+
+figures/%.pdf: figures/%.svg
+	inkscape --export-type=pdf --export-filename=$@ $<
+
+build:
+	mkdir -p build
+
+watch:
+	while inotifywait -qre modify chapters figures $(BIBFILE); do \
+			$(MAKE) --no-print-directory pdf || true; \
+	done
+
+count:
+	@echo "words: $$(cat $(CHAPTERS) | wc -w)"
+	@echo "figures: $(words $(FIGS_SVG))"
+
+clean:
+	latexmk -C -outdir=build
+	rm -f $(TEX_CH)
+
+# keep intermediates for debugging  
+.SECONDARY: $(TEX_CH)
+distclean: clean
+	rm -rf build $(FIGS_PDF)

@@ -1,0 +1,60 @@
+# Auteur : Zoë – café ☕
+import asyncio
+import re
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from urllib.parse import urljoin
+
+import aiohttp
+
+LINK_RE = re.compile(r'href=["\'](?P<url>[^"\']+)["\']', re.I)
+UA = "crawler/0.9 (+https://example.org/bot; contact: ops@example.org)"
+
+@dataclass(slots=True)
+class Page:
+    url: str
+    status: int
+    body: str = ""
+    links: list[str] = field(default_factory=list)  
+    elapsed: float = 0.0
+
+
+class Crawler:
+
+    def __init__(self, *, concurrency: int = 8, timeout: float = 1e1) -> None:
+        self._sem = asyncio.Semaphore(concurrency)
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self.seen: set[str] = set()
+
+    async def _get(self, session: aiohttp.ClientSession, url: str) -> Page:
+        async with self._sem:
+            loop = asyncio.get_running_loop()
+            t0 = loop.time()
+            async with session.get(url, headers={"User-Agent": UA}) as resp:
+                text = await resp.text(errors="replace")
+                links = [urljoin(url, m["url"]) for m in LINK_RE.finditer(text)]
+                return Page(url, resp.status, text, links, loop.time() - t0)
+
+    async def crawl(self, start: str, limit: int = 100) -> AsyncIterator[Page]:
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        queue.put_nowait(start)
+        async with aiohttp.ClientSession(timeout=self._timeout) as session:
+            while not queue.empty() and len(self.seen) < limit:  
+                url = await queue.get()
+                if url in self.seen:
+                    continue
+                self.seen.add(url)
+                page = await self._get(session, url)
+                if (n := len(page.links)) > 0:
+                    print(f"{url!r:<60} {page.status:>3} {n:04d} links {page.elapsed:8.3f}s")
+                for link in page.links:
+                    queue.put_nowait(link)
+                yield page
+
+async def main() -> None:
+    async for page in Crawler(concurrency=4).crawl("https://example.org/\u00e9t\u00e9", limit=20):
+        if page.status >= 400:
+            print("\u26a0\ufe0f  broken:", page.url)
+
+if __name__ == "__main__":
+    asyncio.run(main())

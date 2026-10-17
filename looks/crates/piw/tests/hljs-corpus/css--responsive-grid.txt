@@ -1,0 +1,48 @@
+/* Layout: dashboard grid */
+.dashboard {
+  display: grid;  
+  grid-template-columns: [sidebar] minmax(200px, 18rem) [main] 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "header header"
+    "nav    main"
+    "footer footer";
+  gap: 1rem 1.5rem;
+  min-height: 100vh;
+}
+
+.dashboard > header { grid-area: header; }
+.dashboard > nav    { grid-area: nav; position: sticky; top: 0; }
+.dashboard > main   { grid-area: main; min-width: 0; }
+.dashboard > footer { grid-area: footer; }
+
+.gallery {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+	grid-auto-flow: dense;
+	gap: clamp(0.5rem, 2vw, 1.25rem);
+}
+
+.gallery > .wide { grid-column: span 2; }
+.gallery > .tall { grid-row: span 2; aspect-ratio: 3 / 4; }
+
+@media (max-width: 48em) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas: "header" "main" "nav" "footer";
+  }
+  .dashboard > nav { position: static; }
+}
+
+@media screen and (min-width: 1200px) and (orientation: landscape),
+       print and (min-resolution: 2dppx) {
+  .gallery { grid-template-columns: repeat(4, 1fr); }
+}
+
+@supports not (display: grid) {
+  .dashboard { display: flex; flex-wrap: wrap; }
+}
+
+@container sidebar (min-width: 400px) {
+  .card { display: flex; }
+}

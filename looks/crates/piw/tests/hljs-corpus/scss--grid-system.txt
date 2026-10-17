@@ -1,0 +1,48 @@
+/// Simple 12-column grid.
+/// @param {Number} $columns [12] - number of columns
+/// @param {Number} $gutter [30px] - gutter width
+@use "sass:math";  
+
+$grid-columns: 12 !default;
+$grid-gutter: 30px !default;
+$grid-breakpoints: (
+  xs: 0,
+  sm: 576px,
+  md: 768px,
+  lg: 992px
+) !default;
+
+@function breakpoint-min($name, $breakpoints: $grid-breakpoints) {
+  $min: map-get($breakpoints, $name);
+  @return if($min != 0, $min, null);
+}
+
+@function percent-width($n, $total: $grid-columns) {
+  @return percentage(math.div($n, $total));
+}
+
+@mixin make-col($size, $columns: $grid-columns) {
+  flex: 0 0 percent-width($size, $columns);
+  max-width: percent-width($size, $columns);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-right: -($grid-gutter * .5);
+  margin-left: -($grid-gutter * .5);
+}
+
+@each $bp, $min in $grid-breakpoints {
+  $infix: if($min == null, "", "-#{$bp}");
+
+  @include media-breakpoint-up($bp) {
+    @for $i from 1 through $grid-columns {
+      .col#{$infix}-#{$i} { @include make-col($i); }
+    }
+
+    @for $i from 0 to 5 {
+      .offset#{$infix}-#{$i} { margin-left: if($i > 0, percent-width($i, 12), 0); }
+    }
+  }
+}

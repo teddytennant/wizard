@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                               Status                                               esc
+
+                                               mock 0.0
+                                               • Model xai-oauth/grok-4.6
+                                               • Directory /home/me/proj
+                                               • Mode genie
+                                               • Effort default
+
+                                      ┃        1 MCP Servers configured
+                                      ┃  Ask   • playwright stdio npx -y @playwright/mcp@latest
+                                      ┃
+                                      ┃  Buil  No Formatters
+                                      ╹▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀
+                                               1 Plugins                                                 commands
+                                               • tidy
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

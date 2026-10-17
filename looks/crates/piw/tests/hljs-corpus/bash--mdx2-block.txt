@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+for f in *.txt; do echo "$f" | grep -q 'x' && cat "$f" | wc -l; done
+if [ -f "$HOME/.x" ]; then export FOO=1; fi

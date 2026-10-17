@@ -1,0 +1,58 @@
+import { useCallback, useEffect, useReducer, useRef } from 'react';
+import type { FC, ReactElement } from 'react';
+
+type FetchState<T> =
+  | { status: 'idle' }
+  | { status: 'loading'; startedAt: number }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error };
+
+type Action<T> = { type: 'start' } | { type: 'resolve'; data: T } | { type: 'reject'; error: Error };
+
+function reducer<T>(state: FetchState<T>, action: Action<T>): FetchState<T> {
+  switch (action.type) {
+    case 'start': return { status: 'loading', startedAt: Date.now() };
+    case 'resolve': return { status: 'success', data: action.data };
+    case 'reject': return { status: 'error', error: action.error };
+  }
+}
+
+export function useFetch<T = unknown>(url: string, init?: RequestInit) {
+  const [state, dispatch] = useReducer(reducer<T>, { status: 'idle' } as FetchState<T>);
+  const abort = useRef<AbortController>();
+
+  const run = useCallback(async () => {
+    abort.current?.abort();
+    abort.current = new AbortController();
+    dispatch({ type: 'start' });
+    try {
+      const res = await fetch(url, { ...init, signal: abort.current.signal });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      dispatch({ type: 'resolve', data: (await res.json()) as T });
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') dispatch({ type: 'reject', error: e as Error });
+    }
+  }, [url, init]);
+
+  useEffect(() => {
+    void run();
+    return () => abort.current?.abort();
+  }, [run]);
+
+  return { ...state, refetch: run } as const;
+}
+
+interface Weather { city: string; tempC: number }
+
+export const WeatherCard: FC<{ city: string }> = ({ city }): ReactElement => {
+  const res = useFetch<Weather>(`/api/weather?city=${encodeURIComponent(city)}&units=metric`);
+  if (res.status === 'loading') return <span aria-busy="true">Loading {city}…</span>;
+  if (res.status === 'error') return <span role="alert">⚠ {res.error.message}</span>;
+  if (res.status !== 'success') return <></>;
+  return (
+    <div className={`card ${res.data.tempC > 30 ? 'hot' : 'mild'}`}>
+      <h3>{res.data.city}</h3>
+      <p>{res.data.tempC.toFixed(1)}°C</p>
+    </div>
+  );
+};

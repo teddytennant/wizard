@@ -1,0 +1,45 @@
+// Animation helpers
+$durations: (fast: 150ms, base: 300ms, slow: 600ms);
+$easing: cubic-bezier(0.4, 0, 0.2, 1) !default;
+$prefixes: -webkit-, -moz-, "";
+
+@mixin prefixed($property, $value) {
+  @each $prefix in $prefixes {
+    #{$prefix}#{$property}: $value;
+  }
+}
+
+@mixin keyframes($name) {
+  @keyframes #{$name} { @content; }
+  @-webkit-keyframes #{$name} { @content; }
+}
+
+@include keyframes(fade-up) {
+  0%   { opacity: 0; transform: translateY(1.5rem); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@mixin animate($name, $speed: base, $delay: 0s) {
+  $d: map-get($durations, $speed);
+  @include prefixed(animation, "#{$name} #{$d} #{$easing} #{$delay} both");
+}
+
+.reveal {
+  @include animate(fade-up, $speed: slow);
+
+  @for $i from 1 through 5 {
+    &:nth-child(#{$i}) { animation-delay: #{$i * 80}ms; }
+  }
+
+  @if $enable-reduced-motion == true {
+    @media (prefers-reduced-motion: reduce) { animation: none !important; }
+  }
+}
+
+$i: 3;
+@while $i > 0 {
+  .item-#{$i} { width: 2em * $i; }
+  $i: $i - 1;
+}
+
+.tooltip[data-label="日本語"]::after { content: attr(data-label) " 🚀"; } 

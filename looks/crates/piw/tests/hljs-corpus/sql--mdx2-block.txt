@@ -1,0 +1,1 @@
+SELECT id, COUNT(*) AS n FROM users WHERE created > '2020-01-01' GROUP BY id ORDER BY n DESC LIMIT 10;

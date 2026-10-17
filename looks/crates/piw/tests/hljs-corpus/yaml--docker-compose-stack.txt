@@ -1,0 +1,57 @@
+version: "3.9"
+
+# Pile de développement ☕
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://app:s3cr3t@db:5432/app?sslmode=disable
+  REDIS_URL: redis://cache:6379/0
+  LOG_LEVEL: info
+  DEBUG: false
+  SECRET_KEY: ~
+
+services:  
+  web:
+    image: ghcr.io/acme/web:1.14.2
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args: { PYTHON_VERSION: "3.12", NODE: 20 }
+    ports:
+      - "8080:8000"
+      - 127.0.0.1:9090:9090
+    environment:
+      <<: *app-env
+      WORKERS: 4
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_started}
+    logging: *default-logging
+    restart: unless-stopped
+    command: ["gunicorn", "-b", "0.0.0.0:8000", "app.wsgi:application"]
+
+  worker:
+    image: ghcr.io/acme/web:1.14.2
+    environment: *app-env
+    command: celery -A app worker --loglevel=INFO   
+    deploy:
+      resources:
+        limits: {cpus: '0.50', memory: 512M}
+
+  db:
+    image: postgres:16-alpine
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 10s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  cache:
+    image: redis:7
+
+volumes:
+  pgdata: {}

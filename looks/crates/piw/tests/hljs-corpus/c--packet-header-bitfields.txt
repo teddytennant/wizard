@@ -1,0 +1,57 @@
+/*
+ * proto.h - on-the-wire frame layout.
+ *
+ * All multi-byte fields are big-endian. Keep this file free of
+ * anything that needs a libc beyond <stdint.h>.
+ */
+#ifndef PROTO_H
+#define PROTO_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#define PROTO_MAGIC      0xC0FFEEu
+#define PROTO_VERSION    2
+#define PROTO_MAX_PAYLOAD 1400
+#define PROTO_FLAG(n)    (1u << (n))
+
+enum frame_type {
+	FRAME_HELLO  = 0x01,
+	FRAME_DATA   = 0x02,
+	FRAME_ACK    = 0x03,
+	FRAME_CLOSE  = 0xFE,
+};
+
+enum {
+	FLAG_COMPRESSED = PROTO_FLAG(0),
+	FLAG_ENCRYPTED  = PROTO_FLAG(1),
+	FLAG_LAST       = PROTO_FLAG(7),
+};
+
+#pragma pack(push, 1)
+struct frame_header {
+	uint32_t magic : 24;
+	uint32_t version : 4;
+	uint32_t reserved : 4;
+	uint8_t  type;
+	uint8_t  flags;
+	uint16_t length;
+	uint32_t seq;
+	uint8_t  payload[];
+};
+#pragma pack(pop)
+
+_Static_assert(sizeof(struct frame_header) == 12, "header must be 12 bytes");
+
+static inline uint32_t be32(uint32_t v)
+{
+	return ((v & 0x000000FFu) << 24) |
+	       ((v & 0x0000FF00u) <<  8) |
+	       ((v & 0x00FF0000u) >>  8) |
+	       ((v & 0xFF000000u) >> 24);
+}
+
+const char *frame_type_name(enum frame_type t);
+int frame_validate(const struct frame_header *h, size_t total_len);
+
+#endif /* PROTO_H */

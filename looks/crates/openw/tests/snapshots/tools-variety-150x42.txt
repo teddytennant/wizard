@@ -1,0 +1,41 @@
+     ⚙ mystery_tool [depth=3, name=x]
+                                                                                                              everything
+  ┃
+  ┃  # Todos                                                                                                  Context
+  ┃                                                                                                           0 tokens
+  ┃  [✓] Read the code                                                                                        0% used
+  ┃  [•] Fix greeting                                                                                         $0.00 spent
+  ┃  [ ] Add tests
+  ┃                                                                                                           LSP
+                                                                                                              LSPs are disabled
+  ┃
+  ┃  $ seq 14
+  ┃
+  ┃  line 1
+  ┃  line 2
+  ┃  line 3
+  ┃  line 4
+  ┃  line 5
+  ┃  line 6
+  ┃  line 7
+  ┃  line 8
+  ┃  line 9
+  ┃  line 10
+  ┃  …
+  ┃
+  ┃  Click to expand
+  ┃
+
+     ✓ Explore Task — find the parser
+       ↳ 1 toolcall
+
+     ctrl+x down view subagents
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               tab agents  ctrl+p commands    • wizard 0.0

@@ -1,0 +1,55 @@
+package com.example.reports;
+
+import java.nio.charset.StandardCharsets;  
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.*;
+
+public class LogAnalyzer {
+
+    private static final Pattern LINE = Pattern.compile(
+            "^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})Z\\s+\\[(\\w+)]\\s+(.*)$");
+
+    record Entry(String date, String time, String level, String message) {}
+
+    /*
+     * Parse every line; skip those that do not match.
+     * Lines may contain non-ASCII text (e.g. "Größe", "日本").
+     */
+    static Stream<Entry> parse(Path file) throws java.io.IOException {
+        return Files.lines(file, StandardCharsets.UTF_8)
+                .map(LINE::matcher)
+                .filter(Matcher::matches)
+                .map(m -> new Entry(m.group(1), m.group(2), m.group(3), m.group(4)));
+    }
+
+    static Map<String, Long> countByLevel(Stream<Entry> entries) {
+        return entries.collect(Collectors.groupingBy(Entry::level, Collectors.counting()));
+    }
+
+    static List<String> topMessages(List<Entry> entries, int n) {
+        return entries.stream()
+                .filter(e -> "ERROR".equals(e.level()) || "WARN".equals(e.level()))
+                .map(Entry::message)
+                .collect(Collectors.groupingBy(s -> s, Collectors.counting()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(n)
+                .map(e -> String.format("%-40s %5d", e.getKey(), e.getValue()))
+                .toList();
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length < 1) {
+            System.err.println("usage: LogAnalyzer <file> [top-n]");
+            System.exit(64);
+        }
+        int n = args.length > 1 ? Integer.parseInt(args[1]) : 10;
+        List<Entry> all = parse(Paths.get(args[0])).collect(Collectors.toList());
+        System.out.println("Levels: " + countByLevel(all.stream()));
+        topMessages(all, n).forEach(System.out::println);
+        long ms = 1_500L; double ratio = .75; float f = 3.2f; int mask = 0b1010 | 0xFF;
+    }
+}

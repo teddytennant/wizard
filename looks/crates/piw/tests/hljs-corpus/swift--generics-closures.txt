@@ -1,0 +1,55 @@
+import Foundation
+
+typealias Predicate<T> = (T) -> Bool
+
+struct Stack<Element> {
+    private var items: [Element] = []
+
+    var isEmpty: Bool { items.isEmpty }
+    var top: Element? { items.last }
+
+    mutating func push(_ x: Element) { items.append(x) }
+    @discardableResult
+    mutating func pop() -> Element? { items.popLast() }
+}
+
+extension Stack: Sequence {
+    func makeIterator() -> AnyIterator<Element> {
+        var copy = self.items
+        return AnyIterator { copy.popLast() }
+    }
+}
+
+extension Collection where Element: Numeric {
+    func total() -> Element { reduce(0, +) }
+}
+
+func partition<T>(_ xs: [T], by predicate: Predicate<T>) -> (yes: [T], no: [T]) {
+    var yes: [T] = [], no: [T] = []
+    for x in xs { predicate(x) ? yes.append(x) : no.append(x) }
+    return (yes, no)
+}
+
+func memoize<In: Hashable, Out>(_ f: @escaping (In) -> Out) -> (In) -> Out {
+    var cache = [In: Out]()
+    return { key in
+        if let v = cache[key] { return v }
+        let v = f(key)
+        cache[key] = v
+        return v
+    }
+}
+
+let words = ["alpha", "βήτα", "gamma", "δέλτα", "🙂"]
+let (long, short) = partition(words) { $0.count > 4 }
+let lengths = words.map { $0.count }.filter { $0 % 2 == 1 }.sorted(by: >)
+let hex = 0xFF_FF, bin = 0b1010, oct = 0o777, big = 1_000_000, sci = 1.5e-3
+
+switch lengths.first {
+case .some(let n) where n > 3: print("long: \(n)")
+case .none: print("empty")
+default: break
+}
+
+if case let (a, b)? = Optional((1, 2)), a < b { print("\(a)<\(b)") }
+let message = "Total: \(lengths.total()) — \(String(format: "%.2f", 3.14159))"   

@@ -1,0 +1,57 @@
+#include <algorithm>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <numeric>
+#include <string>
+#include <vector>
+
+struct Employee {
+	std::string name;
+	std::string dept;
+	double salary;
+	int age;
+};
+
+template <typename Range, typename Pred>
+auto count_if_ranges(const Range& r, Pred&& p)
+{
+	return std::count_if(std::begin(r), std::end(r), std::forward<Pred>(p));
+}
+
+int main()
+{
+	std::vector<Employee> staff = {
+		{"Amélie", "eng", 125000.0, 34},
+		{"Bjørn", "eng", 98000.5, 41},
+		{"陳小明", "ops", 72000.0, 29},
+		{"Dana", "ops", 81500.0, 52},
+		{"Eve", "sales", 66000.25, 23},
+	};
+
+	// sort by dept, then salary descending
+	std::sort(staff.begin(), staff.end(), [](const Employee& a, const Employee& b) {
+		return std::tie(a.dept, b.salary) < std::tie(b.dept, a.salary);
+	});
+
+	std::map<std::string, std::vector<const Employee*>> by_dept;
+	for (const auto& e : staff) by_dept[e.dept].push_back(&e);
+
+	const double threshold = 80'000.0;
+	auto rich = [threshold, &staff](auto&& pred) mutable {
+		return std::count_if(staff.begin(), staff.end(),
+		                     [&](const Employee& e) { return e.salary > threshold && pred(e); });
+	};
+
+	std::function<int(int)> fib = [&fib](int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };
+
+	for (auto& [dept, list] : by_dept) {
+		double total = std::accumulate(list.begin(), list.end(), 0.0,
+		                               [](double s, const Employee* e) { return s + e->salary; });
+		std::cout << dept << ": " << list.size() << " people, avg "
+		          << total / static_cast<double>(list.size()) << '\n';
+	}
+	std::cout << "over 80k and under 50: " << rich([](const Employee& e) { return e.age < 50; })
+	          << ", fib(15)=" << fib(15) << ", seniors=" << count_if_ranges(staff, [](auto& e) { return e.age >= 50; }) << "\n";
+	return 0;
+}

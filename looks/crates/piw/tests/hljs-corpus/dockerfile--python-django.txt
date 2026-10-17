@@ -1,0 +1,38 @@
+# Image de production pour l'app Django — prête à déployer 🚀
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=on
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        gettext \
+    && rm -rf /var/lib/apt/lists/*  
+
+WORKDIR /build
+COPY requirements/prod.txt requirements.txt
+RUN python -m venv /opt/venv \
+ && /opt/venv/bin/pip install --upgrade pip wheel \
+ && /opt/venv/bin/pip install -r requirements.txt
+
+FROM python:${PYTHON_VERSION}-slim-bookworm
+ENV PATH="/opt/venv/bin:$PATH" \
+    DJANGO_SETTINGS_MODULE=config.settings.production
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && adduser --disabled-password --gecos "" --uid 1000 django
+COPY --from=builder /opt/venv /opt/venv
+WORKDIR /srv/app
+COPY --chown=django:django . .
+RUN python manage.py collectstatic --noinput && \
+    python manage.py compilemessages -l fr -l ja   
+USER django
+EXPOSE 8000
+HEALTHCHECK CMD curl -fsS http://localhost:8000/healthz/ || exit 1
+STOPSIGNAL SIGINT
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-"]

@@ -1,0 +1,49 @@
+@use "sass:map";
+@use "sass:math";
+@use "../abstracts/functions" as fn;  
+
+// Theme palette — keep keys in sync with the design file
+$palette: (
+  "primary": #3b82f6,
+  "secondary": #64748b,
+  "success": #22c55e,
+  "danger": #ef4444,
+  "warning": #f59e0b,
+) !default;
+
+$breakpoints: (sm: 576px, md: 768px, lg: 992px, xl: 1200px);
+$base-font-size: 16px !default;
+$spacer: 0.25rem;
+
+/* Generate one utility per colour:
+   .text-primary, .bg-primary, .border-primary */
+@each $name, $color in $palette {
+  .text-#{$name} { color: $color !important; }
+  .bg-#{$name}   { background-color: rgba($color, 0.12); }
+  .border-#{$name} {
+    border: 1px solid darken($color, 8%);
+    &:hover { border-color: lighten($color, 10%); }
+  }
+}
+
+@each $key, $bp in $breakpoints {
+  @media (min-width: $bp) {
+    .container-#{$key} { max-width: $bp - 2 * $spacer; }
+    .d-#{$key}-none { display: none; }
+  }
+}
+
+@function rem($px, $base: $base-font-size) {
+  @if math.is-unitless($px) {
+    @return math.div($px, math.div($base, 1px)) * 1rem;
+  } @else if unit($px) == "px" {
+    @return math.div($px, $base) * 1rem;
+  }
+  @error "rem() expects px or unitless, got #{inspect($px)}";
+}
+
+.hero {
+  font-size: rem(18px);
+  margin: map.get($palette, "primary") == #3b82f6 and 0 or 1rem;
+  padding: fn.space(3) calc(#{$spacer} * 4);
+}

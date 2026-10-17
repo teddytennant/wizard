@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                        0 / 256K
+
+
+                     ┌─ Resume session ───────────────────────────────────────────────────── [✗] ─┐
+                     │                                                                            │
+                     │   / to search                                                    Grok f    │
+                     │────────────────────────────────────────────────────────────────────────────│
+                     │   grok-harvest-000000-proj ─────────────────────────────────────────────  █│
+                     │    › Create build/out demo.txt and list contents                 2m ago   █│
+                     │    › Create build/out demo.txt and list files                    9m ago   █│
+                     │    › Exact markdown echo between BEGIN END                      20m ago   █│
+                     │    › Exact markdown echo between BEGIN END                      25m ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago   █│
+                     │    › Edit README.md hello                                        1h ago    │
+                     │    › Edit README.md hello                                        1h ago    │
+                     │    › Edit README.md hello                                        1h ago    │
+                     │                                                                            │
+  ╭──────────────────│  ↑↓ nav  |  e expand  |  / search  |  f filter  |  d delete  |  i search   │──────────────────╮
+  │ ❯                └────────────────────────────────────────────────────────────────────────────┘                  │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

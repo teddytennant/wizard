@@ -1,0 +1,44 @@
+diff --git a/config/nginx.conf b/config/nginx.conf
+index 7c1e2aa..0d44b1f 100644
+--- a/config/nginx.conf
++++ b/config/nginx.conf
+@@ -1,14 +1,16 @@
+ worker_processes  auto;
+ error_log  /var/log/nginx/error.log warn;
+ 
+ events {
+-    worker_connections  512;
++    worker_connections  4096;
+ }
+ 
+ http {
+     include       mime.types;
+     default_type  application/octet-stream;
+-    sendfile        off;
++    sendfile        on;
++    tcp_nopush      on;  # économise des paquets
+     keepalive_timeout  65;
++    gzip  on;
+ 
+     server {
+         listen       80;
+@@ -30,4 +32,4 @@ http {
+         location / {
+             root   /usr/share/nginx/html;
+-            index  index.html;
++            index  index.html index.htm;
+         }
+diff --git a/VERSION b/VERSION
+index 1cc5f65..5a2a580 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-1.4.2
+\ No newline at end of file
++1.5.0
+\ No newline at end of file
+diff --git a/docs/notes.txt b/docs/notes.txt
+deleted file mode 100644
+index e69de29..0000000
+--- a/docs/notes.txt
++++ /dev/null

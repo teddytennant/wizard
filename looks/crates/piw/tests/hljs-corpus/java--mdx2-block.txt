@@ -1,0 +1,1 @@
+public class A { private final int x = 1; @Override public String toString() { return "a"; } }

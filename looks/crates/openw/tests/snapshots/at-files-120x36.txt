@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+
+                                                     ▀                   █
+                                               █   █ █ ▀▀▀█ █▀▀█ █▀▀▀ █▀▀█
+                       ┃ README.md                                                               ┃
+                       ┃ src/lib.rs                                                              ┃
+                       ┃ src/main.rs                                                             ┃
+                       ┃ src/                                                                    ┃
+                       ┃
+                       ┃  look at @R
+                       ┃
+                       ┃  Build · grok-4.6 xai-oauth
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                       tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

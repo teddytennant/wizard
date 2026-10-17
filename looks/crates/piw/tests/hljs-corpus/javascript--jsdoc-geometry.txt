@@ -1,0 +1,56 @@
+/**
+ * @file Small 2D geometry helpers.
+ * @module geometry
+ * @license MIT
+ */
+
+/**
+ * A point in the plane.
+ * @typedef {Object} Point
+ * @property {number} x - horizontal coordinate
+ * @property {number} y - vertical coordinate
+ */
+
+const EPSILON = 1e-9; // tolerance for float comparisons
+
+/**
+ * Euclidean distance between two points.
+ *
+ * @param {Point} a
+ * @param {Point} b
+ * @returns {number} the distance, always >= 0
+ * @example
+ * distance({ x: 0, y: 0 }, { x: 3, y: 4 }); // 5
+ */
+function distance(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/**
+ * Signed area of a simple polygon (shoelace formula).
+ * Positive when vertices run counter-clockwise.
+ *
+ * @param {ReadonlyArray<Point>} pts
+ * @returns {number}
+ * @throws {RangeError} if fewer than three points are given
+ */
+function area(pts) {
+  if (pts.length < 3) throw new RangeError('need at least 3 points');
+  let sum = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const { x: x1, y: y1 } = pts[i];
+    const { x: x2, y: y2 } = pts[(i + 1) % pts.length];
+    sum += x1 * y2 - x2 * y1; /* cross product term */
+  }
+  return sum / 2;
+}
+
+/**
+ * @param {number} a
+ * @param {number} b
+ * @param {number} [eps=EPSILON]
+ * @returns {boolean}
+ */
+const nearlyEqual = (a, b, eps = EPSILON) => Math.abs(a - b) <= eps * Math.max(1, Math.abs(a), Math.abs(b));
+
+module.exports = { distance, area, nearlyEqual, EPSILON };

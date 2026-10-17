@@ -1,0 +1,2 @@
+def foo(x) = x.map { |y| y * 2 }
+puts "hi #{foo([1])}"

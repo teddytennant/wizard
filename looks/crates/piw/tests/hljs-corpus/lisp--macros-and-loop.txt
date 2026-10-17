@@ -1,0 +1,51 @@
+;; Macros and the LOOP facility
+  
+(defmacro while (test &body body)
+  `(loop (unless ,test (return)) ,@body))
+
+(defmacro with-gensyms ((&rest names) &body body)
+  `(let ,(loop for n in names collect `(,n (gensym ,(symbol-name n))))
+     ,@body))
+
+(defmacro once-only ((&rest vars) &body body)
+  (with-gensyms (tmp)
+    `(let ((,tmp (list ,@vars)))
+       (declare (ignorable ,tmp))
+       ,@body)))
+
+#| Anaphoric if: binds IT to the test value.
+   Not hygienic on purpose. |#
+(defmacro aif (test then &optional else)
+  `(let ((it ,test))
+     (if it ,then ,else)))
+
+(defun primes-up-to (n)
+  (loop for i from 2 to n
+        when (loop for d from 2 to (isqrt i)
+                   never (zerop (mod i d)))
+          collect i))
+
+(defun histogram (words)
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (w words)
+      (incf (gethash w table 0)))
+    (loop for k being the hash-keys of table using (hash-value v)
+          collect (cons k v) into pairs
+          finally (return (sort pairs #'> :key #'cdr)))))
+
+(defun print-table (rows)
+  (loop for (name . n) in rows
+        for i from 1
+        do (format t "~3D. ~15A ~{~A~}~%" i name
+                   (make-list n :initial-element #\*))))
+
+(let ((counter 0))
+  (while (< counter 3)
+    (format t "tick ~D~%" (incf counter))))
+
+(print (primes-up-to 50))
+(print (histogram '("pomme" "poire" "pomme" "été" "été" "été")))   
+(print (aif (find 3 '(1 2 3 4)) (* it 10) :none))
+(format t "~&Unicode: λ → 猫 ♥ ~S~%" "line one
+line two with \"escaped\" quotes and a backslash \\")
+(print '(:keyword #\a #\Space 3/4 -2.5d0 #b1010 #o17 "str"))

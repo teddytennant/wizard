@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                      23K / 256K
+ ┌                                                                                                                    ┐
+ │                                                                                                                    │█
+ │   ❯ Do these in order, tersely. 1) Make a todo list of these steps. 2) Run ls -la in the shell. 3) Read   5:42 PM  │█
+ │     README.md. 4) Edit README.md: change hello to hello world. 5) Grep for println in src. 6) Web                  │█
+ │     search ratatui and give one sentence. 7) Finish with a markdown reply with a heading, a bold …                 │█
+ │                                                                                                                    │█
+ └                                                                                                                    ┘█
+  ┃  ◆ Thought for 2.3s                                                                                                █
+  ┃                                                                                                                    █
+  ┃  I will execute the requested steps in order.                                                                      █
+                                                                                                                       █
+     I'll work through the seven steps in order, starting with the todo list.                                5:42 PM   █
+                                                                                                                       █
+     ◆ Run List workspace files in detail                                                                              █
+     ◈ Read 1 file
+
+     ◆ Edit README.md
+
+       1  # demo project
+       2  hello
+       2  hello world
+
+  ┃  ◆ Thought for 5.9s
+  ┃
+  ┃  Now the search.
+
+     ◈ Searched 1 pattern, Searched 3 websites
+                                                            ▼
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯ Build anything                                                                                                 │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  →:expand  │  Ctrl+e:collapse thinking  │  Ctrl+.:shortcuts

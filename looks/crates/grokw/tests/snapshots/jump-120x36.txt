@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.7K / 256K
+
+     ❯ first question about parsing                                                                          5:42 PM
+                                                                                                                       █
+                                                                                                                       █
+     Parsing is done with a small recursive descent.                                                         5:42 PM   █
+                                                                                                                       █
+     Worked for 1.0s                                                                                                   █
+                                                                                                                       █
+                                                                                                                       █
+     ❯ second question about layout                                                                          5:42 PM   █
+                                                                                                                       █
+                                                                                                                       █
+     Layout is two passes over the tree.                                                                     5:42 PM   █
+                                                                                                                       █
+     Worked for 1.0s                                                                                                   █
+                                                                                                                       █
+                                                                                                                       █
+     ❯ third question about the cursor                                                                       5:42 PM   █
+                                                                                                                       █
+                                                                                                                       █
+     The cursor is drawn last, inside the sync block.                                                        5:42 PM   █
+                                                                                                                       █
+     Worked for 1.0s                                                                                                   █
+                                                                                                                       █
+
+  ┃
+  ┃  Jump to which turn?
+  ┃  1 first question about parsing
+  ┃  2 second question about layout
+  ┃  3 third question about the cursor
+  ┃
+
+  Shift+Tab:mode  │  Ctrl+.:shortcuts

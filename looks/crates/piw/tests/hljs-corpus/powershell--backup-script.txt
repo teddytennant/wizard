@@ -1,0 +1,60 @@
+<#
+.SYNOPSIS  
+    Backs up a folder to a timestamped zip archive.
+
+.DESCRIPTION
+    Compresses the source directory into a zip file in the destination,
+    optionally pruning archives older than a given number of days.
+
+.PARAMETER Source
+    Folder to back up.
+
+.PARAMETER Destination
+    Folder that receives the archive.
+
+.EXAMPLE
+    .\Backup-Folder.ps1 -Source C:\Data -Destination D:\Backups -KeepDays 14
+#>
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [Parameter(Mandatory = $true, Position = 0)]
+    [ValidateScript({ Test-Path $_ -PathType Container })]
+    [string]$Source,
+
+    [Parameter(Mandatory)]
+    [string]$Destination,
+
+    [ValidateRange(1, 365)]
+    [int]$KeepDays = 30
+)
+
+$ErrorActionPreference = 'Stop'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$name  = "backup-$stamp.zip"
+$target = Join-Path -Path $Destination -ChildPath $name
+
+if (-not (Test-Path $Destination)) {
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+}
+
+try {
+    if ($PSCmdlet.ShouldProcess($target, 'Create archive')) {
+        Compress-Archive -Path "$Source\*" -DestinationPath $target -CompressionLevel Optimal
+        Write-Host "Archive créé: $target ✔" -ForegroundColor Green   
+    }
+}
+catch [System.IO.IOException] {
+    Write-Error "I/O failure while writing '$target': $($_.Exception.Message)"
+    exit 2
+}
+finally {
+    Write-Verbose "Finished at $(Get-Date -Format o)"
+}
+
+Get-ChildItem -Path $Destination -Filter 'backup-*.zip' |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$KeepDays) } |
+    Sort-Object LastWriteTime |
+    ForEach-Object {
+        Remove-Item $_.FullName -WhatIf:$WhatIfPreference
+        Write-Verbose ("Pruned {0} ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB))
+    }

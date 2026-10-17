@@ -1,0 +1,57 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)  
+
+var keyRe = regexp.MustCompile(`^\s*([A-Za-z_][\w.]*)\s*=\s*(.*?)\s*$`)
+
+type Config struct {
+	Values map[string]string
+	Path   string
+}
+
+func Load(path string) (*Config, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", path, err)
+	}
+	defer f.Close()
+
+	cfg := &Config{Values: make(map[string]string), Path: path}
+	sc := bufio.NewScanner(f)
+	for n := 1; sc.Scan(); n++ {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		m := keyRe.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf("%s:%d: syntax error near %q", path, n, line)
+		}
+		cfg.Values[m[1]] = m[2]
+	}
+	return cfg, sc.Err()
+}
+
+func main() {
+	var (
+		path    = flag.String("config", "app.conf", "path to `file`")
+		verbose = flag.Bool("v", false, "verbose output")
+	)
+	flag.Parse()
+	cfg, err := Load(*path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if *verbose {
+		fmt.Printf("loaded %d keys from %s ✔\n", len(cfg.Values), cfg.Path)
+	}
+}

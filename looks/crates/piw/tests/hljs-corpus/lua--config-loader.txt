@@ -1,0 +1,53 @@
+--[==[
+  config.lua: reads key = value files, with [section] headers.
+  Lines starting with # or ; are comments.
+]==]
+local M = {}
+
+local usage = [[
+usage: config <file> [key]
+  prints the whole file, or only the value for "section.key"
+]]
+
+local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+
+local function coerce(v)
+  if v == "true" then return true end
+  if v == "false" then return false end
+  local n = tonumber(v)
+  if n ~= nil then return n end
+  local q = v:match('^"(.*)"$') or v:match("^'(.*)'$")
+  return q and q:gsub("\\n", "\n"):gsub('\\"', '"') or v
+end
+
+function M.parse(text)
+  local out, section = {}, "default"
+  local lineno = 0
+  for line in text:gmatch("([^\r\n]*)\r?\n?") do
+    lineno = lineno + 1
+    line = trim(line)
+    if line == "" or line:find("^[#;]") then
+      goto continue
+    end
+    local sec = line:match("^%[([%w_.-]+)%]$")
+    if sec then
+      section = sec
+      out[section] = out[section] or {}
+      goto continue
+    end
+    local k, v = line:match("^([%w_.-]+)%s*=%s*(.-)$")
+    if not k then
+      error(("syntax error on line %d: %q"):format(lineno, line), 2)
+    end
+    out[section] = out[section] or {}
+    out[section][k] = coerce(v)
+    ::continue::
+  end
+  return out
+end
+
+M.usage = usage
+M.sample = [[name = "café ☕"
+retries = 0x05
+ratio = 1.5e-2]]
+return M

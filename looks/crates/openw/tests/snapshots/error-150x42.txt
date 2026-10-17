@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           error please
+  ┃  error please                                                                                                        ┃                         ┃
+  ┃                                                                                                           Context    ┃  provider returned 500  ┃
+                                                                                                              0 tokens   ┃                         ┃
+  ┃                                                                                                           0% used
+  ┃  $ cargo test                                                                                             $0.00 spent
+  ┃
+  ┃  error[E0425]: cannot find value `x` in this scope                                                        LSP
+  ┃   --> src/main.rs:3:5                                                                                     LSPs are disabled
+  ┃
+
+     The build failed on an undefined x.
+
+  ┃
+  ┃  provider returned 500
+  ┃
+
+     ▣  Build · grok-4.6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               tab agents  ctrl+p commands    • wizard 0.0

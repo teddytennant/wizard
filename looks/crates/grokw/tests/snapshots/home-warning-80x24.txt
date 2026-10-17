@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj
+
+
+                          Clipboard may be unreachable.
+                       Run /doctor for details and fixes.
+
+               New worktree                                 ctrl+w
+               Resume session                               ctrl+r
+               Changelog
+               Quit                                         ctrl+q
+
+               New /learn skill!
+               Ask Grok to /learn from your past traces and tune
+               Grok Build to how you work.
+
+   Tip: Use Shift+Tab to cycle between modes like Plan mode.
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                        │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+                                                    Grok Build  1.0.24 [alpha]

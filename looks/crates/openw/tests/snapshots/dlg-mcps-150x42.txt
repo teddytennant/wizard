@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                                 MCPs                                             esc
+
+                                                 Search
+
+                                                 playwright stdio                           ✓ Enabled
+
+                                                 toggle space
+
+                                      ┃
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

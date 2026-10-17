@@ -1,0 +1,54 @@
+<?php
+
+namespace App\Http\Controller;
+
+use App\Enum\Status;
+use Symfony\Component\HttpFoundation\{JsonResponse, Request};
+use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Validator\Constraints as Assert;
+
+#[Attribute(Attribute::TARGET_METHOD)]
+final class RateLimit
+{
+    public function __construct(public int $perMinute = 60, public string $key = 'ip') {}
+}
+
+enum Status: string
+{
+    case Active = 'active';
+    case Banned = 'banned';
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::Active => 'Actif',
+            self::Banned => 'Banni',
+        };
+    }
+}
+
+#[Route('/api/users', name: 'users_')]
+class UserController extends AbstractController
+{
+    #[Route('/{id<\d+>}', name: 'show', methods: ['GET'])]
+    #[RateLimit(perMinute: 120)]
+    public function show(int $id, UserRepository $repo): JsonResponse
+    {
+        $user = $repo->find($id) ?? throw $this->createNotFoundException("User $id not found");
+
+        return $this->json([
+            'id'     => $user->getId(),
+            'status' => $user->getStatus()->label(),
+            'name'   => $user->getName() ?: 'Anonyme',
+            'tags'   => array_filter($user->getTags(), static fn(string $t): bool => $t !== ''),
+        ]);
+    }
+
+    #[Route('', name: 'create', methods: ['POST'])]
+    public function create(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        $name = trim((string) ($data['name'] ?? ''));   
+        return new JsonResponse(['ok' => true, 'name' => $name], 201);
+    }
+}

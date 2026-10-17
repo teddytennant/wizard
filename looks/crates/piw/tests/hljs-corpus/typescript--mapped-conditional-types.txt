@@ -1,0 +1,58 @@
+// Utility types that show up in real codebases.
+
+export type DeepPartial<T> = T extends (infer U)[]
+  ? DeepPartial<U>[]
+  : T extends object
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
+
+export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+export type PickByValue<T, V> = {
+  [K in keyof T as T[K] extends V ? K : never]: T[K];
+};
+
+type Getters<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type Split<S extends string, D extends string> = S extends `${infer H}${D}${infer R}`
+  ? [H, ...Split<R, D>]
+  : [S];
+
+type Path = Split<'api/v1/users', '/'>; // ['api', 'v1', 'users']
+
+export interface Settings {
+  readonly name: string;
+  readonly retries: number;
+  readonly flags: { verbose: boolean; dryRun: boolean };
+  readonly tags: readonly string[];
+}
+
+type NumericKeys = keyof PickByValue<Settings, number>; // 'retries'
+type SettingsGetters = Getters<Settings>;
+
+declare function assertNever(x: never): never;
+
+export function isKeyOf<T extends object>(obj: T, key: PropertyKey): key is keyof T {
+  return key in obj;
+}
+
+export const defaults = {
+  name: 'default',
+  retries: 3,
+  flags: { verbose: false, dryRun: true },
+  tags: ['a', 'b'],
+} as const satisfies Settings;
+
+export function patch(base: Settings, delta: DeepPartial<Mutable<Settings>>): Settings {
+  return {
+    ...base,
+    ...delta,
+    flags: { ...base.flags, ...delta.flags },
+    tags: (delta.tags as string[] | undefined) ?? base.tags,
+  };
+}
+
+const x: NumericKeys = 'retries';
+const n = <const T extends readonly unknown[]>(...xs: T) => xs.length as T['length'];

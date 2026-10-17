@@ -1,0 +1,35 @@
+
+     answer 2 with some words to fill the line
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃  question 3
+  ┃
+
+     answer 3 with some words to fill the line
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃  question 4
+  ┃
+
+     answer 4 with some words to fill the line
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃  question 5
+  ┃
+
+     answer 5 with some words to fill the line
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

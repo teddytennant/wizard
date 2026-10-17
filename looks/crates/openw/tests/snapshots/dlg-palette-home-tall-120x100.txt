@@ -1,0 +1,99 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Suggested
+                                  Switch model                                ctrl+x m
+                                  Connect provider
+
+                                  System
+                                  Hide tips                                   ctrl+x h
+                                  Plugins
+                                  Install plugin
+                                  View status                                 ctrl+x s
+                                  View debug info
+                                  Switch theme                                ctrl+x t
+                                  Switch to light mode
+                                  Lock theme mode
+                                  Help
+                                  Open docs
+                                  Exit the app                ctrl+c, ctrl+d, ctrl+x q
+                                  Toggle debug panel
+                                  Toggle console
+                                  Write heap snapshot
+                       ┃          Disable terminal title
+                       ┃  Ask     Disable animations
+                       ┃          Disable file context
+                       ┃  Buil    Disable diff wrapping
+                       ╹▀▀▀▀▀▀    Disable paste summary                                   ▀▀▀▀▀▀▀▀
+                                  Disable session directory filtering                     commands
+                                  Enable auto-approve permissions
+
+                                  Session
+                                  Open editor                                 ctrl+x e
+                                  Move session Move to another project dir
+                                  Switch session                              ctrl+x l
+                                  New session                                 ctrl+x n
+
+                                  Prompt
+                                  Skills
+
+                                  VCS
+                                  Open diff viewer
+
+                                  Agent
+                                  Switch model                                ctrl+x m
+                                  Switch agent                                ctrl+x a
+                                  Toggle MCPs
+                                  Variant cycle                                 ctrl+t
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

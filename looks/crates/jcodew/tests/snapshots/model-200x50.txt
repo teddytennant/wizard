@@ -1,0 +1,48 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ wizard
+ /model to switch · fake · Grok 4.7
+ v0.0
+▸ grok-4.7 current  fake
+  grok-4.6          fake
+  grok-4.7-fast     fake
+↑↓ choose · Enter select · Esc cancel
+1> /model                                                                                                                                                                                             ⏳
+                                                                                                                                                                         …/jcodew-cmp/proj fake Grok 4.7
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

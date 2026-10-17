@@ -1,0 +1,52 @@
+# Application configuration
+title = "TOML Example"
+debug = false
+retries = 5
+ratio = 0.75
+big = 1_000_000
+hex = 0xDEAD_BEEF
+oct = 0o755
+bin = 0b1101_0110
+exp = 6.626e-34
+neg = -17
+pos_inf = inf
+not_a_number = nan
+
+[owner]  
+name = "Tom Preston-Werner"
+dob = 1979-05-27T07:32:00-08:00
+joined = 2019-01-01
+lunch = 12:30:00.250
+local_dt = 1979-05-27T07:32:00
+
+[database]
+server = "192.168.1.1"
+ports = [ 8000, 8001, 8002 ]
+connection_max = 5000
+enabled = true
+tags = ["primary", 'secondary', "tertiary 📦"]
+matrix = [ [1, 2], [3, 4.5], ["a", "b"] ]
+
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
+
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"  
+limits = { cpu = 2, mem = "4Gi", labels = { tier = "gold", zone = "eu-west" } }
+
+[[services]]
+name = "api"
+port = 8080
+
+[[services]]
+name = "worker"
+port = 0
+env = { LOG = "debug" }
+
+[strings]
+basic = "Tab\there, quote \" and unicode \u00e9 \U0001F600"
+literal = 'C:\Users\nodejs\templates'
+"quoted key" = "value"
+site."google.com" = true

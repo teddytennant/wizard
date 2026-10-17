@@ -1,0 +1,53 @@
+// _buttons.scss
+@use "sass:color";
+
+%btn-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .5rem 1rem;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color .15s ease-in-out;
+}
+
+@mixin button-variant($bg, $fg: #fff, $hover-amount: 7%) {
+  @extend %btn-base;
+  background-color: $bg;
+  color: $fg;
+
+  &:hover:not(:disabled) {
+    background-color: color.adjust($bg, $lightness: -$hover-amount);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 3px rgba($bg, .4);
+  }
+
+  &:disabled { opacity: .6; }
+}
+
+@mixin respond-to($bp) {
+  $query: map-get($breakpoints, $bp);
+  @if $query {
+    @media (min-width: #{$query}) { @content; }
+  } @else {
+    @warn "Unknown breakpoint `#{$bp}`.";
+  }
+}
+
+.btn {
+  &-primary   { @include button-variant(#2563eb); }
+  &-danger    { @include button-variant($bg: #dc2626, $hover-amount: 10%); }
+  &-ghost {
+    @include button-variant(transparent, #374151);
+    border: 1px solid currentColor;
+  }
+  &__icon { width: 1em; height: 1em; }
+  & + & { margin-left: .5rem; }   
+  @include respond-to(md) { padding: .75rem 1.5rem; }
+}
+
+.label::after { content: "→ #{$suffix}"; }

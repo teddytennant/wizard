@@ -1,0 +1,41 @@
+
+
+                                                                                                                                ┃                  ┃
+                                                                                                                                ┃  Prompt stashed  ┃
+                                                                                                                                ┃                  ┃
+
+
+
+
+
+
+
+                                                 Stash                                            esc
+
+                                                 Search
+
+                                                 a longer one 1h ago                         ~2 lines
+                                                 hello just now
+
+                                                 delete ctrl+d
+                                      ┃
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

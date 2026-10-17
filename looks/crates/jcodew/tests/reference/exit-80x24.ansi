@@ -1,0 +1,24 @@
+Server already running; provider/model flags only apply when starting a new serv
+er.
+Current server settings control `/model`. Restart server to apply: --provider op
+enai-compatible
+Connecting to server...
+
+[33mSession [1mmushroom[0m[33m - to resume:[39m
+  jcode --resume session_mushroom_1791950037263_55e822cf13f871eb
+
+
+EXIT=0
+
+
+
+
+
+
+
+
+
+
+
+
+

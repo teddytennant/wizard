@@ -1,0 +1,33 @@
+[package]
+name = "codexw"
+version.workspace = true
+edition = "2024"
+
+[[bin]]
+name = "codexw"
+path = "src/main.rs"
+
+[lib]
+name = "codexw"
+path = "src/lib.rs"
+
+[dependencies]
+agent-core.workspace = true
+tuikit.workspace = true
+backend-wizard.workspace = true
+ratatui.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
+similar = "2"
+unicode-linebreak = "0.1"
+signal-hook = "0.3"
+libc = "0.2"

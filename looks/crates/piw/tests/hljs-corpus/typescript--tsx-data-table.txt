@@ -1,0 +1,59 @@
+import React, { useMemo, useState, type ReactNode } from 'react';
+
+export interface Column<Row, K extends keyof Row = keyof Row> {
+  key: K;
+  header: string;
+  render?: (value: Row[K], row: Row) => ReactNode;
+}
+
+interface DataTableProps<Row extends { id: string | number }> {
+  rows: readonly Row[];
+  columns: ReadonlyArray<Column<Row>>;
+  onSelect?: (row: Row) => void;
+  emptyText?: string;
+}
+
+type SortState<Row> = { key: keyof Row; dir: 'asc' | 'desc' } | null;
+
+export function DataTable<Row extends { id: string | number }>({
+  rows,
+  columns,
+  onSelect,
+  emptyText = 'Nothing to show 🙈',
+}: DataTableProps<Row>) {
+  const [sort, setSort] = useState<SortState<Row>>(null);
+
+  const sorted = useMemo(() => {
+    if (!sort) return rows;
+    const { key, dir } = sort;
+    return [...rows].sort((a, b) => {
+      const cmp = String(a[key]).localeCompare(String(b[key]), undefined, { numeric: true });
+      return dir === 'asc' ? cmp : -cmp;
+    });
+  }, [rows, sort]);
+
+  if (rows.length === 0) return <p className="empty">{emptyText}</p>;
+
+  return (
+    <table className={`data-table ${sort ? 'sorted' : ''}`.trim()}>
+      <thead>
+        <tr>
+          {columns.map((col) => (
+            <th key={String(col.key)} onClick={() => setSort({ key: col.key, dir: sort?.dir === 'asc' ? 'desc' : 'asc' })}>
+              {col.header}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((row) => (
+          <tr key={row.id} onClick={() => onSelect?.(row)}>
+            {columns.map((col) => (
+              <td key={String(col.key)}>{col.render ? col.render(row[col.key], row) : String(row[col.key])}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}

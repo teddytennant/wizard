@@ -1,0 +1,6 @@
+{"lang":"yaml","variants":[
+{"r":[0,1201],"rows":["8v 1d 5n","5v","2d 6v 1d 3s 1d 5s 1d 3s","2d 12v 1d 1s","33d","","4d 8s 1d 12s 1d 2s 1d 13s","2d 8v 1d 5n","2d 8v","4d 5v 1d 3s 1d 7s","4d 6v 1d 19s","8v","4d 4v 1d 26s 2d","4d 12v 1d 10s","6v","2d 14s","4d 4v","6d 12v 1d 6s","6d 8v 1d 5s 1d 1s 1d 3s 1d 2s 1d 2s","6d 5v 2d 4s 1d","6d 11v","10d 5v 1d 5s","10d 3v 1d 4s","10d 9v 1d 4n","10d 7v 2d 5v 1d 7s 2d 7v 1d 5s 2d 8v 1d 1n 1d","6d 10v","8d 6v","10d 12v 1d 2s","10d 8v","12d 17v","14d 7v","16d 5s 1d 26s 2d","8d 6v","10d 12v 1d 3s 1d 5s","11v","2d 8v","4d 4v","6d 5v 1d 6s","6d 9v 2d 2s 2d 4s 1d","6d 11v","8d 3v 2d 5v 1d 7s 2d 8v 1d 5s 1d","8d 5v 2d 5v 1d 6s 2d 8v 1d 20s 1d","8d 9v 2d 5v 1d 6s 2d 9v 1d 4n 2d 8v 1d 4n 1d","8d 7v 2d 5v 1d 6s 2d 8v 1d 6n 1d","8d 4v 2d 5v 1d 6s 2d 8v 1d 20s 1d","8d 6v 2d 5v 1d 6s 2d 8v 1d 10s 1d",""]},
+{"r":[156,319],"rows":["2d 8v","4d 5v 1d 3s 1d 7s","4d 6v 1d 19s","8v","4d 4v 1d 26s 2d","4d 12v 1d 10s","6v","2d 14s",""]},
+{"r":[478,596],"rows":["6v 1d 4n","10d 7v 2d 5v 1d 7s 2d 7v 1d 5s 2d 8v 1d 1n 1d","6d 10v","8d 6v","10d 3s"]},
+{"r":[0,207],"rows":["8v 1d 5n","5v","2d 6v 1d 3s 1d 5s 1d 3s","2d 12v 1d 1s","33d","","4d 8s 1d 12s 1d 2s 1d 13s","2d 8v 1d 5n","2d 8v","4d 5v 1d 3s 1d 7s","4d 6v 1d 7s"]}
+]}

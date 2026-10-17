@@ -1,0 +1,51 @@
+(ns analytics.report
+  (:require [clojure.string :as str]  
+            [clojure.set :as set]))
+
+;; Sample data: vector of maps
+(def orders
+  [{:id 1 :customer "alice" :items [{:sku "A1" :qty 2 :price 9.99}
+                                    {:sku "B7" :qty 1 :price 24.50}]}
+   {:id 2 :customer "bob"   :items [{:sku "A1" :qty 5 :price 9.99}]}
+   {:id 3 :customer "alice" :items []}
+   {:id 4 :customer "chloé" :items [{:sku "C3" :qty 3 :price 4.25}]}])
+
+(defn order-total
+  "Sum of qty * price over all line items of `order`."
+  [{:keys [items]}]
+  (->> items
+       (map (fn [{:keys [qty price]}] (* qty price)))
+       (reduce + 0)))
+
+(defn totals-by-customer [orders]
+  (->> orders
+       (group-by :customer)
+       (map (fn [[cust os]] [cust (transduce (map order-total) + os)]))
+       (into (sorted-map))))
+
+(defn top-skus
+  [orders n]
+  (->> orders
+       (mapcat :items)
+       (reduce (fn [acc {:keys [sku qty]}] (update acc sku (fnil + 0) qty)) {})
+       (sort-by val >)
+       (take n)
+       (map first)
+       set))
+
+(defn describe [{:keys [id customer] [{first-sku :sku} & more] :items}]
+  (format "#%d %s: first=%s (+%d more)" id customer (or first-sku "-") (count more)))
+
+(defn slugify [s]
+  (-> s
+      str/lower-case
+      (str/replace #"[^\p{L}\p{N}]+" "-")
+      (str/replace #"^-|-$" "")))
+
+(let [totals (totals-by-customer orders)
+      best   (key (apply max-key val totals))]
+  (println "Totals:" totals)
+  (println (str "Best customer: " best " \"with\" tab\there"))   
+  (println (map describe orders))
+  (println (top-skus orders 2) #{:a :b} [1 2 3] '(4 5) 0x1F 1/3 2.5e-3 42N 3.14M)
+  (println (slugify "Café Crème — 日本語 ✓")))

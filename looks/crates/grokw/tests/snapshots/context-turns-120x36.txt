@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                      28K / 256K
+
+                     ┌────────────────────────────────────────────────────────────────────── [✗] ─┐
+     ❯ Do these in or│  Context usage  Usage limit  Session info                                  │3) Read   5:42 PM
+       README.md. 4) │────────────────────────────────────────────────────────────────────────────│b
+       search ratatui│  Context                                                                   │ …
+                     │                                                                            │
+                     │  28.1k / 256k tokens (10.96%)                                              │
+     Ratatui is a Rus│  grok-4.7                                                                  │
+                     │                                                                            │
+     hello world     │  ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇                                   │
+                     │  ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇                                   │
+     • Listed the wor│  ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇                                   │                    █
+     • Changed README│  ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇                                   │                    █
+     • Found println!│  ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇ ◇                                   │                    █
+                     │                                                                            │                    █
+     ┌──────┬────────│  ◆ In use    28.1k tokens    (11%)                                         │                    █
+     │ Step │ Result │  ◇ Free       228k tokens    (89%)                                         │                    █
+     ├──────┼────────│                                                                            │                    █
+     │ Edit │ hello w│  Breakdown by category is not reported by wizard.                          │                    █
+     └──────┴────────│                                                                            │                    █
+                     │  Turns: 1 · Tool calls: 8                                                  │                    █
+     fn main() {     │                                                                            │                    █
+         println!("hi│                                                                            │                    █
+     }               │                                                                            │                    █
+                     │                                                                            │                    █
+     Worked for 8.8s │                                                                            │                    █
+                     │                                                                            │                    █
+                     │                                                                            │
+  ╭──────────────────│                                                                            │──────────────────╮
+  │ ❯                │       Tab switch  |  ↑/↓ scroll  |  c copy session ID  |  Esc close        │                  │
+  ╰──────────────────└────────────────────────────────────────────────────────────────────────────┘ Grok 4.7 (high) ─╯
+
+

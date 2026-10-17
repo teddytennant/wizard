@@ -1,0 +1,53 @@
+# Python project tasks
+PYTHON  ?= python3
+VENV    := .venv
+BIN     := $(VENV)/bin
+PKG     := mypkg
+STAMP   := $(VENV)/.installed
+
+ifneq ($(CI),)
+  PYTEST_ARGS := -q --junitxml=report.xml
+else
+  PYTEST_ARGS := -x -vv
+endif
+
+define HELP_TEXT
+Targets:
+  venv    create the virtualenv
+  test    run the test-suite
+  lint    ruff + mypy
+  dist    build sdist and wheel
+endef
+export HELP_TEXT
+
+.PHONY: help venv test lint fmt dist clean
+
+help:
+	@echo "$$HELP_TEXT"
+
+venv: $(STAMP)
+
+$(STAMP): pyproject.toml
+	$(PYTHON) -m venv $(VENV)
+	$(BIN)/pip install -U pip wheel
+	$(BIN)/pip install -e '.[dev]'
+	touch $@
+
+test: venv
+	$(BIN)/pytest $(PYTEST_ARGS) tests/
+
+lint: venv
+	$(BIN)/ruff check $(PKG) tests
+	$(BIN)/mypy --strict $(PKG)
+
+fmt: venv
+	$(BIN)/ruff format $(PKG) tests
+
+dist: clean venv
+	$(BIN)/python -m build
+	@echo "built: $(notdir $(wildcard dist/*))"
+
+# naïve cleanup, 日本語 comment: don't delete .venv   
+clean:
+	rm -rf build dist *.egg-info .pytest_cache .mypy_cache
+	find . -name '__pycache__' -type d -prune -exec rm -rf {} +

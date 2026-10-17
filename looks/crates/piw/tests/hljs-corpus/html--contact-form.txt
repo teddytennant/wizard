@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+<meta charset=utf-8>
+<title>Contact us</title>
+<style type="text/css">
+  form.contact { max-width: 32rem; margin: 2em auto; font-family: Georgia, serif; }
+  form.contact label { display: block; margin-top: 1em; font-weight: bold; }
+  input[type=text], input[type="email"], textarea, select {
+    width: 100%; padding: .5em; border: 1px solid #ccc; border-radius: 3px;
+  }
+  input:invalid { border-color: #c00; outline: 0; }
+  .error::before { content: "\26A0 "; color: #c00 }
+  #msg { min-height: 8em }
+</style>
+</head>
+<body>  
+<form class="contact" action="/api/contact" method="post" enctype="multipart/form-data" novalidate>
+  <fieldset>
+    <legend>Écrivez-nous</legend>
+    <label for=name>Name</label>
+    <input type=text id=name name=name required autofocus placeholder="Jane Doe">
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" required pattern="[^@\s]+@[^@\s]+">
+
+    <label for="topic">Topic</label>
+    <select id="topic" name="topic">
+      <option value="">-- choose --</option>
+      <option value="sales" selected>Sales</option>
+      <option value="support">Support &amp; billing</option>
+    </select>
+
+    <label for="msg">Message</label>
+    <textarea id="msg" name="msg" rows="6" maxlength="2000">Hello,
+  I'd like to know more about <b>pricing</b>.</textarea>
+
+    <label><input type="checkbox" name="subscribe" value="1" checked> Subscribe to the newsletter</label>
+    <input type="hidden" name="csrf" value="a1b2c3d4">  
+    <button type="submit" name=send>Send</button>
+    <button type="reset" onclick="return confirm('Clear the form?')">Reset</button>
+  </fieldset>
+  <p class="error" id="err" hidden></p>
+</form>
+<script>
+  document.querySelector('form.contact').addEventListener('submit', function (ev) {
+    var email = this.elements['email'].value;
+    if (!/^[^@\s]+@[^@\s]+\.\w{2,}$/.test(email)) {
+      ev.preventDefault();
+      var err = document.getElementById('err');
+      err.textContent = 'Adresse invalide: "' + email + '"';
+      err.hidden = false;
+    }
+  });
+</script>
+</body>
+</html>

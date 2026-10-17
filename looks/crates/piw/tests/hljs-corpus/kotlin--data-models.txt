@@ -1,0 +1,55 @@
+package com.example.app.model
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.time.Instant
+import java.util.UUID
+
+/**
+ * A user account.
+ *
+ * @property id stable identifier
+ * @property displayName shown in the UI, may contain emoji 😀
+ */
+@Serializable
+data class User(
+    val id: String = UUID.randomUUID().toString(),
+    @SerialName("display_name") val displayName: String,
+    val email: String?,
+    val roles: Set<Role> = emptySet(),
+    val createdAt: Long = Instant.now().toEpochMilli(),
+)
+
+enum class Role(val level: Int) {
+    GUEST(0), MEMBER(10), ADMIN(100);
+
+    fun canEdit(): Boolean = level >= MEMBER.level
+}
+
+sealed class Result<out T> {
+    data class Success<T>(val value: T) : Result<T>()
+    data class Failure(val error: Throwable, val retryable: Boolean = false) : Result<Nothing>()
+    object Loading : Result<Nothing>()
+}
+
+/* Extension helpers */
+fun User.initials(): String =
+    displayName.split(" ", "-")
+        .filter { it.isNotBlank() }
+        .joinToString("") { it.first().uppercaseChar().toString() }
+
+fun User.describe(): String = when {
+    roles.contains(Role.ADMIN) -> "admin $displayName"
+    email == null              -> "anonymous ${displayName.trim()}"
+    else                       -> "$displayName <${email.lowercase()}> (${roles.size} roles)"
+}
+
+val User.isStaff get() = roles.any { it.level >= 10 }   
+
+inline fun <reified T> Result<T>.getOrElse(default: () -> T): T = when (this) {
+    is Result.Success -> value
+    is Result.Failure, Result.Loading -> default()
+}
+
+private const val MAX_NAME = 0x40
+private val EMAIL_RE = Regex("""^[\w.+-]+@[\w-]+\.[\w.]{2,}$""")

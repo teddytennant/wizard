@@ -1,0 +1,45 @@
+
+              o p e n c  0.1                                                                                                  Session
+              ━━━━━━━━━───────────────────────────────────                                                                    sub agent
+              sonnet-5.5 high · claude 2.1.289
+                                                                                                                              Context
+              shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys                                                       ━─────── 6%  11k / 200k
+
+                                                                                                                              Cost
+            ▎ sub agent                                                                                                       $0.04 · 1 turn
+
+              ▸ Task    explore: find the parser                                                ✓ 0.8s · 2 tools
+
+              The subagent found the parser in src/parser.rs.
+
+              ✓ 2.2s · 640 out · $0.04
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            ▎
+            ▎ Message claude  /  commands  @  files
+            ▎
+              ask · sonnet-5.5 high · /work/proj · main*                                                                      ctx 6% ━─────── · $0.04 · ctrl+p

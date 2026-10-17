@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           think about it
+  ┃  think about it
+  ┃                                                                                                           Context
+                                                                                                              0 tokens
+     Thought: Reading the parser · 237ms                                                                      0% used
+                                                                                                              $0.00 spent
+     The lookahead consumes one token too many.
+                                                                                                              LSP
+     The bug is in the lookahead.                                                                             LSPs are disabled
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               tab agents  ctrl+p commands    • wizard 0.0

@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Suggested
+                                  Switch model                                ctrl+x m
+
+                       ┃          System
+                       ┃  Ask     Hide tips                                   ctrl+x h
+                       ┃          Plugins
+                       ┃  Buil    Install plugin
+                       ╹▀▀▀▀▀▀    View status                                 ctrl+x s    ▀▀▀▀▀▀▀▀
+                                  View debug info                                         commands
+                                  Switch theme                                ctrl+x t
+                                  Switch to light mode
+                                  Lock theme mode
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

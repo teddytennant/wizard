@@ -1,0 +1,56 @@
+use std::{
+	fmt, fs, io,
+	num::ParseIntError,
+	path::{Path, PathBuf},
+	process::ExitCode,
+};
+
+#[derive(Debug)]
+enum CliError {
+	Io { path: PathBuf, source: io::Error },
+	Parse { line: usize, source: ParseIntError },
+	Empty,
+}
+
+impl fmt::Display for CliError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			CliError::Io { path, source } => write!(f, "{}: {}", path.display(), source),
+			CliError::Parse { line, source } => write!(f, "line {line}: {source}"),
+			CliError::Empty => f.write_str("no numbers found"),
+		}
+	}
+}
+
+impl std::error::Error for CliError {}
+
+type Result<T, E = CliError> = std::result::Result<T, E>;
+
+fn read_numbers(path: &Path) -> Result<Vec<i64>> {
+	let text = fs::read_to_string(path).map_err(|source| CliError::Io { path: path.into(), source })?;
+	let nums = text
+		.lines()
+		.enumerate()
+		.filter(|(_, l)| !l.trim().is_empty() && !l.starts_with('#'))
+		.map(|(i, l)| l.trim().parse::<i64>().map_err(|source| CliError::Parse { line: i + 1, source }))
+		.collect::<Result<Vec<_>>>()?;
+	if nums.is_empty() { Err(CliError::Empty) } else { Ok(nums) }
+}
+
+fn main() -> ExitCode {
+	let Some(arg) = std::env::args_os().nth(1) else {
+		eprintln!("usage: sum <file>   // résumé: adds up one integer per line");
+		return ExitCode::from(2);
+	};
+	match read_numbers(Path::new(&arg)) {
+		Ok(nums) => {
+			let (sum, max) = nums.iter().fold((0i64, i64::MIN), |(s, m), &n| (s + n, m.max(n)));
+			println!("n={} sum={sum} max={max} mean={:.2}", nums.len(), sum as f64 / nums.len() as f64);
+			ExitCode::SUCCESS
+		}
+		Err(e) => {
+			eprintln!("error: {e}");
+			ExitCode::FAILURE
+		}
+	}
+}

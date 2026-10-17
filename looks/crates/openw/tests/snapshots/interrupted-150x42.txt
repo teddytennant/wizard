@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           slow please
+  ┃  slow please
+  ┃                                                                                                           Context
+                                                                                                              0 tokens
+     Working                                                                                                  0% used
+                                                                                                              $0.00 spent
+     ▣  Build · grok-4.6 · interrupted
+                                                                                                              LSP
+                                                                                                              LSPs are disabled
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                               tab agents  ctrl+p commands    • wizard 0.0

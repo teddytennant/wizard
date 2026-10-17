@@ -1,0 +1,1 @@
+<div class="a" id='b'><span>text</span><!-- c --></div>

@@ -1,0 +1,27 @@
+2024-03-18 08:00:01,112 INFO  [main] app.Server - Starting application v3.2.0 (pid=4121)
+2024-03-18 08:00:01,498 INFO  [main] app.Config - Loaded config from /etc/app/app.toml  
+2024-03-18 08:00:01,501 WARN  [main] app.Config - Unknown key "cache.sizee" ignored
+2024-03-18 08:00:02,030 INFO  [db-pool-1] db.Pool - Opened 8 connections to postgres://db01:5432/app
+2024-03-18 08:00:02,331 INFO  [main] http.Listener - Listening on 0.0.0.0:8080
+2024-03-18 08:03:17,877 INFO  [worker-3] http.Access - GET /api/users/42 200 12ms
+2024-03-18 08:03:18,004 INFO  [worker-1] http.Access - GET /api/users/43 404 3ms
+2024-03-18 08:04:55,210 DEBUG [worker-2] cache.Store - miss key=session:9f3a2c ttl=900s
+2024-03-18 08:05:02,911 ERROR [worker-4] db.Query - timeout after 5000ms: SELECT * FROM orders WHERE customer_id = ?
+java.sql.SQLTimeoutException: Query timed out
+	at db.Query.run(Query.java:118)
+	at http.OrderHandler.list(OrderHandler.java:57)
+	at http.Router.dispatch(Router.java:203)
+	... 14 more
+2024-03-18 08:05:03,002 WARN  [worker-4] http.Access - GET /api/orders 504 5003ms
+2024-03-18 08:07:44,650 INFO  [scheduler] jobs.Cleanup - Removed 1,204 expired sessions
+2024-03-18 08:10:00,000 INFO  [scheduler] jobs.Report - Sent daily report to ops@example.com   
+2024-03-18 08:12:31,415 INFO  [worker-2] http.Access - POST /api/login 200 88ms user="zoë.müller"
+2024-03-18 08:12:31,416 DEBUG [worker-2] auth.Audit - login ok ip=203.0.113.9 ua="Mozilla/5.0 (X11; Linux x86_64)"
+2024-03-18 08:15:09,771 WARN  [worker-1] http.RateLimit - client 198.51.100.23 exceeded 100 req/min
+2024-03-18 08:15:10,001 INFO  [worker-1] http.Access - GET /api/search?q=café%20crème 200 41ms
+2024-03-18 08:20:45,330 ERROR [worker-3] mail.Smtp - connect to smtp.example.com:587 failed: Connection refused
+2024-03-18 08:20:45,331 INFO  [worker-3] mail.Smtp - retry 1/3 in 30s
+2024-03-18 08:21:15,340 INFO  [worker-3] mail.Smtp - delivered message id=<7f21.88@app> to 3 recipients
+2024-03-18 08:30:00,002 INFO  [scheduler] jobs.Backup - snapshot 2024-03-18T08:30Z size=4.7GiB ok ✓
+2024-03-18 08:42:12,908 FATAL [main] app.Server - out of memory: killed worker pool
+2024-03-18 08:42:13,100 INFO  [main] app.Server - Shutting down (exit code 137)

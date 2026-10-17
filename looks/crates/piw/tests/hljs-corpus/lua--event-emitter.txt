@@ -1,0 +1,49 @@
+--[[
+  Tiny event emitter.
+  Supports once-handlers and wildcard "*" listeners.
+]]
+local Emitter = {}
+Emitter.__index = Emitter
+
+function Emitter.new()
+  return setmetatable({ _handlers = {}, _count = 0 }, Emitter)
+end
+
+function Emitter:on(name, fn)
+  local list = self._handlers[name]
+  if not list then
+    list = {}
+    self._handlers[name] = list
+  end
+  list[#list + 1] = fn
+  self._count = self._count + 1
+  return function()  -- unsubscribe closure
+    for i, f in ipairs(list) do
+      if f == fn then table.remove(list, i); break end
+    end
+  end
+end
+
+function Emitter:once(name, fn)
+  local off
+  off = self:on(name, function(...)
+    off()
+    return fn(...)
+  end)
+  return off
+end
+
+function Emitter:emit(name, ...)
+  local n = select("#", ...)
+  local list = self._handlers[name] or {}
+  for i = 1, #list do
+    list[i](...)
+  end
+  for _, f in ipairs(self._handlers["*"] or {}) do
+    f(name, n, ...)
+  end
+end
+
+local e = Emitter.new()
+e:on("greet", function(who) print("héllo, " .. who .. " 👋") end)
+e:emit("greet", "世界")

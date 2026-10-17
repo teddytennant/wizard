@@ -1,0 +1,30 @@
+# ---------- Build ----------
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /workspace
+COPY mvnw pom.xml ./
+COPY .mvn .mvn
+RUN chmod +x mvnw && ./mvnw -B -q dependency:go-offline
+COPY src src
+RUN ./mvnw -B -DskipTests package && \
+    java -Djarmode=layertools -jar target/*.jar extract --destination target/layers  
+
+# ---------- Run ----------
+FROM eclipse-temurin:21-jre-alpine
+ARG JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+UseZGC"
+ENV JAVA_TOOL_OPTIONS=$JAVA_OPTS \
+    SPRING_PROFILES_ACTIVE=prod \
+    TZ=UTC
+RUN addgroup -S spring && adduser -S spring -G spring
+WORKDIR /app
+COPY --from=build /workspace/target/layers/dependencies/ ./
+COPY --from=build /workspace/target/layers/spring-boot-loader/ ./
+COPY --from=build /workspace/target/layers/snapshot-dependencies/ ./  
+COPY --from=build /workspace/target/layers/application/ ./
+# Strings with escapes and unicode
+LABEL description="Service de facturation \"billing\" v3" \
+      owner='team-été'
+USER spring:spring
+EXPOSE 8080 8081
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
+    CMD wget -qO- http://localhost:8081/actuator/health | grep -q '"status":"UP"' || exit 1
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]

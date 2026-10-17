@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  Write a long, detailed 600-word story about a crab named Pip and the tide
+  ┃
+
+     Once upon a tide.
+
+     ▣  Build · grok-4.6 · 6.5s
+
+  ┃
+  ┃  queued seco    Fork session                                                                 esc
+  ┃
+                    Search
+     Second answ
+                    Full session
+     ▣  Build ·     queued second message                                                    3:11 PM
+                    Write a long, detailed 600-word story about a crab named Pip…            3:09 PM
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/proj                                                                           11.7K (6%)  ctrl+p commands

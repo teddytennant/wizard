@@ -1,0 +1,36 @@
+
+ wizard  v0.0
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help.
+
+ Wizard can explain its own features and look up its docs. Ask it how to use or extend Wizard.
+
+
+ slow please
+
+
+ This answer streams slowly.
+
+ Warning: wizard cannot steer a running turn; the message is sent when it finishes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Steering: steer this
+ Follow-up: follow up
+ ↳ Alt+Up to edit all queued messages
+
+── ⠋ Working ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/proj (main)
+?/?                                                                                                  fake-model • medium

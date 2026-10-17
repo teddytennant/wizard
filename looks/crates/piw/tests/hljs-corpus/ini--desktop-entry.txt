@@ -1,0 +1,35 @@
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=Text Editor
+Name[fr]=Éditeur de texte
+Name[de]=Texteditor
+Name[ja]=テキストエディタ
+Comment=Edit text files
+Comment[fr]=Modifier des fichiers texte
+GenericName=Text Editor  
+Exec=/usr/bin/myedit %F
+TryExec=/usr/bin/myedit
+Icon=accessories-text-editor
+Terminal=false
+StartupNotify=true
+StartupWMClass=myedit
+MimeType=text/plain;text/x-c;text/x-python;application/x-shellscript;
+Categories=Utility;TextEditor;Development;
+Keywords=text;editor;plain;notes;
+Actions=new-window;new-private-window;
+
+# Actions
+[Desktop Action new-window]
+Name=New Window
+Name[fr]=Nouvelle fenêtre
+Exec=/usr/bin/myedit --new-window
+
+[Desktop Action new-private-window]
+Name=New Private Window 🕶
+Exec=/usr/bin/myedit --private \
+	--profile=/tmp/private-profile
+; trailing note: keep this file in sync with
+; the one shipped in the flatpak manifest.
+X-GNOME-UsesNotifications=true
+X-AppVersion=2.0.1   

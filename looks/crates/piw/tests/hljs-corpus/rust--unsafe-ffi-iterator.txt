@@ -1,0 +1,59 @@
+use std::ffi::{c_char, CStr};
+use std::marker::PhantomData;
+use std::ptr::NonNull;
+
+extern "C" {
+    fn strlen(s: *const c_char) -> usize;
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Rgba {
+    pub r: u8, pub g: u8, pub b: u8, pub a: u8,
+}
+
+/// Borrowed view over a C array; never outlives the owner.
+pub struct RawSlice<'a, T> {
+    ptr: NonNull<T>,
+    len: usize,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> RawSlice<'a, T> {
+    /// # Safety
+    /// `ptr` must be valid for `len` reads of `T` for the whole of `'a`.
+    pub unsafe fn from_raw(ptr: *const T, len: usize) -> Option<Self> {
+        NonNull::new(ptr as *mut T).map(|ptr| Self { ptr, len, _marker: PhantomData })
+    }
+
+    pub fn iter(&self) -> RawIter<'a, T> {
+        RawIter { cur: self.ptr.as_ptr(), end: unsafe { self.ptr.as_ptr().add(self.len) }, _m: PhantomData }
+    }
+}
+
+pub struct RawIter<'a, T> {
+    cur: *const T,
+    end: *const T,
+    _m: PhantomData<&'a T>,
+}
+
+impl<'a, T> Iterator for RawIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.cur == self.end {
+            return None;
+        }
+        let item = unsafe { &*self.cur }; // SAFETY: bounds set in `from_raw`
+        self.cur = unsafe { self.cur.add(1) };
+        Some(item)
+    }
+}
+
+fn main() {
+    let px = [Rgba { r: 255, ..Default::default() }, Rgba { g: 0x80, a: 0xff, ..Default::default() }];
+    let view = unsafe { RawSlice::from_raw(px.as_ptr(), px.len()) }.expect("null");
+    let reds: u32 = view.iter().map(|p| u32::from(p.r)).sum();
+    let hello = unsafe { CStr::from_bytes_with_nul_unchecked(b"h\xc3\xa9llo\0") };
+    println!("{reds} {:?} {}", hello, unsafe { strlen(hello.as_ptr()) });
+}

@@ -1,0 +1,44 @@
+CHANGELOG
+=========  
+
+All notable changes to this project are listed here.
+
+Version 3.2.0 (2024-03-18)
+--------------------------
+  * Added support for reading configuration from $XDG_CONFIG_HOME.
+  * Added the --quiet flag; it suppresses everything except errors.
+  * Fixed a crash when the input file contained a UTF-8 byte order mark.
+  * Fixed an off-by-one in the progress bar (it showed 101% on exit).
+  * Changed the default timeout from 30 s to 60 s.
+
+Version 3.1.2 (2024-01-09)
+--------------------------
+  * Fixed: "unknown option" error was printed twice.
+  * Fixed: log files were created with mode 0666 instead of 0644.
+  * Updated translations: fr, ja, pt_BR (thanks to the volunteers!).
+
+Version 3.1.1 (2023-12-02)
+--------------------------
+  * Hotfix: restore the --version output, which printed "(null)".
+
+Version 3.1.0 (2023-11-20)
+--------------------------
+  * New command: `tool export --format csv|json|yaml`.
+  * Performance: parsing is about 2.5x faster on files over 100 MB.
+  * Deprecated: the `--legacy-paths` option will be removed in 4.0.
+  * Removed support for Python 3.7.
+
+Version 3.0.0 (2023-08-14)
+--------------------------
+  Breaking changes
+    - The configuration file is now TOML; the old INI format is gone.
+    - Exit codes changed: 2 means usage error, 3 means I/O error.
+  Other
+    - Rewrote the scheduler; see docs/scheduler.txt for details.
+    - Added a plugin API (experimental).   
+
+Version 2.9.4 (2023-05-30)
+--------------------------
+  * Fixed handling of filenames containing spaces, accents (é, ü) or
+    characters such as 日本語 and emoji like 📁.
+  * Docs: clarified that "-" means standard input.

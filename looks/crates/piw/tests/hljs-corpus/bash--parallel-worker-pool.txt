@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Tiny job pool: run a command per input line with at most N in flight.
+
+MAX_JOBS=${MAX_JOBS:-$(nproc 2>/dev/null || echo 4)}
+RESULTS=$(mktemp -d "${TMPDIR:-/tmp}/pool.XXXXXX")
+pids=()
+failed=0
+
+trap 'kill "${pids[@]}" 2>/dev/null; rm -rf "$RESULTS"' EXIT
+trap 'echo; echo "caught SIGINT, draining..." >&2; wait; exit 130' INT
+
+# usage: process_item ITEM
+process_item() {
+	local item=$1 slug
+	slug=$(printf '%s' "$item" | tr -c '[:alnum:]._-' '_')
+	{
+		echo "start: $item"
+		sleep "$(awk -v seed="$RANDOM" 'BEGIN{srand(seed); printf "%.2f", rand()*2}')"
+		[[ $item == *bad* ]] && { echo "boom: $item" >&2; return 3; }
+		echo "finish: ${item^^}"
+	} >"$RESULTS/$slug.out" 2>"$RESULTS/$slug.err"
+}
+
+reap_one() {
+	local pid
+	wait -n -p pid
+	local rc=$?
+	if (( rc != 0 )); then
+		(( failed++ ))
+		echo "job $pid exited with $rc" >&2
+	fi
+	pids=("${pids[@]/$pid}")
+}
+
+while IFS= read -r line || [[ -n $line ]]; do
+	[[ -z $line || ${line:0:1} == '#' ]] && continue
+	while (( ${#pids[@]} >= MAX_JOBS )); do
+		reap_one
+	done
+	process_item "$line" &
+	pids+=($!)
+done < "${1:-/dev/stdin}"
+
+wait
+printf 'processed %d files, %d failures\n' "$(ls "$RESULTS"/*.out | wc -l)" "$failed"
+cat "$RESULTS"/*.out | sort | head -n ${HEAD_LINES:-20}
+exit $(( failed > 0 ))

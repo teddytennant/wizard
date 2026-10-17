@@ -1,0 +1,44 @@
+# EditorConfig is awesome: https://EditorConfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{yml,yaml,json}]
+indent_size = 2  
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+; ---- my.cnf excerpt below ----
+
+[mysqld]
+user                    = mysql
+pid-file                = /var/run/mysqld/mysqld.pid
+socket                  = /var/run/mysqld/mysqld.sock
+port                    = 3306
+basedir                 = /usr
+datadir                 = /var/lib/mysql  
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_unicode_ci
+max_connections         = 1_000
+innodb_buffer_pool_size = 2G
+sql_mode                = "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
+slow_query_log          = ON
+long_query_time         = 0.5
+skip-name-resolve
+bind-address            = 127.0.0.1
+
+[client]
+default-character-set = utf8mb4
+default-auth = "caching_sha2_password"
+password = 'it''s a "secret" ☃'

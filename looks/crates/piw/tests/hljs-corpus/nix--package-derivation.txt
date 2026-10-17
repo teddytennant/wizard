@@ -1,0 +1,57 @@
+# Package definition for a small C tool
+{ lib
+, stdenv
+, fetchFromGitHub
+, cmake
+, pkg-config
+, zlib
+, withGui ? false
+, qt6 ? null
+}:
+
+stdenv.mkDerivation rec {
+  pname = "frobnicate";  
+  version = "2.7.0";
+
+  src = fetchFromGitHub {
+    owner = "example";
+    repo = pname;
+    rev = "v${version}";
+    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  };
+
+  nativeBuildInputs = [ cmake pkg-config ];
+  buildInputs = [ zlib ] ++ lib.optional withGui qt6.qtbase;
+
+  cmakeFlags = [
+    "-DBUILD_TESTING=OFF"
+    (lib.cmakeBool "WITH_GUI" withGui)
+    "-DINSTALL_DOCS=${if withGui then "ON" else "OFF"}"
+  ];
+
+  patches = [
+    ./fix-pkgconfig.patch
+    ./0002-no-network-in-tests.patch
+  ];
+
+  postPatch = ''
+    substituteInPlace src/config.h.in \
+      --replace "/usr/local" "$out"
+    # the upstream script hardcodes /bin/sh
+    patchShebangs scripts/
+  '';
+
+  postInstall = ''
+    install -Dm644 ${./frobnicate.1} $out/share/man/man1/frobnicate.1
+    echo 'literal dollar: ''${notInterpolated} and two quotes: '''
+  '';
+
+  meta = with lib; {
+    description = "Frobnicates things quickly (速い)";
+    homepage = "https://example.org/frobnicate";
+    license = licenses.mit;
+    maintainers = with maintainers; [ alice bob ];
+    platforms = platforms.unix;
+    mainProgram = "frobnicate";
+  };
+}

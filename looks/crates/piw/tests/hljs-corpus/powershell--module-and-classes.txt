@@ -1,0 +1,59 @@
+using namespace System.Collections.Generic
+  
+enum Severity {
+    Info    = 0
+    Warning = 1
+    Error   = 2
+}
+
+class LogEntry {
+    [datetime]$Time
+    [Severity]$Level
+    [string]$Message
+    hidden [string]$Source
+
+    LogEntry([Severity]$level, [string]$message) {
+        $this.Time    = Get-Date
+        $this.Level   = $level
+        $this.Message = $message
+        $this.Source  = 'app'
+    }
+
+    [string] ToString() {
+        return '[{0:HH:mm:ss}] {1,-7} {2}' -f $this.Time, $this.Level, $this.Message
+    }
+}
+
+class Logger {
+    [List[LogEntry]]$Entries = [List[LogEntry]]::new()
+    [Severity]$Minimum = [Severity]::Info
+
+    [void] Write([Severity]$level, [string]$msg) {
+        if ($level -lt $this.Minimum) { return }
+        $this.Entries.Add([LogEntry]::new($level, $msg))
+    }
+
+    [LogEntry[]] Where([Severity]$level) {
+        return $this.Entries.Where({ $_.Level -eq $level })
+    }
+}
+
+$script:Logger = [Logger]::new()
+
+function Write-Log {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)][string]$Message,
+        [Severity]$Level = [Severity]::Info
+    )
+    process { $script:Logger.Write($Level, $Message) }
+}
+
+function Export-Log {
+    param([Parameter(Mandatory)][string]$Path)
+    $script:Logger.Entries | ForEach-Object { $_.ToString() } | Set-Content -Path $Path
+}
+
+'démarrage du service', 'ディスク容量が少ない' | Write-Log -Level Warning
+Write-Log "Disk at $([math]::Round(87.456, 1))% 🔥" -Level Error   
+Export-ModuleMember -Function Write-Log, Export-Log

@@ -1,0 +1,35 @@
+
+  ┃
+  ┃  △ Permission required
+  ┃    → Edit util.py
+  ┃
+  ┃  2       return a + b
+  ┃  3
+  ┃  4
+  ┃  5   def greet(name):
+  ┃  6 -     return "hello " + name
+  ┃  6 +     return "hi " + name
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃   Allow once   Allow always   Reject                                     ctrl+f minimize  ⇆ select  enter confirm
+  ┃

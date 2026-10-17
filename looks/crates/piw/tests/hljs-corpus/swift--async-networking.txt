@@ -1,0 +1,60 @@
+import Foundation
+
+enum APIError: Error, LocalizedError {
+    case badURL(String)
+    case status(code: Int, body: String?)
+    case decoding(underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .badURL(let s): return "Bad URL: \(s)"
+        case .status(let code, _): return "Server returned HTTP \(code)"
+        case .decoding(let e): return "Could not decode: \(e.localizedDescription)"
+        }
+    }
+}
+
+struct Weather: Decodable {
+    let city: String
+    let temperatureC: Double
+    let conditions: [String]
+}
+
+actor WeatherClient {
+    private let session: URLSession
+    private var cache: [String: Weather] = [:]
+    static let base = "https://api.example.com/v2"
+
+    init(session: URLSession = .shared) { self.session = session }
+
+    func fetch(city: String) async throws -> Weather {
+        if let hit = cache[city] { return hit }
+        guard let escaped = city.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(Self.base)/weather/\(escaped)") else {
+            throw APIError.badURL(city)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.status(code: (response as? HTTPURLResponse)?.statusCode ?? -1,
+                                  body: String(data: data, encoding: .utf8))
+        }
+        do {
+            let w = try JSONDecoder().decode(Weather.self, from: data)
+            cache[city] = w
+            return w
+        } catch {
+            throw APIError.decoding(underlying: error)
+        }
+    }
+
+    func fetchAll(_ cities: [String]) async -> [Weather] {
+        await withTaskGroup(of: Weather?.self) { group in
+            for c in cities { group.addTask { try? await self.fetch(city: c) } }
+            return await group.reduce(into: []) { if let w = $1 { $0.append(w) } }
+        }
+    }
+}
+
+let cities = ["Zürich", "東京", "São Paulo"]   

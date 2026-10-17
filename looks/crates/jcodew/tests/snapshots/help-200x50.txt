@@ -1,0 +1,50 @@
+┌ Help  0%  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│  Commands                                                                                                                                                                                            │
+│                                                                                                                                                                                                      │
+│    /help  Show help and keyboard shortcuts                                                                                                                                                           │
+│    /?  Show help and keyboard shortcuts                                                                                                                                                              │
+│    /commands  Alias for /help                                                                                                                                                                        │
+│    /model  List or switch models                                                                                                                                                                     │
+│    /models  Alias for /model                                                                                                                                                                         │
+│    /cancel  Cancel the current prompt or operation                                                                                                                                                   │
+│    /clear  Clear conversation history                                                                                                                                                                │
+│    /cls  Clear the view only, keeping context                                                                                                                                                        │
+│    /version  Show current version                                                                                                                                                                    │
+│    /diff  Cycle or set diff display mode (off/inline/full)                                                                                                                                           │
+│    /resume  Open session picker                                                                                                                                                                      │
+│    /sessions  Alias for /resume                                                                                                                                                                      │
+│    /session  Alias for /resume                                                                                                                                                                       │
+│    /quit  Exit wizard                                                                                                                                                                                │
+│                                                                                                                                                                                                      │
+│  ─────────────────────────────────────────────────                                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│  More commands                                                                                                                                                                                       │
+│                                                                                                                                                                                                      │
+│    /mode <genie|sovereign>  switch mode                                                                                                                                                              │
+│    /effort <low|medium|high>  set reasoning effort                                                                                                                                                   │
+│    /plan  toggle plan mode                                                                                                                                                                           │
+│    /compact  summarize older history                                                                                                                                                                 │
+│    /todos  show the todo list                                                                                                                                                                        │
+│    /status  show status                                                                                                                                                                              │
+│    /cost  show cost                                                                                                                                                                                  │
+│    /agents  list subagents                                                                                                                                                                           │
+│                                                                                                                                                                                                      │
+│  ─────────────────────────────────────────────────                                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│  Navigation                                                                                                                                                                                          │
+│                                                                                                                                                                                                      │
+│    PageUp / PageDown     Scroll history                                                                                                                                                              │
+│    Up / Down             Scroll history (when input empty)                                                                                                                                           │
+│    Ctrl+J / Ctrl+K       Jump to next / previous user prompt                                                                                                                                         │
+│    Alt+U / Alt+D         Scroll history up / down ten lines                                                                                                                                          │
+│    Ctrl+G                Set a scroll bookmark, press again to return                                                                                                                                │
+│                                                                                                                                                                                                      │
+│  ─────────────────────────────────────────────────                                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│  Input & Editing                                                                                                                                                                                     │
+│                                                                                                                                                                                                      │
+│    Ctrl+C / Ctrl+D       Quit (press twice to confirm)                                                                                                                                               │
+│    Ctrl+U                Clear input line                                                                                                                                                            │
+│    Ctrl+K                Delete to end of input                                                                                                                                                      │
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

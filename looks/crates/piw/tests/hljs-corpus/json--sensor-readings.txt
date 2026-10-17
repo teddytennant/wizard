@@ -1,0 +1,39 @@
+{
+  "schema": 3,
+  "device": {
+    "id": "esp32-0x1F4A",
+    "location": { "lat": 35.6895, "lon": 139.6917, "alt": -0.25, "label": "東京 \u2014 Shibuya" },
+    "firmware": "1.4.2+build.77",
+    "battery": 0.87,
+    "sleeping": false,
+    "last_error": null
+  },
+  "calibration": {
+    "offset": -0.25,
+    "gain": 1.0001,
+    "coeffs": [1.5e3, -2.25E-4, 3e0, 0.0, -0.0, 6.02214076e23],
+    "ranges": [[0, 100], [-40, 85], [-1.5, 1.5]]
+  },
+  "readings": [
+    { "t": 1727913600, "temp_c": 21.4, "humidity": 48.0, "ok": true },
+    { "t": 1727913660, "temp_c": 21.5, "humidity": 47.8, "ok": true },
+    { "t": 1727913720, "temp_c": -999, "humidity": null, "ok": false, "note": "sensor \"B\" timed out" },
+    { "t": 1727913780, "temp_c": 21.7, "humidity": 47.1, "ok": true }
+  ],
+  "tags": ["indoor", "prototype", "\ud83c\udf21\ufe0f"],
+  "path": "C:\\data\\logs\\2026\\10\\05.log",
+  "notes": "line one\nline two\ttabbed\r\nand a slash \/ escaped",
+  "stats": {
+    "count": 4,
+    "min": -999,
+    "max": 21.7,
+    "mean": 1.5e-1,
+    "histogram": {
+      "<0": 1,
+      "0-20": 0,
+      "20-25": 3
+    }
+  },
+  "empty_object": {},
+  "empty_array": []
+}

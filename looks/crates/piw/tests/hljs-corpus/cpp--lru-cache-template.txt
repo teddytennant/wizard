@@ -1,0 +1,49 @@
+#pragma once
+
+#include <cstddef>  
+#include <list>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+
+namespace acme::cache { 
+
+/// Least-recently-used cache with O(1) get/put.
+template <typename K, typename V, typename Hash = std::hash<K>>
+class LruCache {
+public:
+    explicit LruCache(std::size_t capacity) : capacity_{capacity} {}
+
+    [[nodiscard]] std::optional<V> get(const K& key) {
+        auto it = index_.find(key);
+        if (it == index_.end()) return std::nullopt;
+        items_.splice(items_.begin(), items_, it->second);  // move to front
+        return it->second->second;
+    }
+
+    template <typename U>
+    void put(const K& key, U&& value) {
+        if (auto it = index_.find(key); it != index_.end()) {
+            it->second->second = std::forward<U>(value);
+            items_.splice(items_.begin(), items_, it->second);
+            return;
+        }
+        items_.emplace_front(key, std::forward<U>(value));
+        index_[key] = items_.begin();
+        if (items_.size() > capacity_) {
+            index_.erase(items_.back().first);
+            items_.pop_back();
+        }
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept { return items_.size(); }
+    [[nodiscard]] bool contains(const K& key) const { return index_.count(key) > 0; }
+
+private:
+    using Item = std::pair<K, V>;
+    std::size_t capacity_;
+    std::list<Item> items_;
+    std::unordered_map<K, typename std::list<Item>::iterator, Hash> index_;
+};
+
+}  // namespace acme::cache

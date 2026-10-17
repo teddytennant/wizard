@@ -1,0 +1,50 @@
+package com.example.persistence;
+
+import java.io.Serializable;  
+import java.lang.annotation.*;
+import java.util.*;
+import java.util.function.Function;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE, ElementType.METHOD})
+@interface Audited {
+    String value() default "";
+    String[] tags() default {};
+}
+
+public interface Repository<T extends Entity<ID>, ID extends Serializable & Comparable<ID>> {
+    Optional<T> findById(ID id);
+    List<T> findAll();
+    <S extends T> S save(S entity);
+    void deleteById(ID id);
+
+    default <R> List<R> mapAll(Function<? super T, ? extends R> mapper) {
+        List<R> out = new ArrayList<>();
+        for (T t : findAll()) out.add(mapper.apply(t));
+        return out;
+    }
+}
+
+@Audited(value = "in-memory", tags = {"test", "dev"})
+public class InMemoryRepository<T extends Entity<Long>> implements Repository<T, Long> {
+    private final Map<Long, T> store = new LinkedHashMap<>();
+    private long sequence = 1L;
+    private static final double EPSILON = 1.0e-9;
+    private static final char SEP = '→';
+
+    @Override
+    public Optional<T> findById(Long id) { return Optional.ofNullable(store.get(id)); }
+
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public <S extends T> S save(S entity) {
+        if (entity.getId() == null) {
+            ((Entity) entity).setId(sequence++);
+        }
+        store.put(entity.getId(), entity);
+        return entity;
+    }
+
+    @Override public List<T> findAll() { return new ArrayList<>(store.values()); }
+    @Override public void deleteById(Long id) { store.remove(id); }
+}

@@ -1,0 +1,60 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, RwLock};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum Job {
+    Email { to: String, subject: String },
+    Resize { path: String, #[serde(default)] width: Option<u32> },
+    #[serde(other)]
+    Unknown,
+}
+
+#[async_trait]
+pub trait Handler: Send + Sync + 'static {
+    type Output: Send;
+    const NAME: &'static str;
+
+    async fn handle(&self, job: Job) -> anyhow::Result<Self::Output>;
+
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(30)
+    }
+}
+
+pub struct Registry<H: Handler> {
+    handler: Arc<H>,
+    seen: RwLock<HashMap<String, usize>>,
+}
+
+impl<H> Registry<H>
+where
+    H: Handler,
+    H::Output: std::fmt::Debug,
+{
+    pub fn new(handler: H) -> Self {
+        Self { handler: Arc::new(handler), seen: RwLock::default() }
+    }
+
+    pub async fn run(&self, mut rx: mpsc::Receiver<Job>) {
+        while let Some(job) = rx.recv().await {
+            let kind = match &job {
+                Job::Email { .. } => "email",
+                Job::Resize { width: Some(w), .. } if *w > 4096 => "huge-resize",
+                Job::Resize { .. } => "resize",
+                Job::Unknown => continue,
+            };
+            *self.seen.write().await.entry(kind.to_owned()).or_insert(0) += 1;
+            let h = Arc::clone(&self.handler);
+            let res = tokio::time::timeout(h.timeout(), h.handle(job)).await;
+            match res {
+                Ok(Ok(out)) => tracing::info!(handler = H::NAME, ?out, "done ✓"),
+                Ok(Err(e)) => tracing::error!(error = %e, "job failed"),
+                Err(_elapsed) => tracing::warn!("timed out after {:?}", h.timeout()),
+            }
+        }
+    }
+}

@@ -1,0 +1,41 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                                                      0 / 256K
+
+
+                                     ┌─ Commands ──────────────────────────────────────────────────────── [✗] ─┐
+                                     │                                                                         │
+                                     │   search:                                                               │
+                                     │─────────────────────────────────────────────────────────────────────────│
+                                     │   Session ───────────────────────────────────────────────────────────  █│
+                                     │  ◆ New Session                                                Ctrl+N   █│
+                                     │  ◆ New Session in Worktree                         Ctrl+P → worktree   █│
+                                     │  ◆ Agent Dashboard                                        /dashboard   █│
+                                     │  ◆ Back to Home                                                /home   █│
+                                     │  ◆ Delete This Session                                       /delete   █│
+                                     │  ◆ Resume Session                                            /resume   █│
+                                     │  ◆ Rename Session                                           /rename    █│
+                                     │  ◆ Session Info                                        /session-info   █│
+                                     │  ◆ Send Feedback                                           /feedback   █│
+                                     │                                                                        █│
+                                     │   Context ───────────────────────────────────────────────────────────  █│
+                                     │  ◆ Compact History                                          /compact   █│
+                                     │  ◆ Context Usage                                            /context   █│
+                                     │  ◆ View Plan                                              /view-plan   █│
+                                     │  ◆ Memory                                                    /memory   █│
+                                     │                                                                        █│
+                                     │   Model & Input ─────────────────────────────────────────────────────  █│
+                                     │  ◆ Switch Model                                               /model   █│
+                                     │  ◆ Always Approve Mode                               /always-approve    │
+                                     │  ◆ Multiline Input                                        /multiline    │
+                                     │  ◆ Edit Prompt in External Editor                       /edit-prompt    │
+                                     │                                                                         │
+                                     │   Tools ─────────────────────────────────────────────────────────────   │
+                                     │  ◆ Hooks                                                      /hooks    │
+                                     │  ◆ Plugins                                                  /plugins    │
+                                     │  ◆ Marketplace                                          /marketplace    │
+                                     │                                                                         │
+  ╭──────────────────────────────────│                 ↑/↓ nav  |  Enter select  |  Esc close                  │───────────────────────────────────╮
+  │ ❯                                └─────────────────────────────────────────────────────────────────────────┘                                   │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

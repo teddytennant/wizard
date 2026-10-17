@@ -1,0 +1,44 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+record Sale(string Region, string Product, int Units, double Price, DateOnly Day);
+
+static class Report
+{
+    static readonly Regex LineRx = new(@"^(?<region>\w+),(?<product>[^,]+),(?<units>\d+),(?<price>\d+\.\d{2}),(?<day>\d{4}-\d{2}-\d{2})$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    static void Main(string[] args)
+    {
+        var text = File.ReadAllText(args.Length > 0 ? args[0] : "sales.csv");
+        var sales = LineRx.Matches(text)
+            .Select(m => new Sale(
+                m.Groups["region"].Value,
+                m.Groups["product"].Value,
+                int.Parse(m.Groups["units"].Value),
+                double.Parse(m.Groups["price"].Value),
+                DateOnly.Parse(m.Groups["day"].Value)))
+            .ToList();
+
+        var byRegion =
+            from s in sales
+            where s.Units > 0
+            group s by s.Region into g
+            let revenue = g.Sum(x => x.Units * x.Price)
+            orderby revenue descending
+            select new { Region = g.Key, Revenue = revenue, Best = g.MaxBy(x => x.Units)!.Product };
+
+        foreach (var r in byRegion)
+            Console.WriteLine($"{r.Region,-10}{r.Revenue,12:N2}  best: {r.Best}");
+
+        var banner = @"
+  === Quarterly report ===
+  ""Q3"" — résumé 📈
+";
+        Console.WriteLine(banner);
+        char tab = '\t'; char quote = '\'';
+        Console.WriteLine($"{tab}{quote}done{quote} {0b1010_1010} {0xFF_FFL} {1.5e3f}");
+    }
+}

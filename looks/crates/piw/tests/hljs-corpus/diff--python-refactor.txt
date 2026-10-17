@@ -1,0 +1,34 @@
+diff --git a/app/billing/invoice.py b/app/billing/invoice.py
+index 91d3e6f..2c4b7a0 100644
+--- a/app/billing/invoice.py
++++ b/app/billing/invoice.py
+@@ -1,12 +1,14 @@
+ """Invoice rendering."""
+-import datetime
+-from decimal import Decimal
++from __future__ import annotations
++
++from datetime import date, timedelta
++from decimal import ROUND_HALF_UP, Decimal
+ 
+ from app.models import Customer, LineItem
+ 
+ TAX_RATE = Decimal("0.0825")
+ 
+ 
+-def total(items):
+-    return sum(i.qty * i.price for i in items) * (1 + TAX_RATE)
++def total(items: list[LineItem]) -> Decimal:
++    subtotal = sum((i.qty * i.price for i in items), Decimal(0))
++    return (subtotal * (1 + TAX_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+@@ -30,7 +32,7 @@ def due_date(customer: Customer) -> date:
+-    return datetime.date.today() + datetime.timedelta(days=30)
++    return date.today() + timedelta(days=customer.terms_days or 30)
+@@ -58,6 +60,8 @@ def render(customer, items):
+     lines = []
+     for it in items:
+-        lines.append("%-30s %5d  %8.2f" % (it.name, it.qty, it.price))
++        lines.append(f"{it.name:<30} {it.qty:>5}  {it.price:>8.2f}")
++    if not lines:
++        lines.append("(no items) — nothing to bill")
+     return "\n".join(lines)

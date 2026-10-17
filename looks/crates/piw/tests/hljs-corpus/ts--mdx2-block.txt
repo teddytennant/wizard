@@ -1,0 +1,4 @@
+interface User { id: number; name?: string }
+type Id = string | number;
+export const f = <T,>(x: T): T => x;
+enum Color { Red, Green }

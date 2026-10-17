@@ -1,0 +1,58 @@
+use std::iter::Peekable;
+use std::str::CharIndices;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Token<'src> {
+    Ident(&'src str),
+    Int(i64),
+    Punct(char),
+    Eof,
+}
+
+#[derive(Debug)]
+pub struct LexError {
+    pub offset: usize,
+    pub msg: &'static str,
+}
+
+pub struct Lexer<'src> {
+    src: &'src str,
+    chars: Peekable<CharIndices<'src>>,
+}
+
+impl<'src> Lexer<'src> {
+    pub fn new(src: &'src str) -> Self {
+        Lexer { src, chars: src.char_indices().peekable() }
+    }
+
+    fn take_while<F: FnMut(char) -> bool>(&mut self, start: usize, mut pred: F) -> &'src str {
+        let mut end = start;
+        while let Some(&(i, c)) = self.chars.peek() {
+            if !pred(c) {
+                break;
+            }
+            end = i + c.len_utf8();
+            self.chars.next();
+        }
+        &self.src[start..end]
+    }
+
+    pub fn next_token(&mut self) -> Result<Token<'src>, LexError> {
+        while matches!(self.chars.peek(), Some((_, c)) if c.is_whitespace()) {
+            self.chars.next();
+        }
+        let Some((i, c)) = self.chars.next() else { return Ok(Token::Eof) };
+        match c {
+            'a'..='z' | 'A'..='Z' | '_' => {
+                let rest = self.take_while(i + c.len_utf8(), |c| c.is_alphanumeric() || c == '_');
+                Ok(Token::Ident(&self.src[i..i + c.len_utf8() + rest.len()]))
+            }
+            '0'..='9' => {
+                let digits = self.take_while(i, |c| c.is_ascii_digit() || c == '_');
+                digits.replace('_', "").parse().map(Token::Int).map_err(|_| LexError { offset: i, msg: "bad int" })
+            }
+            '+' | '-' | '*' | '/' | '(' | ')' | ',' | ';' => Ok(Token::Punct(c)),
+            _ => Err(LexError { offset: i, msg: "unexpected character" }),
+        }
+    }
+}

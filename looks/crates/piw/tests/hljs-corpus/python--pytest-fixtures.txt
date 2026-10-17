@@ -1,0 +1,60 @@
+import json
+import sqlite3
+import sys
+import pytest
+
+pytestmark = pytest.mark.usefixtures("db")
+
+
+@pytest.fixture(scope="session")
+def schema() -> str:
+    return """
+        CREATE TABLE users (
+            id    INTEGER PRIMARY KEY,
+            name  TEXT NOT NULL,
+            email TEXT UNIQUE
+        );
+    """
+
+
+@pytest.fixture  
+def db(schema, tmp_path):
+    path = tmp_path / "test.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.executescript(schema)
+    yield conn
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "name, email, ok",
+    [
+        ("Ada", "ada@example.org", True),
+        ("Zoë", "zoe@example.org", True),
+        ("", "x@y.z", False),
+        ("李雷", None, True),
+    ],
+    ids=["ascii", "accent", "empty", "cjk"],
+)
+def test_insert_user(db, name, email, ok):
+    if not ok:
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO users (name, email) VALUES (NULL, ?)", (email,))  
+        return
+    cur = db.execute("INSERT INTO users (name, email) VALUES (?, ?)", (name, email))
+    assert cur.lastrowid >= 1, f"bad rowid {cur.lastrowid!r}"
+
+
+class TestExport:
+    def test_json_roundtrip(self, db):
+        db.execute("INSERT INTO users (name) VALUES ('O''Brien')")
+        rows = [dict(zip(("id", "name"), r)) for r in db.execute("SELECT id, name FROM users")]
+        blob = json.dumps(rows)
+        assert json.loads(blob) == rows
+        assert '"O\'Brien"' not in blob
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="posix only \U0001F427")
+    def test_perm(self, tmp_path):
+        p = tmp_path / "f"
+        p.touch(mode=0o600)
+        assert p.stat().st_mode & 0o777 == 0o600

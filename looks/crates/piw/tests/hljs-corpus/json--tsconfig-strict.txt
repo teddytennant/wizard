@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@components/*": ["src/components/*"],
+      "~types": ["src/types/index.d.ts"]
+    },
+    "types": ["node", "vite/client"],
+    "plugins": [
+      { "name": "typescript-plugin-css-modules" },
+      { "name": "@styled/typescript-styled-plugin", "tags": ["styled", "css"] }
+    ]
+  },
+  "include": ["src/**/*", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.stories.tsx"],
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "../shared" }
+  ],
+  "ts-node": {
+    "esm": true,
+    "transpileOnly": false
+  }
+}

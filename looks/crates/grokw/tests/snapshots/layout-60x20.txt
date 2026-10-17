@@ -1,0 +1,19 @@
+
+  main /tmp/grok-harvest-000000/proj
+
+     New worktree                                 ctrl+w
+     Resume session                               ctrl+r
+     Changelog
+     Quit                                         ctrl+q
+
+     Grok 4.7 is here!
+     Select 'Grok 4.7' under /model.
+
+ Tip: Start Grok in a fresh worktree with `-w`; add `-r
+ <session-id>` to resume an existing session there.
+
+ ╭────────────────────────────────────────────────────────╮
+ │ ❯                                                      │
+ ╰───────────────────────────────────── Grok 4.7 (xhigh) ─╯
+
+                                        Wizard  0.0 [alpha]

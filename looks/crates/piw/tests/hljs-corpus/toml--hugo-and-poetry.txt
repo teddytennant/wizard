@@ -1,0 +1,47 @@
+baseURL = "https://blog.example.org/"
+languageCode = "fr-FR"
+title = "Mon blog ✍️"
+theme = "paper"
+paginate = 10
+enableRobotsTXT = true
+defaultContentLanguage = "fr"
+
+[params]
+  author = "Zoë"
+  description = "Notes sur le code & le café"
+  mainSections = ["posts"]
+  showToc = true
+  [params.social]  
+    github = "zoe"
+    mastodon = "https://mastodon.example/@zoe"
+
+[[menu.main]]
+  name = "Accueil"
+  url = "/"
+  weight = 10
+
+[[menu.main]]
+  name = "À propos"
+  url = "/about/"
+  weight = 20
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+[markup.highlight]
+  style = "monokai"  
+  lineNos = false
+  tabWidth = 4
+
+[tool.poetry]
+name = "blog-tools"
+version = "0.1.0"
+packages = [{ include = "blog_tools", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+markdown = { version = ">=3.5", extras = ["extra"] }
+pillow = { version = "10.*", markers = "sys_platform != 'win32'" }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"

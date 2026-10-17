@@ -1,0 +1,23 @@
+
+   main /tmp/grok-harvest-000000/proj                             1.5K / 256K
+
+
+            ┌─ How-to Guides ──────────────────────────────── [✗] ─┐
+            │                                                      │
+            │   / to search                                        │
+            │──────────────────────────────────────────────────────│
+            │  ◆ Getting …  Installation, first launch, and bas…   │
+            │  ◆ Keyboard…  Complete reference for all TUI key …   │
+            │                                                      │
+            │                                                      │
+            │                                                      │
+            │                                                      │
+            │                                                      │
+            │                                                      │
+            Tip · Ask Wizard about the docs · /tmp/grokw-docs-test/docs/user-gui
+            │                                                      │
+  ╭─────────│        ↑/↓ nav  |  Enter select  |  Esc close        │─────────╮
+  │ ❯       └──────────────────────────────────────────────────────┘         │
+  ╰──────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

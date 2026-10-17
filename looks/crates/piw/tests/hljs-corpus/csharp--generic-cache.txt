@@ -1,0 +1,48 @@
+using System;
+using System.Collections.Concurrent;
+
+namespace Util.Caching;
+
+public interface ICache<in TKey, TValue> where TKey : notnull
+{
+    bool TryGet(TKey key, out TValue? value);
+    void Set(TKey key, TValue value, TimeSpan ttl);
+}
+
+public sealed class MemoryCache<TKey, TValue> : ICache<TKey, TValue>
+    where TKey : notnull
+{
+    private readonly ConcurrentDictionary<TKey, (TValue Value, DateTime Expires)> _map = new();
+    private readonly Func<DateTime> _clock;
+
+    public MemoryCache(Func<DateTime>? clock = null)
+    {
+        _clock = clock ?? (() => DateTime.UtcNow);
+    }
+
+    public int Count => _map.Count;
+
+    public bool TryGet(TKey key, out TValue? value)
+    {
+        if (_map.TryGetValue(key, out var entry) && entry.Expires > _clock())
+        {
+            value = entry.Value;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
+    public void Set(TKey key, TValue value, TimeSpan ttl) =>
+        _map[key] = (value, _clock() + ttl);
+
+    public TValue GetOrAdd(TKey key, Func<TKey, TValue> factory, TimeSpan ttl)
+    {
+        if (TryGet(key, out var hit) && hit is not null) return hit;
+        var made = factory(key);
+        Set(key, made, ttl);
+        return made;
+    }
+
+    public override string ToString() => $"MemoryCache<{typeof(TKey).Name},{typeof(TValue).Name}>[{Count}] \u2014 ok ✅";
+}

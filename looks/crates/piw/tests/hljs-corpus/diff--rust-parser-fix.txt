@@ -1,0 +1,47 @@
+diff --git a/src/parser.rs b/src/parser.rs
+index 3f2a9c1..b84e07d 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -41,9 +41,14 @@ impl<'a> Parser<'a> {
+     fn parse_number(&mut self) -> Result<Token, ParseError> {
+         let start = self.pos;
+-        while self.peek().is_ascii_digit() {
++        while matches!(self.peek(), '0'..='9' | '_') {
+             self.pos += 1;
+         }
+-        let text = &self.src[start..self.pos];
+-        Ok(Token::Int(text.parse().unwrap()))
++        let text: String = self.src[start..self.pos].chars().filter(|c| *c != '_').collect();  
++        let n = text
++            .parse::<i64>()
++            .map_err(|e| ParseError::BadNumber { at: start, source: e })?;
++        Ok(Token::Int(n))
+     }
+ 
+     fn skip_ws(&mut self) {
+@@ -88,7 +93,7 @@ impl<'a> Parser<'a> {
+         match self.peek() {
+             '"' => self.parse_string(),
+-            c if c.is_alphabetic() => self.parse_ident(),
++            c if c.is_alphabetic() || c == '_' => self.parse_ident(),
+             _ => Err(ParseError::Unexpected(self.peek())),
+         }
+     }
+diff --git a/tests/numbers.rs b/tests/numbers.rs
+new file mode 100644
+index 0000000..9a1c5d2
+--- /dev/null
++++ b/tests/numbers.rs
+@@ -0,0 +1,12 @@
++use mylang::parse;
++
++#[test]
++fn underscores_are_ignored() {
++    assert_eq!(parse("1_000_000").unwrap(), Token::Int(1_000_000));
++}
++
++#[test]
++fn overflow_is_an_error() { // débordement
++    let err = parse("99999999999999999999").unwrap_err();
++    assert!(matches!(err, ParseError::BadNumber { .. }));
++}

@@ -1,0 +1,51 @@
+#include <iostream>
+#include <regex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+using namespace std::string_literals;
+using namespace std::literals::string_view_literals;
+
+namespace {
+
+constexpr auto kHeader = R"(HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+X-Note: backslashes \n stay literal here)"sv;
+
+const std::string kJsonTemplate = R"json({
+  "name": "%s",
+  "path": "C:\temp\new",
+  "pattern": "^\d+(\.\d+)?$"
+})json";
+
+const std::regex kEmail{R"(([\w.+-]+)@([\w-]+\.)+[a-z]{2,})", std::regex::icase};
+const std::regex kSemver{R"re(^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$)re"};
+
+}  // namespace
+
+struct Version {
+	int major = 0, minor = 0, patch = 0;
+	std::string pre;
+};
+
+std::optional<Version> parse_version(const std::string& s)
+{
+	std::smatch m;
+	if (!std::regex_match(s, m, kSemver)) return std::nullopt;
+	return Version{std::stoi(m[1]), std::stoi(m[2]), std::stoi(m[3]), m[4].str()};
+}
+
+int main()
+{
+	const std::string text = "contact: ann@example.org, bob.smith+tag@mail.example.co.uk — 日本語 ok 🙂";
+	for (std::sregex_iterator it{text.begin(), text.end(), kEmail}, end; it != end; ++it) {
+		std::cout << "found " << it->str() << " at " << it->position() << '\n';
+	}
+	if (auto v = parse_version("v1.22.3-rc.1"s)) {
+		std::cout << v->major << '.' << v->minor << '.' << v->patch << " [" << v->pre << "]\n";
+	}
+	char buf[256];
+	std::snprintf(buf, sizeof buf, kJsonTemplate.c_str(), "demo\t\"quoted\"");
+	std::cout << kHeader << "\n" << buf << std::endl;
+}

@@ -1,0 +1,49 @@
+; This is the main PHP configuration file.
+; Lines beginning with a semicolon are comments.
+
+[PHP]
+engine = On
+short_open_tag = Off
+precision = 14
+output_buffering = 4096
+zlib.output_compression = Off
+implicit_flush = Off
+serialize_precision = -1
+disable_functions = exec,passthru,shell_exec,system,proc_open,popen
+expose_php = Off
+max_execution_time = 30  
+memory_limit = 128M
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+display_errors = Off
+log_errors = On
+error_log = "/var/log/php/error.log"
+html_errors = Off
+variables_order = "GPCS"
+post_max_size = 8M
+include_path = ".:/usr/share/php:/usr/share/pear"
+upload_max_filesize = 2M
+max_file_uploads = 20
+date.timezone = "Europe/Paris"
+default_charset = "UTF-8"
+
+[Session]
+session.save_handler = files
+session.save_path = "/var/lib/php/sessions"
+session.use_strict_mode = 1
+session.cookie_httponly = 1
+session.gc_maxlifetime = 1440
+session.name = "SESSÏD"
+
+[opcache]
+opcache.enable=1
+opcache.memory_consumption=0x80   ; 128 MB
+opcache.validate_timestamps = 0
+# hash-style comment, accepted by many parsers
+opcache.blacklist_filename=/etc/php/opcache-blacklist.txt   
+
+[MySQLi]
+mysqli.default_port = 3306
+mysqli.default_socket =
+mysqli.default_host =
+mysqli.default_pw = "p@ss;word=#1"
+mysqli.reconnect = Off

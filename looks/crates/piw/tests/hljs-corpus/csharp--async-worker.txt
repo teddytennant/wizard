@@ -1,0 +1,53 @@
+using System.Threading.Channels;
+
+namespace Workers;
+
+public abstract class Job
+{
+    public Guid Id { get; } = Guid.NewGuid();
+    public abstract Task RunAsync(CancellationToken ct);
+}
+
+public sealed class Worker : BackgroundService
+{
+    private readonly Channel<Job> _queue = Channel.CreateBounded<Job>(new BoundedChannelOptions(128)
+    {
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleReader = true,
+    });
+    private readonly ILogger<Worker> _log;
+
+    public Worker(ILogger<Worker> log) { _log = log; }
+
+    public ValueTask EnqueueAsync(Job job) => _queue.Writer.WriteAsync(job);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await foreach (var job in _queue.Reader.ReadAllAsync(stoppingToken))
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(30));
+                await job.RunAsync(cts.Token);
+                _log.LogInformation($"Job {job.Id} finished");
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Job {Job} failed: {Msg}", job.Id, ex.Message);
+                await Task.Delay(250 * (int)Math.Pow(2, 3), stoppingToken);   
+            }
+        }
+    }
+}
+
+#if DEBUG
+internal static class Debugging
+{
+    public const string Banner = "worker started — ñandú 🦆";
+}
+#endif

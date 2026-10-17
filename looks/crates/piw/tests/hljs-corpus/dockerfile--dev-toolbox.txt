@@ -1,0 +1,37 @@
+FROM ubuntu:24.04
+LABEL maintainer="dev@example.org" version="1.0" description="Dev toolbox"
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+ENV EDITOR vim
+ENV PATH=/opt/tools/bin:$PATH
+
+# Base tools, outils de base. One RUN so the apt cache never lands in a layer. ✨
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        curl wget git vim tmux jq \
+        build-essential python3 python3-pip \
+        locales ; \
+    locale-gen en_US.UTF-8 fr_FR.UTF-8 ; \
+    rm -rf /var/lib/apt/lists/*  
+
+RUN curl -fsSL "https://example.org/dl/tool-${TARGETARCH}.tar.gz" -o /tmp/tool.tgz \
+    && echo "d2d2e4a7c1f0  /tmp/tool.tgz" | sha256sum -c - \
+    && mkdir -p /opt/tools \
+    && tar -xzf /tmp/tool.tgz -C /opt/tools --strip-components=1 \
+    && rm /tmp/tool.tgz
+
+COPY --chmod=0755 scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY ["config/vimrc", "config/tmux.conf", "/root/"]
+ADD motd.txt /etc/motd
+RUN printf 'Bienvenue \xe2\x9c\xa8\n' >> /etc/motd
+WORKDIR /workspace
+VOLUME /workspace
+EXPOSE 22 8000-8010
+SHELL ["/bin/bash", "-c"]
+RUN echo "shell form" && ls -la \
+    # inline comment in a continuation
+    && echo done   
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["bash", "-l"]

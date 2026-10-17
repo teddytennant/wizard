@@ -1,0 +1,59 @@
+package com.example.shop.orders;
+
+import java.math.BigDecimal;  
+import java.time.Instant;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Coordinates order placement.
+ *
+ * <p>All monetary values use {@link BigDecimal}; see {@code Money} for rounding.
+ *
+ * @author Zoë Müller
+ * @since 2.4
+ */
+@Service
+public class OrderService {
+
+    private static final BigDecimal TAX_RATE = new BigDecimal("0.0825");
+    private static final int MAX_LINES = 0x40;
+
+    private final OrderRepository repository;
+    private final Map<String, List<Order>> cache = new HashMap<>();
+
+    public OrderService(OrderRepository repository) {
+        this.repository = Objects.requireNonNull(repository, "repository");
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public Order place(Customer customer, List<LineItem> items) throws OrderException {
+        if (items.isEmpty() || items.size() > MAX_LINES) {
+            throw new OrderException("Invalid line count: " + items.size());
+        }
+        BigDecimal subtotal = items.stream()
+                .map(i -> i.unitPrice().multiply(BigDecimal.valueOf(i.quantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal total = subtotal.add(subtotal.multiply(TAX_RATE));
+        Order order = new Order(UUID.randomUUID(), customer.id(), items, total, Instant.now());
+        return repository.save(order);
+    }
+
+    /* Group totals by customer — only for the last 30 days. */
+    public Map<String, BigDecimal> totalsByCustomer(Collection<Order> orders) {
+        return orders.stream()
+                .filter(o -> o.createdAt().isAfter(Instant.now().minusSeconds(30L * 24 * 3600)))
+                .collect(Collectors.groupingBy(
+                        o -> o.customerId().toString(),
+                        TreeMap::new,
+                        Collectors.reducing(BigDecimal.ZERO, Order::total, BigDecimal::add)));
+    }
+
+    @Override
+    public String toString() {
+        return "OrderService[cache=%d, note=\"café ☕\"]".formatted(cache.size());
+    }
+}

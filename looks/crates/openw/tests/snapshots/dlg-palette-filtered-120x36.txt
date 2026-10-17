@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  th
+
+                                  System
+                                  Exit the app                ctrl+c, ctrl+d, ctrl+x q
+                                  Switch theme                                ctrl+x t
+                       ┃          Lock theme mode
+                       ┃  Ask     Switch to light mode
+                       ┃          Write heap snapshot
+                       ┃  Buil
+                       ╹▀▀▀▀▀▀    Agent                                                   ▀▀▀▀▀▀▀▀
+                                  Switch model                                ctrl+x m    commands
+                                  Switch agent                                ctrl+x a
+
+                                  Session
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

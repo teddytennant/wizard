@@ -1,0 +1,41 @@
+
+  ┃                                                                                                           first
+  ┃  first
+  ┃                                                                                                           Context
+                                                                                                              0 tokens
+     working                                                                                                  0% used
+                                                                                                              $0.00 spent
+  ┃
+  ┃  second                                                                                                   LSP
+  ┃   QUEUED                                                                                                  LSPs are disabled
+  ┃
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth                                                                               /home/me/proj:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ■⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                     tab agents  ctrl+p commands    • wizard 0.0

@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+     Environment
+       terminal     Unknown
+       multiplexer  tmux
+       ssh          no
+       color        truecolor
+       themes       all
+
+     Clipboard
+       native       unavailable
+       tmux         on
+       osc 52       unknown
+
+     Issues (1)
+
+       ! terminal.dcs-passthrough  `allow-passthrough` is off in tmux, which can block clipboard copies in nested
+     sessions
+           Add `set -wg allow-passthrough on` to ~/.tmux.conf
+           Note: Reload tmux with `tmux source-file ~/.tmux.conf`, or restart the tmux server.
+
+
+
+
+
+
+
+
+
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                                                                │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+.:shortcuts

@@ -1,0 +1,26 @@
+order_id,date,customer,country,product,quantity,unit_price,currency,notes
+10001,2024-01-03,"Dupont, Marie",FR,Café en grains 1kg,2,18.90,EUR,
+10002,2024-01-03,Ito Kenji,JP,抹茶パウダー 100g,5,1250,JPY,"gift wrap, ""fragile"""
+10003,2024-01-04,Alice Smith,US,Ceramic mug,4,12.50,USD,
+10004,2024-01-05,Müller GmbH,DE,Espresso machine,1,349.00,EUR,"invoice #2024-0012"
+10005,2024-01-05,Carlos Ñúñez,ES,Tamper (58mm),3,24.99,EUR,
+10006,2024-01-06,Bob O'Brien,IE,Filter papers (100),10,4.20,EUR,backordered   
+10007,2024-01-08,"Smith, John",GB,Milk frother,1,59.00,GBP,
+10008,2024-01-08,Li Wei,CN,龙井茶 250g,2,88.00,CNY,"expedited
+second line of note"
+10009,2024-01-09,Sofía Rojas,MX,Ceramic mug,6,12.50,USD,
+10010,2024-01-10,Dupont Marie,FR,Café en grains 1kg,1,18.90,EUR,repeat customer
+10011,2024-01-12,Ana Costa,PT,Pastel de nata mold,2,7.75,EUR,
+10012,2024-01-12,Noah Brown,CA,Espresso machine,1,429.00,CAD,"2-year warranty"
+10013,2024-01-15,Åsa Lindqvist,SE,Grinder (burr),1,199.00,EUR,
+10014,2024-01-16,Ito Kenji,JP,急須 (kyusu),1,3400,JPY,☕
+10015,2024-01-17,Alice Smith,US,Café en grains 1kg,3,18.90,USD,
+10016,2024-01-18,Tomás Pereira,PT,Filter papers (100),5,4.20,EUR,
+10017,2024-01-19,"Kim, Soo-jin",KR,Ceramic mug,2,12.50,USD,
+10018,2024-01-22,Bob O'Brien,IE,Tamper (58mm),1,24.99,EUR,
+10019,2024-01-23,Müller GmbH,DE,Milk frother,2,59.00,EUR,"net 30"
+10020,2024-01-25,Emma Johnson,AU,Grinder (burr),1,199.00,AUD,
+10021,2024-01-26,Li Wei,CN,龙井茶 250g,4,88.00,CNY,
+10022,2024-01-29,Sofía Rojas,MX,Pastel de nata mold,1,7.75,EUR,"returned 2024-02-02"
+10023,2024-01-30,Carlos Ñúñez,ES,Espresso machine,1,349.00,EUR,
+10024,2024-01-31,Ana Costa,PT,Café en grains 1kg,6,18.90,EUR,bulk

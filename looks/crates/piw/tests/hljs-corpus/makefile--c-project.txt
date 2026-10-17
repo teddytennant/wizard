@@ -1,0 +1,49 @@
+# Build a small C library and its test binary.
+CC      ?= gcc
+AR      := ar
+CFLAGS  := -std=c11 -Wall -Wextra -Wpedantic -O2 \
+           -Iinclude -DVERSION=\"$(VERSION)\"
+LDFLAGS :=
+VERSION := $(shell git describe --tags --always 2>/dev/null || echo 0.0.0)
+
+SRC_DIR := src
+OBJ_DIR := build
+SRCS    := $(wildcard $(SRC_DIR)/*.c)
+OBJS    := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+DEPS    := $(OBJS:.o=.d)
+
+ifeq ($(DEBUG),1)
+  CFLAGS += -g -O0 -fsanitize=address,undefined
+  LDFLAGS += -fsanitize=address,undefined
+else
+  CFLAGS += -DNDEBUG
+endif
+
+.PHONY: all clean test install
+
+all: libfoo.a
+
+libfoo.a: $(OBJS)
+	$(AR) rcs $@ $^
+	@echo "built $@ ($(words $(OBJS)) objects)"
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(OBJ_DIR):
+	mkdir -p $@
+
+test: tests/run
+	./$<
+
+tests/run: tests/run.c libfoo.a
+	$(CC) $(CFLAGS) $< -L. -lfoo $(LDFLAGS) -o $@
+
+install: libfoo.a
+	install -d $(DESTDIR)$(PREFIX)/lib   
+	install -m 644 $< $(DESTDIR)$(PREFIX)/lib/
+
+clean:
+	-rm -rf $(OBJ_DIR) libfoo.a tests/run
+
+-include $(DEPS)

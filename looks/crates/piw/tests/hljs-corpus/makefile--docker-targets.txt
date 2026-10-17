@@ -1,0 +1,45 @@
+# Docker-driven workflow for the api service
+IMAGE      ?= registry.example.com/team/api
+TAG        ?= $(shell git rev-parse --short HEAD)
+COMPOSE    := docker compose -f deploy/compose.yml
+ENV_FILE   := .env
+
+# pull in local overrides if present
+-include local.mk
+
+export DOCKER_BUILDKIT = 1
+
+.DEFAULT_GOAL := help
+.PHONY: help build push up down logs shell lint
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
+				awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+build: ## Build the image
+	docker build --pull \
+			--build-arg COMMIT=$(TAG) \
+			--label org.opencontainers.image.revision=$(TAG) \
+			-t $(IMAGE):$(TAG) -t $(IMAGE):latest .
+
+push: build ## Push tags to the registry
+	docker push $(IMAGE):$(TAG)
+	docker push $(IMAGE):latest
+
+up: ## Start the stack
+ifeq ($(wildcard $(ENV_FILE)),)
+	$(error $(ENV_FILE) missing, copy .env.example first)
+endif
+	$(COMPOSE) up -d --remove-orphans
+
+down: ## Stop the stack
+	$(COMPOSE) down -v
+
+logs: ## Tail logs
+	$(COMPOSE) logs -f --tail=100 api
+
+shell: ## Open a shell in the api container
+	$(COMPOSE) exec api sh -c 'echo "héllo from $$HOSTNAME 🐳" && exec sh'
+
+lint:
+	docker run --rm -v "$(CURDIR)":/src -w /src hadolint/hadolint hadolint Dockerfile

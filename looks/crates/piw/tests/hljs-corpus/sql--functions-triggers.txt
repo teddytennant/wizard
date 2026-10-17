@@ -1,0 +1,40 @@
+/* Audit trigger for the inventory table */
+CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at := now();
+    IF TG_OP = 'UPDATE' AND NEW.qty < 0 THEN
+        RAISE EXCEPTION 'quantity cannot be negative: %', NEW.qty;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_inventory_touch
+    BEFORE INSERT OR UPDATE ON inventory
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+-- Recursive org chart
+WITH RECURSIVE chain(id, manager_id, name, depth, path) AS (
+    SELECT id, manager_id, name, 0, ARRAY[id]
+    FROM   employees
+    WHERE  manager_id IS NULL
+    UNION ALL
+    SELECT e.id, e.manager_id, e.name, c.depth + 1, c.path || e.id
+    FROM   employees e
+    JOIN   chain c ON e.manager_id = c.id
+    WHERE  NOT e.id = ANY(c.path)
+)
+SELECT repeat('  ', depth) || name AS org,
+       NTILE(4) OVER (ORDER BY depth, name) AS quartile,
+       FIRST_VALUE(name) OVER w AS first_in_level,
+       0.5 AS half, -17 AS neg, 0xFF AS hex_val, 6.02E23 AS big
+FROM   chain
+WINDOW w AS (PARTITION BY depth ORDER BY name)
+ORDER BY path;
+
+SELECT "order", "group", 'naïve café ☕' AS note
+FROM   "Order Details"
+WHERE  "group" = 'a''b'   
+HAVING COUNT(*) > 1;
+
+GRANT SELECT, INSERT ON inventory TO app_rw;

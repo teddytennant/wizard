@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                        0 / 256K
+
+
+                    ┌─ Keyboard Shortcuts ─────────────────────────────────────────────────── [✗] ─┐
+                    │                                                                              │
+                    │   / to search                                                                │
+                    │──────────────────────────────────────────────────────────────────────────────│
+                    │  ◆ Essentials                                                                │
+                    │    ◆ Send                                                            Enter   │
+                    │    ◆ Focus scrollback                                                  Tab   │
+                    │    ◆ Cancel turn                                                    Ctrl+c   │
+                    │    ◆ Cycle mode (Normal / Plan / Always-approve)                 Shift+Tab   │
+                    │    ◆ Quit                                                  Ctrl+q / Ctrl+d   │
+                    │    ◆ Command palette                                            Ctrl+p / ?   │
+                    │    ◆ Keyboard shortcuts                                    Ctrl+. / Ctrl+x   │
+                    │    ◆ Open the settings modal                         F2 / Ctrl+, / Super+,   │
+                    │  › Input (0)                                                                 │
+                    │  › Conversation Navigation (0)                                               │
+                    │  › Panels (0)                                                                │
+                    │  › Session (0)                                                               │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │          ↑/↓ nav  |  f show all  |  e/Space/→ expand  |  ← collapse          │
+  ╭─────────────────│                   Enter details  |  / search  |  Esc close                   │─────────────────╮
+  │ ❯               └──────────────────────────────────────────────────────────────────────────────┘                 │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+

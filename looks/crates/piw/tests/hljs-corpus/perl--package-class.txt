@@ -1,0 +1,58 @@
+package Shape::Circle;
+
+use strict;
+use warnings;
+use Carp qw(croak);
+use constant PI => 4 * atan2(1, 1);
+use parent -norequire, 'Shape';
+
+our $VERSION = '1.04';
+
+=pod
+
+=head1 NAME
+
+Shape::Circle - a circle with a radius and a centre
+
+=head1 SYNOPSIS
+
+    my $c = Shape::Circle->new(radius => 2.5, centre => [0, 0]);
+    printf "%.2f\n", $c->area;
+
+=cut
+
+sub new {
+    my ($class, %args) = @_;
+    my $self = bless {
+        radius => delete $args{radius} // croak("radius required"),
+        centre => delete $args{centre} || [0, 0],
+        label  => $args{label} // 'circle',
+    }, $class;
+    croak "bad radius '$self->{radius}'" unless $self->{radius} =~ /^\d+(?:\.\d+)?$/;
+    return $self;
+}
+
+sub area      { my $s = shift; return PI * $s->{radius} ** 2 }
+sub perimeter { 2 * PI * $_[0]{radius} }
+
+sub scale {
+    my ($self, $k) = @_;
+    $self->{radius} *= $k;
+    return $self;    
+}
+
+sub to_string {
+    my $self = shift;
+    my ($x, $y) = @{ $self->{centre} };
+    return sprintf('%s(r=%g @ %d,%d) \'ok\' "q"', $self->{label}, $self->{radius}, $x, $y);
+}
+
+1;
+
+__END__
+
+=head1 AUTHOR
+
+Zoë Müller
+
+=cut

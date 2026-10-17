@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                      28K / 256K
+
+                     ┌────────────────────────────────────────────────────────────────────── [✗] ─┐
+     ❯ Do these in or│  Context usage  Usage limit  Session info                                  │3) Read   5:42 PM
+       README.md. 4) │────────────────────────────────────────────────────────────────────────────│b
+       search ratatui│  Session info   click or drag to copy                                      │ …
+                     │                                                                            │
+                     │  Shell version:                                                            │
+     Ratatui is a Rus│  0.0 [alpha]                                                               │
+                     │                                                                            │
+     hello world     │  Session ID:                                                               │
+                     │  0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44                                      │
+     • Listed the wor│                                                                            │                    █
+     • Changed README│  Working directory:                                                        │                    █
+     • Found println!│  /tmp/grok-harvest-000000/proj                                             │                    █
+                     │                                                                            │                    █
+     ┌──────┬────────│  Model: Grok 4.7                                                           │                    █
+     │ Step │ Result │  Mode: genie                                                               │                    █
+     ├──────┼────────│  API Backend: mock 0.0                                                     │                    █
+     │ Edit │ hello w│  Turn: 1                                                                   │                    █
+     └──────┴────────│  Context: 28064 / 256000 tokens (11%)                                      │                    █
+                     │                                                                            │                    █
+     fn main() {     │                                                                            │                    █
+         println!("hi│                                                                            │                    █
+     }               │                                                                            │                    █
+                     │                                                                            │                    █
+     Worked for 8.8s │                                                                            │                    █
+                     │                                                                            │                    █
+                     │                                                                            │
+  ╭──────────────────│       Tab switch  |  ↑/↓ scroll  |  c copy session ID  |  y copy all       │──────────────────╮
+  │ ❯                │                                 Esc close                                  │                  │
+  ╰──────────────────└────────────────────────────────────────────────────────────────────────────┘ Grok 4.7 (high) ─╯
+
+

@@ -1,0 +1,60 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Api.Handlers where  
+
+import           Data.Aeson           (ToJSON (..), object, (.=))
+import qualified Data.ByteString.Lazy.Char8 as BL
+import           Data.Maybe           (fromMaybe, mapMaybe)
+import qualified Data.Text            as T
+import           Data.Text            (Text)
+
+{-
+   A very small request router. Each route is a predicate on the
+   path segments plus a handler that renders a response body.
+-}
+data Method = GET | POST | DELETE
+  deriving (Show, Read, Eq, Enum, Bounded)
+
+data Request = Request
+  { reqMethod :: Method
+  , reqPath   :: [Text]
+  , reqQuery  :: [(Text, Text)]
+  , reqBody   :: BL.ByteString
+  }
+
+data Response = Response { status :: Int, body :: BL.ByteString }
+  deriving Show
+
+type Handler = Request -> Maybe Response
+
+route :: Method -> [Text] -> (Request -> Response) -> Handler
+route m segs h req
+  | reqMethod req == m && matches segs (reqPath req) = Just (h req)
+  | otherwise                                         = Nothing
+  where
+    matches [] []         = True
+    matches (":" : s) (_ : p) = matches s p
+    matches (x : s) (y : p)   = x == y && matches s p
+    matches _ _           = False
+
+ok :: ToJSON a => a -> Response
+ok = Response 200 . BL.pack . show . toJSON
+
+notFound :: Response
+notFound = Response 404 "{\"error\":\"not found\"}"
+
+greet :: Request -> Response
+greet req = ok $ object ["message" .= ("Bonjour, " <> name <> " !"), "emoji" .= ("👋" :: Text)]
+  where name = fromMaybe "monde" (lookup "name" (reqQuery req))   
+
+limitOf :: Request -> Int
+limitOf = fromMaybe 10 . (>>= readMaybe . T.unpack) . lookup "limit" . reqQuery
+
+routes :: [Handler]
+routes =
+  [ route GET ["hello"] greet
+  , route GET ["items"] (\r -> ok [1 .. limitOf r :: Int])
+  , route DELETE ["items", ":"] (const (Response 204 ""))
+  ]
+
+dispatch :: Request -> Response
+dispatch req = fromMaybe notFound . foldr (\h acc -> maybe acc Just (h req)) Nothing $ routes

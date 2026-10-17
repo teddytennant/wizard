@@ -1,0 +1,11 @@
+use std::collections::HashMap;
+#[derive(Debug, Clone)]
+pub struct S<'a> { x: &'a str, n: u64 }
+impl<'a> S<'a> {
+    pub fn new(x: &'a str) -> Self { Self { x, n: 0xff_u64 } }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let m: HashMap<String, i32> = HashMap::new();
+    println!("{:?} {}", m, 1.5e3);
+    Ok(())
+}

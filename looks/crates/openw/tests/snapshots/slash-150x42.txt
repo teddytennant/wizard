@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+                                      ┃ /agents     Switch agent                                                ┃
+                                      ┃ /connect    Connect provider                                            ┃
+                                      ┃ /debug      View debug info                                             ┃
+                                      ┃ /diff       Open diff viewer                                            ┃
+                                      ┃ /editor     Open editor                                                 ┃
+                                      ┃ /exit       Exit the app                                                ┃
+                                      ┃ /help       Help                                                        ┃
+                                      ┃ /init       guided AGENTS.md setup                                      ┃
+                                      ┃ /mcps       Toggle MCPs                                                 ┃
+                                      ┃ /models     Switch model                                                ┃
+                                      ┃
+                                      ┃  /
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

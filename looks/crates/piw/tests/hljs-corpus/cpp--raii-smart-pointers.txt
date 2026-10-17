@@ -1,0 +1,59 @@
+// Resource handles and ownership.
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <unistd.h>
+#define HAVE_POSIX 1
+#else
+#define HAVE_POSIX 0
+#endif
+
+class File {
+public:
+    File(const std::string& path, const char* mode)
+        : handle_{std::fopen(path.c_str(), mode), &std::fclose}
+    {
+        if (!handle_) throw std::runtime_error("cannot open " + path);
+    }
+
+    File(File&&) noexcept = default;
+    File(const File&) = delete;
+    File& operator=(const File&) = delete;
+
+private:
+    std::unique_ptr<std::FILE, decltype(&std::fclose)> handle_;
+};
+
+class Node : public std::enable_shared_from_this<Node> {
+public:
+    explicit Node(std::string n) : name{std::move(n)} {}
+    ~Node() { std::printf("~Node(%s)\n", name.c_str()); }
+
+    void add_child(std::shared_ptr<Node> c)
+    {
+        c->parent = weak_from_this();   // avoid a reference cycle
+        children.push_back(std::move(c));
+    }
+
+    std::string name;
+    std::weak_ptr<Node> parent;
+    std::vector<std::shared_ptr<Node>> children;
+};
+
+int main()
+{
+    auto root = std::make_shared<Node>("root");
+    root->add_child(std::make_shared<Node>("child-α"));
+    root->add_child(std::make_shared<Node>("child-β"));
+    try {
+        File f{"/nonexistent/file.txt", "rb"};
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "error: %s\n", ex.what());
+    }
+    return HAVE_POSIX ? 0 : 1;
+}

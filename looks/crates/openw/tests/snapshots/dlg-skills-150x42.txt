@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                   Skills                                                                       esc
+
+                                   Search skills…
+
+                                   Skills
+                                   common-sense Give the agent the judgment a competent engineer already has.
+                                   wrangler     Run Wrangler. Shows status and budget, then does follow-up.
+
+
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

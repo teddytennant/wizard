@@ -1,0 +1,41 @@
+/*! utilities.css v2.1 | MIT License */
+@import url(//fonts.googleapis.com/css?family=Lato:300,400,700);
+
+:root { --gap: 8px; --max-w: 72rem; --ratio: 16 / 9; }
+
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.container { width: min(100% - 2rem, var(--max-w)); margin-inline: auto; }
+.stack > * + * { margin-block-start: var(--gap); }
+.cluster { display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 1.5) var(--gap); align-items: center; }
+.ratio { aspect-ratio: var(--ratio); object-fit: cover; }
+
+.hero {
+  background:
+    linear-gradient(135deg, rgba(0,0,0,.6) 0%, transparent 60%),
+    url("../img/hero@2x.jpg") center / cover no-repeat,
+    #1e293b;
+  min-height: 60vh;
+  color: #FFF;
+}
+
+.btn:is(:hover, :focus-visible):not([disabled]) { filter: brightness(1.1) saturate(120%); }
+.list > li:first-child::first-letter { font-size: 2em; float: left; }
+.tbl tr:nth-child(even) td:nth-last-of-type(-n+2) { text-align: right; }
+.card:where(.featured, .promoted) > h2 { color: var(--accent, #f59e0b); }
+.a11y-hint::after { content: "\201C" attr(data-hint) "\201D 🔍"; }
+
+@media (min-width: 40em) and (max-width: 63.99em) { .hide-md { display: none !important; } }
+@media (hover: none) and (pointer: coarse) { .btn { min-height: 44px; } }
+@layer base, components, utilities;
+@layer utilities { .mt-4 { margin-top: 1rem; } .p-0\.5 { padding: 0.125rem; } }
+.nest { & > .child { color: red; &:hover { color: blue; } } }   
+.vh { height: 100dvh; width: 50vw; transform: translate(-50%, -50%) rotate(-45deg) scale(1.5, .8); }
+.x { margin: -0.5em +1px 0 -.25rem; line-height: 1.5; z-index: -1; opacity: 0.0; }

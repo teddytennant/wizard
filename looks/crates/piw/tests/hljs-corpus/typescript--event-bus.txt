@@ -1,0 +1,50 @@
+// Strongly typed event bus.
+
+export type EventMap = Record<string, unknown>;
+export type Handler<T> = (payload: T) => void | Promise<void>;
+  
+interface Subscription {
+  readonly id: number;
+  unsubscribe(): void;
+}
+
+export class EventBus<E extends EventMap> {
+  private handlers: { [K in keyof E]?: Set<Handler<E[K]>> } = {}; 
+  private nextId = 1;
+
+  on<K extends keyof E>(event: K, handler: Handler<E[K]>): Subscription {
+    const set = (this.handlers[event] ??= new Set());
+    set.add(handler);
+    const id = this.nextId++;
+    return {
+      id,
+      unsubscribe: () => void set.delete(handler),
+    };
+  }
+
+  once<K extends keyof E>(event: K, handler: Handler<E[K]>): Subscription {
+    const sub = this.on(event, async (payload) => {
+      sub.unsubscribe();
+      await handler(payload);
+    });
+    return sub;
+  }
+
+  async emit<K extends keyof E>(event: K, payload: E[K]): Promise<void> {
+    const set = this.handlers[event];
+    if (!set || set.size === 0) return;
+    await Promise.all([...set].map((h) => h(payload)));
+  }
+}
+
+type AppEvents = {
+  'user:login': { userId: string; at: Date };
+  'user:logout': { userId: string };
+  'cart:update': { items: ReadonlyArray<{ sku: string; qty: number }>; total: number };
+};
+
+const bus = new EventBus<AppEvents>();
+bus.on('user:login', ({ userId, at }) => {
+  console.log(`✔ ${userId} signed in at ${at.toISOString()}`);
+});
+await bus.emit('user:login', { userId: 'u_42', at: new Date() });

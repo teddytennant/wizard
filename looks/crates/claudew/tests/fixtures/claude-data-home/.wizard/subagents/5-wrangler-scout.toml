@@ -1,0 +1,2 @@
+name = "wrangler:wrangler-scout"
+description = "Finds and screens candidate open source repos for the user to contribute to, based on the machine."

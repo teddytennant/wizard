@@ -1,0 +1,45 @@
+{
+  "editor.fontFamily": "'JetBrains Mono', 'Noto Sans CJK JP', monospace",
+  "editor.fontSize": 13.5,
+  "editor.lineHeight": 1.6,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.rulers": [80, 100, 120],
+  "editor.wordWrap": "off",
+  "editor.minimap.enabled": false,
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "never"
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/*.pyc": true
+  },
+  "files.associations": {
+    "*.tpl": "html",
+    "Dockerfile.*": "dockerfile"
+  },
+  "search.exclude": { "**/dist": true, "**/coverage": true },
+  "terminal.integrated.env.linux": {
+    "PATH": "${env:HOME}/.cargo/bin:${env:PATH}",
+    "RUST_LOG": "debug"
+  },
+  "terminal.integrated.scrollback": 10000,
+  "workbench.colorTheme": "Tokyo Night",
+  "workbench.colorCustomizations": {
+    "editorCursor.foreground": "#ff9e64",
+    "statusBar.background": "#1a1b26",
+    "terminal.ansiBrightBlack": "#414868"
+  },
+  "[python]": { "editor.defaultFormatter": "charliermarsh.ruff", "editor.tabSize": 4 },
+  "[markdown]": { "editor.wordWrap": "on", "files.trimTrailingWhitespace": false },
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "telemetry.telemetryLevel": "off",
+  "window.zoomLevel": -0.5,
+  "emmet.includeLanguages": { "javascript": "javascriptreact" },
+  "cSpell.words": ["café", "naïve", "résumé", "hljs"],
+  "terminal.integrated.defaultProfile.windows": null
+}

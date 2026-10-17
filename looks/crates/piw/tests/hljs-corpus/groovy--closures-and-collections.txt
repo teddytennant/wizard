@@ -1,0 +1,47 @@
+#!/usr/bin/env groovy
+// Closures, collections and GStrings.  
+
+def inventory = [
+    [sku: 'A-100', name: 'Widget', qty: 12, price: 3.50],
+    [sku: 'B-200', name: 'Gadget', qty: 0,  price: 12.00],
+    [sku: 'C-300', name: 'Gizmo',  qty: 7,  price: 0.99G],
+]
+
+def inStock = { item -> item.qty > 0 }
+def total   = { items -> items.sum { it.qty * it.price } }
+
+println "In stock: ${inventory.findAll(inStock)*.name.join(', ')}"
+println "Total value: ${String.format('%.2f', total(inventory))}"
+
+/* Build a lookup keyed by sku,
+   then group by availability. */
+def bySku = inventory.collectEntries { [(it.sku): it] }
+def groups = inventory.groupBy { it.qty > 0 ? 'available' : 'sold out' }
+
+groups.each { status, items ->
+    println "${status.padRight(10)} -> ${items.collect { it.sku }}"
+}
+
+def compose = { Closure f, Closure g -> { x -> g(f(x)) } }
+def inc = { it + 1 }
+def dbl = { it * 2 }
+assert compose(inc, dbl)(5) == 12
+
+def regex = ~/^([A-Z])-(\d{3})$/
+inventory.each { item ->
+    def m = item.sku =~ regex
+    if (m.matches()) {
+        println "prefix=${m[0][1]} number=${m[0][2] as int}"
+    }
+}
+
+def tags = ['alpha', 'beta', 'gamma'] as Set
+tags << 'delta'
+def opts = [verbose: true, 'dry-run': false, depth: 0x1F]
+println opts?.verbose ?: 'none'   
+println "Escapes: tab\there, quote\" and \$dollar, unicode \u00e9 and 日本語 😀"
+
+def text = '''multi
+line 'single' string
+with ${no} interpolation'''
+println text.readLines().size()

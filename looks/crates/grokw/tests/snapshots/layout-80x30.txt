@@ -1,0 +1,29 @@
+
+   main /tmp/grok-harvest-000000/proj
+
+                                 ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄
+                                 ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀
+                                 ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀
+                                 ⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀
+                                 ⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀
+                                 ⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀
+                                 ⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+
+               New worktree                                 ctrl+w
+               Resume session                               ctrl+r
+               Changelog
+               Quit                                         ctrl+q
+
+               New /learn skill!
+               Ask Grok to /learn from your past traces and tune
+               Grok Build to how you work.
+
+
+   Tip: Run /dashboard (or Ctrl+\) to see and manage all your agents in one
+   place.
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                        │
+  ╰─────────────────────────────────────────────────────── Grok 4.7 (xhigh) ─╯
+
+                                                           Wizard  0.0 [alpha]

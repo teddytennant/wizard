@@ -1,0 +1,59 @@
+/* ring.c - fixed-capacity byte ring buffer */
+#include <stddef.h>  
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define RING_MIN_CAP 16u
+#define MIN(a, b)    ((a) < (b) ? (a) : (b))
+
+typedef struct ring {
+    uint8_t *buf;
+    size_t   cap;    /* always a power of two */
+    size_t   head;   /* next write */
+    size_t   tail;   /* next read  */
+} ring_t;
+
+static size_t round_up_pow2(size_t n)
+{
+    size_t p = RING_MIN_CAP;
+    while (p < n) p <<= 1;
+    return p;
+}
+
+ring_t *ring_new(size_t want)
+{
+    ring_t *r = calloc(1, sizeof *r);
+    if (!r) return NULL;
+    r->cap = round_up_pow2(want);
+    r->buf = malloc(r->cap);
+    if (!r->buf) { free(r); return NULL; }
+    return r;
+}
+
+size_t ring_len(const ring_t *r) { return r->head - r->tail; }
+size_t ring_free(const ring_t *r) { return r->cap - ring_len(r); }
+
+size_t ring_write(ring_t *r, const void *src, size_t n)
+{
+    n = MIN(n, ring_free(r));
+    size_t off   = r->head & (r->cap - 1);
+    size_t first = MIN(n, r->cap - off);
+    memcpy(r->buf + off, src, first);
+    memcpy(r->buf, (const uint8_t *)src + first, n - first);
+    r->head += n;
+    return n;
+}
+
+size_t ring_read(ring_t *r, void *dst, size_t n)
+{
+    n = MIN(n, ring_len(r));
+    size_t off   = r->tail & (r->cap - 1);
+    size_t first = MIN(n, r->cap - off);
+    memcpy(dst, r->buf + off, first);
+    memcpy((uint8_t *)dst + first, r->buf, n - first);
+    r->tail += n;
+    return n;
+}
+
+void ring_free_all(ring_t *r) { if (r) { free(r->buf); free(r); } }

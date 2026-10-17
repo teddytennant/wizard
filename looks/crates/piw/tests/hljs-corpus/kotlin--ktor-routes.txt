@@ -1,0 +1,52 @@
+package com.example.api
+
+import io.ktor.http.*
+import io.ktor.server.application.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class CreateTodo(val title: String, val tags: List<String> = listOf())  
+
+@Serializable
+data class Todo(val id: Int, val title: String, val done: Boolean = false)
+
+object TodoStore {
+    private val items = mutableMapOf<Int, Todo>()
+    private var nextId = 1
+
+    @Synchronized
+    fun add(title: String): Todo = Todo(nextId++, title).also { items[it.id] = it }
+
+    fun all(): List<Todo> = items.values.sortedBy { it.id }
+    fun find(id: Int): Todo? = items[id]
+}
+
+fun Application.todoRoutes() {
+    routing {
+        route("/todos") {
+            get {
+                call.respond(TodoStore.all())
+            }
+
+            post {
+                val body = call.receive<CreateTodo>()
+                if (body.title.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "title required"))
+                    return@post
+                }
+                call.respond(HttpStatusCode.Created, TodoStore.add(body.title))
+            }
+
+            get("/{id}") {
+                val id = call.parameters["id"]?.toIntOrNull()
+                val todo = id?.let(TodoStore::find)
+                if (todo == null) call.respondText("No such todo: $id", status = HttpStatusCode.NotFound)
+                else call.respond(todo)
+            }
+        }
+        get("/health") { call.respondText("ok ✅") }
+    }
+}

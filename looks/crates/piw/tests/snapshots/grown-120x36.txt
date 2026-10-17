@@ -1,0 +1,36 @@
+
+ wizard  v0.0
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help.
+
+ Wizard can explain its own features and look up its docs. Ask it how to use or extend Wizard.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────── ↑ 4 more ───────────────────────────────────────────────────────
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+end
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/proj (main)
+?/?                                                                                                  fake-model • medium

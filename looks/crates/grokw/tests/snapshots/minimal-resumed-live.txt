@@ -1,0 +1,10 @@
+{"name": "grok", "ok": true, "n": 3}
+
+- old line
++ new line
+
+echo "hi" | grep -v 'x' && ls -la
+Worked for 7.1s
+minimal · /help
+❯
+Grok 4.7 (high) · 1.8K / 256K (1%) · ctrl+o transcript

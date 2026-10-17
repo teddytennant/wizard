@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                   Plugins                                                                      esc
+
+                                   Search
+
+                                   Wizard
+                                   tidy Plugin in ~/.wizard/plugins                                          active
+
+                                   toggle space  install shift+i
+
+                                      ┃  Ask anything… "Fix broken tests"
+                                      ┃
+                                      ┃  Build · grok-4.6 xai-oauth
+                                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                                                             0.0

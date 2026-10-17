@@ -1,0 +1,24 @@
+[38;2;80;80;80m┌[1m[38;2;200;200;220m Help  0%  [0m[38;2;80;80;80m───────────────────────────────────────────────────────────────────┐
+│[39m                                                                              [38;2;80;80;80m│
+│[1m[38;2;186;139;255m  Commands[0m                                                                    [38;2;80;80;80m│
+│[39m                                                                              [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/help[39m  [38;2;150;150;165mShow this help overlay[39m                                             [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/help <command>[39m  [38;2;150;150;165mShow details for one command[39m                             [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/model[39m  [38;2;150;150;165mList or switch models[39m                                             [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/model <name>[39m  [38;2;150;150;165mSwitch to a different model[39m                                [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/provider-test-coverage[39m  [38;2;150;150;165mShow live-test evidence for the current provider/[38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/agents[39m  [38;2;150;150;165mConfigure models for agent roles[39m                                 [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/swarm-prompt[39m  [38;2;150;150;165mOpen the active swarm routing prompt in your editor[39m        [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/effort <level>[39m  [38;2;150;150;165mSet effort (none|minimal|low|medium|high|xhigh|max|swarm|[38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/fast [on|off|status|default ...][39m  [38;2;150;150;165mToggle fast mode[39m                       [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/transport <mode>[39m  [38;2;150;150;165mSet connection transport (auto|https|websocket)[39m        [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/alignment [status|centered|left][39m  [38;2;150;150;165mShow or persist text alignment preferen[38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/compact-notifications [status|on|off][39m  [38;2;150;150;165mCollapse swarm/file-activity notif[38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/show-agentgrep-output [status|on|off][39m  [38;2;150;150;165mRender full agentgrep search outpu[38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/config[39m  [38;2;150;150;165mShow active configuration[39m                                        [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/config init[39m  [38;2;150;150;165mCreate default config file[39m                                  [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/config edit[39m  [38;2;150;150;165mOpen config in $EDITOR[39m                                      [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/voice[39m  [38;2;150;150;165mVoice input: speak, then send (Ctrl+Space)[39m                        [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/dictate[39m  [38;2;150;150;165mRun configured external dictation[39m                               [38;2;80;80;80m│
+│[39m    [38;2;230;230;240m/git [status][39m  [38;2;150;150;165mShow branch and working tree status for the repo[39m           [38;2;80;80;80m│
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

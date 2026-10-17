@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Out-of-tree build for the sensor driver.
+# Usage: make [KDIR=/path/to/kernel] [ARCH=arm64]
+
+obj-m += sensor.o
+sensor-y := sensor_core.o sensor_i2c.o sensor_sysfs.o
+
+KDIR  ?= /lib/modules/$(shell uname -r)/build
+PWD   := $(shell pwd)
+ccflags-y := -DDEBUG -Wno-unused-function
+
+ifdef CROSS_COMPILE
+  MAKEARGS := ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE)
+endif
+
+ifeq ($(ARCH),arm64)
+  ccflags-y += -mgeneral-regs-only
+else ifeq ($(ARCH),x86_64)
+  ccflags-y += -mno-sse
+endif
+
+all: modules
+
+modules:
+	$(MAKE) -C $(KDIR) M=$(PWD) $(MAKEARGS) modules
+
+install: modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
+	depmod -a
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+load: modules
+	sudo insmod sensor.ko poll_ms=250 name="température"
+	dmesg | tail -n 5
+
+unload:
+	-sudo rmmod sensor
+
+.PHONY: all modules install clean load unload

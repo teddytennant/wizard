@@ -1,0 +1,79 @@
+
+  ┃
+  ┃  go
+  ┃
+
+     $ cargo test
+
+  ┃
+  ┃  ⠋ cargo test
+  ┃
+
+  ┃
+  ┃  ⠋ make
+  ┃
+  ┃  cc a.c
+  ┃  cc b.c
+  ┃
+
+     ⠋ Read src/lib.rs
+     ← Edit a.rs [replaceAll=true]
+     ✱ Grep "foo"
+     ~ Fetching from the web…
+     ◈ Web Search "rust"
+     ~ Updating todos…
+
+     ⠋ Explorer Task (background) — Find the parser
+
+     ⚙ memory [action=list]
+
+     ctrl+x down view subagents
+
+     ▣  Build · grok-4.6 · 6.5s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · grok-4.6 xai-oauth
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /p                                                                                      tab agents  ctrl+p commands

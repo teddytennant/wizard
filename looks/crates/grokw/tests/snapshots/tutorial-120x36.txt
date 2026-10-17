@@ -1,0 +1,35 @@
+
+   main /tmp/grok-harvest-000000/proj                                                                     1.5K / 256K
+
+
+                        ┌─ Welcome to Wizard ──────────────────────────────────────────── [✗] ─┐
+                        │                                                                      │
+                        │  Quick tips to get the most out of Wizard.                           │
+                        │  Pick a topic. Esc when you're done.                                 │
+                        │                                                                      │
+                        │  ◆ Coming from Claude, Cursor, or…  your settings, rules & skills…   │
+                        │  ◆ Your First Prompt                           send, queue, cancel   │
+                        │  ◆ Attach Files, Images & Paste     @files, line ranges, screensh…   │
+                        │  ◆ Finding Your Way Around                focus, scrollback, panes   │
+                        │  ◆ Slash Commands                   /help  /model  /resume  and C…   │
+                        │  ◆ Parallel Work: Worktrees          isolated sessions on one repo   │
+                        │  ◆ Plan Mode & Permissions          review the approach before it…   │
+                        │  ◆ Make It Yours                    just ask: AGENTS.md, memory, …   │
+                        │  ◆ Where to Go Next                 guides, feedback, and good ha…   │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+                        │                                                                      │
+  ╭─────────────────────│      0/9 explored  |  ↑/↓ navigate  |  Enter open  |  Esc done       │─────────────────────╮
+  │ ❯                   └──────────────────────────────────────────────────────────────────────┘                     │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+.:shortcuts

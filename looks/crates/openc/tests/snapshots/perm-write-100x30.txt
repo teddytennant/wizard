@@ -1,0 +1,30 @@
+
+    o p e n c  0.1
+    ━━━━━━━━━───────────────────────────────────
+    sonnet-5.5 high · claude 2.1.289
+
+    shift+tab mode   ctrl+t model   ctrl+p commands   f1 keys
+
+
+  ▎ perm write
+
+    I'll update the greeting.
+
+
+
+
+
+  ─ Write docs/NEW.md ────────────────────────────────────────────────────────────────────────────
+        1 + line 1 of the new file
+        2 + line 2 of the new file
+        3 + line 3 of the new file
+        4 + line 4 of the new file
+        5 + line 5 of the new file
+        6 + line 6 of the new file
+        7 + line 7 of the new file
+        8 + line 8 of the new file
+        9 + line 9 of the new file
+       10 + line 10 of the new file
+      ╌ 20 more rows  d full diff
+    Create this file?   y yes   a yes, edits this session   n no   e tell claude why   d full diff
+      ⠙ ask · sonnet-5.5 high · /work/proj · main*                                          ctrl+p

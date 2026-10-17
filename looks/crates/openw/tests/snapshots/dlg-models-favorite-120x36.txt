@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Select model                                     esc
+
+                                  Search
+
+                                  Favorites
+                                ● grok-4.6 xai-oauth
+
+                       ┃          chatgpt
+                       ┃  Ask     gpt-5.6-sol
+                       ┃
+                       ┃  Buil    openrouter
+                       ╹▀▀▀▀▀▀    anthropic/claude-sonnet-5                               ▀▀▀▀▀▀▀▀
+                                                                                          commands
+                                  xai-oauth
+                                  grok-4.6-fast
+
+                                  Connect provider ctrl+a  Favorite ctrl+f
+
+
+
+
+
+
+
+  /home/me/proj:main                                                                                               0.0

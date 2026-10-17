@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>
+<!DOCTYPE catalog [
+  <!ELEMENT catalog (book+)>
+  <!ELEMENT book (title, author, price)>
+  <!ATTLIST book id ID #REQUIRED lang (en|fr|de) "en">
+  <!ENTITY copy "&#169;">
+  <!ENTITY publisher "Éditions du Seuil">
+  <!ENTITY % common "title, author">
+]>
+<?php-like target="ignored" data='x < y'?>
+<catalog xmlns:t="urn:example:titles" version="1.0">  
+  <!-- First entry: has a CDATA section and entities -->
+  <book id="b001" lang="fr">
+    <title t:kind="main">Le Petit Prince &amp; autres contes</title>
+    <author>Antoine de Saint-Exup&#233;ry</author>
+    <price currency="EUR">12.50</price>
+    <notes><![CDATA[Contains <markup> & raw ampersands: AT&T, 1 < 2 > 0]]></notes>
+    <rights>&copy; 1943 &publisher;</rights>
+  </book>
+
+  <book id="b002">
+    <title>Programming in "XML"</title>
+    <author>O'Neil, M.</author>
+    <price currency="USD" discount='0.15'>1_000</price>
+    <!-- trailing whitespace on the next line -->   
+    <summary>
+      Multi-line text
+      with   odd    spacing
+    </summary>
+    <empty/>
+    <empty></empty>
+  </book>
+  <book id="b003" lang="de">
+    <title>Gr&uuml;&szlig;e aus K&ouml;ln</title>
+    <author>漱石</author>
+    <price>9.99</price>
+  </book>
+</catalog>
+<!-- end of file -->
