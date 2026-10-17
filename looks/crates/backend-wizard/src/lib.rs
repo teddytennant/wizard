@@ -409,7 +409,7 @@ fn launch(bin: &OsString, cwd: &std::path::Path) -> anyhow::Result<Proc> {
 
 impl Backend for WizardBackend {
     fn spawn(cwd: PathBuf, resume: Option<String>) -> anyhow::Result<BackendHandle> {
-        Self::spawn_with(cwd, resume, false, false)
+        Self::spawn_with(cwd, resume, false, true)
     }
 }
 
