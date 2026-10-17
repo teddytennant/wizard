@@ -291,6 +291,41 @@ jobs:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo build --release --locked
 
+  # The full looks (wizard-ui-*) are their own workspace under looks/, built
+  # into every release tarball. One job for all three checks: the looks share
+  # one dependency tree, and a second and third runner would each rebuild it.
+  rust-looks:
+    name: Looks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: looks
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: looks
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
   # The name in branch protection, and nothing else. Four jobs became four
   # check runs, and the repository's required-status-check rule matches one
   # name, "Rust checks", which no longer belongs to a job that does anything.
@@ -303,7 +338,7 @@ jobs:
   # the `Workflow invariants` step above will fail before a rename can merge.
   rust:
     name: Rust checks
-    needs: [rust-lint, rust-test, rust-release]
+    needs: [rust-lint, rust-test, rust-release, rust-looks]
     # Without this a failed leg SKIPS the gate, and GitHub does not treat a
     # skipped required check as a failing one: the pull request sits at
     # "Expected - Waiting for status to be reported" with a green tick on
