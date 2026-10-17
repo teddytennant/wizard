@@ -97,7 +97,6 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         Some(Modal::Usage(_)) => dialogs::usage::key(app, key),
         Some(Modal::Settings(_)) => dialogs::settings::key(app, key),
         Some(Modal::Docs(_)) => dialogs::docs::key(app, key),
-        Some(Modal::Tutorial(_)) => dialogs::tutorial::key(app, key),
         Some(Modal::Stub { .. }) => {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter) || ctrl(&key, 'c') {
                 app.modal = None;

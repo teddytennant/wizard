@@ -1,4 +1,4 @@
-// OWNER: dialogs (palette, cheatsheet, settings, context/usage, tutorial and the rest are stubs)
+// OWNER: dialogs (palette, cheatsheet, settings, context/usage and the rest are stubs)
 //! Modal windows and the full-frame pickers. `modal_frame` is the shared chrome of spec 6.2
 //! (square border, title on the top edge, `[✗]` button, no dimming behind); the resume picker is
 //! built on it for the agent screen and as the full-frame list on home (spec 2.18, 6.8).
@@ -19,7 +19,6 @@ pub mod page;
 pub mod settings;
 mod settings_defs;
 pub mod shortcuts;
-pub mod tutorial;
 pub mod usage;
 pub mod widgets;
 
@@ -30,7 +29,6 @@ pub enum Modal {
     Shortcuts(shortcuts::Shortcuts),
     Settings(settings::Settings),
     Docs(docs::Docs),
-    Tutorial(tutorial::Tutorial),
     /// Context, usage limit and session info tabs.
     Usage(usage::UsageModal),
     /// A window for a surface that is not built yet: title and the lines it prints.
@@ -44,8 +42,6 @@ impl Modal {
     /// Whether the shortcuts bar goes blank while this window is open.
     pub fn hides_bar(&self) -> bool {
         match self {
-            // the tutorial keeps the bar
-            Modal::Tutorial(_) => false,
             Modal::Resume(_)
             | Modal::Palette(_)
             | Modal::Shortcuts(_)
@@ -169,7 +165,6 @@ pub fn draw(buf: &mut Buffer, app: &mut App, lay: &Layout) {
         Modal::Usage(m) => usage::draw(buf, app, lay, &m),
         Modal::Settings(s) => settings::draw(buf, app, lay, &s),
         Modal::Docs(d) => docs::draw(buf, app, lay, &d),
-        Modal::Tutorial(t) => tutorial::draw(buf, app, lay, &t),
         Modal::Stub { title, lines } => {
             let r = modal_rect(lay.w, lay.h, 0.5, 80, 44, 4);
             let inner = modal_frame(buf, app, r, &title);
@@ -549,7 +544,6 @@ const PALETTE: &[(&str, &[(&str, &str)])] = &[
             ("Settings", "F2"),
             ("Keyboard Shortcuts", "Ctrl+."),
             ("How-to Guides", ""),
-            ("Tutorial", ""),
             ("Quit", "Ctrl+Q"),
         ],
     ),
@@ -821,7 +815,6 @@ fn run_palette_entry(app: &mut App, label: &str, right: &str) {
             crate::ui::composer::input::request_editor(app, draft);
         }
         ("How-to Guides", _) => docs::open(app),
-        ("Tutorial", _) => tutorial::open(app),
         (_, cmd) if cmd.starts_with('/') => crate::commands::run(app, &cmd[1..], ""),
         _ => {}
     }

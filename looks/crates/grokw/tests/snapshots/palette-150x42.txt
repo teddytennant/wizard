@@ -29,8 +29,8 @@
                                      │  ◆ Settings                                                        F2   │
                                      │  ◆ Keyboard Shortcuts                                          Ctrl+.   │
                                      │  ◆ How-to Guides                                                        │
-                                     │  ◆ Tutorial                                                             │
                                      │  ◆ Quit                                                        Ctrl+Q   │
+                                     │                                                                         │
                                      │                                                                         │
                                      │                                                                         │
                                      │                                                                         │

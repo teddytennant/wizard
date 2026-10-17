@@ -9,7 +9,7 @@
                   │   Session ────────────────────────────  █│
                   │  ◆ New Session                 Ctrl+N   █│
                   │  ◆ New Session in …  Ctrl+P → worktr…   █│
-                  │  ◆ Back to Home                          │
+                  │  ◆ Back to Home                         █│
                   │  ◆ Resume Session             /resume    │
                   │  ◆ Session Info                          │
                   │                                          │

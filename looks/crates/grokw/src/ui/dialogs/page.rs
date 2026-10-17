@@ -1,4 +1,4 @@
-//! A scrollable markdown page inside a modal: how-to guides, tutorial topics (spec 6.13).
+//! A scrollable markdown page inside a modal: how-to guides (spec 6.13).
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;

@@ -24,7 +24,7 @@
                               │  ◆ Multiline Input                         /multiline   █│
                               │  ◆ Edit Prompt in External Editor                       █│
                               │                                                         █│
-                              │   Other ──────────────────────────────────────────────   │
+                              │   Other ──────────────────────────────────────────────  █│
                               │  ◆ Switch Theme                                /theme    │
                               │  ◆ Settings                                        F2    │
                               │                                                          │

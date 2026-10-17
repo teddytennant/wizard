@@ -1,4 +1,4 @@
-//! The modals: the cheatsheet, settings, context, usage, session info, tutorial, docs and the
+//! The modals: the cheatsheet, settings, context, usage, session info, docs and the
 //! doctor block, at the three sizes the captures use. `GROKW_DUMP_DIR` writes `.ansi` files for
 //! `tools/grokw-cmp.py`; `UPDATE_SNAPSHOTS=1` rewrites the text snapshots.
 
@@ -123,24 +123,6 @@ fn settings_modal() {
     }
     h.dump("settings-scrolled-120x36");
     assert_snapshot("settings-scrolled-120x36", &h.text());
-}
-
-#[test]
-fn tutorial_list_and_topic_pages() {
-    each("tutorial", |h| palette(h, "tutorial"));
-    let mut h = Harness::new(120, 36);
-    palette(&mut h, "tutorial");
-    h.press(KeyCode::Down);
-    h.press(KeyCode::Enter);
-    h.dump("tutorial-page-120x36");
-    assert_snapshot("tutorial-page-120x36", &h.text());
-    // Right reads on, Esc goes back to the list with the topics ticked
-    h.press(KeyCode::Right);
-    h.press(KeyCode::Esc);
-    h.dump("tutorial-explored-120x36");
-    assert_snapshot("tutorial-explored-120x36", &h.text());
-    h.press(KeyCode::Esc);
-    assert!(h.app.modal.is_none());
 }
 
 #[test]
