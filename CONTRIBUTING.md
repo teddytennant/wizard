@@ -28,6 +28,8 @@ cargo test --locked
 cargo build --release --locked
 ```
 
+The full looks (`wizard-ui-*`) are their own Cargo workspace under `looks/`, checked by the `rust-looks` job in `ci.yml`. To try one, run `cargo build --release --manifest-path looks/Cargo.toml` and copy `looks/target/release/openw` to `wizard-ui-opencode` beside `wizard` (`piw`, `codexw`, `grokw`, `jcodew` and `claudew` likewise as `wizard-ui-pi` and so on).
+
 Wizard GUI under `gui/` is its own Cargo workspace with its own CI (`.github/workflows/gui.yml`); see [gui/README.md](gui/README.md) to build it.
 
 Optional supply-chain check:

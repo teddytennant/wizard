@@ -4,8 +4,8 @@ Wizard's TUI can wear another coding agent's terminal chrome. Seven ship:
 `wizard` (the house look), `codex`, `grok`, `opencode`, `pi`, `jcode` and
 `claude`. `wizard`, `codex` and `grok` draw inside this process; `codex` and
 `grok` also have a full look, and the other four exist only as one. A full look
-is its own binary (`wizard-ui-<name>`, built from the openw repo pinned in
-`looks.rev`) that `/ui` restarts into, talking to `wizard acp`. Pick one at
+is its own binary (`wizard-ui-<name>`, built from the cargo workspace in
+`looks/`) that `/ui` restarts into, talking to `wizard acp`. Pick one at
 onboarding, change it live with `/ui`, or cycle the **Interface** row in
 `/settings`. See [usage.md](usage.md#the-interface) for the user-facing half.
 
@@ -118,8 +118,8 @@ readable at 16 colors and under `NO_COLOR`:
 
 ### A note on closed-source agents
 
-No code from a closed-source TUI is copied here or in openw. The `claude` look
-is built from its observable screen alone: openw's `crates/claudew` drives the
+No code from a closed-source TUI is copied here or in `looks/`. The `claude` look
+is built from its observable screen alone: `looks/crates/claudew` drives the
 real program and the look through the same keys in a private tmux server and
 diffs the two cell by cell (`crates/claudew/tools/compare.sh`). Nothing from
 that program's install is read, copied or redistributed.
