@@ -43,8 +43,6 @@ pub enum Msg {
     Backend(Event),
     Branch(Option<String>),
     Files(Vec<String>),
-    /// Text for a system block from a background thread (`/doctor`'s wizard checks).
-    Note(String),
     /// A `!cmd` finished: its block's id, the command, what it printed and whether it exited 0.
     Shell {
         id: String,
@@ -183,7 +181,6 @@ pub struct App {
     pub sessions: Vec<SessionInfo>,
     pub files: Vec<String>,
     pub branch: Option<String>,
-    pub titles: HashMap<String, String>,
 
     pub ed: Editor,
     pub shell_mode: bool,
@@ -281,7 +278,6 @@ impl App {
             sessions: Vec::new(),
             files: Vec::new(),
             branch: None,
-            titles: HashMap::new(),
             ed,
             shell_mode: false,
             multiline: false,
@@ -416,10 +412,6 @@ impl App {
                     })
                     .sum()
             })
-    }
-
-    pub fn session_title(&self) -> Option<String> {
-        self.titles.get(&self.tr.session_id).cloned()
     }
 
     pub fn unix_now(&self) -> i64 {
@@ -590,7 +582,6 @@ impl App {
                 self.dirty = true;
             }
             Msg::Files(f) => self.files = f,
-            Msg::Note(t) => self.note(t),
             Msg::Shell {
                 id,
                 cmd,
@@ -794,10 +785,9 @@ impl App {
     }
 
     pub fn dispatch(&mut self, text: String) {
-        if let Some(rest) = text.strip_prefix('/') {
-            let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if let Some((name, args)) = agent_core::commands::split(&text) {
             if crate::commands::is_known(self, name) {
-                crate::commands::run(self, name, args.trim());
+                crate::commands::run(self, name, args);
                 return;
             }
         }
@@ -973,17 +963,15 @@ impl App {
         let mut out = String::from("\n");
         // minimal leaves the conversation in the scrollback, so it prints no summary
         if !minimal && (user.is_some() || reply.is_some()) {
-            let title = self
-                .session_title()
-                .or_else(|| {
-                    user.as_ref().map(|u| {
-                        let first = u.lines().next().unwrap_or("");
-                        if first.chars().count() > 60 {
-                            format!("{}...", first.chars().take(60).collect::<String>())
-                        } else {
-                            first.to_string()
-                        }
-                    })
+            let title = user
+                .as_ref()
+                .map(|u| {
+                    let first = u.lines().next().unwrap_or("");
+                    if first.chars().count() > 60 {
+                        format!("{}...", first.chars().take(60).collect::<String>())
+                    } else {
+                        first.to_string()
+                    }
                 })
                 .unwrap_or_else(|| format!("session {}", &id[..id.len().min(8)]));
             out.push_str(&tuikit::width::truncate(&title, w));

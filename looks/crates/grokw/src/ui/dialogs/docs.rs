@@ -1,4 +1,4 @@
-//! `/docs`: the How-to Guides list and a guide page (spec 6.11). The guides are the user guide
+//! The How-to Guides list and a guide page (spec 6.11). The guides are the user guide
 //! Grok Build installs under `~/.grok/docs/user-guide`; with that directory missing the list
 //! says so instead of inventing pages.
 
@@ -192,9 +192,9 @@ fn have() -> Vec<usize> {
         .collect()
 }
 
-pub fn open(app: &mut App, arg: &str) {
+pub fn open(app: &mut App) {
     app.enter_session();
-    let mut d = Docs {
+    let d = Docs {
         have: have(),
         sel: 0,
         top: 0,
@@ -203,17 +203,6 @@ pub fn open(app: &mut App, arg: &str) {
         page: None,
         body: String::new(),
     };
-    let want = arg.trim().to_lowercase();
-    if !want.is_empty() {
-        if let Some(i) = d
-            .have
-            .iter()
-            .copied()
-            .find(|&i| GUIDES[i].1.to_lowercase().contains(&want))
-        {
-            open_page(&mut d, i);
-        }
-    }
     app.modal = Some(Modal::Docs(d));
     app.dirty = true;
 }

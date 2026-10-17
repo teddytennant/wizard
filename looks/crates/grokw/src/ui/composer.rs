@@ -82,20 +82,6 @@ fn label_runs(app: &App, focused: bool) -> Vec<(String, Style)> {
     v
 }
 
-/// The caption in the top border: `Stashed`, the `/rename` title, or both.
-fn caption(app: &App) -> Option<String> {
-    let title = app
-        .titles
-        .get(&app.tr.session_id)
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty());
-    match (app.stash.is_some(), title) {
-        (true, Some(t)) => Some(format!("Stashed · {t}")),
-        (true, None) => Some("Stashed".into()),
-        (false, t) => t,
-    }
-}
-
 pub fn draw(buf: &mut Buffer, app: &mut App, lay: &Layout) {
     let th = app.theme.clone();
     let focused = focused(app);
@@ -104,13 +90,13 @@ pub fn draw(buf: &mut Buffer, app: &mut App, lay: &Layout) {
     let bs = st(bc);
     let right = r.x + r.width.saturating_sub(1);
     let bottom = r.y + r.height.saturating_sub(1);
-    // top border, with the caption near the right corner
+    // top border, with `Stashed` near the right corner
     let top = format!("╭{}╮", "─".repeat(r.width.saturating_sub(2) as usize));
     put(buf, r.x, r.y, &top, bs);
-    if let Some(cap) = caption(app) {
+    if app.stash.is_some() {
         let max_w = r.width.saturating_sub(6) as usize;
         if max_w >= 6 {
-            let label = truncate(&format!(" {cap} "), max_w);
+            let label = truncate(" Stashed ", max_w);
             let w = display_width(&label) as u16;
             put(
                 buf,
@@ -145,10 +131,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App, lay: &Layout) {
     let tx = r.x + 4;
     let tw = text_width(r.width);
     let text_area = Rect::new(tx, r.y + 1, tw, r.height.saturating_sub(2));
-    let search = app.inp.hist.as_ref().is_some_and(|p| !p.browse);
-    let (prefix, pc) = if search {
-        ("? ", th.accent_user)
-    } else if app.shell_mode {
+    let (prefix, pc) = if app.shell_mode {
         ("! ", th.command)
     } else if app.mode == Mode::Plan {
         ("❯ ", th.accent_plan)
@@ -602,7 +585,6 @@ pub enum PopupKind {
 pub struct PopupItem {
     /// Shown label (`/model`, `Grok 4.7 (current)`).
     pub label: String,
-    pub tag: Option<String>,
     pub desc: String,
     /// What Tab or Enter puts in the composer.
     pub insert: String,
@@ -690,7 +672,6 @@ fn at_popup(app: &App) -> Option<Popup> {
             } else {
                 h.path.clone()
             },
-            tag: None,
             desc: String::new(),
             insert: h.path,
             hits: h.hits.into_iter().map(|i| i as usize).collect(),
@@ -765,11 +746,11 @@ fn geometry(app: &App, p: &Popup, lay: &Layout) -> Option<Geo> {
     let w = lay.w.saturating_sub(2 * lay.hpad);
     let item_x = x0 + 2;
     let full_w = w.saturating_sub(2) as usize;
-    // the label column is as wide as the longest label plus tag over every item
+    // the label column is as wide as the longest label over every item
     let col = p
         .items
         .iter()
-        .map(|i| display_width(&i.label) + i.tag.as_ref().map_or(0, |t| display_width(t) + 1))
+        .map(|i| display_width(&i.label))
         .max()
         .unwrap_or(0)
         .min(40)
@@ -930,17 +911,6 @@ pub fn draw_popup(buf: &mut Buffer, app: &App, p: &Popup, lay: &Layout) {
                 }
                 let mut b = [0u8; 4];
                 x = put_str(buf, x, y, ch.encode_utf8(&mut b), s, clip);
-            }
-            if let Some(tag) = &it.tag {
-                let tx = item_x + 2 + col as u16 - display_width(tag) as u16;
-                put_str(
-                    buf,
-                    tx,
-                    y,
-                    tag,
-                    Style::new().fg(th.fuzzy_accent).bg(bg),
-                    clip,
-                );
             }
             put_str(
                 buf,

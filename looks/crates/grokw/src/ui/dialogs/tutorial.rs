@@ -1,4 +1,4 @@
-//! `/tutorial`: nine topics, each a short page (spec 6.13). The pages are the ones Grok Build
+//! The tutorial: nine topics, each a short page (spec 6.13). The pages are the ones Grok Build
 //! ships (Apache 2.0, SpaceXAI); a topic that describes something grokw does not have starts with
 //! a one-line note saying so.
 

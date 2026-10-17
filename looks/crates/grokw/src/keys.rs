@@ -231,10 +231,6 @@ fn session_key(app: &mut App, key: KeyEvent) {
         viewer_key(app, key);
         return;
     }
-    if app.view.nav.jump.is_some() {
-        jump_key(app, key);
-        return;
-    }
     if ctrl(&key, 'r') {
         app.open_resume();
         return;
@@ -260,7 +256,7 @@ fn session_key(app: &mut App, key: KeyEvent) {
         return;
     }
     if key.code == KeyCode::F(2) {
-        crate::commands::run(app, "settings", "");
+        dialogs::settings::open(app);
         return;
     }
     if ctrl(&key, 't') {
@@ -350,21 +346,7 @@ fn viewer_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// `/jump`: the list owns the keys until `Enter` or `Esc`.
-fn jump_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Down | KeyCode::Char('j') if plain(&key) => app.view.jump_move(1),
-        KeyCode::Up | KeyCode::Char('k') if plain(&key) => app.view.jump_move(-1),
-        KeyCode::Enter => {
-            app.view.jump_commit();
-            app.focus = Focus::Scrollback;
-        }
-        KeyCode::Esc => app.view.jump_cancel(),
-        _ => {}
-    }
-}
-
-/// `/find`: type a query, `Enter` accepts it, `Down`/`Up` (or `n`/`N` after accepting) step.
+/// The find bar: type a query, `Enter` accepts it, `Down`/`Up` (or `n`/`N` after accepting) step.
 fn find_key(app: &mut App, key: KeyEvent) {
     let composing = app.view.nav.find.as_ref().is_some_and(|f| f.composing);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -535,7 +517,7 @@ fn prompt_key(app: &mut App, key: KeyEvent) {
         }
         // Up on an empty composer browses the history; with text it moves a row
         KeyCode::Up if app.ed.is_empty() && plain(&key) && !app.shell_mode => {
-            hist::open(app, true);
+            hist::open(app);
         }
         _ => edit_key(app, key),
     }
@@ -1068,14 +1050,9 @@ pub fn on_paste(app: &mut App, text: &str) {
         app.focus = Focus::Prompt;
     }
     // a paste detaches a browsed history entry like any other edit
-    if app.inp.hist.as_ref().is_some_and(|p| p.browse) {
-        app.inp.hist = None;
-    }
+    app.inp.hist = None;
     input::paste(app, text);
     sync_popup(app);
-    if app.inp.hist.is_some() {
-        hist::refilter(app);
-    }
 }
 
 pub fn on_mouse(app: &mut App, ev: MouseEvent) {
@@ -1201,9 +1178,6 @@ fn viewer_mouse(app: &mut App, ev: &MouseEvent) -> bool {
 
 /// Clicks, drags and the scrollbar over the transcript. Returns whether the event was used.
 fn scrollback_mouse(app: &mut App, lay: &Layout, ev: &MouseEvent) -> bool {
-    if app.view.nav.jump.is_some() {
-        return false;
-    }
     let in_view = ev.row >= lay.view.y && ev.row < lay.view.y + lay.view.height;
     match ev.kind {
         MouseEventKind::Down(MouseButton::Left) => {

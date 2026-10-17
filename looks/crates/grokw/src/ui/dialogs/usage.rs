@@ -1,4 +1,4 @@
-//! `/context`, `/usage` and `/session-info`: one window with three tabs (spec 6.9). What the
+//! Context usage, usage and session info: one window with three tabs (spec 6.9). What the
 //! window shows is what wizard reports: tokens in context, the window size, session token totals
 //! and cost. The category breakdown of the context, the account allowance and the API timing are
 //! not in the ACP stream, so those places say so in the same words and colors Grok uses for an
@@ -250,9 +250,6 @@ type Fields = Vec<(&'static str, String)>;
 
 fn info_fields(app: &App) -> (Fields, Fields) {
     let mut long = Vec::new();
-    if let Some(t) = app.titles.get(&app.tr.session_id) {
-        long.push(("Title:", t.clone()));
-    }
     long.push((
         "Shell version:",
         format!("{} [alpha]", app.config.version()),

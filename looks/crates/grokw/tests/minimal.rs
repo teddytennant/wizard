@@ -81,7 +81,7 @@ fn the_slash_popup_is_a_rule_eight_rows_and_a_footer() {
         text.contains("↑/↓ navigate · enter confirm · esc cancel"),
         "{text}"
     );
-    assert!(text.contains("❯ /memory"), "{text}");
+    assert!(text.contains("❯ /model"), "{text}");
 }
 
 #[test]

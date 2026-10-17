@@ -1,4 +1,4 @@
-// OWNER: transcript (scrollback: entries, gaps, scroll, selection, sticky headers; find, jump, the viewer and copy are in `transcript_nav` and `transcript_viewer`)
+// OWNER: transcript (scrollback: entries, gaps, scroll, selection, sticky headers; find, the viewer and copy are in `transcript_nav` and `transcript_viewer`)
 //! The scrollback pane. The agent-core transcript is turned into [`Entry`]s (a user prompt, an
 //! agent message, a thinking block, a tool row, a verb group, a system line), each a list of
 //! [`Row`]s already laid out for the terminal width. Rows hold *what* to paint, including which
@@ -301,7 +301,7 @@ pub struct View {
     /// The member row selected inside the selected open group, with the group it belongs to.
     pub sel_member: Option<(EntryKey, usize)>,
     pub doc: Doc,
-    /// Find, jump, drag selection (`transcript_nav`).
+    /// Find, drag selection (`transcript_nav`).
     pub nav: super::transcript_nav::Nav,
     doc_sig: u64,
     cache: HashMap<EntryKey, (u64, Entry)>,

@@ -1,6 +1,6 @@
-// OWNER: transcript (find, jump, drag selection and copy over the laid-out scrollback)
-//! Things that work on the rows of the transcript rather than make them: the `/find` bar, the
-//! `/jump` list, the text a drag selects, and what `y` copies. Everything here reads
+// OWNER: transcript (find, drag selection and copy over the laid-out scrollback)
+//! Things that work on the rows of the transcript rather than make them: the find bar, the text a
+//! drag selects, and what `y` copies. Everything here reads
 //! [`Doc`] rows, so a match, a selection or a copy is exactly what is drawn.
 
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ use ratatui::style::{Modifier, Style};
 use unicode_width::UnicodeWidthChar;
 
 use super::transcript::{Doc, EntryKey, Kind, Row, View};
-use super::{bold, put, st, Layout};
+use super::{put, st, Layout};
 use crate::app::{App, Focus};
 use crate::theme::Theme;
 
@@ -20,7 +20,6 @@ use crate::theme::Theme;
 #[derive(Debug, Default)]
 pub struct Nav {
     pub find: Option<Find>,
-    pub jump: Option<Jump>,
     /// Messages shown as their markdown source (vim `r`).
     pub raw: HashSet<EntryKey>,
     pub drag: Option<Drag>,
@@ -269,179 +268,6 @@ pub fn draw_find(buf: &mut Buffer, app: &App, lay: &Layout) {
             put(buf, x0 + w - cw, bar, &c, st(th.gray));
         }
     }
-}
-
-// ---- jump -----------------------------------------------------------------------------------
-
-#[derive(Debug)]
-pub struct Jump {
-    pub sel: usize,
-    /// One row per turn, oldest first: the prompt's entry and a one-line preview.
-    pub turns: Vec<(EntryKey, String)>,
-    /// What to put back on `Esc`.
-    pub restore: (Option<usize>, Option<usize>, Option<EntryKey>),
-}
-
-impl View {
-    /// Open `/jump` over the turns the transcript has. `None` when there is nothing to jump to.
-    pub fn jump_open(&mut self, prompts: Vec<(EntryKey, String)>) -> bool {
-        if prompts.len() < 2 {
-            return false;
-        }
-        let sel = prompts.len() - 1;
-        self.nav.jump = Some(Jump {
-            sel,
-            turns: prompts,
-            restore: (self.offset, self.flip, self.selected),
-        });
-        self.jump_preview();
-        true
-    }
-
-    /// Scroll so the turn under the cursor is at the top, as `Enter` would leave it.
-    pub fn jump_preview(&mut self) {
-        let Some(key) = self
-            .nav
-            .jump
-            .as_ref()
-            .and_then(|j| j.turns.get(j.sel).map(|t| t.0))
-        else {
-            return;
-        };
-        if let Some(i) = self.doc.index_of(key) {
-            let to = self.doc.starts[i];
-            self.offset = Some(to.min(self.max_offset()));
-            self.flip = None;
-        }
-    }
-
-    pub fn jump_move(&mut self, delta: i32) {
-        if let Some(j) = self.nav.jump.as_mut() {
-            let max = j.turns.len() as i32 - 1;
-            j.sel = (j.sel as i32 + delta).clamp(0, max) as usize;
-        }
-        self.jump_preview();
-    }
-
-    /// `Enter`: stay where the preview put the view and select the prompt.
-    pub fn jump_commit(&mut self) {
-        if let Some(j) = self.nav.jump.take() {
-            if let Some((k, _)) = j.turns.get(j.sel) {
-                self.selected = Some(*k);
-            }
-        }
-    }
-
-    pub fn jump_cancel(&mut self) {
-        if let Some(j) = self.nav.jump.take() {
-            self.offset = j.restore.0;
-            self.flip = j.restore.1;
-            self.selected = j.restore.2;
-        }
-    }
-}
-
-/// Rows the list takes: a title row, up to 15 turns, a blank row at each end, capped at 60% of
-/// the screen (spec `overlay_list.rs`).
-pub fn overlay_height(turns: usize, screen_h: u16) -> u16 {
-    let rows = turns.min(15) as u16;
-    let h = 2 + rows;
-    let cap = ((screen_h as u32 * 60 / 100).max(6)) as u16;
-    h.min(cap) + 1
-}
-
-/// Draw a docked list in the prompt's slot: panel background, accent bar down the left, bold
-/// title, one row per item with the cursor row on the selection band.
-pub fn draw_list(
-    buf: &mut Buffer,
-    area: Rect,
-    th: &Theme,
-    title: &str,
-    rows: &[(String, String)],
-    sel: usize,
-) {
-    if area.height == 0 || area.width < 10 {
-        return;
-    }
-    buf.set_style(area, Style::new().bg(th.bg_light));
-    for y in area.y..area.y + area.height {
-        put(buf, area.x, y, "┃", st(th.accent_user).bg(th.bg_light));
-    }
-    let cx = area.x + 3;
-    let cw = area.width.saturating_sub(5);
-    put(
-        buf,
-        cx,
-        area.y + 1,
-        title,
-        bold(th.accent_user).bg(th.bg_light),
-    );
-    let visible = area.height.saturating_sub(3) as usize;
-    let first = if visible > 0 && sel >= visible {
-        sel - visible + 1
-    } else {
-        0
-    };
-    for (n, (lead, text)) in rows.iter().enumerate().skip(first).take(visible) {
-        let y = area.y + 2 + (n - first) as u16;
-        let cursor = n == sel;
-        let bg = if cursor { th.bg_visual } else { th.bg_light };
-        if cursor {
-            buf.set_style(Rect::new(cx - 1, y, cw + 2, 1), th_overlay(th));
-        }
-        let x = put(buf, cx, y, lead, st(th.gray).bg(bg));
-        let mut text_style = st(th.text_primary).bg(bg);
-        if cursor {
-            text_style = text_style.add_modifier(Modifier::BOLD);
-        }
-        let room = (cw as usize).saturating_sub(lead.chars().count());
-        let t = if text.chars().count() > room {
-            let cut: String = text.chars().take(room.saturating_sub(3)).collect();
-            format!("{cut}...")
-        } else {
-            text.clone()
-        };
-        put(buf, x, y, &t, text_style);
-    }
-}
-
-/// The selection band: a background on RGB themes, reverse video where there is none.
-fn th_overlay(th: &Theme) -> Style {
-    if th.bandless {
-        Style::new().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::new().bg(th.bg_visual)
-    }
-}
-
-pub fn draw_jump(buf: &mut Buffer, app: &App, lay: &Layout) {
-    let Some(j) = app.view.nav.jump.as_ref() else {
-        return;
-    };
-    let w = j.turns.len().to_string().len();
-    let rows: Vec<(String, String)> = j
-        .turns
-        .iter()
-        .enumerate()
-        .map(|(i, (_, p))| {
-            (
-                format!("{:>w$} ", i + 1),
-                if p.is_empty() {
-                    "(no preview)".to_string()
-                } else {
-                    p.clone()
-                },
-            )
-        })
-        .collect();
-    draw_list(
-        buf,
-        lay.composer,
-        &app.theme,
-        "Jump to which turn?",
-        &rows,
-        j.sel,
-    );
 }
 
 // ---- drag selection and copy ----------------------------------------------------------------

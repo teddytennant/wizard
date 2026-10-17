@@ -80,7 +80,7 @@ pub struct Layout {
     pub banner_y: Option<u16>,
     /// Dock rows (queue): `(first row, height)`.
     pub dock: Option<(u16, u16)>,
-    /// Divider row of the `/find` bar (the bar is the row below), when it is open.
+    /// Divider row of the find bar (the bar is the row below), when it is open.
     pub find_y: Option<u16>,
     pub composer: Rect,
     /// Text rows inside the composer box.
@@ -110,15 +110,7 @@ impl Layout {
         let max_rows = (h / 2).saturating_sub(2).max(1);
         let text_rows = composer::text_rows(app, comp_w, max_rows);
         let bottom = bar_y.saturating_sub(gap + 1);
-        // `/jump` takes the composer's slot with its list
-        let jump_h = app
-            .view
-            .nav
-            .jump
-            .as_ref()
-            .filter(|_| app.screen == Screen::Session)
-            .map(|j| transcript_nav::overlay_height(j.turns.len(), h));
-        let box_h = jump_h.unwrap_or(text_rows + 2);
+        let box_h = text_rows + 2;
         let top = (bottom + 1).saturating_sub(box_h);
         let composer = Rect::new(hpad, top, comp_w, box_h);
 
@@ -239,11 +231,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
     }
     let hide_chrome = app.screen == Screen::Home && app.home.picker.is_some();
     if !hide_chrome {
-        if app.screen == Screen::Session && app.view.nav.jump.is_some() {
-            transcript_nav::draw_jump(buf, app, &lay);
-        } else {
-            composer::draw(buf, app, &lay);
-        }
+        composer::draw(buf, app, &lay);
         footer::draw_bar(buf, app, &lay);
     }
     if app.screen == Screen::Session && app.view.nav.viewer.is_some() {

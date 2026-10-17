@@ -1,4 +1,4 @@
-// OWNER: dialogs (palette, cheatsheet, settings, context/usage, doctor, tutorial and the rest are stubs)
+// OWNER: dialogs (palette, cheatsheet, settings, context/usage, tutorial and the rest are stubs)
 //! Modal windows and the full-frame pickers. `modal_frame` is the shared chrome of spec 6.2
 //! (square border, title on the top edge, `[✗]` button, no dimming behind); the resume picker is
 //! built on it for the agent screen and as the full-frame list on home (spec 2.18, 6.8).
@@ -15,7 +15,6 @@ use super::{bold, dim, put, put_right, st, Layout};
 use crate::app::{App, Screen};
 
 pub mod docs;
-pub mod doctor;
 pub mod page;
 pub mod settings;
 mod settings_defs;
@@ -521,21 +520,17 @@ const PALETTE: &[(&str, &[(&str, &str)])] = &[
         &[
             ("New Session", "Ctrl+N"),
             ("New Session in Worktree", "Ctrl+P → worktree"),
-            ("Agent Dashboard", "/dashboard"),
-            ("Back to Home", "/home"),
-            ("Delete This Session", "/delete"),
+            ("Back to Home", ""),
             ("Resume Session", "/resume"),
-            ("Rename Session", "/rename "),
-            ("Session Info", "/session-info"),
-            ("Send Feedback", "/feedback"),
+            ("Session Info", ""),
         ],
     ),
     (
         "Context",
         &[
             ("Compact History", "/compact"),
-            ("Context Usage", "/context"),
-            ("View Plan", "/view-plan"),
+            ("Context Usage", ""),
+            ("View Plan", ""),
             ("Memory", "/memory"),
         ],
     ),
@@ -543,21 +538,8 @@ const PALETTE: &[(&str, &[(&str, &str)])] = &[
         "Model & Input",
         &[
             ("Switch Model", "/model"),
-            ("Always Approve Mode", "/always-approve"),
             ("Multiline Input", "/multiline"),
-            ("Edit Prompt in External Editor", "/edit-prompt"),
-        ],
-    ),
-    (
-        "Tools",
-        &[
-            ("Hooks", "/hooks"),
-            ("Plugins", "/plugins"),
-            ("Marketplace", "/marketplace"),
-            ("Skills", "/skills"),
-            ("Workflows", "/workflows"),
-            ("MCP Servers", "/mcps"),
-            ("Manage Agents", "/config-agents"),
+            ("Edit Prompt in External Editor", ""),
         ],
     ),
     (
@@ -566,8 +548,8 @@ const PALETTE: &[(&str, &[(&str, &str)])] = &[
             ("Switch Theme", "/theme"),
             ("Settings", "F2"),
             ("Keyboard Shortcuts", "Ctrl+."),
-            ("How-to Guides", "/docs"),
-            ("Tutorial", "/tutorial"),
+            ("How-to Guides", ""),
+            ("Tutorial", ""),
             ("Quit", "Ctrl+Q"),
         ],
     ),
@@ -811,9 +793,9 @@ pub fn palette_key(app: &mut App, key: KeyEvent) {
                     })
                 })?
             });
-            if let Some((_, right)) = pick {
+            if let Some((label, right)) = pick {
                 app.modal = None;
-                run_palette_entry(app, right);
+                run_palette_entry(app, label, right);
             }
         }
         _ => {}
@@ -821,24 +803,38 @@ pub fn palette_key(app: &mut App, key: KeyEvent) {
     app.dirty = true;
 }
 
-fn run_palette_entry(app: &mut App, right: &str) {
-    match right {
-        "Ctrl+N" => app.new_session(),
-        "Ctrl+P → worktree" => app.toast("Worktrees are not built in grokw yet."),
-        "F2" => crate::commands::run(app, "settings", ""),
-        "Ctrl+." => shortcuts::open(app),
-        "Ctrl+Q" => app.quit_now(),
-        "/edit-prompt" => {
+fn run_palette_entry(app: &mut App, label: &str, right: &str) {
+    match (label, right) {
+        (_, "Ctrl+N") => app.new_session(),
+        (_, "Ctrl+P → worktree") => app.toast("Worktrees are not built in grokw yet."),
+        (_, "F2") => settings::open(app),
+        (_, "Ctrl+.") => shortcuts::open(app),
+        (_, "Ctrl+Q") => app.quit_now(),
+        ("Back to Home", _) => app.go_home(),
+        ("Session Info", _) => usage::open(app, 2),
+        ("Context Usage", _) => usage::open(app, 0),
+        ("View Plan", _) => view_plan(app),
+        ("Edit Prompt in External Editor", _) => {
             // the palette keeps the draft
             app.enter_session();
             let draft = crate::ui::composer::input::expand_all(app, app.ed.text());
             crate::ui::composer::input::request_editor(app, draft);
         }
-        "/rename " => {
-            app.ed.set_text("/rename ");
-            app.enter_session();
-        }
-        cmd if cmd.starts_with('/') => crate::commands::run(app, &cmd[1..], ""),
+        ("How-to Guides", _) => docs::open(app),
+        ("Tutorial", _) => tutorial::open(app),
+        (_, cmd) if cmd.starts_with('/') => crate::commands::run(app, &cmd[1..], ""),
         _ => {}
+    }
+}
+
+fn view_plan(app: &mut App) {
+    app.enter_session();
+    let path = app.opts.cwd.join(".wizard").join("plan.md");
+    match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => {
+            app.note("The plan is read from .wizard/plan.md in the project. Wizard does not send plans over ACP.");
+            app.note(t);
+        }
+        _ => app.note("No plan found at .wizard/plan.md."),
     }
 }

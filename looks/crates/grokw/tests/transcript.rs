@@ -1,4 +1,4 @@
-//! Scrollback work: find, jump, vim keys, copy, the block viewer and mouse selection, against
+//! Scrollback work: find, vim keys, copy, the block viewer and mouse selection, against
 //! `reference/grok/120x36/{74b,75,76,63}` where a capture shows the state.
 
 mod common;
@@ -128,6 +128,16 @@ fn an_open_group_takes_the_cursor_member_by_member_and_matches_74b() {
     assert_eq!(h.app.view.member(), None);
 }
 
+/// Open the find bar the way a user can, `/` in vim mode with the scrollback focused, and type `q`.
+fn find(h: &mut Harness, q: &str) {
+    h.app.vim_mode = true;
+    if h.app.focus != Focus::Scrollback {
+        h.press(KeyCode::Tab);
+    }
+    h.type_str("/");
+    h.type_str(q);
+}
+
 /// Back-compat name for the tests below: the group open, the first prompt selected, one row down.
 fn find_state() -> Harness {
     let mut h = long_turn_real();
@@ -159,7 +169,7 @@ fn find_state() -> Harness {
 )]
 fn find_bar_matches_the_capture() {
     let mut h = find_state();
-    h.app.dispatch("/find table".into());
+    find(&mut h, "table");
     h.dump("find-120x36");
     assert_snapshot("find-120x36", &h.text());
     // the counter is the capture's `1/2` only when the reply also says `table`; the rest of the
@@ -177,7 +187,7 @@ fn find_bar_matches_the_capture() {
 #[test]
 fn find_steps_wraps_and_closes() {
     let mut h = find_state();
-    h.app.dispatch("/find ratatui".into());
+    find(&mut h, "ratatui");
     let n = h.app.view.nav.find.as_ref().unwrap().hits.len();
     assert!(
         n >= 3,
@@ -205,12 +215,12 @@ fn find_steps_wraps_and_closes() {
 #[test]
 fn find_is_smart_case_and_says_when_nothing_matches() {
     let mut h = find_state();
-    h.app.dispatch("/find DONE".into());
+    find(&mut h, "DONE");
     assert_eq!(h.app.view.nav.find.as_ref().unwrap().hits.len(), 0);
     let t = h.text();
     assert!(t.contains("no matches"), "{t}");
     h.press(KeyCode::Esc);
-    h.app.dispatch("/find done".into());
+    find(&mut h, "done");
     assert!(!h.app.view.nav.find.as_ref().unwrap().hits.is_empty());
 }
 
@@ -222,23 +232,12 @@ fn find_reveals_a_match_below_the_view() {
     h.render();
     h.app.view.to_top();
     h.render();
-    h.app.dispatch("/find successor".into());
+    find(&mut h, "successor");
     let t = h.text();
     assert!(
         t.contains("successor"),
         "the match scrolled into view:\n{t}"
     );
-}
-
-#[test]
-fn jump_with_one_turn_says_so() {
-    let mut h = Harness::new(120, 36);
-    h.long_turn(5);
-    h.pin_durations(&[2.3, 5.9, 2.5, 5.9], 39.0);
-    h.app.dispatch("/jump".into());
-    h.dump("jump-one-turn-120x36");
-    assert!(h.text().contains("Nothing to jump to yet"));
-    assert!(h.app.view.nav.jump.is_none());
 }
 
 fn three_turns() -> Harness {
@@ -261,52 +260,6 @@ fn three_turns() -> Harness {
         h.took(1.0);
     }
     h
-}
-
-#[test]
-fn jump_lists_turns_scrolls_as_you_move_and_restores_on_esc() {
-    let mut h = three_turns();
-    h.render();
-    let before = h.app.view.top();
-    h.app.dispatch("/jump".into());
-    let t = h.text();
-    assert!(t.contains("Jump to which turn?"), "{t}");
-    assert!(t.contains("1 first question about parsing"), "{t}");
-    assert!(t.contains("3 third question about the cursor"), "{t}");
-    h.dump("jump-120x36");
-    assert_snapshot("jump-120x36", &t);
-    // the cursor starts on the last turn; moving up previews the one above
-    h.press(KeyCode::Up);
-    h.render();
-    assert_eq!(h.app.view.nav.jump.as_ref().unwrap().sel, 1);
-    let top = h.app.view.top();
-    assert!(top < before || before == 0);
-    h.press(KeyCode::Esc);
-    assert!(h.app.view.nav.jump.is_none());
-    h.render();
-    assert_eq!(h.app.view.top(), before, "Esc puts the view back");
-    // Enter lands on the turn and leaves the list
-    h.app.dispatch("/jump".into());
-    h.type_str("kk");
-    h.press(KeyCode::Enter);
-    assert!(h.app.view.nav.jump.is_none());
-    assert_eq!(h.app.focus, Focus::Scrollback);
-    let sel = h.app.view.selected.unwrap();
-    assert_eq!(sel, (0, 0), "the first prompt is selected");
-}
-
-#[test]
-fn the_jump_list_is_docked_where_the_rewind_picker_sits() {
-    // geometry of 63-rewind-picker: the list ends on row 32 (H-4), one row above it for the
-    // title, one for each turn, a blank row at each end, and the host arrow row above
-    let mut h = three_turns();
-    h.app.dispatch("/jump".into());
-    let t = h.render();
-    let first = 32 - (1 + 1 + 3);
-    assert_eq!(t.cell(2, first).unwrap().symbol(), "┃");
-    assert_eq!(t.cell(2, 32).unwrap().symbol(), "┃");
-    assert_eq!(t.cell(2, first - 1).unwrap().symbol(), " ");
-    assert!(t.row(first + 1).contains("Jump to which turn?"));
 }
 
 fn select_tool(h: &mut Harness, word: &str) {

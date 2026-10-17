@@ -146,11 +146,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> Option<Buffer> {
             let cur = k == sel;
             let lead = if cur { "❯ " } else { "  " };
             let label_w = 28usize.min((w as usize).saturating_sub(2));
-            let mut label = it.label.clone();
-            if let Some(t) = &it.tag {
-                label.push_str(&format!(" {t}"));
-            }
-            let label = tuikit::width::truncate(&label, label_w);
+            let label = tuikit::width::truncate(&it.label, label_w);
             let main = if cur {
                 Style::new()
                     .fg(th.fuzzy_accent)

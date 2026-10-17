@@ -1,12 +1,12 @@
 minimal · /help
 ❯ /
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ /memory [new]               Browse, view, and manage your memories
-  /tutorial                   Quick tips to get the most out of Wizard
-  /settings                   Open the settings modal
-  /dashboard                  Open the Agent Dashboard
-  /workflows                  Browse installed workflows
-  /plugins                    View plugins
-  /btw                        Ask a side question without interrupting
-  /voice                      Toggle dictation (Ctrl+Space/F8; Esc/Enter to stop)
+❯ /model                      switch model
+  /mode                       switch mode
+  /effort                     set reasoning effort
+  /plan                       toggle plan mode
+  /compact                    summarize older history
+  /diff                       show the working tree diff
+  /todos                      show the todo list
+  /status                     show status
  ↑/↓ navigate · enter confirm · esc cancel

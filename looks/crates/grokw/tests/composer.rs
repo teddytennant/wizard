@@ -193,24 +193,6 @@ fn history_browse_walks_and_restores() {
     assert_eq!(h.app.ed.text(), "two");
 }
 
-#[test]
-fn history_search_filters_by_the_composer_text() {
-    let mut h = Harness::new(120, 36);
-    for t in ["fix the bug", "write a test", "fix the test"] {
-        h.app.ed.history_push(t);
-    }
-    h.type_str("/history");
-    h.press(KeyCode::Enter);
-    assert!(h.app.inp.hist.is_some());
-    h.type_str("bug");
-    let p = h.app.inp.hist.as_ref().unwrap();
-    assert_eq!(p.items.len(), 1);
-    h.dump("history-search-120x36");
-    assert_snapshot("history-search-120x36", &h.text());
-    h.press(KeyCode::Enter);
-    assert_eq!(h.app.ed.text(), "fix the bug");
-}
-
 fn project(h: &mut Harness) {
     h.app.files = [
         "README.md",
@@ -303,10 +285,7 @@ fn at_picker_window_scrolls_and_pages_by_four() {
 
 #[test]
 fn stash_caption_and_auto_return() {
-    each("stash-title", |h| {
-        h.app
-            .titles
-            .insert(h.app.tr.session_id.clone(), "Demo title".into());
+    each("stash-caption", |h| {
         h.type_str("draft");
         h.ctrl('s');
     });
@@ -358,7 +337,8 @@ fn unfocused_box_collapses_to_three_rows() {
 fn external_editor_is_requested_and_its_text_becomes_the_draft() {
     use grokw::ui::composer::input::edit_done;
     let mut h = Harness::new(120, 36);
-    h.type_str("/edit-prompt");
+    h.ctrl('p');
+    h.type_str("external");
     h.press(KeyCode::Enter);
     // an empty draft goes to the editor
     assert_eq!(h.app.inp.edit_request.take(), Some(String::new()));
@@ -395,14 +375,13 @@ fn popup_rows_hover_and_click() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let mut h = Harness::new(120, 36);
     h.type_str("/mo");
-    // rows start under the rule at 20: the third is a few lines down
-    mouse(&mut h, MouseEventKind::Moved, 30, 22);
+    // rows start under the rule at 24: /mode, then /model
+    mouse(&mut h, MouseEventKind::Moved, 30, 26);
     assert_eq!(h.app.inp.popup_hover, Some(1));
     h.dump("popup-hover-120x36");
     assert_snapshot("popup-hover-120x36", &h.text());
-    mouse(&mut h, MouseEventKind::Down(MouseButton::Left), 30, 21);
-    // the first row is /model, a command without arguments left: it ran
-    assert!(h.app.ed.is_empty() || h.app.ed.text().starts_with("/model"));
+    mouse(&mut h, MouseEventKind::Down(MouseButton::Left), 30, 26);
+    assert!(h.app.ed.text().starts_with("/model"));
 }
 
 #[test]
@@ -492,20 +471,4 @@ fn the_bar_follows_the_state() {
 #[test]
 fn a_long_prompt_wraps_into_four_rows() {
     each("typed-long", |h| h.type_str(PROMPT));
-}
-
-#[test]
-fn history_search_matches_the_real_panel_states() {
-    let mut h = Harness::new(120, 36);
-    h.type_str("/history");
-    h.press(KeyCode::Enter);
-    // the command itself is the one entry, as in the real session
-    h.dump("hist-search-120x36");
-    assert_snapshot("hist-search-open-120x36", &h.text());
-    h.type_str("zz");
-    h.dump("hist-search-none-120x36");
-    assert_snapshot("hist-search-none-120x36", &h.text());
-    h.press(KeyCode::Esc);
-    assert!(h.app.inp.hist.is_none());
-    assert_eq!(h.app.ed.text(), "");
 }

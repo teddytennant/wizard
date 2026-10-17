@@ -24,18 +24,18 @@
 
 
 
-  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────8─
-    ❯ /model         Switch the active model
-      /mode [wizard] switch mode
-      /compact-mode  Toggle compact UI (less padding, more content)
-      /vim-mode      Toggle vim-style scrollback keybindings (j/k, h/l, g/G, y/Y, …)
-      /memory  [new] Browse, view, and manage your memories
-      /import-claude Open the Claude settings import modal
-      /terminal-info Check this session and show available fixes
-      /imagine-video Generate a video from a text description
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────4─
+    ❯ /mode         switch mode
+      /model        switch model
+      /compact-mode Toggle compact UI (less padding, more content)
+      /vim-mode     Toggle vim-style scrollback keybindings (j/k, h/l, g/G, y/Y, …)
   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-  │ ❯ /model                                                                                                                                       │
+  │ ❯ /mode                                                                                                                                        │
   ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) ─╯
 
   Enter:send  │  Shift+Tab:mode  │  Ctrl+.:shortcuts

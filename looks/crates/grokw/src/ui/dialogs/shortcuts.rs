@@ -96,7 +96,7 @@ const GROUPS: &[(&str, bool, &[Row])] = &[
             rh(
                 "Prompt history",
                 "↑",
-                "Recalls previously sent prompts.\nPress Up on an empty prompt to browse earlier prompts, newest first; each move live-populates the composer so you can edit and resend.\nWith prompts queued, Up moves focus into the queue pane on the last row instead.\nRun /history to open a searchable history panel and filter by text.",
+                "Recalls previously sent prompts.\nPress Up on an empty prompt to browse earlier prompts, newest first; each move live-populates the composer so you can edit and resend.\nWith prompts queued, Up moves focus into the queue pane on the last row instead.",
             ),
         ],
     ),
@@ -116,8 +116,8 @@ const GROUPS: &[(&str, bool, &[Row])] = &[
             sb("Scroll down one page", "Page Down"),
             rh(
                 "Search scrollback",
-                "/find",
-                "Searches the conversation scrollback for text and jumps between matches.\nIn the prompt input, run /find to search. In vim mode, you can also press / while the scrollback is focused.\nType a query, then use n and N (or the arrow keys) to step through matches. Press Enter to jump to a match and Esc to dismiss.",
+                "/ (vim mode)",
+                "Searches the conversation scrollback for text and jumps between matches.\nIn vim mode, press / while the scrollback is focused.\nType a query, then use n and N (or the arrow keys) to step through matches. Press Enter to jump to a match and Esc to dismiss.",
             ),
         ],
     ),

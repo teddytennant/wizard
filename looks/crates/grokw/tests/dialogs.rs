@@ -78,25 +78,24 @@ fn after_turns(h: &mut Harness) {
     h.app.tr.usage.cost_usd = Some(0.1383);
 }
 
+fn palette(h: &mut Harness, query: &str) {
+    h.ctrl('p');
+    h.type_str(query);
+    h.press(KeyCode::Enter);
+}
+
 #[test]
 fn context_usage_and_session_info() {
-    for (name, cmd) in [
-        ("context", "/context"),
-        ("usage", "/usage"),
-        ("session-info", "/session-info"),
-    ] {
+    for (name, tab) in [("context", 0), ("usage", 1), ("session-info", 2)] {
         each(name, |h| {
-            h.type_str(cmd);
-            h.press(KeyCode::Enter);
+            grokw::ui::dialogs::usage::open(&mut h.app, tab);
             h.press(KeyCode::Esc);
-            h.type_str(cmd);
-            h.press(KeyCode::Enter);
+            grokw::ui::dialogs::usage::open(&mut h.app, tab);
         });
     }
     let mut h = Harness::new(120, 36);
     after_turns(&mut h);
-    h.type_str("/context");
-    h.press(KeyCode::Enter);
+    palette(&mut h, "context usage");
     h.dump("context-turns-120x36");
     assert_snapshot("context-turns-120x36", &h.text());
     h.press(KeyCode::Tab);
@@ -128,13 +127,9 @@ fn settings_modal() {
 
 #[test]
 fn tutorial_list_and_topic_pages() {
-    each("tutorial", |h| {
-        h.type_str("/tutorial");
-        h.press(KeyCode::Enter);
-    });
+    each("tutorial", |h| palette(h, "tutorial"));
     let mut h = Harness::new(120, 36);
-    h.type_str("/tutorial");
-    h.press(KeyCode::Enter);
+    palette(&mut h, "tutorial");
     h.press(KeyCode::Down);
     h.press(KeyCode::Enter);
     h.dump("tutorial-page-120x36");
@@ -164,60 +159,23 @@ fn docs_list_and_guide_page() {
     )
     .unwrap();
     std::env::set_var("GROK_HOME", &dir);
-    // `/docs` takes an argument, so the first Enter completes it and the second runs it
-    each("docs", |h| {
-        h.type_str("/docs");
-        h.press(KeyCode::Enter);
-        h.press(KeyCode::Enter);
-    });
+    each("docs", |h| palette(h, "guides"));
     let mut h = Harness::new(120, 36);
-    h.type_str("/docs");
-    h.press(KeyCode::Enter);
-    h.press(KeyCode::Enter);
+    palette(&mut h, "guides");
     h.press(KeyCode::Enter);
     h.dump("docs-page-120x36");
     assert_snapshot("docs-page-120x36", &h.text());
     h.press(KeyCode::Esc);
     h.press(KeyCode::Esc);
     assert!(h.app.modal.is_none());
-    // /docs <title> opens the guide directly
-    h.type_str("/docs keyboard");
-    h.press(KeyCode::Enter);
-    assert!(h.text().contains("Keyboard Shortcuts"));
     std::env::remove_var("GROK_HOME");
     std::fs::remove_dir_all(&dir).ok();
     // without the directory the list says so
     std::env::set_var("GROK_HOME", dir.join("none"));
     let mut h = Harness::new(120, 36);
-    h.type_str("/docs");
-    h.press(KeyCode::Enter);
-    h.press(KeyCode::Enter);
+    palette(&mut h, "guides");
     assert!(h.text().contains("No guides found"));
     std::env::remove_var("GROK_HOME");
-}
-
-#[test]
-fn doctor_block_in_the_transcript() {
-    use grokw::ui::dialogs::doctor::{report, Env};
-    let env = Env {
-        terminal: "Unknown".into(),
-        multiplexer: "tmux",
-        ssh: false,
-        truecolor: true,
-        native_clipboard: false,
-        tmux_clipboard: Some(true),
-        tmux_passthrough: Some(false),
-        tmux_extended_keys: Some(true),
-    };
-    each("doctor", |h| {
-        h.app.enter_session();
-        h.app.note(report(&env));
-    });
-    // /doctor fix is refused in words
-    let mut h = Harness::new(120, 36);
-    h.type_str("/doctor fix ssh-wrap");
-    h.press(KeyCode::Enter);
-    assert!(h.text().contains("/doctor fix is not supported by grokw"));
 }
 
 #[test]

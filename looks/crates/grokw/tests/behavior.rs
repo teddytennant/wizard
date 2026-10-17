@@ -95,21 +95,46 @@ fn unknown_slash_text_goes_to_the_model_as_a_prompt() {
 }
 
 #[test]
-fn unsupported_commands_say_so() {
-    let mut h = Harness::new(120, 36);
-    h.type_str("/delete");
-    h.press(KeyCode::Enter);
-    h.press(KeyCode::Enter);
-    assert!(h
-        .text()
-        .contains("Deleting a session is not supported by wizard"));
+fn wizard_commands_go_to_wizard_as_typed() {
+    for text in [
+        "/compact keep the plan",
+        "/memory",
+        "/delete",
+        "/fork try it",
+        "/rewind",
+    ] {
+        let mut h = Harness::new(120, 36);
+        h.app.dispatch(text.into());
+        let sent = h.sent();
+        assert!(
+            matches!(sent.as_slice(), [Request::Prompt(p)] if p == text),
+            "{text}: {sent:?}"
+        );
+        assert!(!h.text().contains("not supported"));
+    }
 }
 
 #[test]
-fn new_session_clears_the_transcript() {
+fn shared_commands_run_in_grokw() {
+    let mut h = Harness::new(120, 36);
+    h.app.dispatch("/help".into());
+    assert!(h.sent().is_empty());
+    let help = format!("{:?}", h.app.tr.messages.last());
+    assert!(
+        help.contains("/compact") && help.contains("/theme"),
+        "{help}"
+    );
+    h.app.dispatch("/resume 0191b6f0".into());
+    assert!(matches!(h.sent().as_slice(), [Request::LoadSession(id)] if id == "0191b6f0"));
+    h.app.dispatch("/quit".into());
+    assert!(h.app.quit);
+}
+
+#[test]
+fn clear_starts_a_new_session() {
     let mut h = Harness::new(120, 36);
     h.turn("hi", "hello");
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     h.press(KeyCode::Enter);
     let sent = h.sent();
