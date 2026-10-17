@@ -6,6 +6,11 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- **The looks live in this repository.** The six full looks moved from teddytennant/openw into `looks/`, their own cargo workspace, history included. A release builds them from the same commit as `wizard`, so `looks.rev` is gone, and CI now checks their formatting, clippy and tests. When a release has no looks for the platform, the installer builds them from the wizard tree instead of cloning openw, and `WIZARD_UI_REPO` is gone.
+- **Every look has the same slash commands.** The `/` menu in the opencode, codex, grok, pi, jcode and claude looks is Wizard's advertised commands, plus `/clear`, `/exit`, `/quit`, `/help`, `/model` and `/resume`, which every look answers the same way, plus a few display commands of the look's own such as opencode's `/theme`. The copies of each source app's commands are gone: `/new`, `/models`, `/sessions`, `/undo`, `/variants`, `/hotkeys`, a look's own `/fork`, `/status`, `/diff` and `/agents`, the rows that only said "not supported by wizard", and the rest. Typed, those names now reach Wizard, which runs its own command of that name or answers that it does not know it; every look now asks for unknown commands to be answered. [ui-skins.md](docs/ui-skins.md#slash-commands-in-the-full-looks) has the list.
+
 ## [3.9.0] - 2026-10-15
 
 ### Added
