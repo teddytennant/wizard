@@ -151,7 +151,7 @@ pub fn tip_text(app: &App) -> Option<String> {
     if !connected {
         return Some(format!(
             "Run {} to add an AI provider and start coding",
-            hl("/connect")
+            hl("/provider")
         ));
     }
     if app.sessions.is_empty() {

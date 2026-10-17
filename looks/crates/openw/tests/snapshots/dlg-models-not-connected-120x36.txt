@@ -24,7 +24,7 @@
 
 
 
-                                ● Tip Run /connect to add an AI provider and start coding
+                                ● Tip Run /provider to add an AI provider and start coding
 
 
 

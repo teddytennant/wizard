@@ -419,7 +419,7 @@ fn gs_box(t: &tuikit::Theme, w: usize, copy: &Copy) -> Vec<Line<'static>> {
     }
     rows.push(pad_row());
     let left = "Connect provider";
-    let right = "/connect";
+    let right = "/provider";
     let gap = col.saturating_sub(display_width(left) + display_width(right));
     rows.push(mk(
         Span::raw(" "),
