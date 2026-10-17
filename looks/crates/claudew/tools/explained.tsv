@@ -15,7 +15,6 @@ help*	both	https://\S+	docs link: Wizard's, not Anthropic's
 *model*	both	(?<=effort)( \(default\))? ←/→ to adjust\s*$	effort default: Wizard's efforts include an unnamed provider default, not a marked level
 *model*	both	Enter to (set as default|confirm).*$	model picker keys: no separate default or session-only pick in Wizard
 model-down	both	^   [○◐●◉] .*$	effort per model: Wizard lists one set of efforts, not which models take them
-status	ref	(?<=Status ) +Config +Usage +Stats\s*$	config, usage and stats tabs: Wizard has no settings editor or usage store behind ACP
 resume*	both	^\s+(Ctrl\+A to show all projects ·|to preview|(to )?search · Esc).*$	resume picker keys: no branch filter, preview or rename in Wizard's session list
 resume*	drop	^▔@@^\s+(to preview|(to )?search · Esc).*$	resume picker keys: the reference's longer key line takes two rows, so its panel sits a row higher
 compact	ref	^  ⎿\s+Read main\.rs \(4 lines\)\s*$	compact: Wizard's answer does not list the files it keeps in context
@@ -34,18 +33,12 @@ help-80x24	look	(?<=^.{55})(alt \+ p to switch|model|ctrl \+ s to stash|prompt|c
 help-[12]*	ref	(?<=^.{66})(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
 help-[12]*	look	(?<=^.{66})(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in \$EDITOR)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
 *	pair	You've used \d+% of your weekly limit.*\S@@[○◐●◉] \w+ · /effort	account notice: the reference's account was near its weekly limit while capturing; its notice takes the row where the look shows the effort notice
-status	squeeze-ref	^   (Session name|Session kind|Peer address|Login method|Organization|Email|Cloud sessions|Setting sources|Auto mode server):	status fields Wizard has no counterpart for: account, login, cloud sessions, IPC address, setting sources
-status	squeeze-look	^   (Effort|Mode|Backend):	status fields the reference does not list here: effort, Wizard's mode and the backend
-status	both	(?<=^   Model:             ).+$$	model name: the reference names the model by the alias it was started with (--model haiku), the look by the config's display name
 plan*	drop	>^  ─{20,}\s*$@@^     3\. Tell Wizard what to change\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
 plan*	drop	>^  ─{20,}\s*$@@^        shift\+tab to approve with this feedback\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
 plan*	drop	>^  ─{20,}\s*$@@^   (ctrl\+g to edit in \S+ ·|~/\.claude/plans/).*$	plan file: Wizard keeps the plan in its session, not in a file to open in an editor
 plan*	norm	(?<=^   [❯ ] [12]\. )\S.*\S@@Option	plan approval: Wizard's options are proceed and keep planning; the reference's are its two ways to proceed
 plan*	ref	^  ⎿  /plan to preview\s*$	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
 plan*	look	^● Updated plan\s*$	plan preview: Wizard's /plan toggles plan mode, so the plan's tool row has no line under it and sits a row lower
-wz-status	squeeze-ref	^   (Session name|Session kind|Peer address|Login method|Organization|Email|Cloud sessions|Setting sources|Auto mode server):	status fields Wizard has no counterpart for: account, login, cloud sessions, IPC address, setting sources
-wz-status	squeeze-look	^   (Effort|Mode|Backend):	status fields the reference does not list here: effort, Wizard's mode and the backend
-wz-status	shape	^   Settings  Status(   Config   Usage   Stats)?\s*$	config, usage and stats tabs: Wizard has no settings editor or usage store behind ACP
 wz-*	shape	^▔+( [○◐●◉] \w+ · /effort ▔)?\s*$	effort notice on the panel's edge: the recorded wizard's effort is its unnamed default, which has no notice
 wz-*	shape	You've used \d+% of your weekly limit	account notice: the reference's account was near its weekly limit while capturing
 wz-modes-*	shape-same	^  \S+ [a-z ]+ on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode stops: the reference's presses go to accept edits, plan and auto mode, Wizard's to sovereign, chat and plan; each row is the same form with its own mode's mark and name

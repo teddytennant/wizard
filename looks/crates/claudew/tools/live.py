@@ -289,9 +289,11 @@ def checks(out, size, version, log, cwd, history):
           'cycling modes prints nothing')
     mode = footer_mode(t)
     s = text(p('live-modes-status'))
-    m = re.search(r'Mode:\s+(\S+)', s)
-    check(fails, tag('live-modes'), m is not None and m.group(1) == mode,
-          'the footer (%r) and /status (%r) agree after a fast cycle' % (mode, m and m.group(1)))
+    m = re.findall(r'^\s*mode: (\S+)\s*$', s, re.M)
+    plan = re.findall(r'^\s*plan mode: (\S+)\s*$', s, re.M)
+    said = 'plan' if plan and plan[-1] != 'off' else m and m[-1]
+    check(fails, tag('live-modes'), said == mode,
+          'the footer (%r) and wizard\'s /status (%r) agree after a fast cycle' % (mode, said))
     check(fails, tag('live-modes'), footer_mode(text(p('live-modes-turn'))) == mode,
           'a turn does not move the mode')
     # what the fake model was offered on that turn says which mode wizard was really in
@@ -406,8 +408,8 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-plan-text'), footer_mode(text(p('live-plan-text'))) == 'plan',
           '/plan with text in plan mode leaves plan mode on')
     check(fails, tag('live-config'), request(log, '/config') is None, '/config is not sent to the model')
-    check(fails, tag('live-config'), 'no settings panel' in text(p('live-config')),
-          '/config says where the settings are')
+    check(fails, tag('live-config'), 'Unknown slash command' in text(p('live-config')),
+          'wizard answers /config as unknown')
     t = text(p('live-mode'))
     check(fails, tag('live-mode'), 'Select mode' in t and re.search(r'1\.\s+genie', t),
           '/mode opens a picker of wizard\'s modes')
@@ -445,10 +447,10 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-custom'), request(log, '/tmp what is here') is not None,
           'a path is a prompt, not an unknown command')
     check(fails, tag('live-queue-local'), request(log, 'fourth prompt') is not None,
-          'a prompt queued behind a local command is sent')
+          'a prompt queued behind a command is sent')
     check(fails, tag('live-queue-local'), 'Options can only be changed' not in text(p('live-queue-local')),
           'a queued /effort waits for the turn to end instead of being refused')
-    t = text(p('live-skill'))
+    t = text(p('live-skill')).split('/frontend-design make a landing page')[-1]
     check(fails, tag('live-skill'), 'Unknown slash command' not in t
           and request(log, 'make a landing page') is not None, 'a skill typed as a command reaches the model')
     check(fails, tag('live-queue-clear'), request(log, 'hello again') is not None,

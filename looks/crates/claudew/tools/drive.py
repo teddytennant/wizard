@@ -47,8 +47,6 @@ STATIC = [
     ('model', [('type', '/model'), ('keys', 'Enter'), ('until', r'Select model', 15),
                ('wait', 0.5), ('snap', ''), ('keys', 'Down'), ('snap', '-down'),
                ('keys', 'Escape'), ('wait', 1.5), ('snap', '-kept')]),
-    ('status', [('type', '/status'), ('keys', 'Enter'), ('until', r'Esc to cancel', 15),
-                ('wait', 0.8), ('snap', ''), ('keys', 'Escape'), ('wait', 0.5)]),
     ('resume', [('type', '/resume'), ('keys', 'Enter'), ('until', r'Resume session', 15),
                 ('wait', 1.0), ('snap', ''), ('keys', 'Down'), ('snap', '-down'),
                 ('keys', 'Escape'), ('wait', 0.5)]),
@@ -335,8 +333,6 @@ WIZARD = [
                  ('snap', '-commands'), ('keys', 'Escape'), ('wait', 0.5)]),
     ('wz-model', [('type', '/model'), ('keys', 'Enter'), ('wait', 0.5), ('snap', ''),
                   ('keys', 'Escape'), ('wait', 0.5)]),
-    ('wz-status', [('type', '/status'), ('keys', 'Enter'), ('wait', 0.5), ('snap', ''),
-                   ('keys', 'Escape'), ('wait', 0.5)]),
 ]
 
 GROUPS = {'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,

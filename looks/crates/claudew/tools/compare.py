@@ -51,8 +51,10 @@ REF_ONLY = [
 
 # Reference scenes of a dialog Wizard never raises: it asks before no tool runs (its one
 # question is a finished plan, compared in `plan`). The look still has these prompts for the
-# replay, but a match with them would prove nothing about Wizard.
+# replay, but a match with them would prove nothing about Wizard. `status` is Claude Code's
+# panel; the look sends /status to Wizard, which answers in text.
 NOT_COMPARED = [
+    ('status', 'Wizard answers /status in text, not in a panel'),
     ('edit-permission*', 'Wizard never asks before an edit'),
     ('write-permission', 'Wizard never asks before a write'),
     ('bash-permission', 'Wizard never asks before a command'),
