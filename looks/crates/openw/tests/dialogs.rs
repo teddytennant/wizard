@@ -9,6 +9,7 @@ use agent_core::{Config, Event};
 use common::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 use openw::app::AppOpts;
+use openw::keys::Action;
 use std::path::PathBuf;
 
 const SIZES: [(u16, u16); 2] = [(120, 36), (150, 42)];
@@ -24,6 +25,11 @@ fn press(h: &mut Harness, c: KeyCode) {
 fn slash(h: &mut Harness, cmd: &str) {
     h.type_str(cmd);
     press(h, KeyCode::Enter);
+}
+
+/// Open what the palette opens; these have no slash command.
+fn act(h: &mut Harness, a: Action) {
+    h.app.run_action(a);
 }
 
 /// Render at each reference size, compare with the snapshot and dump the ANSI.
@@ -94,30 +100,30 @@ fn palette() {
 
 #[test]
 fn models() {
-    each("models", |h| slash(h, "/models"));
+    each("models", |h| slash(h, "/model"));
     each("models-opencode", |h| {
         opencode_models(h);
-        slash(h, "/models");
+        slash(h, "/model");
     });
     each("models-not-connected", |h| {
         no_models(h);
-        slash(h, "/models");
+        slash(h, "/model");
     });
     each("models-filtered", |h| {
-        slash(h, "/models");
+        slash(h, "/model");
         h.type_str("fast");
     });
     each("models-favorite", |h| {
-        slash(h, "/models");
+        slash(h, "/model");
         ctrl(h, 'f');
         press(h, KeyCode::Esc);
-        slash(h, "/models");
+        slash(h, "/model");
     });
     each("variant", |h| {
         let mut cfg = agent_core::mock::config();
         cfg.effort = "turbo".into();
         h.event(Event::ConfigChanged(cfg));
-        slash(h, "/models");
+        slash(h, "/model");
         press(h, KeyCode::Down);
         press(h, KeyCode::Enter);
     });
@@ -125,9 +131,9 @@ fn models() {
 
 #[test]
 fn themes() {
-    each("themes", |h| slash(h, "/themes"));
+    each("themes", |h| slash(h, "/theme"));
     each("themes-down", |h| {
-        slash(h, "/themes");
+        slash(h, "/theme");
         press(h, KeyCode::Down);
     });
 }
@@ -136,38 +142,38 @@ fn themes() {
 fn sessions() {
     each("sessions", |h| {
         h.sessions(3);
-        slash(h, "/sessions");
+        slash(h, "/resume");
     });
     each("sessions-delete-confirm", |h| {
         h.sessions(3);
-        slash(h, "/sessions");
+        slash(h, "/resume");
         press(h, KeyCode::Down);
         ctrl(h, 'd');
     });
-    each("sessions-empty", |h| slash(h, "/sessions"));
+    each("sessions-empty", |h| slash(h, "/resume"));
     each("sessions-pinned", |h| {
         h.sessions(3);
-        slash(h, "/sessions");
+        slash(h, "/resume");
         press(h, KeyCode::Down);
         ctrl(h, 'f');
     });
     each("sessions-rename", |h| {
         h.sessions(3);
-        slash(h, "/sessions");
+        slash(h, "/resume");
         ctrl(h, 'r');
     });
 }
 
 #[test]
 fn small_dialogs() {
-    each("agents", |h| slash(h, "/agents"));
-    each("help", |h| slash(h, "/help"));
-    each("status", |h| slash(h, "/status"));
+    each("agents", |h| act(h, Action::Agents));
+    each("help", |h| act(h, Action::Help));
+    each("status", |h| act(h, Action::Status));
     // the OS and terminal rows depend on the machine, so mask their values
     for (w, h) in SIZES {
         let mut hn = Harness::new(w, h);
         hn.turn("hi", "Hello there.");
-        slash(&mut hn, "/debug");
+        act(&mut hn, Action::Debug);
         let key = format!("dlg-debug-{w}x{h}");
         hn.dump(&key);
         let masked: Vec<String> = hn
@@ -184,9 +190,9 @@ fn small_dialogs() {
             .collect();
         assert_snapshot(&key, &masked.join("\n"));
     }
-    each("connect", |h| slash(h, "/connect"));
+    each("connect", |h| act(h, Action::Connect));
     each("connect-instructions", |h| {
-        slash(h, "/connect");
+        act(h, Action::Connect);
         press(h, KeyCode::Enter);
     });
     each("rename", |h| {
@@ -195,11 +201,11 @@ fn small_dialogs() {
     });
     each("export", |h| {
         h.turn("hi", "Hello there.");
-        slash(h, "/export");
+        act(h, Action::Export);
     });
     each("export-options", |h| {
         h.turn("hi", "Hello there.");
-        slash(h, "/export");
+        act(h, Action::Export);
         press(h, KeyCode::Tab);
         press(h, KeyCode::Tab);
         h.type_str(" ");
@@ -259,17 +265,17 @@ fn fixture_dir() -> PathBuf {
 fn wizard_dir_dialogs() {
     for (w, h) in SIZES {
         let mut hn = with_wizard_dir(w, h);
-        slash(&mut hn, "/skills");
+        act(&mut hn, Action::Skills);
         check("skills", w, h, &mut hn);
         let mut hn = with_wizard_dir(w, h);
-        slash(&mut hn, "/mcps");
+        act(&mut hn, Action::Mcps);
         check("mcps", w, h, &mut hn);
         let mut hn = with_wizard_dir(w, h);
-        slash(&mut hn, "/status");
+        act(&mut hn, Action::Status);
         check("status-wizard", w, h, &mut hn);
     }
-    each("skills-empty", |h| slash(h, "/skills"));
-    each("mcps-empty", |h| slash(h, "/mcps"));
+    each("skills-empty", |h| act(h, Action::Skills));
+    each("mcps-empty", |h| act(h, Action::Mcps));
 }
 
 #[test]
@@ -301,11 +307,11 @@ fn message_dialogs() {
     };
     each("timeline", |h| {
         two(h);
-        slash(h, "/timeline");
+        act(h, Action::Timeline);
     });
     each("fork", |h| {
         two(h);
-        slash(h, "/fork");
+        act(h, Action::Fork);
     });
 }
 
@@ -339,25 +345,25 @@ fn reference_sizes() {
         hn.type_str("th");
         hn.dump(&format!("ref-07-palette-filtered-{w}x{hh}"));
     }
-    dump("help", 120, 44, &|h| slash(h, "/help"));
-    dump("status", 120, 44, &|h| slash(h, "/status"));
-    dump("agents", 120, 44, &|h| slash(h, "/agents"));
-    dump("mcps", 120, 44, &|h| slash(h, "/mcps"));
-    dump("skills", 120, 44, &|h| slash(h, "/skills"));
-    dump("debug", 120, 44, &|h| slash(h, "/debug"));
-    dump("themes", 120, 44, &|h| slash(h, "/themes"));
+    dump("help", 120, 44, &|h| act(h, Action::Help));
+    dump("status", 120, 44, &|h| act(h, Action::Status));
+    dump("agents", 120, 44, &|h| act(h, Action::Agents));
+    dump("mcps", 120, 44, &|h| act(h, Action::Mcps));
+    dump("skills", 120, 44, &|h| act(h, Action::Skills));
+    dump("debug", 120, 44, &|h| act(h, Action::Debug));
+    dump("themes", 120, 44, &|h| slash(h, "/theme"));
     dump("themes-preview-orng", 120, 44, &|h| {
-        slash(h, "/themes");
+        slash(h, "/theme");
         while !h.text().contains("orng") || h.app.theme.name != "orng" {
             press(h, KeyCode::Down);
         }
     });
-    dump("sessions-empty", 120, 44, &|h| slash(h, "/sessions"));
+    dump("sessions-empty", 120, 44, &|h| slash(h, "/resume"));
     dump("models", 120, 36, &|h| {
         no_models(h);
-        slash(h, "/models");
+        slash(h, "/model");
     });
-    dump("connect", 120, 36, &|h| slash(h, "/connect"));
+    dump("connect", 120, 36, &|h| act(h, Action::Connect));
     dump("palette-filtered", 120, 36, &|h| {
         h.type_str("hello");
         ctrl(h, 'p');
@@ -369,7 +375,7 @@ fn reference_sizes() {
     });
     dump("export", 120, 36, &|h| {
         h.turn("hi", "x");
-        slash(h, "/export");
+        act(h, Action::Export);
     });
     dump("stash", 120, 36, &|h| {
         h.app
@@ -414,7 +420,7 @@ fn reference_sizes() {
                 40,
             ),
         ]));
-        slash(h, "/sessions");
+        slash(h, "/resume");
     };
     let two = |h: &mut Harness| {
         h.turn(
@@ -425,11 +431,11 @@ fn reference_sizes() {
     };
     dump("timeline", 120, 36, &|h| {
         two(h);
-        slash(h, "/timeline");
+        act(h, Action::Timeline);
     });
     dump("fork", 120, 36, &|h| {
         two(h);
-        slash(h, "/fork");
+        act(h, Action::Fork);
     });
     dump("sessions", 120, 40, &ref_sessions);
     dump("sessions-confirm", 120, 40, &|h| {
@@ -650,7 +656,7 @@ fn saved(config: &std::path::Path) -> serde_json::Value {
 fn picking_a_model_sends_it_and_remembers_it() {
     let cfg = temp("model-cfg");
     let mut h = with_dirs(&cfg, &temp("model-w"));
-    slash(&mut h, "/models");
+    slash(&mut h, "/model");
     h.type_str("fast");
     press(&mut h, KeyCode::Enter);
     assert!(h.sent().contains(&agent_core::Request::SetModel(
@@ -659,7 +665,7 @@ fn picking_a_model_sends_it_and_remembers_it() {
     assert!(!h.app.dialogs.is_open());
     assert_eq!(saved(&cfg)["recent"][0], "xai-oauth/grok-4.6-fast");
     // reopened, it is under Recent
-    slash(&mut h, "/models");
+    slash(&mut h, "/model");
     assert!(h.text().contains("Recent"));
 }
 
@@ -667,11 +673,11 @@ fn picking_a_model_sends_it_and_remembers_it() {
 fn ctrl_f_favorites_the_selected_model_and_survives_a_restart() {
     let cfg = temp("fav-cfg");
     let mut h = with_dirs(&cfg, &temp("fav-w"));
-    slash(&mut h, "/models");
+    slash(&mut h, "/model");
     ctrl(&mut h, 'f');
     assert_eq!(saved(&cfg)["favorites"][0], "xai-oauth/grok-4.6");
     let mut again = with_dirs(&cfg, &temp("fav-w2"));
-    slash(&mut again, "/models");
+    slash(&mut again, "/model");
     assert!(again.text().contains("Favorites"));
     // pressing it again removes it
     ctrl(&mut again, 'f');
@@ -684,7 +690,7 @@ fn a_model_with_an_unknown_effort_asks_for_a_variant() {
     let mut cfg = agent_core::mock::config();
     cfg.effort = "turbo".into();
     h.event(Event::ConfigChanged(cfg));
-    slash(&mut h, "/models");
+    slash(&mut h, "/model");
     press(&mut h, KeyCode::Down);
     press(&mut h, KeyCode::Enter);
     assert!(h.text().contains("Select variant"));
@@ -702,14 +708,14 @@ fn the_theme_dialog_previews_keeps_and_restores() {
     let cfg = temp("theme-cfg");
     let mut h = with_dirs(&cfg, &temp("theme-w"));
     assert_eq!(h.app.theme.name, "opencode");
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     press(&mut h, KeyCode::Down);
     let previewed = h.app.theme.name.clone();
     assert_ne!(previewed, "opencode", "moving applies the theme live");
     press(&mut h, KeyCode::Esc);
     assert_eq!(h.app.theme.name, "opencode", "esc restores it");
     assert!(!cfg.join("state.json").exists(), "a preview is never saved");
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     press(&mut h, KeyCode::Down);
     press(&mut h, KeyCode::Enter);
     assert_eq!(h.app.theme.name, previewed);
@@ -742,7 +748,7 @@ fn the_selected_row_text_colour_is_fixed_when_the_theme_dialog_opens() {
     let cfg = temp("selfg-cfg");
     let mut h = with_dirs(&cfg, &temp("selfg-w"));
     let opening = h.app.theme.background;
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     h.render(); // the frame that follows opening it
                 // some neighbours share the default background; go on until one does not
     for _ in 0..12 {
@@ -755,7 +761,7 @@ fn the_selected_row_text_colour_is_fixed_when_the_theme_dialog_opens() {
     assert_eq!(sel_fg(&mut h), opening, "preview keeps the opening colour");
     press(&mut h, KeyCode::Enter);
     let now = h.app.theme.background;
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     assert_eq!(sel_fg(&mut h), now, "a new dialog reads the live theme");
 }
 
@@ -767,7 +773,7 @@ fn sessions_load_pin_rename_and_delete() {
     std::fs::write(wiz.join("sessions/s1.jsonl"), "{}").unwrap();
     let mut h = with_dirs(&cfg, &wiz);
     h.sessions(3);
-    slash(&mut h, "/sessions");
+    slash(&mut h, "/resume");
     // enter loads
     press(&mut h, KeyCode::Down);
     press(&mut h, KeyCode::Enter);
@@ -776,7 +782,7 @@ fn sessions_load_pin_rename_and_delete() {
         .contains(&agent_core::Request::LoadSession("s1".into())));
     // pin the first row: it moves to Pinned and takes slot 1
     h.sessions(3);
-    slash(&mut h, "/sessions");
+    slash(&mut h, "/resume");
     ctrl(&mut h, 'f');
     assert_eq!(saved(&cfg)["pinned"][0], "s0");
     assert!(h.text().contains("Pinned"));
@@ -790,7 +796,7 @@ fn sessions_load_pin_rename_and_delete() {
         .sent()
         .contains(&agent_core::Request::LoadSession("s0".into())));
     // rename
-    slash(&mut h, "/sessions");
+    slash(&mut h, "/resume");
     ctrl(&mut h, 'r');
     assert!(h.text().contains("Rename Session"));
     for _ in 0..20 {
@@ -800,7 +806,7 @@ fn sessions_load_pin_rename_and_delete() {
     press(&mut h, KeyCode::Enter);
     assert_eq!(saved(&cfg)["titles"]["s0"], "Fresh name");
     // delete takes two presses and removes the file
-    slash(&mut h, "/sessions");
+    slash(&mut h, "/resume");
     press(&mut h, KeyCode::Down);
     ctrl(&mut h, 'd');
     assert!(h.text().contains("Press ctrl+d again to confirm"));
@@ -820,7 +826,7 @@ fn sessions_load_pin_rename_and_delete() {
 #[test]
 fn the_sessions_dialog_refills_when_the_backend_answers() {
     let mut h = Harness::new(120, 36);
-    slash(&mut h, "/sessions");
+    slash(&mut h, "/resume");
     assert!(h.text().contains("No results found"));
     h.sessions(2);
     assert!(h.text().contains("Session 1"));
@@ -850,7 +856,7 @@ fn stash_enter_pops_and_ctrl_d_twice_deletes() {
 #[test]
 fn skills_insert_a_slash_command() {
     let mut h = with_wizard_dir(120, 36);
-    slash(&mut h, "/skills");
+    act(&mut h, Action::Skills);
     h.type_str("wrang");
     press(&mut h, KeyCode::Enter);
     assert_eq!(h.app.prompt.text(), "/wrangler ");
@@ -859,7 +865,7 @@ fn skills_insert_a_slash_command() {
 #[test]
 fn connect_explains_the_login_and_never_asks_for_a_key() {
     let mut h = Harness::new(120, 36);
-    slash(&mut h, "/connect");
+    act(&mut h, Action::Connect);
     press(&mut h, KeyCode::Enter);
     let t = h.text();
     assert!(t.contains("wizard --login xai"), "{t}");
@@ -874,7 +880,7 @@ fn export_writes_the_chosen_file_and_honors_the_options() {
     let path = dir.join("out.md");
     let mut h = Harness::new(120, 36);
     h.turn("hi", "Hello there.");
-    slash(&mut h, "/export");
+    act(&mut h, Action::Export);
     for _ in 0..40 {
         press(&mut h, KeyCode::Backspace);
     }
@@ -949,7 +955,7 @@ fn a_dismissed_question_is_reported() {
 fn clicking_the_dim_layer_closes_and_clicking_a_row_picks_it() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut h = Harness::new(120, 36);
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     h.render();
     let click = |h: &mut Harness, x: u16, y: u16, kind| {
         h.app.on_mouse(MouseEvent {
@@ -964,7 +970,7 @@ fn clicking_the_dim_layer_closes_and_clicking_a_row_picks_it() {
     click(&mut h, 2, 2, MouseEventKind::Up(MouseButton::Left));
     assert!(!h.app.dialogs.is_open());
     // on a row: down selects, up submits
-    slash(&mut h, "/themes");
+    slash(&mut h, "/theme");
     h.render();
     click(&mut h, 40, 16, MouseEventKind::Moved);
     click(&mut h, 40, 16, MouseEventKind::Down(MouseButton::Left));
@@ -1060,7 +1066,7 @@ fn confirm_runs_its_effects_only_on_confirm() {
 fn more_dialogs() {
     each("message-actions", |h| {
         h.turn("Fix the parser", "Done.");
-        slash(h, "/timeline");
+        act(h, Action::Timeline);
         press(h, KeyCode::Enter);
     });
     each("subagent", |h| {
@@ -1096,7 +1102,7 @@ fn a_skills_directory_that_cannot_be_read_says_so() {
                 ..Default::default()
             },
         );
-        slash(&mut hn, "/skills");
+        act(&mut hn, Action::Skills);
         let t = hn.text();
         assert!(t.contains("Could not load skills"), "{t}");
         check("skills-error", w, h, &mut hn);
@@ -1108,7 +1114,7 @@ fn message_actions_revert_rewinds_to_that_turn_and_restores_the_text() {
     let mut h = Harness::new(120, 36);
     h.turn("first question", "a");
     h.turn("second question", "b");
-    slash(&mut h, "/timeline");
+    act(&mut h, Action::Timeline);
     // newest first: pick the older one
     press(&mut h, KeyCode::Down);
     press(&mut h, KeyCode::Enter);

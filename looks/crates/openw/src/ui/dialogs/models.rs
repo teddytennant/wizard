@@ -1,5 +1,5 @@
 // OWNER: dialogs
-//! `/models`: the backend's models grouped by provider, with favorites and recent on top, and
+//! `/model`: the backend's models grouped by provider, with favorites and recent on top, and
 //! the variant (reasoning effort) dialog that can follow a pick.
 
 use agent_core::{Event, ModelOption, Request};

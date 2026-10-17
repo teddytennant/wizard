@@ -1,12 +1,21 @@
-//! One table behind the slash popup and the ctrl+p palette.
+//! The ctrl+p palette, and openw's own slash commands.
 //!
-//! Frontend commands carry opencode's names and wording. Commands the backend advertises
-//! (`Event::Commands`) are merged in after them; when both define a name, the frontend entry
-//! wins and calls the backend underneath. Anything wizard cannot do is simply not in the table,
-//! so it never shows up pretending to work.
+//! The palette carries opencode's entries and wording. The slash menu is the one every look
+//! has (`agent_core::commands::menu`): wizard's commands, the shared ones and the few extras
+//! below.
 
 use crate::keys::{Action, Keymap};
 use agent_core::SlashCommand;
+
+/// openw's slash commands on top of the shared ones: name, argument hint, description.
+pub fn extras() -> Vec<SlashCommand> {
+    agent_core::commands::extras(&[
+        ("copy", "", "copy the last response"),
+        ("theme", "[name]", "switch theme"),
+        ("thinking", "", "expand or collapse thinking"),
+        ("timestamps", "", "show or hide timestamps"),
+    ])
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
@@ -33,36 +42,22 @@ impl Category {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    Frontend,
-    Backend,
-}
-
 #[derive(Clone, Debug)]
 pub struct Command {
-    /// Slash name without the slash; `None` for palette-only entries.
-    pub name: Option<String>,
-    pub aliases: Vec<String>,
-    /// Palette title.
     pub title: String,
-    /// Text in the slash popup. Defaults to the title.
-    pub description: String,
     /// Muted text after the palette title (`Move to another project dir`).
     pub palette_desc: Option<String>,
     pub category: Category,
     pub action: Action,
     pub keybind: String,
     pub suggested: bool,
-    pub palette: bool,
-    pub source: Source,
     pub session_only: bool,
     pub home_only: bool,
 }
 
 /// What the table needs to know about the app to word and filter its entries.
 #[derive(Default)]
-pub struct CmdCtx<'a> {
+pub struct CmdCtx {
     pub in_session: bool,
     pub has_sessions: bool,
     pub sidebar_visible: bool,
@@ -76,7 +71,6 @@ pub struct CmdCtx<'a> {
     pub stash_nonempty: bool,
     pub tips_hidden: bool,
     pub light: bool,
-    pub backend: &'a [SlashCommand],
     /// The backend reported at least one model.
     pub connected: bool,
     /// The model has variants (wizard reports effort levels), which opencode lists as
@@ -93,29 +87,15 @@ struct B<'a> {
 }
 
 impl B<'_> {
-    #[allow(clippy::too_many_arguments)]
-    fn add(
-        &mut self,
-        name: Option<&str>,
-        aliases: &[&str],
-        title: &str,
-        desc: Option<&str>,
-        cat: Category,
-        action: Action,
-    ) -> &mut Command {
+    fn add(&mut self, title: &str, cat: Category, action: Action) -> &mut Command {
         let keybind = self.keymap.display(&action);
         self.out.push(Command {
-            name: name.map(String::from),
-            aliases: aliases.iter().map(|s| s.to_string()).collect(),
             title: title.to_string(),
-            description: desc.unwrap_or(title).to_string(),
             palette_desc: None,
             category: cat,
             action,
             keybind,
             suggested: false,
-            palette: true,
-            source: Source::Frontend,
             session_only: false,
             home_only: false,
         });
@@ -138,26 +118,8 @@ impl Command {
     }
 }
 
-/// Names the backend refuses or that a frontend entry covers.
-const HIDDEN_BACKEND: &[&str] = &[
-    "model",
-    "new",
-    "clear",
-    "exit",
-    "quit",
-    "resume",
-    "login",
-    "settings",
-    "dashboard",
-    "vim",
-    "view",
-    "resume-claude",
-    "help",
-    "cost",
-];
-
-/// Build the full list for the current state. Palette order within a category is the order
-/// entries are added here; the slash popup sorts alphabetically itself.
+/// Build the palette for the current state. Order within a category is the order entries are
+/// added here.
 pub fn build(ctx: &CmdCtx, keymap: &Keymap) -> Vec<Command> {
     use Category::*;
     let mut b = B {
@@ -167,197 +129,69 @@ pub fn build(ctx: &CmdCtx, keymap: &Keymap) -> Vec<Command> {
     let s = ctx.in_session;
 
     // Session group. opencode hides `Share session` when sharing is disabled in its config, and
-    // wizard has no sharing, so it stays out of the palette; typed, `/share` says so instead of
-    // the popup's fuzzy match running something else. The session-only entries are
-    // always built so a backend command of the same name is shadowed on
-    // the home screen too; the popup and palette filter them by screen.
+    // wizard has no sharing, so it stays out.
     {
-        b.add(
-            Some("share"),
-            &[],
-            "Share session",
-            Some("wizard has no session sharing"),
-            Session,
-            Action::Share,
-        )
-        .palette = false;
-        b.add(
-            Some("rename"),
-            &[],
-            "Rename session",
-            None,
-            Session,
-            Action::Rename,
-        )
-        .session();
-        b.add(
-            Some("timeline"),
-            &[],
-            "Jump to message",
-            None,
-            Session,
-            Action::Timeline,
-        )
-        .session();
-        b.add(
-            Some("fork"),
-            &[],
-            "Fork session",
-            None,
-            Session,
-            Action::Fork,
-        )
-        .session();
-        b.add(
-            Some("compact"),
-            &["summarize"],
-            "Compact session",
-            None,
-            Session,
-            Action::Compact,
-        )
-        .session();
-        b.add(
-            Some("undo"),
-            &[],
-            "Undo previous message",
-            None,
-            Session,
-            Action::Undo,
-        )
-        .session();
+        b.add("Rename session", Session, Action::Rename).session();
+        b.add("Jump to message", Session, Action::Timeline)
+            .session();
+        b.add("Fork session", Session, Action::Fork).session();
+        b.add("Compact session", Session, Action::Compact).session();
+        b.add("Undo previous message", Session, Action::Undo)
+            .session();
         let t = if ctx.sidebar_visible {
             "Hide sidebar"
         } else {
             "Show sidebar"
         };
-        b.add(None, &[], t, None, Session, Action::SidebarToggle)
-            .session();
+        b.add(t, Session, Action::SidebarToggle).session();
         let t = if ctx.conceal {
             "Disable code concealment"
         } else {
             "Enable code concealment"
         };
-        b.add(None, &[], t, None, Session, Action::ToggleConceal)
-            .session();
+        b.add(t, Session, Action::ToggleConceal).session();
         let t = if ctx.timestamps {
             "Hide timestamps"
         } else {
             "Show timestamps"
         };
-        b.add(
-            Some("timestamps"),
-            &["toggle-timestamps"],
-            t,
-            None,
-            Session,
-            Action::ToggleTimestamps,
-        )
-        .session();
+        b.add(t, Session, Action::ToggleTimestamps).session();
         let t = if ctx.thinking_shown {
             "Collapse thinking"
         } else {
             "Expand thinking"
         };
-        b.add(
-            Some("thinking"),
-            &["toggle-thinking"],
-            t,
-            None,
-            Session,
-            Action::ToggleThinking,
-        )
-        .session();
+        b.add(t, Session, Action::ToggleThinking).session();
         let t = if ctx.tool_details {
             "Hide tool details"
         } else {
             "Show tool details"
         };
-        b.add(None, &[], t, None, Session, Action::ToggleToolDetails)
+        b.add(t, Session, Action::ToggleToolDetails).session();
+        b.add("Toggle session scrollbar", Session, Action::ToggleScrollbar)
             .session();
-        b.add(
-            None,
-            &[],
-            "Toggle session scrollbar",
-            None,
-            Session,
-            Action::ToggleScrollbar,
-        )
-        .session();
         let t = if ctx.generic_output {
             "Hide generic tool output"
         } else {
             "Show generic tool output"
         };
-        b.add(None, &[], t, None, Session, Action::ToggleGenericOutput)
+        b.add(t, Session, Action::ToggleGenericOutput).session();
+        b.add("Copy last assistant message", Session, Action::CopyLast)
             .session();
-        b.add(
-            None,
-            &[],
-            "Copy last assistant message",
-            None,
-            Session,
-            Action::CopyLast,
-        )
-        .session();
-        b.add(
-            Some("copy"),
-            &[],
-            "Copy session transcript",
-            None,
-            Session,
-            Action::CopyTranscript,
-        )
-        .session();
-        b.add(
-            Some("export"),
-            &[],
-            "Export session transcript",
-            None,
-            Session,
-            Action::Export,
-        )
-        .session();
+        b.add("Copy session transcript", Session, Action::CopyTranscript)
+            .session();
+        b.add("Export session transcript", Session, Action::Export)
+            .session();
     }
     let editor = |b: &mut B| {
-        b.add(
-            Some("editor"),
-            &[],
-            "Open editor",
-            None,
-            Session,
-            Action::Editor,
-        );
-        b.add(
-            Some("move"),
-            &[],
-            "Move session",
-            None,
-            Session,
-            Action::MoveSession,
-        )
-        .palette_desc = Some("Move to another project dir".into());
-        let c = b.out.last_mut().expect("just pushed");
-        c.description = "Move to another project dir".into();
+        b.add("Open editor", Session, Action::Editor);
+        b.add("Move session", Session, Action::MoveSession)
+            .palette_desc = Some("Move to another project dir".into());
     };
     let switcher = |b: &mut B| {
-        let c = b.add(
-            Some("sessions"),
-            &["resume", "continue"],
-            "Switch session",
-            None,
-            Session,
-            Action::Sessions,
-        );
+        let c = b.add("Switch session", Session, Action::Sessions);
         c.suggested = ctx.has_sessions;
-        let c = b.add(
-            Some("new"),
-            &["clear"],
-            "New session",
-            None,
-            Session,
-            Action::NewSession,
-        );
+        let c = b.add("New session", Session, Action::NewSession);
         c.suggested = s;
     };
     // Registration order in opencode moves with timing: after the first turn the switcher
@@ -373,61 +207,25 @@ pub fn build(ctx: &CmdCtx, keymap: &Keymap) -> Vec<Command> {
     }
     // Prompt group.
     if ctx.prompt_has_text {
-        b.add(None, &[], "Stash prompt", None, Prompt, Action::StashPush);
+        b.add("Stash prompt", Prompt, Action::StashPush);
     }
     if ctx.stash_nonempty {
-        b.add(None, &[], "Stash pop", None, Prompt, Action::StashPop);
-        b.add(None, &[], "Stash list", None, Prompt, Action::StashList);
+        b.add("Stash pop", Prompt, Action::StashPop);
+        b.add("Stash list", Prompt, Action::StashList);
     }
-    b.add(Some("skills"), &[], "Skills", None, Prompt, Action::Skills);
+    b.add("Skills", Prompt, Action::Skills);
 
     // Agent group.
-    b.add(
-        Some("models"),
-        &["mo"],
-        "Switch model",
-        None,
-        Agent,
-        Action::Models,
-    )
-    .suggest();
-    b.add(
-        Some("agents"),
-        &[],
-        "Switch agent",
-        None,
-        Agent,
-        Action::Agents,
-    );
-    b.add(Some("mcps"), &[], "Toggle MCPs", None, Agent, Action::Mcps);
-    b.add(
-        None,
-        &[],
-        "Variant cycle",
-        None,
-        Agent,
-        Action::VariantCycle,
-    );
+    b.add("Switch model", Agent, Action::Models).suggest();
+    b.add("Switch agent", Agent, Action::Agents);
+    b.add("Toggle MCPs", Agent, Action::Mcps);
+    b.add("Variant cycle", Agent, Action::VariantCycle);
     if ctx.has_variants {
-        b.add(
-            Some("variants"),
-            &[],
-            "Switch model variant",
-            None,
-            Agent,
-            Action::Variants,
-        );
+        b.add("Switch model variant", Agent, Action::Variants);
     }
 
     // Provider.
-    let c = b.add(
-        Some("connect"),
-        &[],
-        "Connect provider",
-        None,
-        Provider,
-        Action::Connect,
-    );
+    let c = b.add("Connect provider", Provider, Action::Connect);
     c.suggested = !ctx.connected;
 
     // System group. Tips and plugins register first on the home screen and last in a session,
@@ -439,98 +237,42 @@ pub fn build(ctx: &CmdCtx, keymap: &Keymap) -> Vec<Command> {
             } else {
                 "Hide tips"
             };
-            b.add(None, &[], t, None, System, Action::TipsToggle).home();
+            b.add(t, System, Action::TipsToggle).home();
         }
-        b.add(None, &[], "Plugins", None, System, Action::Plugins);
-        b.add(
-            None,
-            &[],
-            "Install plugin",
-            None,
-            System,
-            Action::InstallPlugin,
-        );
+        b.add("Plugins", System, Action::Plugins);
+        b.add("Install plugin", System, Action::InstallPlugin);
     };
     if !s {
         tips_plugins(&mut b);
     }
-    b.add(
-        Some("status"),
-        &[],
-        "View status",
-        None,
-        System,
-        Action::Status,
-    );
-    b.add(
-        Some("debug"),
-        &[],
-        "View debug info",
-        None,
-        System,
-        Action::Debug,
-    );
-    b.add(
-        Some("themes"),
-        &["theme"],
-        "Switch theme",
-        None,
-        System,
-        Action::Themes,
-    );
+    b.add("View status", System, Action::Status);
+    b.add("View debug info", System, Action::Debug);
+    b.add("Switch theme", System, Action::Themes);
     let t = if ctx.light {
         "Switch to dark mode"
     } else {
         "Switch to light mode"
     };
-    b.add(None, &[], t, None, System, Action::ToggleMode);
-    b.add(
-        None,
-        &[],
-        "Lock theme mode",
-        None,
-        System,
-        Action::LockThemeMode,
-    );
-    b.add(Some("help"), &[], "Help", None, System, Action::Help);
-    b.add(None, &[], "Open docs", None, System, Action::OpenDocs);
-    b.add(
-        Some("exit"),
-        &["quit", "q"],
-        "Exit the app",
-        None,
-        System,
-        Action::Exit,
-    );
-    b.add(
-        None,
-        &[],
-        "Toggle debug panel",
-        None,
-        System,
-        Action::DebugPanel,
-    );
-    b.add(None, &[], "Toggle console", None, System, Action::Console);
-    b.add(
-        None,
-        &[],
-        "Write heap snapshot",
-        None,
-        System,
-        Action::HeapSnapshot,
-    );
+    b.add(t, System, Action::ToggleMode);
+    b.add("Lock theme mode", System, Action::LockThemeMode);
+    b.add("Help", System, Action::Help);
+    b.add("Open docs", System, Action::OpenDocs);
+    b.add("Exit the app", System, Action::Exit);
+    b.add("Toggle debug panel", System, Action::DebugPanel);
+    b.add("Toggle console", System, Action::Console);
+    b.add("Write heap snapshot", System, Action::HeapSnapshot);
     let t = if ctx.title_enabled {
         "Disable terminal title"
     } else {
         "Enable terminal title"
     };
-    b.add(None, &[], t, None, System, Action::ToggleTerminalTitle);
+    b.add(t, System, Action::ToggleTerminalTitle);
     let t = if ctx.animations {
         "Disable animations"
     } else {
         "Enable animations"
     };
-    b.add(None, &[], t, None, System, Action::ToggleAnimations);
+    b.add(t, System, Action::ToggleAnimations);
     for (title, what) in [
         ("Disable file context", "file context"),
         ("Disable diff wrapping", "diff wrapping"),
@@ -544,120 +286,16 @@ pub fn build(ctx: &CmdCtx, keymap: &Keymap) -> Vec<Command> {
             "auto-approve permissions",
         ),
     ] {
-        b.add(None, &[], title, None, System, Action::Unsupported(what));
+        b.add(title, System, Action::Unsupported(what));
     }
     if s {
         tips_plugins(&mut b);
     }
 
     // VCS.
-    b.add(
-        Some("diff"),
-        &[],
-        "Open diff viewer",
-        None,
-        Vcs,
-        Action::Diff,
-    );
+    b.add("Open diff viewer", Vcs, Action::Diff);
 
-    // Prompt templates opencode ships as slash commands; not in its palette.
-    b.add(
-        Some("init"),
-        &[],
-        "Initialize AGENTS.md",
-        Some("guided AGENTS.md setup"),
-        Prompt,
-        Action::Template("init"),
-    )
-    .palette = false;
-    b.add(
-        Some("review"),
-        &[],
-        "Review changes",
-        Some("review changes [commit|branch|pr], defaults to uncommitted"),
-        Prompt,
-        Action::Template("review"),
-    )
-    .palette = false;
-
-    let mut out = b.out;
-
-    // Slash-only descriptions that differ from the palette title.
-    for c in out.iter_mut() {
-        if c.title == "Switch theme" {
-            c.description = "Switch theme".into();
-        }
-    }
-    // Backend commands, after the frontend names so those win a clash.
-    for sc in ctx.backend {
-        if HIDDEN_BACKEND.contains(&sc.name.as_str())
-            || out.iter().any(|c| {
-                c.name.as_deref() == Some(sc.name.as_str())
-                    || c.aliases.iter().any(|a| a == &sc.name)
-            })
-        {
-            continue;
-        }
-        let mut desc = sc.description.clone();
-        if !sc.input_hint.is_empty() {
-            desc = format!("{desc} {}", sc.input_hint);
-        }
-        out.push(Command {
-            name: Some(sc.name.clone()),
-            aliases: Vec::new(),
-            title: sc.name.clone(),
-            description: desc,
-            palette_desc: None,
-            category: Category::Session,
-            action: Action::InsertSlash(sc.name.clone()),
-            keybind: String::new(),
-            suggested: false,
-            palette: false,
-            source: Source::Backend,
-            session_only: false,
-            home_only: false,
-        });
-    }
-    out
-}
-
-/// The prompt a template command sends. `args` is whatever followed the command.
-pub fn template(name: &str, args: &str) -> String {
-    match name {
-        "init" => "Look through this repository and write an AGENTS.md at its root for coding \
-                   agents: how to build, test and lint, the code style in use, how the \
-                   directories are laid out, and anything an agent would get wrong without being \
-                   told. Keep it short and specific to this project. If an AGENTS.md exists, \
-                   improve it instead of starting over."
-            .to_string(),
-        _ => {
-            let what = if args.is_empty() {
-                "the uncommitted changes in the working tree".to_string()
-            } else {
-                args.to_string()
-            };
-            format!(
-                "Review {what}. Read the diff, then report bugs, risky changes and missing \
-                 tests, each with the file and line. Do not edit anything."
-            )
-        }
-    }
-}
-
-/// Entries for the slash popup, alphabetical by name, filtered to the current screen.
-/// Commands the backend added come after the frontend ones, so what opencode shows first stays
-/// first.
-pub fn slash_entries(cmds: &[Command], in_session: bool) -> Vec<&Command> {
-    let mut v: Vec<&Command> = cmds
-        .iter()
-        .filter(|c| c.name.is_some())
-        .filter(|c| in_session || !c.session_only)
-        .filter(|c| !in_session || !c.home_only)
-        .collect();
-    v.sort_by(|a, b| {
-        (a.source == Source::Backend, &a.name).cmp(&(b.source == Source::Backend, &b.name))
-    });
-    v
+    b.out
 }
 
 /// Palette categories in the order each screen shows them, as the real palette lists them in
@@ -674,85 +312,46 @@ pub fn category_order(in_session: bool, has_sessions: bool, stash: bool) -> &'st
     }
 }
 
-/// Look a typed `/name` up, aliases included.
-pub fn find<'a>(cmds: &'a [Command], name: &str) -> Option<&'a Command> {
-    cmds.iter()
-        .find(|c| c.name.as_deref() == Some(name) || c.aliases.iter().any(|a| a == name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn names(v: &[&Command]) -> Vec<String> {
-        v.iter().map(|c| c.name.clone().unwrap()).collect()
-    }
-
     #[test]
-    fn home_popup_is_alphabetical_and_hides_session_commands() {
-        let km = Keymap::new();
-        let cmds = build(&CmdCtx::default(), &km);
-        let n = names(&slash_entries(&cmds, false));
-        assert!(n.windows(2).all(|w| w[0] <= w[1]), "{n:?}");
-        assert!(n.contains(&"models".to_string()));
-        assert!(!n.contains(&"compact".to_string()));
-    }
-
-    #[test]
-    fn session_popup_has_session_commands() {
-        let km = Keymap::new();
-        let cmds = build(
-            &CmdCtx {
-                in_session: true,
-                ..Default::default()
-            },
-            &km,
-        );
-        let n = names(&slash_entries(&cmds, true));
-        for want in ["compact", "undo", "timeline", "export", "thinking"] {
-            assert!(n.contains(&want.to_string()), "{want} missing");
-        }
-    }
-
-    #[test]
-    fn frontend_wins_a_name_clash_and_backend_extras_are_added() {
-        let km = Keymap::new();
-        let be = vec![
-            SlashCommand {
-                name: "compact".into(),
-                description: "wizard compact".into(),
+    fn slash_menu_is_wizards_commands_the_shared_ones_and_the_extras() {
+        let be: Vec<SlashCommand> = ["model", "compact", "effort", "agents", "diff"]
+            .into_iter()
+            .map(|n| SlashCommand {
+                name: n.into(),
+                description: format!("wizard {n}"),
                 input_hint: String::new(),
-            },
-            SlashCommand {
-                name: "effort".into(),
-                description: "set effort".into(),
-                input_hint: "<low|high>".into(),
-            },
-            SlashCommand {
-                name: "clear".into(),
-                description: "refused".into(),
-                input_hint: String::new(),
-            },
-        ];
-        let cmds = build(
-            &CmdCtx {
-                in_session: true,
-                backend: &be,
-                ..Default::default()
-            },
-            &km,
+            })
+            .collect();
+        let menu = agent_core::commands::menu(&be, &extras());
+        let names: Vec<&str> = menu.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "model",
+                "compact",
+                "effort",
+                "agents",
+                "diff",
+                "clear",
+                "exit",
+                "help",
+                "quit",
+                "resume",
+                "copy",
+                "theme",
+                "thinking",
+                "timestamps"
+            ]
         );
-        let compact = find(&cmds, "compact").unwrap();
-        assert_eq!(compact.source, Source::Frontend);
-        let effort = find(&cmds, "effort").unwrap();
-        assert_eq!(effort.source, Source::Backend);
-        assert_eq!(effort.description, "set effort <low|high>");
-        assert_eq!(find(&cmds, "clear").unwrap().action, Action::NewSession);
     }
 
     fn titles(cmds: &[Command], cat: Category) -> Vec<String> {
         cmds.iter()
-            .filter(|c| c.category == cat && c.palette)
+            .filter(|c| c.category == cat)
             .filter(|c| !c.session_only || cmds_in_session(cmds))
             .map(|c| c.title.clone())
             .collect()
@@ -816,7 +415,7 @@ mod tests {
             },
             &km,
         );
-        assert!(!cmds.iter().any(|c| c.palette && c.title == "Share session"));
+        assert!(!cmds.iter().any(|c| c.title == "Share session"));
         let sys = titles(&cmds, Category::System);
         assert_eq!(sys[0], "View status");
         assert_eq!(&sys[sys.len() - 2..], ["Plugins", "Install plugin"]);
@@ -849,46 +448,5 @@ mod tests {
             ]
         );
         assert_eq!(with(false).len(), 4);
-    }
-
-    #[test]
-    fn init_and_review_are_slash_only_templates() {
-        let km = Keymap::new();
-        let cmds = build(&CmdCtx::default(), &km);
-        for name in ["init", "review"] {
-            let c = find(&cmds, name).unwrap();
-            assert!(!c.palette);
-            assert_eq!(c.source, Source::Frontend);
-        }
-        assert!(template("review", "main").starts_with("Review main."));
-        assert!(template("review", "").contains("uncommitted"));
-    }
-
-    #[test]
-    fn backend_commands_come_after_the_frontend_ones_in_the_popup() {
-        let km = Keymap::new();
-        let be = vec![SlashCommand {
-            name: "effort".into(),
-            description: "set effort".into(),
-            input_hint: String::new(),
-        }];
-        let cmds = build(
-            &CmdCtx {
-                backend: &be,
-                ..Default::default()
-            },
-            &km,
-        );
-        let n = names(&slash_entries(&cmds, false));
-        assert_eq!(n.last().unwrap(), "effort");
-        assert!(n.iter().position(|x| x == "themes") < n.iter().position(|x| x == "effort"));
-    }
-
-    #[test]
-    fn aliases_resolve() {
-        let km = Keymap::new();
-        let cmds = build(&CmdCtx::default(), &km);
-        assert_eq!(find(&cmds, "quit").unwrap().action, Action::Exit);
-        assert_eq!(find(&cmds, "mo").unwrap().action, Action::Models);
     }
 }

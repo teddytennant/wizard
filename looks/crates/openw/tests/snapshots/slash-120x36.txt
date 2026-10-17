@@ -5,16 +5,16 @@
 
 
 
-                       ┃ /agents     Switch agent                                                ┃
-                       ┃ /connect    Connect provider                                            ┃
-                       ┃ /debug      View debug info                                             ┃
-                       ┃ /diff       Open diff viewer                                            ┃
-                       ┃ /editor     Open editor                                                 ┃
-                       ┃ /exit       Exit the app                                                ┃
-                       ┃ /help       Help                                                        ┃
-                       ┃ /init       guided AGENTS.md setup                                      ┃
-                       ┃ /mcps       Toggle MCPs                                                 ┃
-                       ┃ /models     Switch model                                                ┃
+                       ┃ /agents       list subagents                                            ┃
+                       ┃ /clear        clear the conversation                                    ┃
+                       ┃ /compact      summarize older history                                   ┃
+                       ┃ /copy         copy the last response                                    ┃
+                       ┃ /cost         show cost                                                 ┃
+                       ┃ /diff         show the working tree diff                                ┃
+                       ┃ /effort       set reasoning effort <low|medium|high>                    ┃
+                       ┃ /exit         exit wizard                                               ┃
+                       ┃ /help         show help                                                 ┃
+                       ┃ /mode         switch mode <genie|sovereign>                             ┃
                        ┃
                        ┃  /
                        ┃

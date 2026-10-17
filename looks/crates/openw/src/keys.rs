@@ -68,7 +68,6 @@ pub enum Action {
     ChildPrev,
     ChildNext,
     Fork,
-    Share,
     Plugins,
     InstallPlugin,
     LockThemeMode,
@@ -86,10 +85,8 @@ pub enum Action {
     SwitchPinned(u8),
     /// Send `/name` to the backend as a prompt.
     Backend(String),
-    /// Put `/name ` in the prompt and let the user finish it.
-    InsertSlash(String),
-    /// A slash command that is a prompt template (`/init`, `/review`), as in opencode.
-    Template(&'static str),
+    /// A slash command openw answers itself, picked from the popup.
+    Slash(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

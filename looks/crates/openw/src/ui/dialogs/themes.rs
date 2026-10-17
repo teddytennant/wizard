@@ -1,5 +1,5 @@
 // OWNER: dialogs
-//! `/themes`: every built-in theme. Moving the selection previews it live, enter keeps it and
+//! `/theme`: every built-in theme. Moving the selection previews it live, enter keeps it and
 //! stores it, esc restores the one that was active.
 
 use crossterm::event::{KeyEvent, MouseEvent};

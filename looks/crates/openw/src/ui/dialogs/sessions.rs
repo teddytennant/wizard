@@ -1,5 +1,5 @@
 // OWNER: dialogs
-//! `/sessions`: the sessions the backend lists, pinned ones first, then one group per day.
+//! `/resume`: the sessions the backend lists, pinned ones first, then one group per day.
 //! Opens at once with what the app already knows and refills when `Event::Sessions` arrives.
 
 use std::collections::HashSet;

@@ -159,11 +159,10 @@ fn f3_a_quiet_tool_is_not_a_stalled_backend() {
 }
 
 #[test]
-fn f5_rename_is_a_slash_command() {
+fn f5_rename_is_on_ctrl_r() {
     let mut h = Harness::new(120, 36);
     h.turn("hello", "hi");
-    h.type_str("/rename");
-    h.key(KeyCode::Enter, NONE);
+    h.key(KeyCode::Char('r'), KeyModifiers::CONTROL);
     let t = h.text();
     assert!(t.contains("Rename Session"), "{t}");
     assert!(h.app.dialogs.is_open());
@@ -241,7 +240,7 @@ fn a_model_switched_on_wizards_side_survives_a_new_session() {
 }
 
 #[test]
-fn theme_with_a_name_switches_and_is_saved_and_share_says_it_is_not_there() {
+fn theme_with_a_name_switches_and_is_saved() {
     let dir = std::env::temp_dir().join(format!("openw-theme-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = Harness::with(
@@ -260,12 +259,6 @@ fn theme_with_a_name_switches_and_is_saved_and_share_says_it_is_not_there() {
     let saved = openw::ui::dialogs::prefs::Prefs::load(&dir);
     assert_eq!(saved.theme.as_deref(), Some("dracula"));
 
-    h.sent();
-    h.type_str("/share");
-    h.key(KeyCode::Enter, KeyModifiers::NONE);
-    h.key(KeyCode::Enter, KeyModifiers::NONE);
-    assert!(h.text().contains("wizard has no session sharing"));
-    assert!(!h.sent().iter().any(|r| matches!(r, Request::Prompt(_))));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

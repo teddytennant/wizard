@@ -1,5 +1,5 @@
 // OWNER: dialogs
-//! `/help`.
+//! The palette's `Help`.
 
 use super::panel::Alert;
 use super::Dialog;

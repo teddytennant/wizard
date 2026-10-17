@@ -299,9 +299,7 @@ fn item_for(c: &commands::Command, group: &str) -> SelectItem<Action> {
 impl Palette {
     pub fn new(ctx: &CmdCtx, keymap: &Keymap) -> Self {
         let mut cmds = commands::build(ctx, keymap);
-        cmds.retain(|c| {
-            c.palette && (ctx.in_session || !c.session_only) && (!ctx.in_session || !c.home_only)
-        });
+        cmds.retain(|c| (ctx.in_session || !c.session_only) && (!ctx.in_session || !c.home_only));
         let mut full = Vec::new();
         let mut plain = Vec::new();
         for cat in commands::category_order(ctx.in_session, ctx.has_sessions, ctx.stash_nonempty) {

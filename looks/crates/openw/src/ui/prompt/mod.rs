@@ -18,8 +18,9 @@ use tuikit::paint::{fill, put_str, set_style};
 use tuikit::width::{display_width, normalize_newlines, truncate_middle};
 
 use crate::app::App;
-use crate::commands::{self, Command, Source};
 use crate::keys::Action;
+use agent_core::commands::{resolve, Command as Cmd};
+use agent_core::SlashCommand;
 
 pub const EXAMPLES: [&str; 3] = [
     "Fix a TODO in the codebase",
@@ -115,7 +116,7 @@ pub enum AcKind {
 
 #[derive(Clone, Debug)]
 pub enum AcValue {
-    Command(Box<Command>),
+    Command(String),
     File { path: String, dir: bool },
 }
 
@@ -722,7 +723,6 @@ pub fn refresh_ac(app: &mut App) {
     let text = app.prompt.editor.text().to_string();
     let cur = app.prompt.editor.cursor();
     let before = &text[..cur];
-    let in_session = app.in_session();
 
     let trigger: Option<(AcKind, usize, String)> = if app.prompt.shell {
         None
@@ -752,7 +752,7 @@ pub fn refresh_ac(app: &mut App) {
         };
     }
     let items = match kind {
-        AcKind::Slash => slash_items(&app.cmds, &query, in_session),
+        AcKind::Slash => slash_items(&app.menu, &query),
         AcKind::File => file_items(&app.prompt.index, &query),
     };
     let keep = app
@@ -793,34 +793,25 @@ fn removing_line_range(q: &str) -> &str {
     q.rfind('#').map_or(q, |i| &q[..i])
 }
 
-fn slash_items(cmds: &[Command], query: &str, in_session: bool) -> Vec<AcItem> {
+fn slash_items(menu: &[SlashCommand], query: &str) -> Vec<AcItem> {
     struct E<'a> {
         display: String,
-        desc: &'a str,
-        aliases: String,
-        cmd: &'a Command,
+        desc: String,
+        name: &'a str,
     }
-    let mut entries: Vec<E> = commands::slash_entries(cmds, in_session)
-        .into_iter()
+    let mut entries: Vec<E> = menu
+        .iter()
         .map(|c| E {
-            display: format!("/{}", c.name.as_deref().unwrap_or("")),
-            desc: &c.description,
-            aliases: c
-                .aliases
-                .iter()
-                .map(|a| format!("/{a}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            cmd: c,
+            display: format!("/{}", c.name),
+            desc: if c.input_hint.is_empty() {
+                c.description.clone()
+            } else {
+                format!("{} {}", c.description, c.input_hint)
+            },
+            name: &c.name,
         })
         .collect();
-    // what the backend added comes after opencode's own, so the first screen is opencode's
-    entries.sort_by(|a, b| {
-        let backend = |e: &E| e.cmd.source == Source::Backend;
-        backend(a)
-            .cmp(&backend(b))
-            .then_with(|| locale_cmp(&a.display, &b.display))
-    });
+    entries.sort_by(|a, b| locale_cmp(&a.display, &b.display));
     let max = entries
         .iter()
         .map(|e| e.display.chars().count())
@@ -830,11 +821,11 @@ fn slash_items(cmds: &[Command], query: &str, in_session: bool) -> Vec<AcItem> {
         (0..entries.len()).collect()
     } else {
         let q = removing_line_range(query);
-        let prepared: Vec<[Option<fuzzysort::Prepared>; 3]> = entries
+        let prepared: Vec<[Option<fuzzysort::Prepared>; 2]> = entries
             .iter()
             .map(|e| {
                 let some = |s: &str| (!s.is_empty()).then(|| fuzzysort::Prepared::new(s));
-                [some(&e.display), some(e.desc), some(&e.aliases)]
+                [some(&e.display), some(&e.desc)]
             })
             .collect();
         let keys: Vec<Vec<Option<&fuzzysort::Prepared>>> = prepared
@@ -861,7 +852,7 @@ fn slash_items(cmds: &[Command], query: &str, in_session: bool) -> Vec<AcItem> {
             AcItem {
                 display: format!("{:<w$}", e.display, w = max + 2),
                 desc: e.desc.trim_start().to_string(),
-                value: AcValue::Command(Box::new(e.cmd.clone())),
+                value: AcValue::Command(e.name.to_string()),
             }
         })
         .collect()
@@ -1042,10 +1033,15 @@ fn ac_key(app: &mut App, key: &KeyEvent) -> Option<PromptEvent> {
                 && !key.modifiers.contains(KeyModifiers::ALT)
                 && !ctrl(key) =>
         {
-            // With nothing listed opencode's select does nothing, so enter does not submit.
             if n > 0 {
                 return Some(complete(app, true));
             }
+            // a `/name` the menu does not list still goes to wizard, which says if it is unknown
+            if ac.kind == AcKind::Slash {
+                app.prompt.ac = None;
+                return None;
+            }
+            // with nothing listed opencode's select does nothing, so enter does not submit
             return Some(PromptEvent::None);
         }
         _ => return None,
@@ -1072,15 +1068,13 @@ fn complete(app: &mut App, enter: bool) -> PromptEvent {
     };
     let cur = app.prompt.editor.cursor();
     match &item.value {
-        AcValue::Command(c) => {
-            let c = c.clone();
-            if c.source == Source::Frontend {
+        AcValue::Command(name) => {
+            if resolve(name, &app.extras) != Cmd::Wizard {
                 // hide() first: the typed `/xx` is removed, then the command runs
                 app.prompt.ac = None;
                 drop_typed_slash(app);
-                return PromptEvent::Action(c.action.clone());
+                return PromptEvent::Action(Action::Slash(name.clone()));
             }
-            let name = c.name.clone().unwrap_or_default();
             let text = format!("/{name} ");
             let at = text.len();
             app.prompt.ac = None;

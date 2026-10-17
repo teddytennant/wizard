@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use agent_core::commands::{resolve, Command as Cmd, Shared};
 use agent_core::mock::MockBackend;
 use agent_core::transcript::{Part, Role, Transcript};
 use agent_core::{
@@ -28,7 +29,7 @@ use tuikit::theme::Variant;
 use tuikit::toast::{Toast, ToastState};
 use tuikit::{Mode, Theme};
 
-use crate::commands::{self, CmdCtx, Command, Source};
+use crate::commands::{self, CmdCtx};
 use crate::keys::{Action, Keymap, Resolve};
 use crate::ui;
 use crate::ui::dialogs::{self, DialogStack, Effect, Outcome};
@@ -422,8 +423,9 @@ pub struct App {
     pub branch: Option<String>,
     pub transcript: Transcript,
     pub config: Config,
-    pub backend_cmds: Vec<SlashCommand>,
-    pub cmds: Vec<Command>,
+    /// openw's own slash commands, and the `/` menu: wizard's, the shared ones, these.
+    pub extras: Vec<SlashCommand>,
+    pub menu: Vec<SlashCommand>,
     pub sessions: Vec<SessionInfo>,
     pub titles: HashMap<String, String>,
     /// What the dialogs remember (theme, favorites, recent models, pins, renames).
@@ -537,7 +539,7 @@ impl App {
         };
         let seed = opts.seed as usize;
         let prompt = PromptState::new(seed, opts.state_dir.clone());
-        let mut app = App {
+        App {
             continue_pending: opts.continue_latest,
             initial_prompt: opts.prompt.clone(),
             theme,
@@ -548,8 +550,8 @@ impl App {
             branch: None,
             transcript: Transcript::new(),
             config: Config::default(),
-            backend_cmds: Vec::new(),
-            cmds: Vec::new(),
+            extras: commands::extras(),
+            menu: agent_core::commands::menu(&[], &commands::extras()),
             sessions: Vec::new(),
             titles: prefs_loaded.titles.clone().into_iter().collect(),
             prefs: prefs_loaded,
@@ -600,9 +602,7 @@ impl App {
             wanted_model: None,
             save_failed: false,
             opts,
-        };
-        app.rebuild_commands();
-        app
+        }
     }
 
     // ---- small queries -----------------------------------------------------------------
@@ -828,7 +828,7 @@ impl App {
         }
     }
 
-    pub fn cmd_ctx(&self) -> CmdCtx<'_> {
+    pub fn cmd_ctx(&self) -> CmdCtx {
         CmdCtx {
             in_session: self.in_session(),
             // opencode counts the session it is in, saved or not
@@ -847,16 +847,10 @@ impl App {
             stash_nonempty: !self.prompt.stash.is_empty(),
             tips_hidden: self.flags.tips_hidden,
             light: self.theme.mode == Mode::Light,
-            backend: &self.backend_cmds,
             connected: !self.config.models.is_empty(),
             title_enabled: !self.prefs.disable_title,
             animations: !self.prefs.disable_animations,
         }
-    }
-
-    fn rebuild_commands(&mut self) {
-        let cmds = commands::build(&self.cmd_ctx(), &self.keymap);
-        self.cmds = cmds;
     }
 
     // ---- toasts and requests -----------------------------------------------------------
@@ -937,8 +931,7 @@ impl App {
                 }
             }
             Event::Commands(c) => {
-                self.backend_cmds = c.clone();
-                self.rebuild_commands();
+                self.menu = agent_core::commands::menu(c, &self.extras);
             }
             Event::Permission(req) => {
                 let p = dialogs::ask::PermissionPrompt::new(req.clone());
@@ -971,7 +964,6 @@ impl App {
                         }
                     }
                 }
-                self.rebuild_commands();
             }
             Event::History { items, .. } => {
                 self.transcript.apply(&ev);
@@ -1755,17 +1747,12 @@ impl App {
             self.run_shell(&text);
             return;
         }
-        if let Some(rest) = text.strip_prefix('/') {
-            let (name, args) = rest
-                .split_once(char::is_whitespace)
-                .map_or((rest, ""), |(n, a)| (n, a.trim()));
-            if let Some(cmd) = commands::find(&self.cmds, name).cloned() {
-                if cmd.source == Source::Frontend {
-                    self.prompt.remember();
-                    self.prompt.clear();
-                    self.run_command(&cmd, args);
-                    return;
-                }
+        if let Some((name, args)) = agent_core::commands::split(&text) {
+            if self.is_local(name, args) {
+                self.prompt.remember();
+                self.prompt.clear();
+                self.run_slash(name, args);
+                return;
             }
         }
         if self.backend_dead {
@@ -1823,9 +1810,28 @@ impl App {
         );
     }
 
-    fn run_command(&mut self, cmd: &Command, args: &str) {
-        match (&cmd.action, args.is_empty()) {
-            (Action::Models, false) => {
+    /// Whether openw answers `/name args` itself rather than sending it to wizard as typed.
+    /// `/compact` still goes to wizard, under a divider.
+    fn is_local(&self, name: &str, args: &str) -> bool {
+        match resolve(name, &self.extras) {
+            Cmd::Wizard => match name {
+                "compact" => true,
+                "effort" => args.is_empty() && !self.config.efforts.is_empty(),
+                "mode" => args.is_empty(),
+                _ => false,
+            },
+            _ => true,
+        }
+    }
+
+    /// Run a slash command [`is_local`](Self::is_local) said openw answers.
+    fn run_slash(&mut self, name: &str, args: &str) {
+        match (resolve(name, &self.extras), args.is_empty()) {
+            (Cmd::Shared(Shared::Clear), _) => self.new_session(),
+            (Cmd::Shared(Shared::Exit), _) => self.quit = true,
+            (Cmd::Shared(Shared::Help), _) => self.slash_help(),
+            (Cmd::Shared(Shared::Model), true) => self.run_action(Action::Models),
+            (Cmd::Shared(Shared::Model), false) => {
                 let id = self.model_id_for(args);
                 if self.config.models.iter().any(|m| m.id == id) {
                     self.wanted_model = Some(id.clone());
@@ -1834,25 +1840,40 @@ impl App {
                 }
                 self.send(Request::SetModel(args.to_string()))
             }
-            (Action::Themes, false) => match Theme::builtin_mode(args, self.theme.mode) {
+            (Cmd::Shared(Shared::Resume), true) => self.run_action(Action::Sessions),
+            (Cmd::Shared(Shared::Resume), false) => {
+                self.send(Request::LoadSession(args.to_string()))
+            }
+            (Cmd::Extra("theme"), true) => self.run_action(Action::Themes),
+            (Cmd::Extra("theme"), false) => match Theme::builtin_mode(args, self.theme.mode) {
                 Some(_) => self.run_effect(Effect::SetTheme(args.to_string())),
                 None => self.toast(Variant::Error, format!("No theme named {args}")),
             },
-            (Action::Compact, _) => self.compact(args),
-            (Action::Template(name), _) => self.run_template(name, args),
-            (a, _) => self.run_action(a.clone()),
+            (Cmd::Extra("timestamps"), _) => self.run_action(Action::ToggleTimestamps),
+            (Cmd::Extra("thinking"), _) => self.run_action(Action::ToggleThinking),
+            (Cmd::Extra("copy"), _) => self.run_action(Action::CopyLast),
+            (_, _) => match name {
+                "compact" => self.compact(args),
+                "effort" => self.run_action(Action::Variants),
+                "mode" => self.run_action(Action::Agents),
+                _ => {}
+            },
         }
     }
 
-    /// `/init` and `/review`: opencode runs them as prompt templates, and the user block shows
-    /// the command as typed.
-    fn run_template(&mut self, name: &str, args: &str) {
-        let shown = if args.is_empty() {
-            format!("/{name}")
-        } else {
-            format!("/{name} {args}")
-        };
-        self.send_prompt_with(shown, commands::template(name, args), MsgMeta::default());
+    /// `/help`: the `/` menu, one command a line, and where the keys are.
+    fn slash_help(&mut self) {
+        let text = format!(
+            "{}\n\nPress {} to see all available actions and their keys.",
+            agent_core::commands::help_text(&self.menu),
+            self.keymap.first(&Action::Palette)
+        );
+        self.transcript.apply(&Event::Notice {
+            level: NoticeLevel::Info,
+            text,
+        });
+        self.enter_session();
+        self.scroll.to_bottom();
     }
 
     fn run_shell(&mut self, cmd: &str) {
@@ -2008,7 +2029,6 @@ impl App {
                 if !self.in_session() {
                     self.flags.tips_hidden = !self.flags.tips_hidden;
                     self.save_kv();
-                    self.rebuild_commands();
                 }
             }
             Action::Editor => self.pending.push(Deferred::Editor),
@@ -2242,7 +2262,6 @@ impl App {
                 let ctx = self.dialog_ctx();
                 self.dialogs.push(dialogs::timeline::fork(&ctx));
             }
-            Action::Share => self.toast(Variant::Info, "wizard has no session sharing"),
             Action::Plugins => {
                 let ctx = self.dialog_ctx();
                 self.dialogs.push(dialogs::plugins::open(&ctx));
@@ -2285,13 +2304,8 @@ impl App {
                 }
             }
             Action::Backend(name) => self.send_prompt(format!("/{name}")),
-            Action::InsertSlash(name) => {
-                self.prompt.set_text(&format!("/{name} "));
-                prompt::refresh_ac(self);
-            }
-            Action::Template(name) => self.run_template(name, ""),
+            Action::Slash(name) => self.run_slash(&name, ""),
         }
-        self.rebuild_commands();
     }
 
     pub fn set_agent(&mut self, a: AgentKind) {

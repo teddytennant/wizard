@@ -3,7 +3,7 @@
 
 mod common;
 
-use agent_core::{Event, NoticeLevel, StopReason};
+use agent_core::{Event, NoticeLevel, Request, StopReason};
 use common::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -427,14 +427,14 @@ fn esc_closes_the_popup_until_the_text_changes_and_drops_a_half_typed_command() 
 }
 
 #[test]
-fn enter_with_nothing_listed_does_not_submit() {
+fn enter_with_nothing_listed_sends_the_command_to_wizard() {
     let mut h = Harness::new(120, 36);
     h.sent();
     h.type_str("/zzzz");
     assert!(h.text().contains("No matching items"));
     h.key(KeyCode::Enter, NONE);
-    assert!(h.sent().is_empty());
-    assert_eq!(h.app.prompt.text(), "/zzzz");
+    assert_eq!(h.sent(), vec![Request::Prompt("/zzzz".into())]);
+    assert!(h.app.prompt.is_empty());
 }
 
 #[test]
@@ -451,8 +451,7 @@ fn slash_popup_follows_the_reference_ordering_for_mo() {
         .iter()
         .map(|i| i.display.trim().to_string())
         .collect();
-    // the alias `/mo` makes /models an exact hit; reference 04-slash-filtered has it first
-    assert_eq!(names[0], "/models", "{names:?}");
+    assert_eq!(names[..2], ["/mode", "/model"], "{names:?}");
 }
 
 #[test]

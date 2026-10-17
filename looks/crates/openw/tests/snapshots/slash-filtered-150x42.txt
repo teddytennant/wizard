@@ -12,12 +12,12 @@
 
 
 
-                                      ┃ /models     Switch model                                                ┃
-                                      ┃ /move       Move to another project dir                                 ┃
-                                      ┃ /mode       switch mode <genie|sovereign>                               ┃
-                                      ┃ /plan       toggle plan mode                                            ┃
-                                      ┃ /sessions   Switch session                                              ┃
-                                      ┃ /review     review changes [commit|branch|pr], defaults to uncommitted  ┃
+                                                                    ▀                   █
+                                                              █   █ █ ▀▀▀█ █▀▀█ █▀▀▀ █▀▀█
+                                      ┃ /mode         switch mode <genie|sovereign>                             ┃
+                                      ┃ /model        switch model <provider>/<model>                           ┃
+                                      ┃ /plan         toggle plan mode                                          ┃
+                                      ┃ /compact      summarize older history                                   ┃
                                       ┃
                                       ┃  /mo
                                       ┃

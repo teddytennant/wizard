@@ -91,7 +91,7 @@ fn typed_exit_quits_without_calling_the_backend() {
 #[test]
 fn slash_commands_run_frontend_actions() {
     let mut h = Harness::new(120, 36);
-    h.type_str("/models");
+    h.type_str("/model");
     enter(&mut h);
     assert!(h.app.dialogs.is_open());
     assert_eq!(h.app.dialogs.top_title(), Some("Select model"));
@@ -104,7 +104,7 @@ fn slash_commands_run_frontend_actions() {
 fn model_with_an_argument_sets_it_directly() {
     let mut h = Harness::new(120, 36);
     h.sent();
-    h.type_str("/models xai-oauth/grok-4.6-fast");
+    h.type_str("/model xai-oauth/grok-4.6-fast");
     enter(&mut h);
     assert_eq!(
         h.sent(),
@@ -141,6 +141,69 @@ fn backend_commands_complete_into_the_prompt_instead_of_running() {
     assert_eq!(h.sent(), vec![Request::Prompt("/effort high".into())]);
 }
 
+fn typed(h: &mut Harness, text: &str) {
+    h.app.prompt.set_text(text);
+    h.app.submit();
+}
+
+#[test]
+fn wizard_commands_and_unknown_names_go_to_wizard_as_typed() {
+    let mut h = Harness::new(120, 36);
+    h.turn("hi", "hello");
+    h.sent();
+    for text in [
+        "/agents",
+        "/diff --stat",
+        "/status",
+        "/effort high",
+        "/mode chat",
+        "/new",
+        "/sessions",
+        "/models",
+        "/themes",
+        "/share",
+        "/undo",
+        "/export",
+        "/init",
+        "/q",
+        "/tmp/notes.txt explain",
+    ] {
+        typed(&mut h, text);
+        assert_eq!(h.sent(), vec![Request::Prompt(text.into())], "{text}");
+        assert!(!h.app.dialogs.is_open(), "{text}");
+    }
+}
+
+#[test]
+fn shared_commands_and_extras_are_answered_here() {
+    let mut h = Harness::new(120, 36);
+    h.turn("hi", "hello");
+    h.sent();
+    typed(&mut h, "/resume abc");
+    assert_eq!(h.sent(), vec![Request::LoadSession("abc".into())]);
+    typed(&mut h, "/help");
+    assert!(h.sent().is_empty());
+    let help = h.text();
+    for name in [
+        "/compact",
+        "/clear",
+        "/resume [id]",
+        "/theme [name]",
+        "/timestamps",
+    ] {
+        assert!(help.contains(name), "{name} missing from {help}");
+    }
+    let shown = h.app.flags.timestamps;
+    typed(&mut h, "/timestamps");
+    assert_ne!(h.app.flags.timestamps, shown);
+    typed(&mut h, "/mode");
+    assert_eq!(h.app.dialogs.top_title(), Some("Select agent"));
+    h.key(KeyCode::Esc, NONE);
+    typed(&mut h, "/quit");
+    assert!(h.app.quit);
+    assert!(h.sent().is_empty());
+}
+
 #[test]
 fn leader_sequences_open_dialogs_and_time_out() {
     let mut h = Harness::new(120, 36);
@@ -175,7 +238,7 @@ fn new_session_goes_home_and_asks_the_backend() {
     h.turn("hi", "hello");
     assert_eq!(h.app.route, Route::Session);
     h.sent();
-    h.type_str("/new");
+    h.type_str("/clear");
     enter(&mut h);
     assert_eq!(h.sent(), vec![Request::NewSession]);
     assert_eq!(h.app.route, Route::Home);
@@ -479,15 +542,7 @@ fn tiny_terminals_do_not_panic_on_any_screen() {
         hn.type_str("th");
         hn.text();
         hn.key(KeyCode::Esc, NONE);
-        for cmd in [
-            "/models",
-            "/themes",
-            "/sessions",
-            "/status",
-            "/help",
-            "/agents",
-            "/export",
-        ] {
+        for cmd in ["/model", "/theme", "/resume", "/help"] {
             hn.type_str(cmd);
             enter(&mut hn);
             hn.text();

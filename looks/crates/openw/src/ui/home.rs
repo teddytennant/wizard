@@ -53,44 +53,41 @@ fn tips(app: &App) -> Vec<String> {
             &one(Action::AgentCycle),
             "to cycle between Build and Plan agents",
         ),
-        Some(format!(
-            "Use {} to revert the last message and file changes",
-            h("/undo")
-        )),
+        press(
+            &one(Action::Undo),
+            "to revert the last message and file changes",
+        ),
         Some("Drag and drop images or PDFs into the terminal as context".into()),
         press(
             "ctrl+v",
             "to paste images from your clipboard into the prompt",
         ),
-        Some(format!(
-            "Use {} to compose messages in your external editor",
-            command_text("/editor", &one(Action::Editor))
-        )),
+        press(
+            &one(Action::Editor),
+            "to compose messages in your external editor",
+        ),
         Some(format!(
             "Use {} to switch between available AI models",
-            command_text("/models", &one(Action::Models))
+            command_text("/model", &one(Action::Models))
         )),
         Some(format!(
             "Use {} to switch between {} built-in themes",
-            command_text("/themes", &one(Action::Themes)),
+            command_text("/theme", &one(Action::Themes)),
             tuikit::Theme::names().len()
         )),
         Some(format!(
             "Use {} to start a fresh conversation session",
-            command_text("/new", &one(Action::NewSession))
+            command_text("/clear", &one(Action::NewSession))
         )),
         Some(format!(
             "Use {} to list and continue sessions",
-            command_text("/sessions", &one(Action::Sessions))
+            command_text("/resume", &one(Action::Sessions))
         )),
         Some(format!(
             "Run {} to summarize long sessions near context limits",
             h("/compact")
         )),
-        Some(format!(
-            "Use {} to save the conversation as Markdown",
-            command_text("/export", &one(Action::Export))
-        )),
+        press(&one(Action::Export), "to save the conversation as Markdown"),
         press(
             &one(Action::CopyLast),
             "to copy the assistant's last message to clipboard",
@@ -128,26 +125,14 @@ fn tips(app: &App) -> Vec<String> {
             "Switch to {} agent for suggestions without making changes",
             h("Plan")
         )),
-        Some(format!(
-            "Use {} to jump to specific messages",
-            command_text("/timeline", &one(Action::Timeline))
-        )),
+        press(&one(Action::Timeline), "to jump to specific messages"),
         press(
             &one(Action::ToggleConceal),
             "to toggle code block visibility in messages",
         ),
-        Some(format!(
-            "Use {} to see system status info",
-            command_text("/status", &one(Action::Status))
-        )),
-        Some(format!(
-            "Use {} to show the help dialog",
-            command_text("/help", "")
-        )),
-        Some(format!(
-            "Use {} to rename the current session",
-            h("/rename")
-        )),
+        press(&one(Action::Status), "to see system status info"),
+        Some(format!("Use {} to list the slash commands", h("/help"))),
+        press(&one(Action::Rename), "to rename the current session"),
         press(
             &one(Action::Suspend),
             "to suspend the terminal and return to your shell",
