@@ -130,12 +130,12 @@ fn suggestions_rank_prefix_matches_by_length_then_name() {
         .filter(|l| l.starts_with('/'))
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    assert_eq!(rows[..4], ["/?", "/cls", "/cost", "/diff"]);
+    assert_eq!(rows[..4], ["/cls", "/cost", "/diff", "/exit"]);
     assert_eq!(rows.len(), 8);
     assert!(text.contains(" more"));
     h.press(KeyCode::Down);
     h.press(KeyCode::Enter);
-    assert_eq!(h.app.ed.text(), "/cls");
+    assert_eq!(h.app.ed.text(), "/cost");
 }
 
 #[test]
@@ -165,6 +165,44 @@ fn a_command_wizard_owns_goes_to_wizard_as_typed() {
     assert!(h.row_starting("1>").is_some());
     h.say("/ui grok");
     assert_eq!(h.sent(), [Request::Prompt("/ui grok".into())]);
+}
+
+#[test]
+fn the_menu_is_wizards_commands_then_the_shared_ones_then_cls() {
+    let h = Harness::new(120, 40);
+    let names: Vec<String> = jcodew::commands::menu(&h.app)
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "model", "mode", "effort", "plan", "compact", "diff", "todos", "status", "cost",
+            "agents", "help", "clear", "exit", "quit", "resume", "cls"
+        ]
+    );
+}
+
+#[test]
+fn jcodes_own_names_go_to_wizard_and_the_shared_ones_stay_here() {
+    let mut h = Harness::new(120, 40);
+    for typed in ["/diff", "/sessions", "/version", "/?", "/cancel"] {
+        h.say(typed);
+        assert_eq!(h.sent(), [Request::Prompt(typed.into())]);
+    }
+    h.app.dispatch("/model beta/b".into());
+    assert_eq!(h.sent(), [Request::SetModel("beta/b".into())]);
+    h.say("/resume fake-session-2");
+    assert_eq!(h.sent(), [Request::LoadSession("fake-session-2".into())]);
+    h.say("/help");
+    assert!(h.sent().is_empty());
+    assert!(matches!(
+        h.app.overlay,
+        Some(jcodew::app::Overlay::Help { .. })
+    ));
+    h.press(KeyCode::Esc);
+    h.say("/exit");
+    assert!(h.app.quit);
 }
 
 #[test]

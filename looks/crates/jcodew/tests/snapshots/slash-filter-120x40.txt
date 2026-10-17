@@ -21,8 +21,8 @@
 
 1> /mo                                                                                                                ⏳
 /mode  switch mode
-/model  List or switch models
-/models  Alias for /model
+/model  switch model
+
 
 
 

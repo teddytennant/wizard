@@ -2,33 +2,22 @@
 │                                                                                                                                                                                                      │
 │  Commands                                                                                                                                                                                            │
 │                                                                                                                                                                                                      │
-│    /help  Show help and keyboard shortcuts                                                                                                                                                           │
-│    /?  Show help and keyboard shortcuts                                                                                                                                                              │
-│    /commands  Alias for /help                                                                                                                                                                        │
-│    /model  List or switch models                                                                                                                                                                     │
-│    /models  Alias for /model                                                                                                                                                                         │
-│    /cancel  Cancel the current prompt or operation                                                                                                                                                   │
-│    /clear  Clear conversation history                                                                                                                                                                │
-│    /cls  Clear the view only, keeping context                                                                                                                                                        │
-│    /version  Show current version                                                                                                                                                                    │
-│    /diff  Cycle or set diff display mode (off/inline/full)                                                                                                                                           │
-│    /resume  Open session picker                                                                                                                                                                      │
-│    /sessions  Alias for /resume                                                                                                                                                                      │
-│    /session  Alias for /resume                                                                                                                                                                       │
-│    /quit  Exit wizard                                                                                                                                                                                │
-│                                                                                                                                                                                                      │
-│  ─────────────────────────────────────────────────                                                                                                                                                   │
-│                                                                                                                                                                                                      │
-│  More commands                                                                                                                                                                                       │
-│                                                                                                                                                                                                      │
+│    /model <provider>/<model>  switch model                                                                                                                                                           │
 │    /mode <genie|sovereign>  switch mode                                                                                                                                                              │
 │    /effort <low|medium|high>  set reasoning effort                                                                                                                                                   │
 │    /plan  toggle plan mode                                                                                                                                                                           │
 │    /compact  summarize older history                                                                                                                                                                 │
+│    /diff  show the working tree diff                                                                                                                                                                 │
 │    /todos  show the todo list                                                                                                                                                                        │
 │    /status  show status                                                                                                                                                                              │
 │    /cost  show cost                                                                                                                                                                                  │
 │    /agents  list subagents                                                                                                                                                                           │
+│    /help  show help                                                                                                                                                                                  │
+│    /clear  clear the conversation                                                                                                                                                                    │
+│    /exit  exit wizard                                                                                                                                                                                │
+│    /quit  exit wizard                                                                                                                                                                                │
+│    /resume [id]  reopen and continue a past session                                                                                                                                                  │
+│    /cls  Clear the view only, keeping context                                                                                                                                                        │
 │                                                                                                                                                                                                      │
 │  ─────────────────────────────────────────────────                                                                                                                                                   │
 │                                                                                                                                                                                                      │
@@ -44,7 +33,18 @@
 │                                                                                                                                                                                                      │
 │  Input & Editing                                                                                                                                                                                     │
 │                                                                                                                                                                                                      │
+│    Esc                   Interrupt the running turn                                                                                                                                                  │
 │    Ctrl+C / Ctrl+D       Quit (press twice to confirm)                                                                                                                                               │
 │    Ctrl+U                Clear input line                                                                                                                                                            │
 │    Ctrl+K                Delete to end of input                                                                                                                                                      │
+│    Alt+Backspace / Alt+DeleteDelete previous word in input                                                                                                                                           │
+│    Ctrl+S                Stash / pop input (save for later)                                                                                                                                          │
+│    Ctrl+Backspace        Delete previous word in input                                                                                                                                               │
+│    Ctrl+B / Ctrl+F       Move by word left / right                                                                                                                                                   │
+│    Ctrl+Left / Right     Move by word left / right                                                                                                                                                   │
+│    Shift+Enter / Alt+EnterInsert newline in input                                                                                                                                                    │
+│    Trailing \ then Enter Insert newline                                                                                                                                                              │
+│    Ctrl+Enter            Stop the turn and send now                                                                                                                                                  │
+│    Ctrl+Up               Retrieve pending message for editing                                                                                                                                        │
+│    Ctrl+L                Clear the view, keeping context                                                                                                                                             │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

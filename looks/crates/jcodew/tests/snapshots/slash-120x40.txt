@@ -20,14 +20,14 @@
 
 
 1> /                                                                                                                  ⏳
-/?  Show help and keyboard shortcuts
 /cls  Clear the view only, keeping context
 /cost  show cost
-/diff  Cycle or set diff display mode (off/inline/full)
-/help  Show help and keyboard shortcuts
+/diff  show the working tree diff
+/exit  exit wizard
+/help  show help
 /mode  switch mode
 /plan  toggle plan mode
-/quit  Exit wizard  +14 more
+/quit  exit wizard  +8 more
 
 
 

@@ -13,33 +13,6 @@ use super::line::{spans_width, truncate_spans, Hang, RLine};
 use super::markdown::Highlighter;
 use crate::theme;
 
-/// How edit diffs are shown; `/diff` cycles it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum DiffMode {
-    Off,
-    #[default]
-    Inline,
-    FullInline,
-}
-
-impl DiffMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            DiffMode::Off => "OFF",
-            DiffMode::Inline => "Inline",
-            DiffMode::FullInline => "Inline Full",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            DiffMode::Off => DiffMode::Inline,
-            DiffMode::Inline => DiffMode::FullInline,
-            DiffMode::FullInline => DiffMode::Off,
-        }
-    }
-}
-
 const MAX_INLINE_DIFF_LINES: usize = 12;
 
 /// The name jcode's own tool of the same job has; anything else keeps wizard's name.
@@ -298,7 +271,7 @@ fn ext_of(path: &str) -> &str {
         .unwrap_or("txt")
 }
 
-fn diff_block(diff: &FileDiff, width: usize, mode: DiffMode, out: &mut Vec<RLine>) {
+fn diff_block(diff: &FileDiff, width: usize, out: &mut Vec<RLine>) {
     let dim = Style::default().fg(theme::dim());
     let ch = changes(diff);
     let (adds, dels) = (
@@ -306,7 +279,7 @@ fn diff_block(diff: &FileDiff, width: usize, mode: DiffMode, out: &mut Vec<RLine
         ch.iter().filter(|c| !c.add).count(),
     );
     out.push(RLine::styled(format!("┌─ diff · {}", diff.path), dim).hang(Hang::None));
-    let truncated = mode != DiffMode::FullInline && ch.len() > MAX_INLINE_DIFF_LINES;
+    let truncated = ch.len() > MAX_INLINE_DIFF_LINES;
     let mut hl = Highlighter::new(ext_of(&diff.path));
     let mut row = |c: &Change, out: &mut Vec<RLine>| {
         let (sign, col) = if c.add {
@@ -323,19 +296,15 @@ fn diff_block(diff: &FileDiff, width: usize, mode: DiffMode, out: &mut Vec<RLine
                 Style::default().fg(theme::rgb(mix(r, col.0), mix(g, col.1), mix(b, col.2))),
             ));
         }
-        if mode == DiffMode::FullInline {
-            out.push(RLine::new(spans).hang(Hang::Spans(vec![Span::styled("│ ", dim)])));
-        } else {
-            let max = width.saturating_sub(1);
-            if spans_width(&spans) > max {
-                let mut cut = truncate_spans(&spans, max);
-                if let Some(last) = cut.last_mut() {
-                    *last = Span::styled("…", dim);
-                }
-                spans = cut;
+        let max = width.saturating_sub(1);
+        if spans_width(&spans) > max {
+            let mut cut = truncate_spans(&spans, max);
+            if let Some(last) = cut.last_mut() {
+                *last = Span::styled("…", dim);
             }
-            out.push(RLine::new(spans).nowrap());
+            spans = cut;
         }
+        out.push(RLine::new(spans).nowrap());
     };
     if truncated {
         for c in &ch[..6] {
@@ -364,16 +333,13 @@ fn diff_block(diff: &FileDiff, width: usize, mode: DiffMode, out: &mut Vec<RLine
 }
 
 /// The rows of one finished call. `width` is the text width of the transcript.
-pub fn render(call: &ToolCall, width: usize, mode: DiffMode, out: &mut Vec<RLine>) {
+pub fn render(call: &ToolCall, width: usize, out: &mut Vec<RLine>) {
     let dim = Style::default().fg(theme::dim());
     let tool = Style::default().fg(theme::tool());
     let failed = call.status == ToolStatus::Failed;
     let name = display_name(call);
     let output = call.output.as_deref().unwrap_or("");
-    let diff = call
-        .diff
-        .as_ref()
-        .filter(|_| mode != DiffMode::Off && !failed);
+    let diff = call.diff.as_ref().filter(|_| !failed);
     let (icon, icon_color) = if failed {
         ("✗", theme::rgb(220, 100, 100))
     } else {
@@ -443,7 +409,7 @@ pub fn render(call: &ToolCall, width: usize, mode: DiffMode, out: &mut Vec<RLine
         }
     }
     if let Some(d) = diff {
-        diff_block(d, width, mode, out);
+        diff_block(d, width, out);
     }
 }
 
@@ -474,7 +440,7 @@ mod tests {
 
     fn rows(c: &ToolCall) -> Vec<String> {
         let mut out = Vec::new();
-        render(c, 100, DiffMode::Inline, &mut out);
+        render(c, 100, &mut out);
         out.iter().map(RLine::text).collect()
     }
 

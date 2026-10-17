@@ -1,27 +1,21 @@
-//! Slash commands: the few this look answers itself, and wizard's own, which go to the backend
-//! as typed. The suggestion list ranks them the way jcode ranks its registry.
+//! Slash commands: the shared few and `/cls`, which this look answers itself, and wizard's
+//! own, which go to the backend as typed. The suggestion list ranks them the way jcode ranks
+//! its registry.
 
-use agent_core::Request;
+use agent_core::commands::{self as shared, Command, Shared};
+use agent_core::{Request, SlashCommand};
 
-use crate::app::{App, Overlay, VERSION};
+use crate::app::{App, Overlay};
 
-/// Commands handled in the look, with the text jcode shows for the same command.
-pub const LOCAL: &[(&str, &str)] = &[
-    ("help", "Show help and keyboard shortcuts"),
-    ("?", "Show help and keyboard shortcuts"),
-    ("commands", "Alias for /help"),
-    ("model", "List or switch models"),
-    ("models", "Alias for /model"),
-    ("cancel", "Cancel the current prompt or operation"),
-    ("clear", "Clear conversation history"),
-    ("cls", "Clear the view only, keeping context"),
-    ("version", "Show current version"),
-    ("diff", "Cycle or set diff display mode (off/inline/full)"),
-    ("resume", "Open session picker"),
-    ("sessions", "Alias for /resume"),
-    ("session", "Alias for /resume"),
-    ("quit", "Exit wizard"),
-];
+/// This look's own commands, beside the shared ones.
+pub fn extras() -> Vec<SlashCommand> {
+    shared::extras(&[("cls", "", "Clear the view only, keeping context")])
+}
+
+/// Every command on offer: what wizard advertises, then the shared ones, then ours.
+pub fn menu(app: &App) -> Vec<SlashCommand> {
+    shared::menu(&app.commands, &extras())
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Suggestion {
@@ -30,21 +24,6 @@ pub struct Suggestion {
     pub description: String,
     /// Character positions of `command` the typed text matched.
     pub matched: Vec<usize>,
-}
-
-/// Every command on offer: the local ones first, then what wizard advertises.
-pub fn all(app: &App) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = LOCAL
-        .iter()
-        .map(|(n, d)| (format!("/{n}"), (*d).to_string()))
-        .collect();
-    for c in &app.commands {
-        let name = format!("/{}", c.name);
-        if !out.iter().any(|(n, _)| *n == name) {
-            out.push((name, c.description.clone()));
-        }
-    }
-    out
 }
 
 const MATCH: i32 = 16;
@@ -112,7 +91,8 @@ pub fn suggestions(app: &App, input: &str) -> Vec<Suggestion> {
     let needle = &input[1..];
     let mut prefix: Vec<Suggestion> = Vec::new();
     let mut loose: Vec<(i32, Suggestion)> = Vec::new();
-    for (cmd, desc) in all(app) {
+    for c in menu(app) {
+        let (cmd, desc) = (format!("/{}", c.name), c.description);
         let body = &cmd[1..];
         if body.starts_with(needle) {
             prefix.push(Suggestion {
@@ -145,11 +125,9 @@ pub fn suggestions(app: &App, input: &str) -> Vec<Suggestion> {
 
 fn accepts_args(app: &App, command: &str) -> bool {
     let name = command.trim_start_matches('/');
-    matches!(name, "model" | "models" | "diff")
-        || app
-            .commands
-            .iter()
-            .any(|c| c.name == name && !c.input_hint.is_empty())
+    menu(app)
+        .iter()
+        .any(|c| c.name == name && !c.input_hint.is_empty())
 }
 
 /// Tab: take the selected suggestion; repeated Tab walks the list of the text it started from.
@@ -192,9 +170,7 @@ pub fn model_matches(app: &App, filter: &str) -> Vec<usize> {
 
 /// The filter text when the composer holds `/model ...`.
 pub fn model_filter(input: &str) -> Option<&str> {
-    input
-        .strip_prefix("/models ")
-        .or_else(|| input.strip_prefix("/model "))
+    input.strip_prefix("/model ")
 }
 
 pub fn pick_model(app: &mut App, index: usize) {
@@ -215,11 +191,9 @@ pub fn pick_model(app: &mut App, index: usize) {
 
 /// Run `name` here if it is one of ours. Anything else is wizard's to answer.
 pub fn run_local(app: &mut App, name: &str, args: &str) -> bool {
-    match name {
-        "help" | "?" | "commands" if args.is_empty() => {
-            app.overlay = Some(Overlay::Help { scroll: 0 });
-        }
-        "model" | "models" => {
+    match shared::resolve(name, &extras()) {
+        Command::Shared(Shared::Help) => app.overlay = Some(Overlay::Help { scroll: 0 }),
+        Command::Shared(Shared::Model) => {
             if args.is_empty() {
                 app.ed.set_text("/model ");
                 app.picker_sel = 0;
@@ -239,45 +213,21 @@ pub fn run_local(app: &mut App, name: &str, args: &str) -> bool {
                 }
             }
         }
-        "cancel" | "stop" => {
-            if app.busy() {
-                app.interrupt();
-            } else {
-                app.system("Nothing to cancel: no prompt or operation is in progress.");
-            }
-        }
-        "clear" => app.new_session(),
-        "cls" | "clear-view" => {
+        Command::Shared(Shared::Clear) => app.new_session(),
+        Command::Extra(_) => {
             app.cleared_at = Some(app.tr.messages.len());
             app.scroll = None;
             app.set_notice("View cleared (context kept)");
         }
-        "version" => app.system(format!(
-            "wizard look: jcode {VERSION}\nbackend: {}",
-            if app.config.backend.is_empty() {
-                "wizard"
-            } else {
-                &app.config.backend
-            }
-        )),
-        "diff" => {
-            app.diff_mode = match args {
-                "off" => crate::ui::tools::DiffMode::Off,
-                "inline" => crate::ui::tools::DiffMode::Inline,
-                "full" | "full-inline" => crate::ui::tools::DiffMode::FullInline,
-                _ => app.diff_mode.next(),
-            };
-            app.set_notice(format!("Diffs: {}", app.diff_mode.label()));
-        }
-        "resume" | "sessions" | "session" => {
+        Command::Shared(Shared::Resume) => {
             if args.is_empty() {
                 app.open_sessions();
             } else {
                 app.send(Request::LoadSession(args.to_string()));
             }
         }
-        "quit" | "exit" => app.quit = true,
-        _ => return false,
+        Command::Shared(Shared::Exit) => app.quit = true,
+        Command::Wizard => return false,
     }
     app.dirty = true;
     true

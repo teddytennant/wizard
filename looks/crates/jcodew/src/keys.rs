@@ -170,7 +170,7 @@ fn edited(app: &mut App) {
     app.picker_sel = 0;
     app.tab_base = None;
     app.hist_walk = false;
-    if matches!(app.ed.text(), "/model" | "/models") && app.ed.cursor() == app.ed.text().len() {
+    if app.ed.text() == "/model" && app.ed.cursor() == app.ed.text().len() {
         app.ed.set_text("/model ");
     }
 }

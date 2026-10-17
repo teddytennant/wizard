@@ -2,23 +2,23 @@
 │                                                                              │
 │  Commands                                                                    │
 │                                                                              │
-│    /help  Show help and keyboard shortcuts                                   │
-│    /?  Show help and keyboard shortcuts                                      │
-│    /commands  Alias for /help                                                │
-│    /model  List or switch models                                             │
-│    /models  Alias for /model                                                 │
-│    /cancel  Cancel the current prompt or operation                           │
-│    /clear  Clear conversation history                                        │
+│    /model <provider>/<model>  switch model                                   │
+│    /mode <genie|sovereign>  switch mode                                      │
+│    /effort <low|medium|high>  set reasoning effort                           │
+│    /plan  toggle plan mode                                                   │
+│    /compact  summarize older history                                         │
+│    /diff  show the working tree diff                                         │
+│    /todos  show the todo list                                                │
+│    /status  show status                                                      │
+│    /cost  show cost                                                          │
+│    /agents  list subagents                                                   │
+│    /help  show help                                                          │
+│    /clear  clear the conversation                                            │
+│    /exit  exit wizard                                                        │
+│    /quit  exit wizard                                                        │
+│    /resume [id]  reopen and continue a past session                          │
 │    /cls  Clear the view only, keeping context                                │
-│    /version  Show current version                                            │
-│    /diff  Cycle or set diff display mode (off/inline/full)                   │
-│    /resume  Open session picker                                              │
-│    /sessions  Alias for /resume                                              │
-│    /session  Alias for /resume                                               │
-│    /quit  Exit wizard                                                        │
 │                                                                              │
 │  ─────────────────────────────────────────────────                           │
-│                                                                              │
-│  More commands                                                               │
 │                                                                              │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page ───────────────────┘

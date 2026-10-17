@@ -22,7 +22,6 @@ use tuikit::editor::Editor;
 use tuikit::term::{Event as TermEvent, EventPump, TermGuard, Terminal};
 
 use crate::ui;
-use crate::ui::tools::DiffMode;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The name this look answers to in `[ui] skin`.
@@ -173,7 +172,6 @@ pub struct App {
     pub last_unknown_note: Option<Duration>,
     pub quit_armed: Option<Duration>,
     pub overlay: Option<Overlay>,
-    pub diff_mode: DiffMode,
     pub todos_pinned: bool,
     pub cursor: Option<(u16, u16)>,
 
@@ -226,7 +224,6 @@ impl App {
             last_unknown_note: None,
             quit_armed: None,
             overlay: None,
-            diff_mode: DiffMode::default(),
             todos_pinned: true,
             cursor: None,
             dirty: true,

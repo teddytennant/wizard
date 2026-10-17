@@ -28,6 +28,7 @@ const NAVIGATION: &[(&str, &str)] = &[
 ];
 
 const EDITING: &[(&str, &str)] = &[
+    ("Esc", "Interrupt the running turn"),
     ("Ctrl+C / Ctrl+D", "Quit (press twice to confirm)"),
     ("Ctrl+U", "Clear input line"),
     ("Ctrl+K", "Delete to end of input"),
@@ -51,21 +52,13 @@ const EDITING: &[(&str, &str)] = &[
 
 fn help_rows(app: &App) -> Vec<HelpRow> {
     let mut rows = vec![HelpRow::Blank, HelpRow::Section("Commands"), HelpRow::Blank];
-    for (name, desc) in crate::commands::LOCAL {
-        rows.push(HelpRow::Command(format!("/{name}"), (*desc).to_string()));
-    }
-    rows.extend([HelpRow::Blank, HelpRow::Rule, HelpRow::Blank]);
-    rows.extend([HelpRow::Section("More commands"), HelpRow::Blank]);
-    for c in &app.commands {
-        if crate::commands::LOCAL.iter().any(|(n, _)| *n == c.name) {
-            continue;
-        }
+    for c in crate::commands::menu(app) {
         let name = if c.input_hint.is_empty() {
             format!("/{}", c.name)
         } else {
             format!("/{} {}", c.name, c.input_hint)
         };
-        rows.push(HelpRow::Command(name, c.description.clone()));
+        rows.push(HelpRow::Command(name, c.description));
     }
     rows.extend([HelpRow::Blank, HelpRow::Rule, HelpRow::Blank]);
     rows.extend([HelpRow::Section("Navigation"), HelpRow::Blank]);

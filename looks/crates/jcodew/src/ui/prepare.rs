@@ -244,7 +244,7 @@ pub fn prepare(app: &App, width: usize, height: u16) -> Prepared {
                                 continue;
                             }
                             body = true;
-                            tools::render(c, width, app.diff_mode, &mut lines);
+                            tools::render(c, width, &mut lines);
                         }
                     }
                 }
