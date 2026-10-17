@@ -49,13 +49,6 @@
 # Environment variables:
 #   WIZARD_INSTALL_DIR           where to place the binary    (default /usr/local/bin;
 #                                ~/.local/bin on NixOS; $PREFIX/bin on Termux)
-#   WIZARD_UI_REPO               owner/repo of the full looks (default
-#                                teddytennant/openw). Installed beside wizard as
-#                                wizard-ui-codex, wizard-ui-grok,
-#                                wizard-ui-jcode, wizard-ui-opencode,
-#                                wizard-ui-pi, wizard-ui-claude. A failed
-#                                build is a warning:
-#                                wizard still runs.
 #   WIZARD_LOCAL                 1 = preinstall the llama.cpp stack and a model
 #                                    (see above)               (default 0)
 #   WIZARD_MINIMAL               1 = minimal install (see above)        (default 0)
@@ -179,7 +172,6 @@ WIZARD_REF="${WIZARD_REF:-}"
 # people who have one set WIZARD_MIRROR.
 WIZARD_MIRROR="${WIZARD_MIRROR:-}"
 WIZARD_BUILD_FROM_SOURCE="${WIZARD_BUILD_FROM_SOURCE:-0}"
-WIZARD_UI_REPO="${WIZARD_UI_REPO:-teddytennant/openw}"
 
 # WIZARD_NATIVE and WIZARD_APP used to install a second binary with a window
 # in it. The desktop app is Wizard GUI now, a separate release asset, so say
@@ -2016,22 +2008,32 @@ install_looks() {
     fi
     if ! cargo_works; then
         warn "this release did not include every look, and cargo is not available to build the rest."
-        warn "wizard still runs. /ui names the missing look. Re-run the installer against a current release, or build ${WIZARD_UI_REPO} and copy wizard-ui-codex, wizard-ui-grok, wizard-ui-jcode, wizard-ui-opencode, wizard-ui-pi, wizard-ui-claude next to wizard."
+        warn "wizard still runs. /ui names the missing look. Re-run the installer against a current release, or build looks/ in ${WIZARD_REPO} and copy wizard-ui-codex, wizard-ui-grok, wizard-ui-jcode, wizard-ui-opencode, wizard-ui-pi, wizard-ui-claude next to wizard."
         return
     fi
-    command -v git >/dev/null 2>&1 || {
-        warn "git is not available, so the full looks were not built"
-        return
-    }
-    say "Building the full looks from ${WIZARD_UI_REPO} (codex, grok, jcode, opencode, pi, claude) ..."
-    local src="${TMP_DIR}/openw-src"
-    # A repo GitHub cannot find answers 401, and git would stop the install
-    # to ask for a username on /dev/tty.
-    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "https://github.com/${WIZARD_UI_REPO}" "$src"; then
-        warn "could not clone ${WIZARD_UI_REPO}; wizard is installed, the full looks are not"
-        return
+    # A source install has already cloned the tree the looks are in.
+    local src="${TMP_DIR}/wizard-src"
+    if [ ! -d "${src}/looks" ]; then
+        command -v git >/dev/null 2>&1 || {
+            warn "git is not available, so the full looks were not built"
+            return
+        }
+        local ref
+        ref="$(resolve_source_ref)"
+        rm -rf "$src"
+        # A repo GitHub cannot find answers 401, and git would stop the install
+        # to ask for a username on /dev/tty.
+        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$ref" "https://github.com/${WIZARD_REPO}" "$src"; then
+            warn "could not clone ${WIZARD_REPO}@${ref}; wizard is installed, the full looks are not"
+            return
+        fi
+        if [ ! -d "${src}/looks" ]; then
+            warn "${WIZARD_REPO}@${ref} has no looks/; wizard is installed, the full looks are not"
+            return
+        fi
     fi
-    if ! ( cd "$src" && cargo build --release -p codexw -p grokw -p jcodew -p openw -p piw -p claudew ); then
+    say "Building the full looks (codex, grok, jcode, opencode, pi, claude) ..."
+    if ! ( cd "${src}/looks" && cargo build --release -p codexw -p grokw -p jcodew -p openw -p piw -p claudew ); then
         warn "the full looks failed to build; wizard is installed without them"
         return
     fi
@@ -2041,8 +2043,8 @@ install_looks() {
             continue
         fi
         case "$name" in
-            opencode) bin="${src}/target/release/openw" ;;
-            *) bin="${src}/target/release/${name}w" ;;
+            opencode) bin="${src}/looks/target/release/openw" ;;
+            *) bin="${src}/looks/target/release/${name}w" ;;
         esac
         if [ ! -f "$bin" ]; then
             warn "build produced no ${name} binary"
