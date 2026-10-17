@@ -1,5 +1,6 @@
-//! `/thinking` (spec 11.4), after `thinking-selector.js`. The levels are the backend's own
-//! (`Config.efforts`); Pi's descriptions are used where the names match.
+//! The thinking level selector, `/effort` with no argument (spec 11.4), after
+//! `thinking-selector.js`. The levels are the backend's own (`Config.efforts`); Pi's descriptions
+//! are used where the names match.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::Line;

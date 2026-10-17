@@ -24,13 +24,13 @@
 
 
 
+
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /se
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 → settings       Open settings menu
-  session        Show session info and stats
   scoped-models  Enable/disable models for Ctrl+P cycling
-  share          Share session as a secret GitHub gist
-  resume         Resume a different session
+  resume         [id] — reopen and continue a past session
 ~/proj (main)
 ?/?                                                                                                  fake-model • medium

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use agent_core::commands::split;
 use agent_core::transcript::{Part, Role, Transcript};
 use agent_core::{
     Backend, BackendHandle, Config, Event, NoticeLevel, Request, SessionInfo, SlashCommand,
@@ -25,7 +26,7 @@ use ratatui::text::Line;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tuikit::term::{Event as TermEvent, EventPump, TermGuard, Terminal};
 
-use crate::commands::{self, SlashItem};
+use crate::commands;
 use crate::keys::{Action, Keymap};
 use crate::mock::PiMock;
 use crate::settings::Settings;
@@ -54,19 +55,15 @@ pub enum Item {
     Msg(usize),
     /// Dim status line; a status that follows a status replaces it in place.
     Status(String),
-    /// A dim line that is never replaced (`Session name set: x`).
-    Note(String),
     Warning(String),
     Error(String),
     /// `✓ New session started`.
     Accent(String),
     /// Command output: default colour, padding 1.
     Text(String),
-    /// Pre-styled rows (`/session`, `/hotkeys`), shown with padding 1.
-    Rows(Vec<Line<'static>>),
-    /// `/hotkeys` and `/changelog`: blocks that draw their own rules, rebuilt at every width.
-    Hotkeys,
-    Changelog,
+    /// `/help`: the commands and the keys in a block that draws its own rules, rebuilt at every
+    /// width.
+    Help,
     /// A `!cmd` run, index into `App::bashes`.
     Bash(usize),
     Compaction {
@@ -354,7 +351,7 @@ pub struct App {
     mapped: usize,
     pub config: Config,
     pub backend_cmds: Vec<SlashCommand>,
-    pub slash: Vec<SlashItem>,
+    pub slash: Vec<SlashCommand>,
     pub sessions: Vec<SessionInfo>,
     /// The backend has answered a `ListSessions` at least once.
     sessions_listed: bool,
@@ -793,14 +790,14 @@ impl App {
                     None => {
                         let mut regions = Vec::new();
                         let (rows, keep) = match other {
-                            Item::Status(t) | Item::Note(t) => (messages::status(t, cx), true),
+                            Item::Status(t) => (messages::status(t, cx), true),
                             Item::Warning(t) => (messages::warning(t, cx), true),
                             Item::Error(t) => (messages::error(t, cx), true),
                             Item::Accent(t) => (messages::accent_note(t, cx), true),
                             Item::Text(t) => (messages::text_block(t, cx), true),
-                            Item::Rows(r) => (messages::lines_block(r), true),
-                            Item::Hotkeys => (ui::selectors::hotkeys(cx, &self.keymap), true),
-                            Item::Changelog => (ui::selectors::changelog(cx), true),
+                            Item::Help => {
+                                (ui::selectors::help(cx, &self.keymap, &self.slash), true)
+                            }
                             Item::Bash(b) => match self.bashes.get(*b) {
                                 Some(b) => {
                                     let time = ToolTime {
@@ -903,7 +900,7 @@ impl App {
                 if let Some(cmd) = self.handed_plan.take() {
                     self.send(Request::Prompt(cmd.into()));
                 }
-                // wizard confirms `/new` with `Ready` alone; it sends no `History` for an empty
+                // wizard confirms `/clear` with `Ready` alone; it sends no `History` for an empty
                 // session, so the conversation on screen is cleared here
                 if self.after_history == Some(After::NewSession) {
                     self.transcript.apply(&Event::History {
@@ -1038,7 +1035,7 @@ impl App {
                 self.after_history = None;
                 self.error(text.clone());
                 self.items.push(Item::Text(
-                    "Press ctrl+c to exit, or start a new session with /new".into(),
+                    "Press ctrl+c to exit, or start a new session with /clear".into(),
                 ));
                 // what was waiting for the turn can no longer be sent: back into the editor
                 let n = self.dequeue_all();
@@ -1162,24 +1159,23 @@ impl App {
             }
             return;
         }
-        if let Some((name, arg)) = commands::split(&text) {
-            let (name, arg) = (name.to_string(), arg.to_string());
-            if commands::run(self, &name, &arg) {
-                self.follow_end();
-                return;
-            }
-            // a wizard command: it answers with a notice, no user block
-            if self.backend_cmds.iter().any(|c| c.name == name) {
-                self.send(Request::Prompt(text));
-                self.follow_end();
-                return;
-            }
+        if commands::run(self, &text) {
+            self.follow_end();
+            return;
+        }
+        // compacting and reloading mid-turn would show what has not started: they wait their turn
+        if self.is_wizard_command(&text)
+            && !(self.busy() && matches!(split(&text), Some(("compact" | "reload", _))))
+        {
+            self.send_command(text);
+            self.follow_end();
+            return;
         }
         if self.backend_dead {
             // there is nobody to answer; keep what was typed instead of showing it as sent
             self.editor.set_text(&text);
             self.error(
-                "wizard is not running. Type /new to start it again, or ctrl+c to exit.".into(),
+                "wizard is not running. Type /clear to start it again, or ctrl+c to exit.".into(),
             );
             return;
         }
@@ -1225,13 +1221,28 @@ impl App {
     }
 
     fn dispatch_unqueued(&mut self, text: String) {
-        if let Some((name, arg)) = commands::split(&text) {
-            let (name, arg) = (name.to_string(), arg.to_string());
-            if commands::run(self, &name, &arg) {
-                return;
-            }
+        if commands::run(self, &text) {
+            return;
+        }
+        if self.is_wizard_command(&text) {
+            self.send_command(text);
+            return;
         }
         self.send_prompt(text);
+    }
+
+    fn is_wizard_command(&self, text: &str) -> bool {
+        split(text).is_some_and(|(name, _)| self.backend_cmds.iter().any(|c| c.name == name))
+    }
+
+    /// One of wizard's commands, sent as typed. It answers with a notice, no user block.
+    fn send_command(&mut self, text: String) {
+        match split(&text) {
+            Some(("compact", _)) => self.compacting = true,
+            Some(("reload", _)) => self.reload_look(),
+            _ => {}
+        }
+        self.send(Request::Prompt(text));
     }
 
     /// `alt+up`: every queued message back into the editor, steering first.
@@ -1404,28 +1415,13 @@ impl App {
         }
     }
 
-    pub fn cmd_thinking(&mut self, arg: &str) {
-        if arg.is_empty() {
-            if self.config.efforts.is_empty() {
-                self.status("Current model does not support thinking".into());
-                return;
-            }
-            let sel = Selector::thinking_with_default(
-                &self.config.efforts,
-                &self.config.effort,
-                self.default_effort.as_deref(),
-            );
-            self.open_selector(sel);
-            return;
-        }
-        if self.config.efforts.iter().any(|e| e == arg) {
-            self.set_effort(arg.to_string());
-        } else {
-            let all = self.config.efforts.join(", ");
-            self.error(format!(
-                "Unknown thinking level \"{arg}\". Available levels: {all}"
-            ));
-        }
+    pub fn open_thinking(&mut self) {
+        let sel = Selector::thinking_with_default(
+            &self.config.efforts,
+            &self.config.effort,
+            self.default_effort.as_deref(),
+        );
+        self.open_selector(sel);
     }
 
     fn set_effort(&mut self, level: String) {
@@ -1479,20 +1475,6 @@ impl App {
         self.status(format!("Switched to {name} (thinking: {lvl})"));
     }
 
-    pub fn cmd_name(&mut self, arg: &str) {
-        if arg.is_empty() {
-            match &self.session_name {
-                Some(n) => self.status(format!("Session name: {n}")),
-                None => self.warn("Usage: /name <name>".into()),
-            }
-            return;
-        }
-        self.session_name = Some(arg.to_string());
-        self.title_dirty = true;
-        self.items
-            .push(Item::Note(format!("Session name set: {arg}")));
-    }
-
     pub fn new_session(&mut self) {
         if self.backend_dead {
             self.restart_backend();
@@ -1506,7 +1488,7 @@ impl App {
         self.send(Request::NewSession);
     }
 
-    /// The wizard process is gone (`Fatal`): `/new` starts another one, as the error line says.
+    /// The wizard process is gone (`Fatal`): `/clear` starts another one, as the error line says.
     fn restart_backend(&mut self) {
         if tokio::runtime::Handle::try_current().is_err() {
             self.error("Could not start wizard again: no async runtime".into());
@@ -1528,22 +1510,6 @@ impl App {
             }
             Err(e) => self.error(format!("Could not start wizard again: {e:#}")),
         }
-    }
-
-    pub fn compact(&mut self, arg: &str) {
-        if self.busy() {
-            // the backend queues the prompt behind the turn, and `compacting` would show a
-            // compaction that has not started
-            self.warn("Finish or cancel the running turn before compacting.".into());
-            return;
-        }
-        self.compacting = true;
-        let p = if arg.is_empty() {
-            "/compact".to_string()
-        } else {
-            format!("/compact {arg}")
-        };
-        self.send(Request::Prompt(p));
     }
 
     /// The theme setting in force: the command line wins over the settings file.
@@ -1621,20 +1587,16 @@ impl App {
         }
     }
 
-    /// `/reload`: wizard rereads its skills and scripted tools; piw rereads its settings file and
-    /// theme (not keybindings: `keybindings.json` is not read, and the message does not say so). A busy turn refuses, as Pi does.
-    pub fn reload(&mut self) {
-        if self.busy() {
-            self.warn("Wait for the current response to finish before reloading.".into());
-            return;
-        }
+    /// `/reload` goes to wizard, which rereads its skills and scripted tools; piw rereads its
+    /// settings file and theme (not keybindings: `keybindings.json` is not read, and the message
+    /// does not say so).
+    fn reload_look(&mut self) {
         if let Some(d) = self.opts.config_dir.clone() {
             self.settings = Settings::load(&d);
             self.hide_thinking = self.settings.hide_thinking_block;
             self.autocomplete.max_visible = self.settings.autocomplete_max_visible;
             self.theme = resolve_theme(self.theme_setting().as_deref(), &self.term);
         }
-        self.send(Request::Prompt("/reload".into()));
         self.status("Reloaded settings, theme and wizard skills".into());
     }
 
@@ -1673,40 +1635,17 @@ impl App {
         self.open_selector(sel);
     }
 
-    pub fn show_session_info(&mut self) {
-        let t = &self.transcript;
-        let mut st = ui::selectors::SessionStats {
-            name: self.session_name.as_deref(),
-            id: &t.session_id,
-            path: format!("~/.wizard/sessions/{}.jsonl", t.session_id),
-            usage: t.usage.clone(),
-            ..Default::default()
-        };
-        for m in &t.messages {
-            match m.role {
-                Role::User => st.users += 1,
-                Role::Assistant => st.assistants += 1,
-                Role::Notice(_) => {}
-            }
-            for p in &m.parts {
-                if let Part::Tool(c) = p {
-                    st.tool_calls += 1;
-                    if matches!(c.status, ToolStatus::Completed | ToolStatus::Failed) {
-                        st.tool_results += 1;
-                    }
-                }
-            }
+    pub fn cmd_resume(&mut self, id: &str) {
+        if id.is_empty() {
+            self.open_resume();
+            return;
         }
-        let rows = ui::selectors::session_info(&self.cx(self.size.0), &st);
-        self.items.push(Item::Rows(rows));
+        self.after_history = Some(After::Resumed);
+        self.send(Request::LoadSession(id.to_string()));
     }
 
-    pub fn show_changelog(&mut self) {
-        self.items.push(Item::Changelog);
-    }
-
-    pub fn show_hotkeys(&mut self) {
-        self.items.push(Item::Hotkeys);
+    pub fn show_help(&mut self) {
+        self.items.push(Item::Help);
     }
 
     /// Apply settings the `/settings` selector changed, live, and write them.

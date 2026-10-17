@@ -240,19 +240,12 @@ pub fn accent_note(text: &str, cx: &Cx) -> Lines {
     ]
 }
 
-/// Plain default-colour text block (`/session`, command output): blank row, padding 1.
+/// Plain default-colour text block (command output): blank row, padding 1.
 pub fn text_block(text: &str, cx: &Cx) -> Lines {
     let mut out = vec![blank()];
     for l in wrap_text(text, cx.width.saturating_sub(2).max(1), Style::default()) {
         out.push(indent(l, 1));
     }
-    out
-}
-
-/// Rows already styled by the caller, in a block with a blank row before and padding 1.
-pub fn lines_block(lines: &[Line<'static>]) -> Lines {
-    let mut out = vec![blank()];
-    out.extend(lines.iter().cloned().map(|l| indent(l, 1)));
     out
 }
 

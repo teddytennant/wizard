@@ -4,12 +4,11 @@
 
 use std::path::Path;
 
-use agent_core::ModelOption;
+use agent_core::{ModelOption, SlashCommand};
 use ratatui::text::{Line, Span};
 use tuikit::width::display_width;
 
 use super::{span, Cx, Lines};
-use crate::commands::SlashItem;
 use crate::theme::Tok;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +111,7 @@ const LOOKS: [&str; 7] = [
 ];
 
 pub struct AcCtx<'a> {
-    pub commands: &'a [SlashItem],
+    pub commands: &'a [SlashCommand],
     pub files: &'a [String],
     pub models: &'a [ModelOption],
     pub cwd: &'a Path,
@@ -198,10 +197,10 @@ impl Autocomplete {
                     .iter()
                     .map(|c| Item {
                         label: c.name.clone(),
-                        desc: if c.hint.is_empty() {
+                        desc: if c.input_hint.is_empty() {
                             c.description.clone()
                         } else {
-                            format!("{} — {}", c.hint, c.description)
+                            format!("{} — {}", c.input_hint, c.description)
                         },
                         value: format!("/{} ", c.name),
                         dir: false,
@@ -801,26 +800,14 @@ mod tests {
         assert_eq!(locale_cmp("Makefile", "main.go"), Greater);
     }
 
-    fn cmds() -> Vec<SlashItem> {
-        [
+    fn cmds() -> Vec<SlashCommand> {
+        agent_core::commands::extras(&[
             ("settings", "", "Open settings menu"),
-            (
-                "model",
-                "<provider/model>",
-                "Select model (opens selector UI)",
-            ),
-        ]
-        .iter()
-        .map(|(n, h, d)| SlashItem {
-            name: n.to_string(),
-            hint: h.to_string(),
-            description: d.to_string(),
-            builtin: true,
-        })
-        .collect()
+            ("model", "<provider/model>", "pick or switch the model"),
+        ])
     }
 
-    fn ctx<'a>(c: &'a [SlashItem], f: &'a [String], m: &'a [ModelOption]) -> AcCtx<'a> {
+    fn ctx<'a>(c: &'a [SlashCommand], f: &'a [String], m: &'a [ModelOption]) -> AcCtx<'a> {
         AcCtx {
             commands: c,
             files: f,
@@ -846,12 +833,7 @@ mod tests {
     #[test]
     fn an_exact_name_outranks_a_longer_one() {
         let mut c = cmds();
-        c.push(SlashItem {
-            name: "mode".into(),
-            hint: String::new(),
-            description: "pick a mode".into(),
-            builtin: false,
-        });
+        c.extend(agent_core::commands::extras(&[("mode", "", "pick a mode")]));
         let mut a = Autocomplete::new();
         a.update("/mode", 5, &ctx(&c, &[], &[]));
         assert_eq!(a.selected().unwrap().text, "/mode ");

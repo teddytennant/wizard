@@ -26,11 +26,11 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-→ settings       Open settings menu
-  model          <provider/model> — Select model (opens selector UI)
-  tree           Navigate session tree (switch branches)
-  thinking       <level> — Set thinking level
-  scoped-models  Enable/disable models for Ctrl+P cycling
-  (1/33)
+→ model          <provider>/<model> — switch model
+  mode           <genie|sovereign> — switch mode
+  effort         <low|medium|high> — set reasoning effort
+  plan           toggle plan mode
+  compact        summarize older history
+  (1/18)
 ~/proj (main)
 ?/?                                                                                                  fake-model • medium

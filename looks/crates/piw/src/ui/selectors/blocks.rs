@@ -1,88 +1,14 @@
-//! Transcript blocks the selector commands print: `/session` (spec 11.10), `/hotkeys` (11.11) and
-//! `/changelog`. Rows come back ready to sit in the transcript; `session_info` has no padding of
-//! its own (the caller's block adds the blank row and the one column), the other two draw their
-//! own rules and padding.
+//! The `/help` block: the slash commands, then Pi's keyboard shortcut tables (spec 11.11). It
+//! draws its own rules and padding.
 
-use agent_core::Usage;
+use agent_core::SlashCommand;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use tuikit::width::{spans_width, wrap_spans, WrapMode};
 
 use crate::keys::{Action, Keymap};
 use crate::theme::Tok;
-use crate::ui::markdown_theme;
-use crate::ui::messages::group_digits;
 use crate::ui::{blank, indent, rule, span, Cx, Lines};
-
-/// What `/session` counts.
-#[derive(Default, Clone, Debug)]
-pub struct SessionStats<'a> {
-    pub name: Option<&'a str>,
-    pub id: &'a str,
-    pub path: String,
-    pub users: usize,
-    pub assistants: usize,
-    pub tool_calls: usize,
-    pub tool_results: usize,
-    pub usage: Usage,
-}
-
-pub fn session_info(cx: &Cx, s: &SessionStats) -> Lines {
-    let th = cx.th();
-    let dim = th.fg(Tok::Dim);
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    let kv = |k: &str, v: String| {
-        Line::from(vec![span(format!("{k}:"), dim), Span::raw(format!(" {v}"))])
-    };
-    let head = |t: &str| Line::from(span(t.to_string(), bold));
-    let n = |v: usize| group_digits(v as u64);
-    let mut out: Lines = vec![head("Session Info"), blank()];
-    if let Some(name) = s.name {
-        out.push(kv("Name", name.to_string()));
-    }
-    out.push(kv("File", s.path.clone()));
-    out.push(kv("ID", s.id.to_string()));
-    out.push(blank());
-    out.push(head("Messages"));
-    out.push(kv("Total", n(s.users + s.assistants + s.tool_results)));
-    out.push(kv("User", n(s.users)));
-    out.push(kv("Assistant", n(s.assistants)));
-    out.push(kv(
-        "Tools",
-        format!("{} calls, {} results", n(s.tool_calls), n(s.tool_results)),
-    ));
-    let u = &s.usage;
-    if u.input_tokens + u.output_tokens > 0 {
-        out.push(blank());
-        out.push(head("Tokens"));
-        out.push(kv("Input", group_digits(u.input_tokens)));
-        if u.cached_tokens > 0 {
-            let pct = u.cached_tokens as f64 * 100.0 / u.input_tokens.max(1) as f64;
-            out.push(Line::from(vec![
-                Span::raw("  "),
-                span("Cached:", dim),
-                Span::raw(format!(" {} ", group_digits(u.cached_tokens))),
-                span(format!("({pct:.1}%)"), dim),
-            ]));
-            out.push(Line::from(vec![
-                Span::raw("  "),
-                span("Uncached:", dim),
-                Span::raw(format!(
-                    " {}",
-                    group_digits(u.input_tokens.saturating_sub(u.cached_tokens))
-                )),
-            ]));
-        }
-        out.push(kv("Output", group_digits(u.output_tokens)));
-        out.push(kv("Total", group_digits(u.input_tokens + u.output_tokens)));
-    }
-    if let Some(c) = u.cost_usd.filter(|c| *c > 0.0) {
-        out.push(blank());
-        out.push(head("Cost"));
-        out.push(kv("Total", format!("${c:.3}")));
-    }
-    out
-}
 
 fn title_block(cx: &Cx, title: &str, body: Lines) -> Lines {
     let th = cx.th();
@@ -96,21 +22,6 @@ fn title_block(cx: &Cx, title: &str, body: Lines) -> Lines {
     out.extend(body);
     out.push(r);
     out
-}
-
-/// `/changelog`: the `What's New` block with piw's own entries.
-pub fn changelog(cx: &Cx) -> Lines {
-    let th = cx.th();
-    let md = markdown_theme::render(
-        "## [0.1.0] - 2026-10-05\n\n### Added\n\n- Pi 1.0.3's terminal UI on the wizard backend: header, editor, messages, tool blocks, footer, slash commands and selectors.\n- `--print`, `--continue`, `--resume`, `--session`, `--model` and `--thinking`.",
-        cx.width.saturating_sub(2).max(1),
-        th,
-        Style::default(),
-    );
-    let mut body = vec![blank()];
-    body.extend(md.into_iter().map(|l| indent(l, 1)));
-    body.push(blank());
-    title_block(cx, "What's New", body)
 }
 
 fn cap(c: &crate::keys::Chord) -> String {
@@ -274,25 +185,39 @@ fn table(header: [&str; 2], body: Vec<[Vec<Span<'static>>; 2]>, avail: usize) ->
     out
 }
 
-/// `/hotkeys`: the tables of spec 11.11 without the rows for features piw does not have (jump to
-/// character, yank cycling, images).
-pub fn hotkeys(cx: &Cx, km: &Keymap) -> Lines {
+/// `/help`: the commands in `menu`, then the key tables of spec 11.11 without the rows for
+/// features piw does not have (jump to character, yank cycling, images).
+pub fn help(cx: &Cx, km: &Keymap, menu: &[SlashCommand]) -> Lines {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let avail = cx.width.saturating_sub(2).max(10) as usize;
     let mut body: Lines = vec![blank()];
-    for (name, list) in rows(km) {
+    let mut section = |name: &'static str, header, b| {
         body.push(indent(Line::from(span(name, bold)), 1));
         body.push(blank());
-        let b: Vec<[Vec<Span<'static>>; 2]> = list
-            .iter()
-            .map(|(k, d)| [cell_spans(k, cx), vec![Span::raw((*d).to_string())]])
-            .collect();
-        for l in table(["Key", "Action"], b, avail) {
+        for l in table(header, b, avail) {
             body.push(indent(l, 1));
         }
         body.push(blank());
+    };
+    let commands = menu
+        .iter()
+        .map(|c| {
+            let usage = format!("/{} {}", c.name, c.input_hint);
+            [
+                cell_spans(&Cell::Text(usage.trim_end().into()), cx),
+                vec![Span::raw(c.description.clone())],
+            ]
+        })
+        .collect();
+    section("Commands", ["Command", "Description"], commands);
+    for (name, list) in rows(km) {
+        let b = list
+            .iter()
+            .map(|(k, d)| [cell_spans(k, cx), vec![Span::raw((*d).to_string())]])
+            .collect();
+        section(name, ["Key", "Action"], b);
     }
-    title_block(cx, "Keyboard Shortcuts", body)
+    title_block(cx, "Help", body)
 }
 
 #[cfg(test)]
@@ -320,12 +245,27 @@ mod tests {
         l.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    fn menu() -> Vec<SlashCommand> {
+        crate::commands::items(&agent_core::mock::commands())
+    }
+
     #[test]
-    fn hotkeys_grid_matches_the_capture_shape() {
-        let rows: Vec<String> = hotkeys(&cx(120), &Keymap::new()).iter().map(t).collect();
+    fn help_grid_matches_the_capture_shape() {
+        let rows: Vec<String> = help(&cx(120), &Keymap::new(), &menu())
+            .iter()
+            .map(t)
+            .collect();
         assert_eq!(rows[1], "─".repeat(120));
-        assert_eq!(rows[2], " Keyboard Shortcuts");
+        assert_eq!(rows[2], " Help");
+        assert_eq!(rows[5], " Commands");
         assert!(rows.contains(&" Navigation".to_string()));
+        assert!(
+            rows.iter().any(
+                |r| r.starts_with(" │ /model <provider>/<model>") && r.contains("switch model")
+            ),
+            "{rows:#?}"
+        );
+        assert!(rows.iter().any(|r| r.starts_with(" │ /copy ")), "{rows:#?}");
         assert!(
             rows.iter()
                 .any(|r| r.starts_with(" │ Up / Down / Left/Ctrl+B / Right/Ctrl+F")),
@@ -346,24 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn hotkeys_fit_an_80_column_screen() {
-        let rows = hotkeys(&cx(80), &Keymap::new());
+    fn help_fits_an_80_column_screen() {
+        let rows = help(&cx(80), &Keymap::new(), &menu());
         assert!(rows.iter().all(|l| display_width(&t(l)) <= 80));
-    }
-
-    #[test]
-    fn session_block_lists_counts_and_hides_empty_sections() {
-        let s = SessionStats {
-            id: "abc",
-            path: "~/.wizard/sessions/abc".into(),
-            users: 1,
-            assistants: 1,
-            ..Default::default()
-        };
-        let rows: Vec<String> = session_info(&cx(100), &s).iter().map(t).collect();
-        assert_eq!(rows[0], "Session Info");
-        assert!(rows.contains(&"ID: abc".to_string()));
-        assert!(rows.contains(&"Tools: 0 calls, 0 results".to_string()));
-        assert!(!rows.contains(&"Tokens".to_string()));
     }
 }

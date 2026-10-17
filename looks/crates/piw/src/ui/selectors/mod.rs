@@ -23,7 +23,7 @@ use agent_core::{ModelOption, SessionInfo};
 use super::{rule, Cx, Lines};
 use crate::theme::Tok;
 
-pub use blocks::{changelog, hotkeys, session_info, SessionStats};
+pub use blocks::help;
 pub use input::Input;
 pub use model::ModelSelector;
 pub use resume::ResumeSelector;

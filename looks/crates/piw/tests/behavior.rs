@@ -165,10 +165,10 @@ fn status_lines_replace_each_other() {
 }
 
 #[test]
-fn new_session_clears_the_chat_and_prints_the_accent_line() {
+fn clear_starts_a_new_session_and_prints_the_accent_line() {
     let mut h = Harness::new(100, 30);
     h.turn("hello", "hi");
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     assert!(h.sent().contains(&Request::NewSession));
     h.event(Event::History {
@@ -246,24 +246,66 @@ fn wizard_commands_go_to_the_backend_without_a_user_block() {
 }
 
 #[test]
-fn unsupported_commands_say_so() {
+fn pi_only_commands_are_gone_and_go_to_wizard_as_typed() {
     let mut h = Harness::new(100, 30);
-    for c in ["/fork", "/tree", "/clone", "/export", "/login", "/trust"] {
-        h.type_str(c);
-        h.press(KeyCode::Esc);
-        h.press(KeyCode::Enter);
+    let names: Vec<&str> = h.app.slash.iter().map(|c| c.name.as_str()).collect();
+    for gone in [
+        "tree",
+        "thinking",
+        "export",
+        "import",
+        "share",
+        "bug",
+        "name",
+        "session",
+        "changelog",
+        "hotkeys",
+        "fork",
+        "clone",
+        "trust",
+        "login",
+        "logout",
+        "new",
+    ] {
+        assert!(!names.contains(&gone), "/{gone} is still listed: {names:?}");
     }
-    let t = h.text();
-    assert!(
-        t.contains("Warning: wizard sessions do not branch; /fork is not supported."),
-        "{t}"
-    );
-    assert!(t.contains("Warning: /export is not supported yet."), "{t}");
-    assert!(
-        t.contains("Warning: wizard signs in to its providers from ~/.wizard"),
-        "{t}"
-    );
-    assert!(prompts(&mut h).is_empty());
+    h.type_str("/tree");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert_eq!(prompts(&mut h), ["/tree"]);
+    assert!(!h.text().contains("Warning"), "{}", h.text());
+}
+
+#[test]
+fn shared_commands_are_answered_here() {
+    let mut h = Harness::new(100, 30);
+    h.type_str("/help");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert!(matches!(h.app.items.last(), Some(piw::app::Item::Help)));
+    h.type_str("/resume ses_old");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert_eq!(h.sent(), [Request::LoadSession("ses_old".into())]);
+    h.type_str("/quit");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert!(h.app.quit);
+}
+
+#[test]
+fn effort_with_no_argument_opens_the_thinking_selector() {
+    let mut h = Harness::new(100, 30);
+    h.type_str("/effort");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert!(h.sent().is_empty());
+    assert!(h.text().contains("Thinking Level"), "{}", h.text());
+    h.press(KeyCode::Esc);
+    h.type_str("/effort high");
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert_eq!(prompts(&mut h), ["/effort high"]);
 }
 
 #[tokio::test]
@@ -331,7 +373,7 @@ fn trailing_backslash_makes_a_newline() {
 #[test]
 fn enter_on_a_slash_row_runs_the_command() {
     let mut h = Harness::new(100, 30);
-    h.type_str("/ne");
+    h.type_str("/cle");
     h.press(KeyCode::Enter);
     assert!(h.sent().contains(&Request::NewSession));
     assert!(h.app.editor.is_empty());
@@ -407,7 +449,7 @@ fn errors_and_fatal_events_become_lines() {
     let t = h.text();
     assert!(t.contains("Error: wizard exited"), "{t}");
     assert!(
-        t.contains("Press ctrl+c to exit, or start a new session with /new"),
+        t.contains("Press ctrl+c to exit, or start a new session with /clear"),
         "{t}"
     );
 }

@@ -655,7 +655,7 @@ fn new_clears_the_conversation_when_wizard_confirms_with_ready_alone() {
     let mut h = Harness::new(100, 30);
     h.turn("first question", "the old answer");
     assert!(h.text().contains("the old answer"));
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     assert!(h.sent().iter().any(|r| matches!(r, Request::NewSession)));
     // the real backend sends no History for an empty session, only Ready
@@ -680,7 +680,7 @@ fn new_while_a_turn_runs_is_refused_here_and_announces_nothing_later() {
     let mut h = Harness::new(100, 30);
     start_turn(&mut h, "go");
     h.sent();
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     assert!(!h.sent().iter().any(|r| matches!(r, Request::NewSession)));
     assert!(
@@ -699,7 +699,7 @@ fn new_while_a_turn_runs_is_refused_here_and_announces_nothing_later() {
 #[test]
 fn a_refused_switch_does_not_leave_a_pending_announcement() {
     let mut h = Harness::new(100, 30);
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     h.event(Event::Notice {
         level: agent_core::NoticeLevel::Error,
@@ -733,9 +733,9 @@ async fn a_dead_backend_keeps_the_draft_and_the_queue_and_new_starts_it_again() 
     assert_eq!(h.app.editor.text(), "hello");
     assert_eq!(h.app.transcript.messages.len(), blocks);
     assert!(h.text().contains("wizard is not running"), "{}", h.text());
-    // /new does what the error line says
+    // /clear does what the error line says
     h.app.editor.clear();
-    h.type_str("/new");
+    h.type_str("/clear");
     h.press(KeyCode::Enter);
     for _ in 0..100 {
         h.deliver();
@@ -896,8 +896,16 @@ fn an_unknown_model_or_thinking_level_is_an_error_not_a_silent_default() {
 #[test]
 fn reload_and_copy_say_what_happened() {
     let mut h = Harness::new(100, 30);
+    let mut cmds = agent_core::mock::commands();
+    cmds.extend(agent_core::commands::extras(&[("reload", "", "reload")]));
+    h.event(Event::Commands(cmds));
     h.type_str("/reload");
     h.press(KeyCode::Enter);
+    assert_eq!(
+        h.sent(),
+        [Request::Prompt("/reload".into())],
+        "wizard runs it"
+    );
     let t = h.text();
     assert!(
         t.contains("Reloaded settings, theme and wizard skills"),
@@ -927,15 +935,6 @@ fn reload_and_copy_say_what_happened() {
         "{t}"
     );
     assert!(!t.contains("Copied last agent message to clipboard"), "{t}");
-}
-
-#[test]
-fn the_session_path_is_the_file_that_exists() {
-    let mut h = Harness::new(100, 30);
-    h.type_str("/session");
-    h.press(KeyCode::Enter);
-    let t = h.text();
-    assert!(t.contains("~/.wizard/sessions/ses_1234567890.jsonl"), "{t}");
 }
 
 #[test]
@@ -999,17 +998,15 @@ fn an_empty_listing_is_reported_as_empty() {
 }
 
 #[test]
-fn compact_while_a_turn_runs_is_refused_and_does_not_mark_compaction() {
+fn compact_while_a_turn_runs_waits_for_it_and_marks_compaction_only_then() {
     let mut h = Harness::new(100, 30);
     start_turn(&mut h, "go");
     h.sent();
     h.type_str("/compact");
     h.press(KeyCode::Enter);
     assert!(h.sent().is_empty(), "nothing is sent mid-turn");
-    let t = h.text();
-    assert!(
-        t.contains("Finish or cancel the running turn before compacting."),
-        "{t}"
-    );
-    assert!(!t.contains("Compacting context"), "{t}");
+    assert!(!h.text().contains("Compacting context"), "{}", h.text());
+    h.event(Event::TurnEnd(StopReason::EndTurn));
+    assert_eq!(h.sent(), [Request::Prompt("/compact".into())]);
+    assert!(h.app.busy(), "compacting");
 }

@@ -291,7 +291,7 @@ fn settings_rows_colours_and_live_changes() {
 #[test]
 fn thinking_selector_lists_the_backend_levels() {
     let mut h = H::new(three());
-    h.cmd("/thinking");
+    h.cmd("/effort");
     let rows = h.block();
     assert_eq!(rows[2], "Thinking Level");
     assert_eq!(rows[4], "Shift+Tab cycles thinking levels in-session");
@@ -410,18 +410,14 @@ fn scoping_models_limits_ctrl_p() {
 }
 
 #[test]
-fn session_hotkeys_and_changelog_blocks() {
+fn help_block_lists_the_commands_and_the_keys() {
     let mut h = H::new(three());
-    h.cmd("/session");
-    h.cmd("/hotkeys");
-    h.cmd("/changelog");
-    let text = h.screen().plain();
-    assert!(text.contains("What's New"), "{text}");
+    h.cmd("/help");
     h.app.size = (120, 120);
     let text = h.screen().plain();
-    assert!(text.contains("Session Info"));
-    assert!(text.contains(" Keyboard Shortcuts"));
-    assert!(text.contains("│ Shift+Tab"));
+    assert!(text.contains(" Help"), "{text}");
+    assert!(text.contains("│ /scoped-models"), "{text}");
+    assert!(text.contains("│ Shift+Tab"), "{text}");
 }
 
 #[test]
@@ -429,7 +425,7 @@ fn every_selector_fits_80_and_150_columns() {
     for (w, hgt) in [(80u16, 24u16), (150, 42)] {
         for cmd in [
             "/model",
-            "/thinking",
+            "/effort",
             "/scoped-models",
             "/settings",
             "/resume",
