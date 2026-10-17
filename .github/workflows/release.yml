@@ -252,30 +252,15 @@ jobs:
       # The six full looks (wizard-ui-opencode, wizard-ui-pi, wizard-ui-codex,
       # wizard-ui-grok, wizard-ui-jcode, wizard-ui-claude) ship in the same tarball as wizard. install.sh and
       # wizard update place them beside it, so a machine without cargo still
-      # gets /ui opencode and the rest. looks.rev pins the source; floating
-      # main would make a tag unreproducible.
-      - name: Read looks pin
-        id: looks-rev
-        run: |
-          set -eu
-          rev="$(grep -E '^[0-9a-f]{40}$' looks.rev | head -1)"
-          test -n "$rev"
-          echo "rev=$rev" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout look UIs
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: teddytennant/openw
-          ref: ${{ steps.looks-rev.outputs.rev }}
-          path: openw
-          persist-credentials: false
-
+      # gets /ui opencode and the rest. They are built from looks/, their own
+      # cargo workspace in this tree.
+      #
       # The looks print their own crate version in the header, the footer and
-      # --version, and openw's is not Wizard's. They ship as Wizard, so they
-      # are built as this release. `cargo update --workspace` rewrites only the
+      # --version, and looks/Cargo.toml stays at 0.1.0. They ship as Wizard, so
+      # they are built as this release. `cargo update --workspace` rewrites only the
       # members' own lockfile entries, which keeps --locked honest below.
       - name: Give the looks this release's version
-        working-directory: openw
+        working-directory: looks
         run: |
           set -eu
           version="$(grep -m1 '^version' ../Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
@@ -285,7 +270,7 @@ jobs:
           cargo update --workspace
 
       - name: Build look UIs
-        working-directory: openw
+        working-directory: looks
         env:
           RUSTFLAGS: ${{ contains(matrix.target, '-musl') && '-C target-feature=+crt-static' || '' }}
           CC_x86_64_unknown_linux_musl: musl-gcc
@@ -299,7 +284,7 @@ jobs:
           rm -rf "$stage"
           mkdir -p "$stage"
           release="target/${{ matrix.target }}/release"
-          looks="openw/target/${{ matrix.target }}/release"
+          looks="looks/target/${{ matrix.target }}/release"
           cp "$release/wizard" "$stage/wizard"
           cp "$looks/openw" "$stage/wizard-ui-opencode"
           cp "$looks/piw" "$stage/wizard-ui-pi"
