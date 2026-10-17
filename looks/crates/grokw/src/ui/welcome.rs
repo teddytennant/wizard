@@ -117,7 +117,7 @@ fn warning_rows(list: &[StartupWarning]) -> u16 {
     })
 }
 
-pub const SUBTITLE: &str = "Thanks for trying Wizard, give feedback with /feedback!";
+pub const SUBTITLE: &str = "Thanks for trying Wizard! Type /help to see the commands.";
 pub const MENU: [(&str, &str); 4] = [
     ("New worktree", "ctrl+w"),
     ("Resume session", "ctrl+r"),
@@ -130,11 +130,11 @@ const TIPS: [&str; 10] = [
     "Use @! for hidden or ignored files: @!.github/workflows.",
     "Use Ctrl+Enter to interject messages. Or just Enter to queue messages.",
     "Press Ctrl+B to background a running terminal command.",
-    "Try out workflows using /workflows.",
+    "Run /diff to see what changed in the working tree.",
     "Press Ctrl+O to toggle auto-approve mode.",
     "Run /compact [context] when chat gets long.",
     "Use @ to attach files like @src/main.rs.",
-    "Run /dashboard (or Ctrl+\\) to see and manage all your agents in one place.",
+    "Run /agents to browse subagents and hand one a task.",
     "Start Wizard in a fresh worktree with `-w`; add `-r <session-id>` to resume an existing session there.",
 ];
 

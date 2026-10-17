@@ -77,7 +77,7 @@ impl HistoryCell for WarningCell {
     }
 }
 
-pub const INTERRUPTED: &str = "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.";
+pub const INTERRUPTED: &str = "Conversation interrupted - tell the model what to do differently.";
 
 /// The rule after a turn that did work, with `Worked for 1m 08s` when it took over a minute.
 #[derive(Clone, Debug)]

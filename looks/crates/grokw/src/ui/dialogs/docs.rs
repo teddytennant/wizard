@@ -115,7 +115,7 @@ pub const GUIDES: &[(&str, &str, &str)] = &[
     (
         "20-background-tasks.md",
         "Background Tasks and Monitoring",
-        "Background commands, /loop, monitor, scheduler",
+        "Background commands, monitor, scheduler",
     ),
     (
         "21-terminal-support.md",

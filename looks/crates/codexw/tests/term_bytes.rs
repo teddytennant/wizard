@@ -32,7 +32,7 @@ fn ready() -> Event {
 
 #[test]
 fn first_frames_match_the_codex_byte_stream() {
-    // Placeholder 7 is `Run /review on my current changes`, the one the capture drew.
+    // Placeholder 6 is the slot the capture drew; ours reads `Review the changes in my worktree` there.
     let mut h = harness(120, 36, 6);
     h.app.tip = CODEX_TIP;
     if let Some(header) = h.app.placeholder_header.as_mut() {
@@ -94,7 +94,7 @@ fn emulated_screen_matches_start_capture() {
         rows[7].starts_with("  Tip: Our most capable model yet."),
         "{rows:?}"
     );
-    assert_eq!(rows[12], "› Use /skills to list available skills");
+    assert_eq!(rows[12], "› Use /help to list available commands");
     assert_eq!(rows[14], "  gpt-5.5 default · ~/proj");
     assert_eq!(
         h.screen.alt_screen_entered, 0,

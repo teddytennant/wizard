@@ -211,7 +211,7 @@ fn ctrl_c_follows_codex_order() {
     t.wait("draft", |s| s.contains("› draft text"));
     t.keys(&["C-c"]);
     t.wait("cleared draft", |s| {
-        !s.contains("draft text") && s.contains("Use /skills")
+        !s.contains("draft text") && s.contains("Use /help")
     });
     assert!(!t.screen().contains("[codexw exited"));
     // 2. during a turn it interrupts and the app stays alive

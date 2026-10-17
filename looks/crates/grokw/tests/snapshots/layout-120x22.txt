@@ -3,7 +3,7 @@
    ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
    │                                                                                                                │
    │  ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄   Wizard  0.0                                                                                  │
-   │  ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀   Thanks for trying Wizard, give feedback with /feedback!                                      │
+   │  ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀   Thanks for trying Wizard! Type /help to see the commands.                                    │
    │  ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀                                                                                                │
    │  ⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀   New worktree                                                                         ctrl+w  │
    │  ⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀   Resume session                                                                       ctrl+r  │

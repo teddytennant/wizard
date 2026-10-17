@@ -39,8 +39,8 @@ pub const PLACEHOLDERS: [&str; 8] = [
     "Find and fix a bug in @filename",
     "Write tests for @filename",
     "Improve documentation in @filename",
-    "Run /review on my current changes",
-    "Use /skills to list available skills",
+    "Review the changes in my worktree",
+    "Use /help to list available commands",
 ];
 
 /// More characters than this in one paste become a `[Pasted Content N chars]` element.

@@ -791,8 +791,10 @@ fn interrupting_prints_the_notice_and_no_rule() {
     let end = log.apply(&Event::TurnEnd(StopReason::Cancelled));
     let rows = texts(&end, 120);
     assert_eq!(rows[0][0], "• Ran sleep 9");
-    assert!(rows[1][0].starts_with("■ Conversation interrupted - tell the model"));
-    assert_eq!(rows[1][1], "issue.");
+    assert_eq!(
+        rows[1],
+        ["■ Conversation interrupted - tell the model what to do differently."]
+    );
     assert_eq!(end.len(), 2);
 }
 

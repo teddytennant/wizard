@@ -152,7 +152,7 @@ impl ModelSelector {
         let mut body: Lines = vec![super::blank_line()];
         if self.scoped.is_empty() {
             body.push(Line::from(span(
-                "Only showing models from configured providers. Use /login to add providers.",
+                "Only showing models from configured providers. Use /provider to add providers.",
                 th.fg(Tok::Warning),
             )));
         } else {
