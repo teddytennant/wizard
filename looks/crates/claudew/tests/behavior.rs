@@ -221,10 +221,72 @@ fn the_commands_the_look_answers_are_listed_before_the_backend_is_up() {
     let (mtx, _mrx) = tokio::sync::mpsc::unbounded_channel();
     let app = claudew::app::App::new(Default::default(), tx, mtx);
     let names: Vec<&str> = app.commands.iter().map(|c| c.name.as_str()).collect();
-    assert!(
-        names.contains(&"help") && names.contains(&"resume"),
-        "{names:?}"
+    for name in ["clear", "exit", "help", "model", "quit", "resume"] {
+        assert!(names.contains(&name), "{names:?}");
+    }
+}
+
+/// The menu is wizard's commands in its order, then the shared ones it did not list, and
+/// nothing of Claude Code's own.
+#[test]
+fn the_menu_is_wizards_commands_and_the_shared_set() {
+    let mut hn = harness();
+    let advertised = ["model", "compact", "status", "btw"].map(|name| agent_core::SlashCommand {
+        name: name.into(),
+        description: format!("wizard's {name}"),
+        input_hint: String::new(),
+    });
+    hn.event(Event::Commands(advertised.to_vec()));
+    let names: Vec<&str> = hn.app.commands.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "model", "compact", "status", "btw", "deploy", "clear", "exit", "help", "quit",
+            "resume"
+        ]
     );
+    assert!(
+        hn.app.custom.contains(&"deploy".to_string()),
+        "the user's own command stays"
+    );
+    assert_eq!(hn.app.commands[0].description, "wizard's model");
+}
+
+/// Names the look used to answer itself, or to alias, now go to wizard as typed.
+#[test]
+fn claude_codes_own_commands_go_to_wizard() {
+    for typed in [
+        "/status",
+        "/config",
+        "/settings",
+        "/new",
+        "/reset",
+        "/continue",
+    ] {
+        let mut hn = harness();
+        hn.app.submit(typed.into());
+        assert_eq!(hn.sent(), [Request::Prompt(typed.into())], "{typed}");
+        assert_eq!(hn.app.dialog, None, "{typed}");
+    }
+}
+
+#[test]
+fn help_opens_the_help_panel_listing_the_menu() {
+    let mut hn = harness();
+    hn.event(Event::Commands(vec![agent_core::SlashCommand {
+        name: "compact".into(),
+        description: "summarize the conversation".into(),
+        input_hint: String::new(),
+    }]));
+    hn.app.submit("/help".into());
+    assert!(hn.sent().is_empty());
+    assert!(matches!(hn.app.dialog, Some(Dialog::Help { .. })));
+    hn.press(KeyCode::Tab);
+    let screen = hn.render().plain();
+    for name in ["/clear", "/compact", "/quit", "/resume"] {
+        assert!(screen.contains(name), "{screen}");
+    }
+    assert!(!screen.contains("/add-dir"), "{screen}");
 }
 
 #[test]
@@ -290,19 +352,12 @@ fn the_effort_notice_goes_after_a_while_and_comes_back_for_a_turn() {
 }
 
 #[test]
-fn the_header_and_status_show_wizards_version() {
+fn the_header_shows_wizards_version() {
     let mut hn = harness();
     let v = common::replay_version();
     assert_eq!(hn.app.wizard_version(), v);
     let screen = hn.render().plain();
     assert!(screen.contains(&format!("Wizard v{v}")), "{screen}");
-    hn.type_str("/status");
-    hn.press(KeyCode::Enter);
-    let screen = hn.render().plain();
-    assert!(
-        screen.contains(&format!("Version:           {v}")),
-        "{screen}"
-    );
 }
 
 #[test]
@@ -579,7 +634,7 @@ fn a_local_command_takes_the_placeholder_away() {
         hn.render().plain().contains("Try "),
         "a fresh prompt has a placeholder"
     );
-    hn.type_str("/status");
+    hn.type_str("/help");
     hn.press(KeyCode::Enter);
     hn.press(KeyCode::Esc);
     assert!(!hn.render().plain().contains("Try "));

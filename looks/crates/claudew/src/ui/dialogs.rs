@@ -1,5 +1,5 @@
-//! The panels that take the prompt's place: help, the model picker, status and the session
-//! picker. A permission prompt is not one of them; it flows at the end of the transcript.
+//! The panels that take the prompt's place: help, the pickers and the side question. A
+//! permission prompt is not one of them; it flows at the end of the transcript.
 
 use agent_core::{PermissionRequest, ToolKind};
 use ratatui::buffer::Buffer;
@@ -29,7 +29,6 @@ pub fn draw(buf: &mut Buffer, app: &mut App, dialog: &Dialog) -> u16 {
     let panel = match dialog {
         Dialog::Help { tab, sel, focus } => help(app, *tab, *sel, *focus, w as usize, h as usize),
         Dialog::Model { sel } => model(app, *sel, w as usize, h as usize),
-        Dialog::Status => status(app, w as usize),
         Dialog::Mode { sel } => mode(app, *sel, w as usize),
         Dialog::Effort { sel } => effort(app, *sel, w as usize),
         Dialog::Resume { sel, query } => resume(app, *sel, query, w as usize, h as usize),
@@ -417,61 +416,6 @@ fn model(app: &App, sel: usize, w: usize, h: usize) -> Panel {
         top,
         bottom: vec![Row::of("   Enter to confirm · Esc to cancel", th.dim())],
         fill: None,
-    }
-}
-
-fn status(app: &App, w: usize) -> Panel {
-    let th = app.theme;
-    let mut top = vec![
-        tabs(app, "Settings", &["Status"], 0, th.suggestion, false),
-        Row::new(),
-    ];
-    let model = if app.cfg.model.is_empty() {
-        app.model_name()
-    } else {
-        format!("{} ({})", app.model_name(), app.cfg.model)
-    };
-    let fields: Vec<(&str, String)> = vec![
-        ("Version:", app.wizard_version()),
-        ("Session ID:", app.session_id.clone()),
-        ("cwd:", app.opts.cwd.to_string_lossy().into_owned()),
-        ("", String::new()),
-        ("Model:", model),
-        ("Effort:", app.cfg.effort.clone()),
-        ("Mode:", app.cfg.mode.clone()),
-        ("Backend:", app.cfg.backend.clone()),
-    ];
-    for (label, value) in fields {
-        // the empty label is the blank row Claude Code keeps before the model
-        if label.is_empty() {
-            top.push(Row::new());
-            continue;
-        }
-        if value.is_empty() {
-            continue;
-        }
-        // a long value breaks three columns short of the edge and carries on under itself
-        let room = w.saturating_sub(25).max(10);
-        let chars: Vec<char> = value.chars().collect();
-        for (i, part) in chars.chunks(room).enumerate() {
-            let lead = if i == 0 {
-                format!("{label:<19}")
-            } else {
-                " ".repeat(19)
-            };
-            top.push(
-                Row::of("   ", Style::new())
-                    .with(lead, th.bold())
-                    .with(part.iter().collect::<String>(), Style::new()),
-            );
-        }
-    }
-    top.push(Row::new());
-    top.push(Row::of("   Esc to cancel", th.dim()));
-    Panel {
-        top,
-        bottom: Vec::new(),
-        fill: Some(2),
     }
 }
 

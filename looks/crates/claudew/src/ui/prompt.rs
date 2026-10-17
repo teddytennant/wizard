@@ -169,8 +169,7 @@ fn command_token(app: &App, text: &str) -> usize {
         return 0;
     };
     let name = rest.split(char::is_whitespace).next().unwrap_or("");
-    let local = ["help", "clear", "model", "status", "resume", "exit", "quit"];
-    if app.commands.iter().any(|c| c.name == name) || local.contains(&name) {
+    if app.commands.iter().any(|c| c.name == name) {
         name.len() + 1
     } else {
         0

@@ -51,18 +51,6 @@ pub const PLACEHOLDERS: [&str; 4] = [
     "Try \"create a util logging.py that...\"",
     "Try \"write a test for <filepath>\"",
 ];
-/// Commands the look answers itself, listed in the menu when the backend does not name them.
-pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
-    ("clear", "Clear conversation history and free up context"),
-    ("exit", "Exit the REPL"),
-    ("help", "Show help and available commands"),
-    ("model", "Set the AI model for Wizard"),
-    ("resume", "Resume a previous conversation"),
-    (
-        "status",
-        "Show Wizard status including version, model and session",
-    ),
-];
 /// How long a footer hint stays up, and how quickly a second press must follow to count.
 /// What to do when wizard cannot start a session or has gone away.
 pub const SETUP_HINT: &str =
@@ -201,7 +189,6 @@ pub enum Dialog {
     Model {
         sel: usize,
     },
-    Status,
     /// `/mode`: wizard's modes, the one in use ticked.
     Mode {
         sel: usize,
@@ -411,14 +398,7 @@ impl App {
                 .map_or(0, |d| d.as_secs() as i64),
             cfg: Config::default(),
             session_id: String::new(),
-            commands: LOCAL_COMMANDS
-                .iter()
-                .map(|(name, description)| SlashCommand {
-                    name: name.to_string(),
-                    description: description.to_string(),
-                    input_hint: String::new(),
-                })
-                .collect(),
+            commands: agent_core::commands::menu(&[], &[]),
             sessions: Vec::new(),
             files: Vec::new(),
             blocks: Vec::new(),
@@ -837,16 +817,7 @@ impl App {
                         c.push(custom.clone());
                     }
                 }
-                for (name, description) in LOCAL_COMMANDS {
-                    if !c.iter().any(|x| x.name == *name) {
-                        c.push(SlashCommand {
-                            name: name.to_string(),
-                            description: description.to_string(),
-                            input_hint: String::new(),
-                        });
-                    }
-                }
-                self.commands = c;
+                self.commands = agent_core::commands::menu(&c, &[]);
                 self.refresh_menu();
             }
             Event::ConfigChanged(c) => {
@@ -1261,12 +1232,9 @@ impl App {
         }
         // a turn running, or a mode change not yet confirmed: the prompt waits for it, so it
         // never runs in a mode on the way to the one pressed
-        // panels the look opens itself (help, status, the pickers) need no wizard mode
-        let local = matches!(
-            name.as_str(),
-            "help" | "status" | "resume" | "continue" | "config" | "settings"
-        ) || (matches!(name.as_str(), "model" | "mode" | "rewind" | "effort")
-            && arg.is_empty());
+        // panels the look opens itself (help and the pickers) need no wizard mode
+        let local = matches!(name.as_str(), "help" | "resume")
+            || (matches!(name.as_str(), "model" | "mode" | "rewind" | "effort") && arg.is_empty());
         if self.busy.is_some() || (self.modes_pending() && !local) {
             self.queued.push(text);
             return;
@@ -1360,15 +1328,6 @@ impl App {
                 self.set_effort(arg);
                 return;
             }
-            "config" | "settings" => {
-                self.blocks.push(Block::User { text, bash: false });
-                self.output(
-                    "Wizard has no settings panel here: /model and /mode change this session, \
-                     and ~/.wizard/config.toml (or `wizard setup`) holds the defaults",
-                    String::new(),
-                );
-                return;
-            }
             "mode" if arg.is_empty() && !self.cfg.modes.is_empty() => {
                 let (mode, _) = self.shown_mode();
                 let sel = self.cfg.modes.iter().position(|m| *m == mode).unwrap_or(0);
@@ -1380,7 +1339,7 @@ impl App {
                 self.pick_mode_named(arg);
                 return;
             }
-            "clear" | "new" | "reset" => {
+            "clear" => {
                 self.notice = None;
                 self.from_queue.clear();
                 self.blocks.clear();
@@ -1399,15 +1358,11 @@ impl App {
                 });
                 return;
             }
-            "status" => {
-                self.dialog = Some(Dialog::Status);
-                return;
-            }
             "model" if arg.is_empty() && !self.cfg.models.is_empty() => {
                 self.open_model();
                 return;
             }
-            "resume" | "continue" if arg.is_empty() => {
+            "resume" if arg.is_empty() => {
                 self.sessions.clear();
                 self.send(Request::ListSessions);
                 self.dialog = Some(Dialog::Resume {
@@ -1416,7 +1371,7 @@ impl App {
                 });
                 return;
             }
-            "resume" | "continue" => {
+            "resume" => {
                 self.blocks.push(Block::User { text, bash: false });
                 self.load(Some(arg));
                 return;
@@ -2295,11 +2250,6 @@ impl App {
                         }
                     }
                     _ => {}
-                }
-            }
-            Dialog::Status => {
-                if key.code == KeyCode::Enter {
-                    self.dialog = None;
                 }
             }
             Dialog::Resume { sel, mut query } => {

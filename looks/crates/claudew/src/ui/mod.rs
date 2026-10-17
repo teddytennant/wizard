@@ -41,9 +41,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
         Some(d) => dialogs::draw(buf, app, &d),
         None => prompt::draw(buf, app),
     };
-    // the status panel sits under one blank row and the transcript's last
-    let skip = u16::from(matches!(app.dialog, Some(Dialog::Status)) && top > 1);
-    draw_rows(buf, app, &rows, Rect::new(0, skip, area.width, top - skip));
+    draw_rows(buf, app, &rows, Rect::new(0, 0, area.width, top));
     if app.scroll > 0 && app.dialog.is_none() && top > 0 {
         let pill = " Jump to bottom (ctrl+End) ↓ ";
         let pw = crate::text::width(pill) as u16;
