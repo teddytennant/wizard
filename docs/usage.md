@@ -143,6 +143,9 @@ A source install, or a release from before that, builds them when `cargo` is
 available. Switching to a full look quits the TUI and starts it. Inside the
 look, `/ui wizard` saves the choice, and quitting the look brings the TUI back.
 `wizard agents`, `-p`, `--resume`, `--plan` and `--mode` always open the TUI.
+The full looks all have the same slash commands, Wizard's own; a few add
+display ones such as opencode's `/theme` ([ui-skins.md](ui-skins.md#slash-commands-in-the-full-looks)
+has the list).
 
 **A skin is a look, and only a look.** The commands stay Wizard's (`/model`,
 `/fusion`, `/ultra`, `/publish`), onboarding is Wizard's, the provider

@@ -31,6 +31,34 @@ and everything the status line reports (mode, the `ULTRA ×N` multiplier,
 background subagents, the context meter) are Wizard's under every skin. The
 skin layer is deliberately given no way to add, hide, or rename a command.
 
+## Slash commands in the full looks
+
+Every full look has the same `/` menu. It is what `wizard acp` advertises
+(the built-in commands, your own commands and the skills), plus six the look
+answers itself because they need its pickers or its process: `/clear`,
+`/exit`, `/quit`, `/help`, `/model [tag]` and `/resume [id]`. These are the
+house TUI's commands with the house TUI's meaning, and their table is
+`agent_core::commands` in `looks/`. Anything else typed as `/name` goes to
+wizard as typed, which runs it or answers that it does not know it. A look may
+draw wizard's answer its own way, and with no argument `/effort`, `/mode` and
+`/rewind` open a picker in the looks that have one (opencode: effort and mode;
+codex: rewind; grok and pi: effort; claude: all three); elsewhere wizard
+answers with the choices.
+
+On top of that, each look keeps a few commands that only change how it draws
+or takes input:
+
+| Look | Its own commands |
+|------|------------------|
+| `opencode` | `/theme`, `/timestamps`, `/thinking` (show or collapse thinking), `/copy` |
+| `codex` | `/theme`, `/raw`, `/vim`, `/statusline`, `/title`, `/keymap`, `/copy` |
+| `grok` | `/theme`, `/timestamps`, `/compact-mode`, `/vim-mode`, `/multiline`, `/copy` |
+| `pi` | `/settings`, `/scoped-models`, `/copy` |
+| `jcode` | `/cls` (clear the view, keep the conversation) |
+| `claude` | none |
+
+`/copy` copies the last response in every look that has it.
+
 Colors come from the skin's own palette (`Skin::companion_theme`, see
 [usage.md](usage.md#color)). There is no separate theme setting: picking the
 skin picks the palette.
