@@ -367,10 +367,13 @@ impl Core {
                 }
             }
             // Added to agent-core for openc; wizard has no steering yet.
-            Request::Steer(_)
-            | Request::Answer { .. }
-            | Request::RewindPreview { .. }
-            | Request::Rewind { .. } => {}
+            // wizard cannot add to a running turn: stop it, then send the text as the next one
+            Request::Steer(text) => {
+                let mut out = self.on_request(Request::Cancel);
+                out.extend(self.on_request(Request::Prompt(text)));
+                return out;
+            }
+            Request::Answer { .. } | Request::RewindPreview { .. } | Request::Rewind { .. } => {}
         }
         self.take()
     }

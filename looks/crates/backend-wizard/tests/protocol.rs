@@ -54,6 +54,28 @@ fn prompt_during_a_turn_waits_for_it() {
 }
 
 #[test]
+fn steer_stops_the_turn_and_sends_the_text_next() {
+    let mut run = ready();
+    run.request(Request::Prompt("first".into()));
+    run.request(Request::Steer("also this".into()));
+    assert!(run.sent.iter().any(|m| m["method"] == "session/cancel"));
+    let id = last_id(&run, "session/prompt");
+    run.line(&json!({"jsonrpc":"2.0","id":id,"result":{"stopReason":"cancelled"}}));
+    let texts: Vec<_> = run
+        .sent
+        .iter()
+        .filter(|m| m["method"] == "session/prompt")
+        .map(|m| {
+            m["params"]["prompt"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(texts, ["first", "/status", "also this"]);
+}
+
+#[test]
 fn cancel_drops_queued_prompts() {
     let mut run = ready();
     run.request(Request::Prompt("first".into()));
