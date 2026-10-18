@@ -924,6 +924,10 @@ impl App {
                     self.agent = AgentKind::Plan;
                     self.silent_notices += 1;
                     self.send(Request::Prompt(cmd.into()));
+                } else if self.agent == AgentKind::Plan {
+                    // wizard opens every session out of plan mode; the agent picked here stays
+                    self.silent_notices += 1;
+                    self.send(Request::Prompt("/plan".into()));
                 }
                 if let Some(p) = self.initial_prompt.take() {
                     self.prompt.set_text(&p);

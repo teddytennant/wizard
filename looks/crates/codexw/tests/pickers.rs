@@ -528,3 +528,34 @@ fn export_writes_the_conversation_and_settings_answers_here() {
     let t = h.screen.full_text();
     assert!(t.contains("This look has no settings view"), "{t}");
 }
+
+#[test]
+fn plan_stays_on_across_clear_because_wizard_opens_sessions_out_of_it() {
+    let mut h = harness(120, 36, 7);
+    ready(&mut h, catalog_config());
+    h.key(KeyCode::BackTab);
+    assert!(h.app.pane.footer.plan_mode);
+    let on = || Event::Notice {
+        level: agent_core::NoticeLevel::Info,
+        text: "plan mode on — the agent investigates read-only".into(),
+    };
+    h.app.on_backend(on());
+    h.sent();
+    h.type_str("/clear");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.sent(), vec![Request::NewSession]);
+    h.app.on_backend(Event::Ready {
+        session_id: "s2".into(),
+        config: catalog_config(),
+    });
+    assert_eq!(h.sent(), vec![Request::Prompt("/plan".into())]);
+    assert!(h.app.pane.footer.plan_mode);
+    h.app.on_backend(on());
+    h.draw();
+    let t = h.screen.full_text();
+    assert!(
+        !t.contains("plan mode on"),
+        "the carried plan stays quiet: {t}"
+    );
+    assert!(h.app.pane.footer.plan_mode);
+}

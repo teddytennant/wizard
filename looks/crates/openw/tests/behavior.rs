@@ -356,6 +356,43 @@ fn tab_toggles_plan_and_the_confirmation_becomes_a_toast() {
 }
 
 #[test]
+fn plan_stays_on_across_clear_because_wizard_opens_sessions_out_of_it() {
+    let mut h = Harness::new(120, 36);
+    h.key(KeyCode::Tab, NONE);
+    h.event(Event::Notice {
+        level: NoticeLevel::Info,
+        text: "plan mode on".into(),
+    });
+    h.sent();
+    typed(&mut h, "/clear");
+    assert_eq!(h.sent(), vec![Request::NewSession]);
+    h.event(Event::Ready {
+        session_id: "s2".into(),
+        config: h.app.config.clone(),
+    });
+    let sent = h.sent();
+    assert!(sent.contains(&Request::Prompt("/plan".into())), "{sent:?}");
+    assert_eq!(h.app.agent, openw::app::AgentKind::Plan);
+    h.event(Event::Notice {
+        level: NoticeLevel::Info,
+        text: "plan mode on".into(),
+    });
+    assert!(h.app.transcript.messages.is_empty());
+    // out of plan, a new session asks for nothing
+    h.key(KeyCode::Tab, NONE);
+    h.event(Event::Notice {
+        level: NoticeLevel::Info,
+        text: "plan mode off".into(),
+    });
+    h.sent();
+    h.event(Event::Ready {
+        session_id: "s3".into(),
+        config: h.app.config.clone(),
+    });
+    assert!(!h.sent().contains(&Request::Prompt("/plan".into())));
+}
+
+#[test]
 fn info_notices_become_assistant_text_and_warnings_become_toasts() {
     let mut h = Harness::new(120, 36);
     h.event(Event::Notice {

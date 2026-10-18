@@ -97,6 +97,8 @@ pub struct App<W: Write> {
     pub tx: UnboundedSender<Request>,
     /// The conversation as `/export` writes it.
     pub export: agent_core::export::Log,
+    /// Answers to a `/plan` the app sent on its own, kept out of history.
+    pub quiet_plan_notices: u32,
     pub term: InlineTerminal<W>,
     pub screen: Size,
     /// Committed history, source of truth for replays.
@@ -222,6 +224,7 @@ impl<W: Write> App<W> {
             screen,
             tx,
             export: Default::default(),
+            quiet_plan_notices: 0,
             cells: Vec::new(),
             replay_from: 0,
             has_emitted_history: false,
@@ -383,6 +386,11 @@ impl<W: Write> App<W> {
             // wizard says where plan mode is: after `/plan`, and when an approved plan leaves it
             if let Some(on) = agent_core::plan_mode(text) {
                 self.pane.footer.plan_mode = on;
+                if self.quiet_plan_notices > 0 {
+                    self.quiet_plan_notices -= 1;
+                    self.request_draw();
+                    return;
+                }
             }
         }
         match &ev {
@@ -484,6 +492,7 @@ impl<W: Write> App<W> {
     }
 
     fn on_ready(&mut self) {
+        let again = self.ready;
         self.ready = true;
         // `-m` wins over the backend's default and is sent on so the session really uses it.
         if let Some(m) = self.opts.model.take() {
@@ -495,6 +504,10 @@ impl<W: Write> App<W> {
         if let Some(cmd) = self.handed_plan.take() {
             self.pane.footer.plan_mode = true;
             let _ = self.tx.send(Request::Prompt(cmd.into()));
+        } else if again && self.pane.footer.plan_mode {
+            // wizard opens every session out of plan mode; the footer's plan stays, quietly
+            self.quiet_plan_notices += 1;
+            let _ = self.tx.send(Request::Prompt("/plan".into()));
         }
         self.sync_footer();
         // The session list decides whether this session is the one the user gets.
