@@ -3,7 +3,7 @@
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::Terminal;
+use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -22,8 +22,12 @@ impl Write for Sink {
 /// What the terminal would print for one row, with the cursor moves and colours taken out.
 fn drawn(text: &str) -> String {
     let sink = Sink::default();
-    let mut term = Terminal::new(CrosstermBackend::new(sink.clone())).unwrap();
-    term.resize(Rect::new(0, 0, 20, 1)).unwrap();
+    let viewport = Viewport::Fixed(Rect::new(0, 0, 20, 1));
+    let mut term = Terminal::with_options(
+        CrosstermBackend::new(sink.clone()),
+        TerminalOptions { viewport },
+    )
+    .unwrap();
     term.draw(|f| {
         tuikit::paint::put_str(
             f.buffer_mut(),
