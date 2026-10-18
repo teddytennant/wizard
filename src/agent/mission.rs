@@ -111,7 +111,10 @@ impl Mission {
             .with_context(|| format!("creating control dir at {}", dir.display()))?;
         let path = mission_path(project_root);
         let serialized = toml::to_string_pretty(self).context("serializing mission to TOML")?;
-        std::fs::write(&path, serialized)
+        // Rename over the destination. `fs::write` truncates first, and a
+        // kill in that window leaves a mission `load` will not parse, which
+        // is how a continuous run stops being resumable.
+        crate::platform::secrets::replace_file(&path, serialized.as_bytes())
             .with_context(|| format!("writing mission file at {}", path.display()))?;
         Ok(())
     }
@@ -324,6 +327,69 @@ mod tests {
         assert!(
             format!("{err:#}").contains("parsing mission file"),
             "a broken mission must not silently restart the loop from zero: {err:#}"
+        );
+    }
+
+    /// A save must not truncate the inode a reader already has open.
+    ///
+    /// `fs::write` opens that inode and truncates it, so a kill between the
+    /// truncate and the write leaves `mission.toml` unparseable — and
+    /// [`Mission::load`] then fails the whole run, which is how a continuous
+    /// mission stops being resumable. Replacing the directory entry leaves
+    /// the previous inode intact until the new file is complete.
+    #[test]
+    fn a_reader_holding_the_file_keeps_the_previous_mission() {
+        use std::io::Read;
+
+        let tmp = TempDir::new();
+        let mission = Mission::new("the previous goal");
+        mission.save(&tmp.0).expect("save the previous mission");
+
+        let mut held = std::fs::File::open(mission_path(&tmp.0)).expect("hold the live file");
+
+        let mut next = Mission::new("the next goal");
+        next.notes.push("n".repeat(64 * 1024));
+        next.save(&tmp.0).expect("save the next mission");
+
+        let mut raw = String::new();
+        held.read_to_string(&mut raw).expect("read the held inode");
+        let parsed: Mission = toml::from_str(&raw).expect("held bytes are a whole mission");
+        assert_eq!(
+            parsed.goal, "the previous goal",
+            "the inode a reader already had must stay the previous mission"
+        );
+
+        let loaded = Mission::load(&tmp.0)
+            .expect("load")
+            .expect("mission present");
+        assert_eq!(loaded.goal, "the next goal");
+    }
+
+    /// A symlink planted at `mission.toml` names some other file. Following
+    /// it truncates that file; replacing the link leaves the target alone.
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_a_mission_symlink_instead_of_truncating_its_target() {
+        let tmp = TempDir::new();
+        let victim = tmp.0.join("victim.toml");
+        std::fs::write(&victim, "goal = \"do not clobber\"\n").unwrap();
+        std::fs::create_dir_all(control_dir(&tmp.0)).unwrap();
+        std::os::unix::fs::symlink(&victim, mission_path(&tmp.0)).unwrap();
+
+        Mission::new("the real mission").save(&tmp.0).expect("save");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "goal = \"do not clobber\"\n",
+            "mission.toml must not be followed into whatever it names"
+        );
+        let loaded = Mission::load(&tmp.0)
+            .expect("load")
+            .expect("mission present");
+        assert_eq!(loaded.goal, "the real mission");
+        assert!(
+            mission_path(&tmp.0).is_file() && !mission_path(&tmp.0).is_symlink(),
+            "the published path is a regular file"
         );
     }
 }
