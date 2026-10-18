@@ -9,7 +9,19 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 ### Changed
 
 - **The looks live in this repository.** The six full looks moved from teddytennant/openw into `looks/`, their own cargo workspace, history included. A release builds them from the same commit as `wizard`, so `looks.rev` is gone, and CI now checks their formatting, clippy and tests. When a release has no looks for the platform, the installer builds them from the wizard tree instead of cloning openw, and `WIZARD_UI_REPO` is gone.
-- **Every look has the same slash commands.** The `/` menu in the opencode, codex, grok, pi, jcode and claude looks is Wizard's advertised commands, plus `/clear`, `/exit`, `/quit`, `/help`, `/model` and `/resume`, which every look answers the same way, plus a few display commands of the look's own such as opencode's `/theme`. The copies of each source app's commands are gone: `/new`, `/models`, `/sessions`, `/undo`, `/variants`, `/hotkeys`, a look's own `/fork`, `/status`, `/diff` and `/agents`, the rows that only said "not supported by wizard", and the rest. Typed, those names now reach Wizard, which runs its own command of that name or answers that it does not know it; every look now asks for unknown commands to be answered. [ui-skins.md](docs/ui-skins.md#slash-commands-in-the-full-looks) has the list.
+- **Every look has the same slash commands.** The `/` menu in the opencode, codex, grok, pi, jcode and claude looks is Wizard's advertised commands, plus `/clear`, `/exit`, `/quit`, `/help`, `/model`, `/resume`, `/export` and `/settings`, which every look answers the same way, plus a few display commands of the look's own such as opencode's `/theme`. The copies of each source app's commands are gone: `/new`, `/models`, `/sessions`, `/undo`, `/variants`, `/hotkeys`, a look's own `/fork`, `/status`, `/diff` and `/agents`, the rows that only said "not supported by wizard", and the rest. Typed, those names now reach Wizard, which runs its own command of that name or answers that it does not know it; every look now asks for unknown commands to be answered. [ui-skins.md](docs/ui-skins.md#slash-commands-in-the-full-looks) has the list.
+- **`/export [file]` in every look** writes the conversation as markdown, to `wizard-<session>.md` in the project when no file is named. It never replaces a file and only you can read what it writes. It was grok's alone before.
+- **`/settings` in every look** opens the look's settings where it has some (grok, pi) and says so where it has none.
+- **The grok look's `/vim-mode` is `/scroll-keys`.** It only ever changed the scrollback keys; codex's `/vim` is the one for the input line.
+- **An unknown `/command` in the terminal** gets `Unknown slash command: <name>` instead of a model turn, as in the looks. Your own commands, skills and paths like `/tmp` still go to the model. ACP clients still opt in to this with `_meta.wizard.unknownCommands`.
+- **The grok look's tutorial is gone.** It was Grok Build's, and most of what it taught does not exist in Wizard.
+
+### Fixed
+
+- After `/clear` or `/resume`, the opencode and codex looks kept showing plan mode while Wizard had left it. Plan mode now stays on in the new session.
+- The jcode and grok looks panicked with "index outside of buffer" when the terminal shrank between two frames, most easily with the model picker open.
+- A message typed in the codex look during a turn sat above the composer forever and Esc did not send it. It now goes when the turn ends, or right away after Esc. jcode's Ctrl+Enter, which stops the turn and sends, sent nothing before and now works.
+- The codex, grok and pi looks pointed at commands that do not exist: `/review`, `/skills`, `/feedback`, `/workflows`, `/dashboard`, `/loop`, `/minimal`, `/fullscreen` and `/login`.
 
 ## [3.9.0] - 2026-10-15
 

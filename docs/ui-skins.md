@@ -34,12 +34,16 @@ skin layer is deliberately given no way to add, hide, or rename a command.
 ## Slash commands in the full looks
 
 Every full look has the same `/` menu. It is what `wizard acp` advertises
-(the built-in commands, your own commands and the skills), plus six the look
-answers itself because they need its pickers or its process: `/clear`,
-`/exit`, `/quit`, `/help`, `/model [tag]` and `/resume [id]`. These are the
-house TUI's commands with the house TUI's meaning, and their table is
-`agent_core::commands` in `looks/`. Anything else typed as `/name` goes to
-wizard as typed, which runs it or answers that it does not know it. A look may
+(the built-in commands, your own commands and the skills), plus eight the look
+answers itself because they need its pickers, its process or its screen:
+`/clear`, `/exit`, `/quit`, `/help`, `/model [tag]` and `/resume [id]` with the
+house TUI's meaning, `/export [file]`, which writes the conversation as
+markdown (to `wizard-<session>.md` in the project when no file is named, and
+never over a file that is already there), and `/settings`, which opens the
+look's settings (grok's settings window, pi's settings menu) or says the look
+has none. Their table is `agent_core::commands` in `looks/`. Anything else
+typed as `/name` goes to wizard as typed, which runs it or answers
+`Unknown slash command`, as the house TUI does. A look may
 draw wizard's answer its own way, and with no argument `/effort`, `/mode` and
 `/rewind` open a picker in the looks that have one (opencode: effort and mode;
 codex: rewind; grok and pi: effort; claude: all three); elsewhere wizard
@@ -52,12 +56,14 @@ or takes input:
 |------|------------------|
 | `opencode` | `/theme`, `/timestamps`, `/thinking` (show or collapse thinking), `/copy` |
 | `codex` | `/theme`, `/raw`, `/vim`, `/statusline`, `/title`, `/keymap`, `/copy` |
-| `grok` | `/theme`, `/timestamps`, `/compact-mode`, `/vim-mode`, `/multiline`, `/copy` |
-| `pi` | `/settings`, `/scoped-models`, `/copy` |
+| `grok` | `/theme`, `/timestamps`, `/compact-mode`, `/scroll-keys` (vim keys in the scrollback), `/multiline`, `/copy` |
+| `pi` | `/scoped-models`, `/copy` |
 | `jcode` | `/cls` (clear the view, keep the conversation) |
 | `claude` | none |
 
-`/copy` copies the last response in every look that has it.
+`/copy` copies the last response in every look that has it. A test in
+`src/commands/mod.rs` fails when a look's text names a `/name` that is none of
+these.
 
 Colors come from the skin's own palette (`Skin::companion_theme`, see
 [usage.md](usage.md#color)). There is no separate theme setting: picking the
