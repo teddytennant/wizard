@@ -22,7 +22,6 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
-unicode-width.workspace = true
 unicode-segmentation.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 pulldown-cmark = { version = "0.13", default-features = false }

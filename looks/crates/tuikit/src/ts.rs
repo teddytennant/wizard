@@ -33,118 +33,115 @@ struct Def {
 }
 
 macro_rules! lang {
-    ($krate:ident) => {
-        || Language::new($krate::LANGUAGE)
-    };
-    ($krate:ident, $konst:ident) => {
-        || Language::new($krate::$konst)
+    ($grammar:path) => {
+        || Language::new($grammar)
     };
 }
 
 static DEFS: &[Def] = &[
     Def {
         name: "python",
-        language: lang!(tree_sitter_python),
+        language: lang!(tree_sitter_python::LANGUAGE),
         query: include_str!("../queries/python.scm"),
     },
     Def {
         name: "rust",
-        language: lang!(tree_sitter_rust),
+        language: lang!(tree_sitter_rust::LANGUAGE),
         query: include_str!("../queries/rust.scm"),
     },
     Def {
         name: "go",
-        language: lang!(tree_sitter_go),
+        language: lang!(tree_sitter_go::LANGUAGE),
         query: include_str!("../queries/go.scm"),
     },
     Def {
         name: "cpp",
-        language: lang!(tree_sitter_cpp),
+        language: lang!(tree_sitter_cpp::LANGUAGE),
         query: include_str!("../queries/cpp.scm"),
     },
     Def {
         name: "csharp",
-        language: lang!(tree_sitter_c_sharp),
+        language: lang!(tree_sitter_c_sharp::LANGUAGE),
         query: include_str!("../queries/csharp.scm"),
     },
     Def {
         name: "bash",
-        language: lang!(tree_sitter_bash),
+        language: lang!(tree_sitter_bash::LANGUAGE),
         query: include_str!("../queries/bash.scm"),
     },
     Def {
         name: "c",
-        language: lang!(tree_sitter_c),
+        language: lang!(tree_sitter_c::LANGUAGE),
         query: include_str!("../queries/c.scm"),
     },
     Def {
         name: "java",
-        language: lang!(tree_sitter_java),
+        language: lang!(tree_sitter_java::LANGUAGE),
         query: include_str!("../queries/java.scm"),
     },
     Def {
         name: "ruby",
-        language: lang!(tree_sitter_ruby),
+        language: lang!(tree_sitter_ruby::LANGUAGE),
         query: include_str!("../queries/ruby.scm"),
     },
     Def {
         name: "php",
-        language: lang!(tree_sitter_php, LANGUAGE_PHP),
+        language: lang!(tree_sitter_php::LANGUAGE_PHP),
         query: include_str!("../queries/php.scm"),
     },
     Def {
         name: "html",
-        language: lang!(tree_sitter_html),
+        language: lang!(tree_sitter_html::LANGUAGE),
         query: include_str!("../queries/html.scm"),
     },
     Def {
         name: "json",
-        language: lang!(tree_sitter_json),
+        language: lang!(tree_sitter_json::LANGUAGE),
         query: include_str!("../queries/json.scm"),
     },
     Def {
         name: "yaml",
-        language: lang!(tree_sitter_yaml),
+        language: lang!(tree_sitter_yaml::LANGUAGE),
         query: include_str!("../queries/yaml.scm"),
     },
     Def {
         name: "css",
-        language: lang!(tree_sitter_css),
+        language: lang!(tree_sitter_css::LANGUAGE),
         query: include_str!("../queries/css.scm"),
     },
     Def {
         name: "lua",
-        language: lang!(tree_sitter_lua),
+        language: lang!(tree_sitter_lua::LANGUAGE),
         query: include_str!("../queries/lua.scm"),
     },
     Def {
         name: "toml",
-        language: lang!(tree_sitter_toml_ng),
+        language: lang!(tree_sitter_toml_ng::LANGUAGE),
         query: include_str!("../queries/toml.scm"),
     },
     Def {
         name: "nix",
-        language: lang!(tree_sitter_nix),
+        language: lang!(tree_sitter_nix::LANGUAGE),
         query: include_str!("../queries/nix.scm"),
     },
     Def {
         name: "make",
-        language: lang!(tree_sitter_make),
+        language: lang!(tree_sitter_make::LANGUAGE),
         query: include_str!("../queries/make.scm"),
     },
     Def {
         name: "diff",
-        language: lang!(tree_sitter_diff),
+        language: lang!(tree_sitter_diff::LANGUAGE),
         query: include_str!("../queries/diff.scm"),
     },
     Def {
         name: "javascript",
-        language: lang!(tree_sitter_javascript),
+        language: lang!(tree_sitter_javascript::LANGUAGE),
         query: include_str!("../queries/javascript.scm"),
     },
     Def {
         name: "typescript",
-        language: lang!(tree_sitter_typescript, LANGUAGE_TYPESCRIPT),
+        language: lang!(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
         query: include_str!("../queries/typescript.scm"),
     },
 ];
