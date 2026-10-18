@@ -1134,6 +1134,7 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App, last: &mut Last) -> std::i
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
     // fullscreen owns the screen; the other modes own an inline viewport that may not start at
     // the top, so the frame is built at the origin and copied in
+    terminal.autoresize()?;
     let area = terminal.get_frame().area();
     let mut buf = Buffer::empty(Rect::new(0, 0, area.width, area.height));
     let mut commit = None;
@@ -1167,17 +1168,7 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App, last: &mut Last) -> std::i
         *last = None;
     }
     let area = terminal.get_frame().area();
-    terminal.draw(|f| {
-        let b = f.buffer_mut();
-        for y in 0..buf.area.height.min(area.height) {
-            for x in 0..buf.area.width.min(area.width) {
-                b[(area.x + x, area.y + y)] = buf[(x, y)].clone();
-            }
-        }
-        if let Some((x, y)) = cursor {
-            f.set_cursor_position((area.x + x, area.y + y));
-        }
-    })?;
+    terminal.draw(|f| tuikit::term::blit(f, &buf, cursor))?;
     crossterm::execute!(out, EndSynchronizedUpdate)?;
     if app.opts.screen != ScreenMode::Fullscreen {
         crate::term::note_viewport_bottom(area.y + area.height.saturating_sub(1));

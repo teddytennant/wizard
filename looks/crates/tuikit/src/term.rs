@@ -28,6 +28,22 @@ use tokio::task::JoinHandle;
 
 pub type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 
+/// Copy a frame built off screen into `f`, cut to the frame's own area. That area is the
+/// terminal's size after `draw` resized it, which can be smaller than the size the frame was
+/// built at when the terminal shrank since.
+pub fn blit(f: &mut ratatui::Frame, buf: &ratatui::buffer::Buffer, cursor: Option<(u16, u16)>) {
+    let area = f.area();
+    let b = f.buffer_mut();
+    for y in 0..buf.area.height.min(area.height) {
+        for x in 0..buf.area.width.min(area.width) {
+            b[(area.x + x, area.y + y)] = buf[(x, y)].clone();
+        }
+    }
+    if let Some((x, y)) = cursor.filter(|&(x, y)| x < area.width && y < area.height) {
+        f.set_cursor_position((area.x + x, area.y + y));
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TermOptions {
     pub alt_screen: bool,
@@ -755,6 +771,23 @@ mod tests {
 
     fn key(c: char) -> CtEvent {
         CtEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn blit_into_a_terminal_that_shrank_after_the_frame_was_built() {
+        use ratatui::backend::TestBackend;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let mut t = ratatui::Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut built = Buffer::empty(Rect::new(0, 0, 120, 40));
+        built[(119, 39)].set_symbol("x");
+        built[(0, 0)].set_symbol("a");
+        t.draw(|f| blit(f, &built, Some((119, 39)))).unwrap();
+        // the window shrinks between building the frame and drawing it
+        t.backend_mut().resize(20, 5);
+        t.draw(|f| blit(f, &built, Some((119, 39)))).unwrap();
+        assert_eq!(t.backend().buffer().area, Rect::new(0, 0, 20, 5));
+        assert_eq!(t.backend().buffer()[(0, 0)].symbol(), "a");
     }
 
     #[test]

@@ -850,6 +850,8 @@ pub fn spawn_backend(
 type Last = Option<(Buffer, Option<(u16, u16)>)>;
 
 fn draw_frame(terminal: &mut Terminal, app: &mut App, last: &mut Last) -> std::io::Result<()> {
+    // build at the size the terminal has now, not the size of the last frame
+    terminal.autoresize()?;
     let area = terminal.get_frame().area();
     let mut buf = Buffer::empty(Rect::new(0, 0, area.width, area.height));
     app.size = (area.width, area.height);
@@ -861,17 +863,7 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App, last: &mut Last) -> std::i
     {
         return Ok(());
     }
-    terminal.draw(|f| {
-        let b = f.buffer_mut();
-        for y in 0..buf.area.height.min(area.height) {
-            for x in 0..buf.area.width.min(area.width) {
-                b[(area.x + x, area.y + y)] = buf[(x, y)].clone();
-            }
-        }
-        if let Some((x, y)) = cursor {
-            f.set_cursor_position((area.x + x, area.y + y));
-        }
-    })?;
+    terminal.draw(|f| tuikit::term::blit(f, &buf, cursor))?;
     *last = Some((buf, cursor));
     Ok(())
 }
