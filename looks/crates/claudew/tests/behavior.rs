@@ -231,6 +231,13 @@ fn the_commands_the_look_answers_are_listed_before_the_backend_is_up() {
 #[test]
 fn the_menu_is_wizards_commands_and_the_shared_set() {
     let mut hn = harness();
+    hn.app.commands.retain(|c| !hn.app.custom.contains(&c.name));
+    hn.app.custom = vec!["deploy".into()];
+    hn.app.commands.push(agent_core::SlashCommand {
+        name: "deploy".into(),
+        description: "Deploy the project".into(),
+        input_hint: String::new(),
+    });
     let advertised = ["model", "compact", "status", "btw"].map(|name| agent_core::SlashCommand {
         name: name.into(),
         description: format!("wizard's {name}"),
