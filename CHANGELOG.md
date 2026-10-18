@@ -6,6 +6,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-10-17
+
 ### Changed
 
 - **The looks live in this repository.** The six full looks moved from teddytennant/openw into `looks/`, their own cargo workspace, history included. A release builds them from the same commit as `wizard`, so `looks.rev` is gone, and CI now checks their formatting, clippy and tests. When a release has no looks for the platform, the installer builds them from the wizard tree instead of cloning openw, and `WIZARD_UI_REPO` is gone.
