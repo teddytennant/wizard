@@ -2910,3 +2910,205 @@ mod tests {
         assert_eq!(out.images.len(), 2);
     }
 }
+
+/// The full looks under `looks/` print hints like "Run /diff": every `/name` one of them shows
+/// has to be a command someone answers there, or the hint is a dead end.
+#[cfg(test)]
+mod look_hints {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    use super::{Surface, available};
+
+    const LOOKS: &[&str] = &["openw", "codexw", "grokw", "piw", "jcodew", "claudew"];
+    /// Path segments that read like a command inside a string.
+    const PATHS: &[&str] = &["tmp"];
+
+    fn crates() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("looks/crates")
+    }
+
+    /// The first string of every tuple in the `[...]` after `marker`.
+    fn tuple_names(src: &str, marker: &str) -> Vec<String> {
+        let Some(at) = src.find(marker) else {
+            return Vec::new();
+        };
+        let body = &src[at + marker.len()..];
+        let body = &body[..body
+            .find("\n];")
+            .or_else(|| body.find("])"))
+            .unwrap_or(body.len())];
+        let mut names = Vec::new();
+        let mut rest = body;
+        while let Some(open) = rest.find('(') {
+            let after = rest[open + 1..].trim_start();
+            if let Some(s) = after.strip_prefix('"') {
+                if let Some(end) = s.find('"') {
+                    names.push(s[..end].to_string());
+                }
+            }
+            rest = &rest[open + 1..];
+        }
+        names
+    }
+
+    fn extras(look: &str) -> Vec<String> {
+        let src = std::fs::read_to_string(crates().join(look).join("src/commands.rs"))
+            .unwrap_or_default();
+        ["EXTRAS: &[(&str, &str, &str)] = &[", "extras(&["]
+            .iter()
+            .flat_map(|m| tuple_names(&src, m))
+            .collect()
+    }
+
+    /// The string literals of `src`, minus comments and a trailing `#[cfg(test)] mod`.
+    fn literals(src: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        let mut lines = src.lines().enumerate().peekable();
+        while let Some((i, line)) = lines.next() {
+            let t = line.trim_start();
+            if t.starts_with("#[cfg(test)]")
+                && lines
+                    .peek()
+                    .is_some_and(|(_, l)| l.trim_start().starts_with("mod "))
+            {
+                break;
+            }
+            if t.starts_with("//") {
+                continue;
+            }
+            let mut chars = line.chars().peekable();
+            let mut cur: Option<String> = None;
+            while let Some(c) = chars.next() {
+                match (&mut cur, c) {
+                    (None, '"') => cur = Some(String::new()),
+                    (None, '/') if chars.peek() == Some(&'/') => break,
+                    (Some(s), '\\') => {
+                        s.push(c);
+                        if let Some(n) = chars.next() {
+                            s.push(n);
+                        }
+                    }
+                    (Some(s), '"') => {
+                        out.push((i + 1, std::mem::take(s)));
+                        cur = None;
+                    }
+                    (Some(s), _) => s.push(c),
+                    (None, _) => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// Each `/name` in `text` that stands alone, not inside a path or a URL.
+    fn slash_words(text: &str) -> Vec<String> {
+        let b = text.as_bytes();
+        let mut out = Vec::new();
+        for (i, _) in text.match_indices('/') {
+            let before = i.checked_sub(1).map(|j| b[j]);
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || b"./~@:-_{}<\\".contains(&c)) {
+                continue;
+            }
+            let name: String = text[i + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+                .collect();
+            if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
+                continue;
+            }
+            let after = &text[i + 1 + name.len()..];
+            let mut next = after.chars();
+            let path = match next.next() {
+                Some('/' | '_') => true,
+                Some(c) if c.is_ascii_alphanumeric() => true,
+                Some('.') => next.next().is_some_and(|c| c.is_ascii_alphanumeric()),
+                _ => false,
+            };
+            if !path {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                sources(&p, out);
+            } else if p.extension().is_some_and(|e| e == "rs")
+                && p.file_name().is_some_and(|n| n != "tests.rs")
+            {
+                out.push(p);
+            }
+        }
+    }
+
+    #[test]
+    fn every_command_a_look_names_exists() {
+        let root = crates();
+        if !root.is_dir() {
+            // a packaged crate has no looks/
+            return;
+        }
+        let shared_src =
+            std::fs::read_to_string(root.join("agent-core/src/commands.rs")).expect("agent-core");
+        let shared = tuple_names(&shared_src, "pub const SHARED: &[(&str, &str, &str)] = &[");
+        assert!(shared.contains(&"model".to_string()), "{shared:?}");
+        let wizard: BTreeSet<String> = available(Surface::Acp)
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        let mut dead = Vec::new();
+        for look in LOOKS {
+            let ok: BTreeSet<String> = wizard
+                .iter()
+                .cloned()
+                .chain(shared.iter().cloned())
+                .chain(extras(look))
+                .chain(PATHS.iter().map(|p| p.to_string()))
+                .collect();
+            let mut files = Vec::new();
+            sources(&root.join(look).join("src"), &mut files);
+            assert!(!files.is_empty(), "{look} has no sources");
+            for f in files {
+                let src = std::fs::read_to_string(&f).unwrap();
+                for (line, lit) in literals(&src) {
+                    for name in slash_words(&lit) {
+                        if !ok.contains(&name) {
+                            let at = f.strip_prefix(&root).unwrap_or(&f).display();
+                            dead.push(format!("{at}:{line}: /{name} in {lit:?}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "looks name commands nobody answers:\n{}",
+            dead.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_scanner_finds_commands_and_skips_paths() {
+        assert_eq!(
+            slash_words("Run /diff, or /fusion config."),
+            ["diff", "fusion"]
+        );
+        assert!(slash_words("src/main.rs ~/.wizard/x /tmp/a {d}/themes http://x.io/y").is_empty());
+        assert_eq!(slash_words("`/feedback`!"), ["feedback"]);
+        assert_eq!(
+            literals("let a = \"/one\"; // \"/two\"\n#[cfg(test)]\nmod tests { \"/three\" }"),
+            [(1, "/one".to_string())]
+        );
+        assert_eq!(
+            tuple_names(
+                "extras(&[\n    (\"cls\", \"\", \"x\"),\n    (\n        \"b\",\n    ),\n])",
+                "extras(&["
+            ),
+            ["cls", "b"]
+        );
+    }
+}
