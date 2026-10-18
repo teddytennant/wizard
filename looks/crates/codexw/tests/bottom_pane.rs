@@ -587,13 +587,8 @@ fn enter_during_a_turn_is_a_steer_with_its_preview_block() {
     h.type_str("a queued follow up fake:text");
     enter(&mut h);
     h.draw();
-    assert_eq!(
-        h.sent(),
-        vec![
-            Request::Prompt("go fake:slow".into()),
-            Request::Steer("a queued follow up fake:text".into())
-        ]
-    );
+    // wizard cannot add to a running turn; the steer waits for it to end
+    assert_eq!(h.sent(), vec![Request::Prompt("go fake:slow".into())]);
     let r = h.screen.rows();
     let at = r
         .iter()
@@ -602,7 +597,7 @@ fn enter_during_a_turn_is_a_steer_with_its_preview_block() {
     assert_eq!(r[at + 1], "");
     assert_eq!(
         r[at + 2],
-        "• Messages to be submitted after next tool call (press esc to interrupt and send immediately)"
+        "• Messages to be submitted when the turn ends (press esc to interrupt and send immediately)"
     );
     assert_eq!(r[at + 3], "  ↳ a queued follow up fake:text");
     // The band follows the block with no blank row between.
@@ -621,9 +616,9 @@ fn steer_block_wraps_at_30_and_40_columns() {
     h.draw();
     let r = h.screen.rows();
     let at = r.iter().position(|l| l.starts_with("• Messages")).unwrap();
-    assert_eq!(r[at], "• Messages to be submitted after next");
-    assert_eq!(r[at + 1], "  tool call (press esc to interrupt and");
-    assert_eq!(r[at + 2], "  send immediately)");
+    assert_eq!(r[at], "• Messages to be submitted when the turn");
+    assert_eq!(r[at + 1], "  ends (press esc to interrupt and send");
+    assert_eq!(r[at + 2], "  immediately)");
     assert_eq!(r[at + 3], "  ↳ a queued follow up fake:text");
 
     let mut h = start(30, 24, 0);
@@ -634,7 +629,7 @@ fn steer_block_wraps_at_30_and_40_columns() {
     let r = h.screen.rows();
     let at = r.iter().position(|l| l.starts_with("• Messages")).unwrap();
     assert_eq!(r[at], "• Messages to be submitted");
-    assert_eq!(r[at + 1], "  after next tool call (press");
+    assert_eq!(r[at + 1], "  when the turn ends (press");
     assert_eq!(r[at + 2], "  esc to interrupt and send");
     assert_eq!(r[at + 3], "  immediately)");
     assert_eq!(r[at + 4], "  ↳ a queued follow up");
@@ -697,6 +692,10 @@ fn esc_while_a_steer_is_pending_interrupts_and_sends_it() {
     h.key(KeyCode::Esc);
     assert_eq!(h.sent().last(), Some(&Request::Cancel));
     h.app.on_backend(Event::TurnEnd(StopReason::Cancelled));
+    assert_eq!(
+        h.sent(),
+        vec![Request::Prompt("a queued follow up fake:text".into())]
+    );
     h.draw();
     let r = h.screen.rows();
     assert!(
@@ -704,6 +703,29 @@ fn esc_while_a_steer_is_pending_interrupts_and_sends_it() {
             .any(|l| l == "• Model interrupted to submit steer instructions.")
     );
     assert!(r.iter().any(|l| l == "› a queued follow up fake:text"));
+    assert!(
+        !r.iter()
+            .any(|l| l.starts_with("• Messages to be submitted"))
+    );
+}
+
+#[test]
+fn a_steer_goes_out_when_the_turn_ends_on_its_own() {
+    let mut h = start(120, 36, 0);
+    running(&mut h, "go fake:slow");
+    h.type_str("and then this");
+    enter(&mut h);
+    h.sent();
+    h.app.on_backend(Event::TurnEnd(StopReason::EndTurn));
+    assert_eq!(h.sent(), vec![Request::Prompt("and then this".into())]);
+    h.draw();
+    let r = h.screen.rows();
+    assert!(
+        !r.iter()
+            .any(|l| l.starts_with("• Messages to be submitted")),
+        "{r:?}"
+    );
+    assert!(!r.iter().any(|l| l.contains("Model interrupted")), "{r:?}");
 }
 
 #[test]

@@ -441,30 +441,30 @@ impl<W: Write> App<W> {
                 crate::ui::approval::on_permission(self, req.clone());
             }
             Event::TurnEnd(reason) => {
-                let cancelled = matches!(reason, StopReason::Cancelled);
-                let steered = cancelled && !self.pane.steers.is_empty();
-                if steered {
-                    let steers = std::mem::take(&mut self.pane.steers);
-                    for c in self.log.apply(&Event::TurnEnd(StopReason::EndTurn)) {
-                        self.push_cell(c);
-                    }
+                let steers = std::mem::take(&mut self.pane.steers);
+                let interrupted = matches!(reason, StopReason::Cancelled) && !steers.is_empty();
+                let end = match interrupted {
+                    true => Event::TurnEnd(StopReason::EndTurn),
+                    false => ev.clone(),
+                };
+                for c in self.log.apply(&end) {
+                    self.push_cell(c);
+                }
+                if interrupted {
                     self.push_cell(Box::new(InfoCell {
                         text: "Model interrupted to submit steer instructions.".into(),
                         hint: None,
                     }));
-                    for s in steers {
-                        self.push_cell(Box::new(UserCell { text: s }));
-                    }
+                }
+                self.set_running(false);
+                if self.rewind.is_some() {
+                    // the steers wait behind the rewind, first in the queue
+                    self.pane.queued.splice(0..0, steers);
+                    self.finish_rewind();
+                } else if !steers.is_empty() {
+                    self.submit_prompt(steers.join("\n"));
                 } else {
-                    for c in self.log.apply(&ev) {
-                        self.push_cell(c);
-                    }
-                    self.set_running(false);
-                    if self.rewind.is_some() {
-                        self.finish_rewind();
-                    } else {
-                        self.send_queued();
-                    }
+                    self.send_queued();
                 }
             }
             Event::Fatal(_) => {
@@ -894,13 +894,11 @@ impl<W: Write> App<W> {
     }
 
     /// Text from the composer: a steer while a turn runs, else a new turn. Slash commands never
-    /// get here; the composer dispatches them itself.
+    /// get here; the composer dispatches them itself. Wizard cannot add to a running turn, so a
+    /// steer waits for the turn to end, or for Esc to end it.
     fn submit_plain(&mut self, text: String) {
         if self.running {
-            self.pane.steers.push(text.clone());
-            self.export.push_user(&text);
-            let send = self.outgoing(&text);
-            let _ = self.tx.send(Request::Steer(send));
+            self.pane.steers.push(text);
         } else {
             self.submit_prompt(text);
         }
@@ -983,9 +981,7 @@ impl<W: Write> App<W> {
             return;
         }
         if self.running {
-            self.pane.steers.push(text.clone());
-            self.export.push_user(&text);
-            let _ = self.tx.send(Request::Steer(text));
+            self.pane.steers.push(text);
         } else {
             self.submit_prompt(text);
         }

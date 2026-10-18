@@ -150,7 +150,7 @@ pub fn pending_preview_lines(
     if !steers.is_empty() {
         let header = Line::from(vec![
             Span::from("• ").dim(),
-            Span::from("Messages to be submitted after next tool call"),
+            Span::from("Messages to be submitted when the turn ends"),
             Span::from(" (press esc to interrupt and send immediately)").dim(),
         ]);
         out.extend(crate::wrap::word_wrap_line(
@@ -239,9 +239,9 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                "• Messages to be submitted after next",
-                "  tool call (press esc to interrupt and",
-                "  send immediately)",
+                "• Messages to be submitted when the turn",
+                "  ends (press esc to interrupt and send",
+                "  immediately)",
                 "  ↳ a queued follow up fake:text",
             ]
         );

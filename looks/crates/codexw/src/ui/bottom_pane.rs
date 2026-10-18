@@ -19,7 +19,7 @@ pub struct BottomPane {
     /// The status row is hidden while answer text is being committed (spec B.16.1).
     pub status_hidden: bool,
     pub view: Option<Box<dyn BottomView>>,
-    /// Steers sent mid-turn, shown as `Messages to be submitted after next tool call`.
+    /// Steers typed mid-turn, shown as `Messages to be submitted when the turn ends`.
     pub steers: Vec<String>,
     /// Tab-queued drafts, sent when the turn ends.
     pub queued: Vec<String>,
