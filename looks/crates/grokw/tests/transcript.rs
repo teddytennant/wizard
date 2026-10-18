@@ -345,7 +345,7 @@ fn the_viewer_scrolls_and_quotes_into_the_composer() {
 #[test]
 fn vim_keys_move_fold_jump_and_copy() {
     let mut h = three_turns();
-    h.app.dispatch("/vim-mode".into());
+    h.app.dispatch("/scroll-keys".into());
     assert!(h.app.vim_mode);
     h.render();
     h.press(KeyCode::Tab);

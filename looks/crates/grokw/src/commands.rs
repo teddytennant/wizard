@@ -19,9 +19,9 @@ const EXTRAS: &[(&str, &str, &str)] = &[
         "Toggle compact UI (less padding, more content)",
     ),
     (
-        "vim-mode",
+        "scroll-keys",
         "",
-        "Toggle vim-style scrollback keybindings (j/k, h/l, g/G, y/Y, …)",
+        "Toggle vim keys in the scrollback (j/k, h/l, g/G, y/Y, …)",
     ),
     (
         "multiline",
@@ -413,9 +413,9 @@ fn run_extra(app: &mut App, name: &str, args: &str) {
             let t = format!("✓ Timestamps: {}", on_off(app.timestamps));
             app.toast(t);
         }
-        "vim-mode" => {
+        "scroll-keys" => {
             app.vim_mode = !app.vim_mode;
-            let t = format!("Vim mode: {}", on_off(app.vim_mode));
+            let t = format!("Vim scrollback keys: {}", on_off(app.vim_mode));
             say(app, &t);
         }
         _ => {}
@@ -594,7 +594,7 @@ mod tests {
             "/theme",
             "/timestamps",
             "/compact-mode",
-            "/vim-mode",
+            "/scroll-keys",
             "/multiline",
             "/copy",
         ];

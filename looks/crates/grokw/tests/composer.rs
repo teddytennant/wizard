@@ -375,12 +375,12 @@ fn popup_rows_hover_and_click() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let mut h = Harness::new(120, 36);
     h.type_str("/mo");
-    // rows start under the rule at 24: /mode, then /model
-    mouse(&mut h, MouseEventKind::Moved, 30, 26);
+    // rows start under the rule at 25: /mode, then /model
+    mouse(&mut h, MouseEventKind::Moved, 30, 27);
     assert_eq!(h.app.inp.popup_hover, Some(1));
     h.dump("popup-hover-120x36");
     assert_snapshot("popup-hover-120x36", &h.text());
-    mouse(&mut h, MouseEventKind::Down(MouseButton::Left), 30, 26);
+    mouse(&mut h, MouseEventKind::Down(MouseButton::Left), 30, 27);
     assert!(h.app.ed.text().starts_with("/model"));
 }
 

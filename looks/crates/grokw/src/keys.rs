@@ -984,7 +984,7 @@ fn ctrl_or_alt(key: &KeyEvent) -> bool {
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }
 
-/// Vim keys in the scrollback (`/vim-mode`). Returns whether the key was one of them.
+/// Vim keys in the scrollback (`/scroll-keys`). Returns whether the key was one of them.
 fn vim_key(app: &mut App, key: KeyEvent) -> bool {
     if ctrl_or_alt(&key) {
         return false;
