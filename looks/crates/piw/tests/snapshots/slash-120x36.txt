@@ -31,6 +31,6 @@
   effort         <low|medium|high> — set reasoning effort
   plan           toggle plan mode
   compact        summarize older history
-  (1/18)
+  (1/19)
 ~/proj (main)
 ?/?                                                                                                  fake-model • medium

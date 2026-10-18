@@ -1830,6 +1830,19 @@ impl App {
             (Cmd::Shared(Shared::Clear), _) => self.new_session(),
             (Cmd::Shared(Shared::Exit), _) => self.quit = true,
             (Cmd::Shared(Shared::Help), _) => self.slash_help(),
+            (Cmd::Shared(Shared::Export), _) => {
+                let cwd = std::path::PathBuf::from(&self.cwd);
+                let (level, text) = agent_core::export::run(&self.transcript, args, &cwd);
+                self.local_notice(level, text);
+            }
+            (Cmd::Shared(Shared::Settings), _) => self.local_notice(
+                NoticeLevel::Info,
+                format!(
+                    "{} Themes, timestamps and thinking are in the {} palette.",
+                    agent_core::commands::NO_SETTINGS,
+                    self.keymap.first(&Action::Palette)
+                ),
+            ),
             (Cmd::Shared(Shared::Model), true) => self.run_action(Action::Models),
             (Cmd::Shared(Shared::Model), false) => {
                 let id = self.model_id_for(args);
@@ -1868,10 +1881,12 @@ impl App {
             agent_core::commands::help_text(&self.menu),
             self.keymap.first(&Action::Palette)
         );
-        self.transcript.apply(&Event::Notice {
-            level: NoticeLevel::Info,
-            text,
-        });
+        self.local_notice(NoticeLevel::Info, text);
+    }
+
+    /// A command's answer that openw gives itself, in the session.
+    fn local_notice(&mut self, level: NoticeLevel, text: String) {
+        self.transcript.apply(&Event::Notice { level, text });
         self.enter_session();
         self.scroll.to_bottom();
     }

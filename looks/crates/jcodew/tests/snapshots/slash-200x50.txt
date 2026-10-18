@@ -32,7 +32,7 @@
 /help  show help
 /mode  switch mode
 /plan  toggle plan mode
-/quit  exit wizard  +8 more
+/quit  exit wizard  +10 more
 
 
 

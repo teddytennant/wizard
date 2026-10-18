@@ -15,8 +15,10 @@
 │    /help  show help                                                                                                                                                                                  │
 │    /clear  clear the conversation                                                                                                                                                                    │
 │    /exit  exit wizard                                                                                                                                                                                │
+│    /export [file]  write the conversation to a markdown file                                                                                                                                         │
 │    /quit  exit wizard                                                                                                                                                                                │
 │    /resume [id]  reopen and continue a past session                                                                                                                                                  │
+│    /settings  open this look's settings                                                                                                                                                              │
 │    /cls  Clear the view only, keeping context                                                                                                                                                        │
 │                                                                                                                                                                                                      │
 │  ─────────────────────────────────────────────────                                                                                                                                                   │
@@ -45,6 +47,4 @@
 │    Shift+Enter / Alt+EnterInsert newline in input                                                                                                                                                    │
 │    Trailing \ then Enter Insert newline                                                                                                                                                              │
 │    Ctrl+Enter            Stop the turn and send now                                                                                                                                                  │
-│    Ctrl+Up               Retrieve pending message for editing                                                                                                                                        │
-│    Ctrl+L                Clear the view, keeping context                                                                                                                                             │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

@@ -163,7 +163,6 @@ fn wizard_commands_and_unknown_names_go_to_wizard_as_typed() {
         "/themes",
         "/share",
         "/undo",
-        "/export",
         "/init",
         "/q",
         "/tmp/notes.txt explain",
@@ -202,6 +201,26 @@ fn shared_commands_and_extras_are_answered_here() {
     typed(&mut h, "/quit");
     assert!(h.app.quit);
     assert!(h.sent().is_empty());
+}
+
+#[test]
+fn export_writes_the_conversation_and_settings_answers_here() {
+    let mut h = Harness::new(120, 36);
+    h.turn("hi", "hello");
+    h.sent();
+    let out = std::env::temp_dir().join(format!("openw-export-{}.md", std::process::id()));
+    typed(&mut h, &format!("/export {}", out.display()));
+    assert!(h.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert_eq!(md, "## You\n\nhi\n\n## Wizard\n\nhello\n\n");
+    typed(&mut h, "/settings");
+    assert!(h.sent().is_empty());
+    assert!(
+        h.text().contains("This look has no settings view"),
+        "{}",
+        h.text()
+    );
 }
 
 #[test]

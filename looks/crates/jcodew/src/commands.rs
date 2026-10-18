@@ -227,6 +227,14 @@ pub fn run_local(app: &mut App, name: &str, args: &str) -> bool {
             }
         }
         Command::Shared(Shared::Exit) => app.quit = true,
+        Command::Shared(Shared::Export) => {
+            let cwd = std::path::PathBuf::from(app.cwd());
+            match agent_core::export::run(&app.tr, args, &cwd) {
+                (agent_core::NoticeLevel::Error, text) => app.error(text),
+                (_, text) => app.system(text),
+            }
+        }
+        Command::Shared(Shared::Settings) => app.system(shared::NO_SETTINGS),
         Command::Wizard => return false,
     }
     app.dirty = true;

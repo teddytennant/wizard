@@ -502,3 +502,29 @@ fn a_paste_goes_to_the_picker_search_while_it_is_open() {
     h.draw();
     assert!(h.app.pane.composer.is_empty());
 }
+
+#[test]
+fn export_writes_the_conversation_and_settings_answers_here() {
+    let mut h = harness(120, 36, 7);
+    ready(&mut h, catalog_config());
+    h.type_str("hi");
+    h.key(KeyCode::Enter);
+    h.app.on_backend(Event::TurnStart);
+    h.app.on_backend(Event::TextDelta("hello".into()));
+    h.app
+        .on_backend(Event::TurnEnd(agent_core::StopReason::EndTurn));
+    h.sent();
+    let out = std::env::temp_dir().join(format!("codexw-export-{}.md", std::process::id()));
+    h.type_str(&format!("/export {}", out.display()));
+    h.key(KeyCode::Enter);
+    assert!(h.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert_eq!(md, "## You\n\nhi\n\n## Wizard\n\nhello\n\n");
+    h.type_str("/settings");
+    h.key(KeyCode::Enter);
+    assert!(h.sent().is_empty());
+    h.draw();
+    let t = h.screen.full_text();
+    assert!(t.contains("This look has no settings view"), "{t}");
+}

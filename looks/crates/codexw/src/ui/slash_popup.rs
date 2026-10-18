@@ -541,12 +541,12 @@ mod tests {
         // The name column is the widest name over all rows, `/statusline`, plus two.
         assert_eq!(rows[0], "  /model       pick or switch the model");
         assert_eq!(rows[1], "  /mode        pick or switch personality mode");
-        for _ in 0..12 {
+        for _ in 0..14 {
             p.move_down();
         }
         let rows = dump(&p, 120);
         assert!(rows.last().unwrap().starts_with("  /theme "), "{rows:?}");
-        assert!(rows[0].starts_with("  /rewind "), "{rows:?}");
+        assert!(rows[0].starts_with("  /clear "), "{rows:?}");
     }
 
     #[test]

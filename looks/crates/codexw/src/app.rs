@@ -95,6 +95,8 @@ pub struct RewindFlow {
 pub struct App<W: Write> {
     pub opts: AppOpts,
     pub tx: UnboundedSender<Request>,
+    /// The conversation as `/export` writes it.
+    pub export: agent_core::export::Log,
     pub term: InlineTerminal<W>,
     pub screen: Size,
     /// Committed history, source of truth for replays.
@@ -219,6 +221,7 @@ impl<W: Write> App<W> {
             term: InlineTerminal::new(out, screen, cursor),
             screen,
             tx,
+            export: Default::default(),
             cells: Vec::new(),
             replay_from: 0,
             has_emitted_history: false,
@@ -363,6 +366,7 @@ impl<W: Write> App<W> {
     // ---- backend events -----------------------------------------------------------------------
 
     pub fn on_backend(&mut self, ev: Event) {
+        self.export.apply(&ev);
         self.log.set_context(self.screen.width, &self.opts.cwd);
         if let (Event::Notice { text, .. }, Some(flow)) = (&ev, self.rewind.as_mut()) {
             // The answer to `/rewind <turn>` is read by `finish_rewind`, not printed.
@@ -668,6 +672,7 @@ impl<W: Write> App<W> {
         self.esc_primed = false;
         self.pane.footer.esc_hint = false;
         self.push_cell(Box::new(UserCell { text: text.clone() }));
+        self.export.push_user(&text);
         let send = self.outgoing(&text);
         // The status row waits for the backend's `TurnStart`, as Codex waits for its server.
         let _ = self.tx.send(Request::Prompt(send));
@@ -880,6 +885,7 @@ impl<W: Write> App<W> {
     fn submit_plain(&mut self, text: String) {
         if self.running {
             self.pane.steers.push(text.clone());
+            self.export.push_user(&text);
             let send = self.outgoing(&text);
             let _ = self.tx.send(Request::Steer(send));
         } else {
@@ -965,6 +971,7 @@ impl<W: Write> App<W> {
         }
         if self.running {
             self.pane.steers.push(text.clone());
+            self.export.push_user(&text);
             let _ = self.tx.send(Request::Steer(text));
         } else {
             self.submit_prompt(text);

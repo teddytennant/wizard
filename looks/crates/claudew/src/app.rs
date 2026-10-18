@@ -257,6 +257,8 @@ pub enum Hint {
 pub struct App {
     pub opts: AppOpts,
     pub tx: UnboundedSender<Request>,
+    /// The conversation as `/export` writes it.
+    pub export: agent_core::export::Log,
     pub msg_tx: UnboundedSender<Msg>,
     pub size: (u16, u16),
     pub theme: Theme,
@@ -428,6 +430,7 @@ impl App {
             fatal: None,
             quit: false,
             switched: false,
+            export: Default::default(),
             dirty: true,
             repaint: false,
             suspend: false,
@@ -747,6 +750,7 @@ impl App {
 
     pub fn on_event(&mut self, ev: Event) {
         self.dirty = true;
+        self.export.apply(&ev);
         match ev {
             Event::Ready { session_id, config } => {
                 // wizard opens every session, new, loaded or rewound, on its config's defaults:
@@ -1350,6 +1354,22 @@ impl App {
                 self.load(None);
                 return;
             }
+            "export" => {
+                self.blocks.push(Block::User { text, bash: false });
+                match agent_core::export::run(self.export.transcript(), &arg, &self.opts.cwd) {
+                    (NoticeLevel::Error, text) => self.blocks.push(Block::Notice {
+                        level: NoticeLevel::Error,
+                        text,
+                    }),
+                    (_, said) => self.output(said, String::new()),
+                }
+                return;
+            }
+            "settings" => {
+                self.blocks.push(Block::User { text, bash: false });
+                self.output(agent_core::commands::NO_SETTINGS, String::new());
+                return;
+            }
             "help" => {
                 self.dialog = Some(Dialog::Help {
                     tab: 0,
@@ -1386,6 +1406,7 @@ impl App {
         // the user's own commands are prompts for the model once wizard expands them
         self.command_turn = !name.is_empty() && !self.custom.contains(&name);
         self.start_busy();
+        self.export.push_user(&text);
         self.send(Request::Prompt(text));
     }
 

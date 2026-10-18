@@ -2,7 +2,8 @@
 //!
 //! A look's `/` menu is the same everywhere: what `wizard acp` advertises (its built-in
 //! commands, the user's own commands and the skills), the few in [`SHARED`] that every look
-//! answers itself because wizard cannot run them over ACP or because they open a picker, and a
+//! answers itself because wizard cannot run them over ACP, because they open a picker or because
+//! they only touch the look, and a
 //! short list of a look's own visual extras (`/theme`). Anything else typed as `/name` goes to
 //! wizard as typed, which runs it or says it does not know it.
 
@@ -13,11 +14,21 @@ use crate::SlashCommand;
 pub const SHARED: &[(&str, &str, &str)] = &[
     ("clear", "", "clear the conversation"),
     ("exit", "", "exit wizard"),
+    (
+        "export",
+        "[file]",
+        "write the conversation to a markdown file",
+    ),
     ("help", "", "show available commands and keys"),
     ("model", "[tag]", "pick or switch the model"),
     ("quit", "", "exit wizard"),
     ("resume", "[id]", "reopen and continue a past session"),
+    ("settings", "", "open this look's settings"),
 ];
+
+/// What `/settings` says in a look that has no settings view.
+pub const NO_SETTINGS: &str =
+    "This look has no settings view. Wizard's own settings are in ~/.wizard/config.toml.";
 
 /// A command in [`SHARED`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,12 +37,16 @@ pub enum Shared {
     Clear,
     /// Leave the look (`/exit` and `/quit`).
     Exit,
+    /// The conversation to a markdown file; see [`crate::export`].
+    Export,
     /// The commands in the menu and the look's keys.
     Help,
     /// No argument: the model picker. With one: switch to that model.
     Model,
     /// No argument: the session picker. With one: open that session.
     Resume,
+    /// The look's settings view, or [`NO_SETTINGS`].
+    Settings,
 }
 
 /// Who runs a typed `/name`.
@@ -58,9 +73,11 @@ pub fn resolve<'a>(name: &'a str, extras: &[SlashCommand]) -> Command<'a> {
     let shared = match name {
         "clear" => Some(Shared::Clear),
         "exit" | "quit" => Some(Shared::Exit),
+        "export" => Some(Shared::Export),
         "help" => Some(Shared::Help),
         "model" => Some(Shared::Model),
         "resume" => Some(Shared::Resume),
+        "settings" => Some(Shared::Settings),
         _ => None,
     };
     match shared {
@@ -152,7 +169,10 @@ mod tests {
         let names: Vec<&str> = m.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,
-            ["model", "compact", "clear", "exit", "help", "quit", "resume", "theme"]
+            [
+                "model", "compact", "clear", "exit", "export", "help", "quit", "resume",
+                "settings", "theme"
+            ]
         );
         assert_eq!(m[0].description, "wizard's model");
         assert_eq!(m[1].description, "compact");

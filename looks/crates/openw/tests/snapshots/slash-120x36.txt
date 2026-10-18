@@ -13,8 +13,8 @@
                        ┃ /diff         show the working tree diff                                ┃
                        ┃ /effort       set reasoning effort <low|medium|high>                    ┃
                        ┃ /exit         exit wizard                                               ┃
+                       ┃ /export       write the conversation to a markdown file [file]          ┃
                        ┃ /help         show help                                                 ┃
-                       ┃ /mode         switch mode <genie|sovereign>                             ┃
                        ┃
                        ┃  /
                        ┃

@@ -1,8 +1,6 @@
 // OWNER: dialogs
 //! `/export`: filename plus four options, then the transcript is written as Markdown.
 
-use std::path::{Path, PathBuf};
-
 use agent_core::transcript::{Part, Role, Transcript};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -77,41 +75,7 @@ pub fn default_filename(session_id: &str) -> String {
     }
 }
 
-/// Write `text` to `name` (relative names are taken against `cwd`) without replacing a file
-/// that is already there: a taken name gets `-2`, `-3` and so on before the extension.
-/// Returns the path written.
-pub fn write_new(cwd: &Path, name: &str, text: &str) -> std::io::Result<PathBuf> {
-    use std::io::Write;
-    let first = cwd.join(name);
-    let (stem, ext) = match first.extension() {
-        Some(e) => (
-            first.with_extension("").to_string_lossy().into_owned(),
-            format!(".{}", e.to_string_lossy()),
-        ),
-        None => (first.to_string_lossy().into_owned(), String::new()),
-    };
-    let mut path = first;
-    for n in 2..1000 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut f) => {
-                f.write_all(text.as_bytes())?;
-                return Ok(path);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                path = PathBuf::from(format!("{stem}-{n}{ext}"));
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "too many files with that name",
-    ))
-}
+pub use agent_core::export::write_new;
 
 pub fn open(ctx: &Ctx) -> Box<dyn Dialog> {
     let mut editor = Editor::with_text(&default_filename(&ctx.session_id));

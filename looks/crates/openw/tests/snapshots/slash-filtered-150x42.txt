@@ -13,11 +13,11 @@
 
 
                                                                     ▀                   █
-                                                              █   █ █ ▀▀▀█ █▀▀█ █▀▀▀ █▀▀█
                                       ┃ /mode         switch mode <genie|sovereign>                             ┃
                                       ┃ /model        switch model <provider>/<model>                           ┃
                                       ┃ /plan         toggle plan mode                                          ┃
                                       ┃ /compact      summarize older history                                   ┃
+                                      ┃ /export       write the conversation to a markdown file [file]          ┃
                                       ┃
                                       ┃  /mo
                                       ┃

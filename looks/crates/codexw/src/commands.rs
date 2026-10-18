@@ -89,6 +89,18 @@ impl<W: Write> App<W> {
             Command::Shared(Shared::Help) => self.show_help(),
             Command::Shared(Shared::Model) => self.open_model_picker_with(rest),
             Command::Shared(Shared::Resume) => self.open_resume(rest),
+            Command::Shared(Shared::Export) => {
+                let (level, text) =
+                    agent_core::export::run(self.export.transcript(), rest, &self.opts.cwd);
+                match level {
+                    agent_core::NoticeLevel::Error => self.say_error(text),
+                    _ => self.push_cell(Box::new(InfoCell { text, hint: None })),
+                }
+            }
+            Command::Shared(Shared::Settings) => self.push_cell(Box::new(InfoCell {
+                text: agent_core::commands::NO_SETTINGS.into(),
+                hint: Some("/theme, /statusline, /title and /keymap change this look".into()),
+            })),
             Command::Extra(name) => self.run_extra(name, rest),
             Command::Wizard if name == "rewind" => self.rewind_command(text, rest),
             Command::Wizard => self.wizard_command(text.trim().to_string()),
@@ -175,10 +187,12 @@ mod tests {
                 "compact",
                 "clear",
                 "exit",
+                "export",
                 "help",
                 "model",
                 "quit",
                 "resume",
+                "settings",
                 "theme",
                 "raw",
                 "vim",

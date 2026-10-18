@@ -6,10 +6,10 @@
 
 
 
-  ─────────────────────────────────────────────────────────────────────────21─
+  ─────────────────────────────────────────────────────────────────────────23─
     ❯ /model                         switch model                            █
       /mode                          switch mode                             █
-      /effort                        set reasoning effort                    █
+      /effort                        set reasoning effort
       /plan                          toggle plan mode
       /compact                       summarize older history
       /diff                          show the working tree diff

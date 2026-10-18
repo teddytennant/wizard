@@ -383,6 +383,11 @@ pub fn run(app: &mut App, name: &str, args: &str) {
             app.open_resume();
         }
         Command::Shared(Shared::Resume) => app.resume_session(args.to_string()),
+        Command::Shared(Shared::Export) => {
+            let (_, text) = agent_core::export::run(&app.tr, args, &app.opts.cwd);
+            say(app, &text);
+        }
+        Command::Shared(Shared::Settings) => crate::ui::dialogs::settings::open(app),
         Command::Extra(extra) => run_extra(app, extra, args),
         // wizard can only answer a bare `/effort` with usage text; the effort list is a picker
         Command::Wizard if name == "effort" && args.is_empty() => {
@@ -589,8 +594,10 @@ mod tests {
             "/help",
             "/clear",
             "/exit",
+            "/export",
             "/quit",
             "/resume",
+            "/settings",
             "/theme",
             "/timestamps",
             "/compact-mode",
@@ -610,7 +617,7 @@ mod tests {
         ] {
             assert!(is_known(&app, name), "{name}");
         }
-        for name in ["new", "settings", "context", "view-plan", "find", "tmp"] {
+        for name in ["new", "dashboard", "context", "view-plan", "find", "tmp"] {
             assert!(!is_known(&app, name), "{name}");
         }
     }

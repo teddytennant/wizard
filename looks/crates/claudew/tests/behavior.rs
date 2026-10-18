@@ -241,8 +241,8 @@ fn the_menu_is_wizards_commands_and_the_shared_set() {
     assert_eq!(
         names,
         [
-            "model", "compact", "status", "btw", "deploy", "clear", "exit", "help", "quit",
-            "resume"
+            "model", "compact", "status", "btw", "deploy", "clear", "exit", "export", "help",
+            "quit", "resume", "settings"
         ]
     );
     assert!(
@@ -255,14 +255,7 @@ fn the_menu_is_wizards_commands_and_the_shared_set() {
 /// Names the look used to answer itself, or to alias, now go to wizard as typed.
 #[test]
 fn claude_codes_own_commands_go_to_wizard() {
-    for typed in [
-        "/status",
-        "/config",
-        "/settings",
-        "/new",
-        "/reset",
-        "/continue",
-    ] {
+    for typed in ["/status", "/config", "/new", "/reset", "/continue"] {
         let mut hn = harness();
         hn.app.submit(typed.into());
         assert_eq!(hn.sent(), [Request::Prompt(typed.into())], "{typed}");
@@ -1015,4 +1008,29 @@ fn a_refused_session_switch_releases_the_queue() {
     });
     assert_eq!(hn.sent(), [Request::Prompt("hello again".into())]);
     assert!(hn.render().plain().contains("Finish or cancel"));
+}
+
+#[test]
+fn export_writes_the_conversation_and_settings_answers_here() {
+    let mut hn = harness();
+    hn.app.submit("hi".into());
+    hn.event(Event::TurnStart);
+    hn.event(Event::TextDelta("hello".into()));
+    hn.event(Event::TurnEnd(StopReason::EndTurn));
+    hn.sent();
+    let out = std::env::temp_dir().join(format!("claudew-export-{}.md", std::process::id()));
+    hn.app.submit(format!("/export {}", out.display()));
+    assert!(hn.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert!(
+        md.ends_with("## You\n\nhi\n\n## Wizard\n\nhello\n\n"),
+        "{md}"
+    );
+    hn.app.submit("/settings".into());
+    assert!(hn.sent().is_empty());
+    assert!(matches!(
+        hn.app.blocks.last(),
+        Some(Block::Output { text, .. }) if text == agent_core::commands::NO_SETTINGS
+    ));
 }

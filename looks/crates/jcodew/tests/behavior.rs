@@ -178,7 +178,7 @@ fn the_menu_is_wizards_commands_then_the_shared_ones_then_cls() {
         names,
         [
             "model", "mode", "effort", "plan", "compact", "diff", "todos", "status", "cost",
-            "agents", "help", "clear", "exit", "quit", "resume", "cls"
+            "agents", "help", "clear", "exit", "export", "quit", "resume", "settings", "cls"
         ]
     );
 }
@@ -407,4 +407,23 @@ fn a_tiny_terminal_draws_nothing_rather_than_panicking() {
         hn.type_str("/");
         hn.render();
     }
+}
+
+#[test]
+fn export_writes_the_conversation_and_settings_answers_here() {
+    let mut h = Harness::new(120, 40);
+    h.say("hi");
+    h.begin();
+    h.event(Event::TextDelta("hello".into()));
+    h.event(Event::TurnEnd(StopReason::EndTurn));
+    h.sent();
+    let out = std::env::temp_dir().join(format!("jcodew-export-{}.md", std::process::id()));
+    h.say(&format!("/export {}", out.display()));
+    assert!(h.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert_eq!(md, "## You\n\nhi\n\n## Wizard\n\nhello\n\n");
+    h.say("/settings");
+    assert!(h.sent().is_empty());
+    assert!(h.text().contains("This look has no settings view"));
 }

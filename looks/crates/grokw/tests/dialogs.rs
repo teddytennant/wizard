@@ -126,6 +126,25 @@ fn settings_modal() {
 }
 
 #[test]
+fn settings_command_opens_the_modal_and_export_writes_the_conversation() {
+    let mut h = Harness::new(120, 36);
+    h.turn("hi", "hello");
+    h.sent();
+    h.app.dispatch("/settings".into());
+    assert!(matches!(
+        h.app.modal,
+        Some(grokw::ui::dialogs::Modal::Settings(_))
+    ));
+    h.press(KeyCode::Esc);
+    let out = std::env::temp_dir().join(format!("grokw-export-{}.md", std::process::id()));
+    h.app.dispatch(format!("/export {}", out.display()));
+    assert!(h.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert_eq!(md, "## You\n\nhi\n\n## Wizard\n\nhello\n\n");
+}
+
+#[test]
 fn docs_list_and_guide_page() {
     let dir = std::env::temp_dir().join("grokw-docs-test");
     let guides = dir.join("docs/user-guide");

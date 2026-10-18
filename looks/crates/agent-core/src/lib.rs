@@ -6,6 +6,7 @@
 //! Frontends never see protocol JSON.
 
 pub mod commands;
+pub mod export;
 pub mod mock;
 pub mod procs;
 pub mod transcript;

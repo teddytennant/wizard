@@ -29,7 +29,7 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /se
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-→ settings       Open settings menu
+→ settings       open this look's settings
   scoped-models  Enable/disable models for Ctrl+P cycling
   resume         [id] — reopen and continue a past session
 ~/proj (main)

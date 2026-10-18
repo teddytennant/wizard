@@ -252,7 +252,6 @@ fn pi_only_commands_are_gone_and_go_to_wizard_as_typed() {
     for gone in [
         "tree",
         "thinking",
-        "export",
         "import",
         "share",
         "bug",
@@ -472,4 +471,19 @@ fn tiny_terminals_do_not_panic() {
         h.ctrl('l');
         let _ = h.text();
     }
+}
+
+#[test]
+fn export_writes_the_conversation() {
+    let mut h = Harness::new(100, 30);
+    h.turn("hi", "hello");
+    h.sent();
+    let out = std::env::temp_dir().join(format!("piw-export-{}.md", std::process::id()));
+    h.type_str(&format!("/export {}", out.display()));
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Enter);
+    assert!(h.sent().is_empty());
+    let md = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert_eq!(md, "## You\n\nhi\n\n## Wizard\n\nhello\n\n");
 }

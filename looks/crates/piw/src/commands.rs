@@ -1,6 +1,6 @@
 // OWNER: commands (slash command table and what each one does on wizard)
 //! The slash commands: wizard's own, the ones every look answers itself
-//! (`agent_core::commands`), and three of Pi's that only touch the look. Anything else goes to
+//! (`agent_core::commands`), and two of Pi's that only touch the look. Anything else goes to
 //! wizard as typed.
 
 use agent_core::commands::{self as shared, Command, Shared};
@@ -11,7 +11,6 @@ use crate::ui::selectors::Selector;
 
 pub fn extras() -> Vec<SlashCommand> {
     shared::extras(&[
-        ("settings", "", "Open settings menu"),
         (
             "scoped-models",
             "",
@@ -38,7 +37,14 @@ pub fn run(app: &mut App, text: &str) -> bool {
         Command::Shared(Shared::Help) => app.show_help(),
         Command::Shared(Shared::Model) => app.cmd_model(arg),
         Command::Shared(Shared::Resume) => app.cmd_resume(arg),
-        Command::Extra("settings") => app.open_settings(),
+        Command::Shared(Shared::Settings) => app.open_settings(),
+        Command::Shared(Shared::Export) => {
+            let cwd = std::path::PathBuf::from(&app.cwd);
+            match agent_core::export::run(&app.transcript, arg, &cwd) {
+                (agent_core::NoticeLevel::Error, text) => app.error(text),
+                (_, text) => app.status(text),
+            }
+        }
         Command::Extra("scoped-models") => app.open_scoped_models(),
         Command::Extra("copy") => match app.last_assistant_text() {
             Some(t) => {
@@ -110,6 +116,7 @@ mod tests {
                 "help",
                 "clear",
                 "exit",
+                "export",
                 "quit",
                 "resume",
                 "settings",
