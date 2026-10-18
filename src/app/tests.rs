@@ -397,13 +397,21 @@ fn typed_custom_command_submits_the_expanded_prompt() {
 }
 
 #[test]
-fn unknown_slash_command_passes_through_as_a_prompt() {
+fn unknown_slash_command_is_answered_here_and_a_path_is_still_a_prompt() {
     let mut app = app();
     type_str(&mut app, "/frobnicate the build");
     let action = press(&mut app, KeyCode::Enter);
+    assert!(action.is_none(), "no model turn for {action:?}");
+    assert!(app.input.is_empty());
+    assert!(matches!(
+        app.transcript.last(),
+        Some(TranscriptItem::Notice(text)) if text == "Unknown slash command: frobnicate"
+    ));
+    type_str(&mut app, "/tmp what is here");
+    let action = press(&mut app, KeyCode::Enter);
     assert!(matches!(
         action,
-        Some(AppAction::Submit(prepared)) if prepared.text == "/frobnicate the build"
+        Some(AppAction::Submit(prepared)) if prepared.text == "/tmp what is here"
     ));
 }
 

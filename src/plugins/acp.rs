@@ -826,7 +826,7 @@ async fn run_prompt(
     // `@file` references; a `/name` nothing runs is answered without a model call.
     let custom = crate::commands::load(&cwd);
     let answer_unknown = state.answer_unknown.load(Ordering::Relaxed);
-    if let Some(name) = command::unknown_command(&text, &custom).filter(|_| answer_unknown) {
+    if let Some(name) = crate::commands::unknown(&text, &custom).filter(|_| answer_unknown) {
         connection.send_notification(SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(format!(

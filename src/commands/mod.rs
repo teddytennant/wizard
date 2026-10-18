@@ -1605,6 +1605,23 @@ pub fn is_known(name: &str) -> bool {
     plugin::is_builtin(name) || plugin::get(name).is_some()
 }
 
+/// The name in a `/name ...` prompt that nothing runs: not a command of this build, not one of
+/// the user's, and not a path on this machine (`/tmp what is here` is a prompt). Answered as
+/// unknown rather than sent to the model as text it was never meant to read, by the terminal
+/// and by `wizard acp` alike.
+pub fn unknown<'a>(text: &'a str, custom: &[CustomCommand]) -> Option<&'a str> {
+    let name = text.trim().strip_prefix('/')?.split_whitespace().next()?;
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+    (plain
+        && !is_known(name)
+        && !custom.iter().any(|c| c.name == name)
+        && !crate::agent::load_skills().iter().any(|s| s.name == name)
+        && !std::path::Path::new("/").join(name).exists())
+    .then_some(name)
+}
+
 /// The commands the agent may queue through `run_command` on a surface that
 /// runs [`Execution::Agent`] commands against the Agent (the GUI): those
 /// entries, minus the ones [`SlashCommand::agent_runnable`] refuses whatever
@@ -2908,6 +2925,29 @@ mod tests {
         assert!(out.text.contains("[image: a.png]"));
         assert!(out.text.contains("[image: b.webp]"));
         assert_eq!(out.images.len(), 2);
+    }
+
+    /// A `/name` no command, custom command or path answers to is unknown; the rest are not.
+    #[test]
+    fn unknown_commands_are_the_ones_nothing_runs() {
+        let custom = vec![CustomCommand {
+            name: "deploy".into(),
+            description: None,
+            template: "deploy $ARGUMENTS".into(),
+            path: std::path::PathBuf::from("deploy.md"),
+            pi_syntax: false,
+        }];
+        assert_eq!(unknown("/zzzfoo", &custom), Some("zzzfoo"));
+        assert_eq!(unknown("/context please", &custom), Some("context"));
+        assert_eq!(unknown("/deploy prod", &custom), None);
+        assert_eq!(
+            unknown("/login xai", &custom),
+            None,
+            "known, refused by name later"
+        );
+        assert_eq!(unknown("/tmp what is here", &custom), None, "a path");
+        assert_eq!(unknown("/etc/hosts is wrong", &custom), None);
+        assert_eq!(unknown("what does /zzz do", &custom), None);
     }
 }
 

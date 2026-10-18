@@ -154,7 +154,8 @@ Any other `/word`, and paths like `/etc/hosts`, go to the model as typed. A
 client can ask for the other behavior: with `"_meta": {"wizard":
 {"unknownCommands": true}}` in `initialize`, a `/word` that is not a command,
 custom command, skill or path gets `Unknown slash command: <word>` as the
-answer, with no model call.
+answer, with no model call. The terminal UI and the full looks always answer
+that way.
 
 ## Protocol and scope
 

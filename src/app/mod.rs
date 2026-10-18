@@ -4139,8 +4139,8 @@ impl App {
                     .next()
                     .unwrap_or_default();
                 // A known builtin with bad arguments keeps its usage notice;
-                // custom commands and unknown `/words` go to the model (the
-                // custom expansion happens in `submit_prompt`).
+                // custom commands go to the model (the custom expansion
+                // happens in `submit_prompt`).
                 if is_builtin_command(word) {
                     self.welcome_dismissed = true;
                     self.push_history(&input);
@@ -4148,11 +4148,25 @@ impl App {
                     self.notice(message);
                     None
                 } else {
-                    self.submit_prompt(input)
+                    self.submit_unless_unknown(input)
                 }
             }
-            None => self.submit_prompt(input),
+            None => self.submit_unless_unknown(input),
         }
+    }
+
+    /// A `/name` nothing runs gets `Unknown slash command` here, as it does in every look,
+    /// instead of a model turn; anything else is a prompt.
+    fn submit_unless_unknown(&mut self, input: String) -> Option<AppAction> {
+        let Some(name) = crate::commands::unknown(&input, &self.custom_commands) else {
+            return self.submit_prompt(input);
+        };
+        let said = format!("Unknown slash command: {name}");
+        self.welcome_dismissed = true;
+        self.push_history(&input);
+        self.clear_input();
+        self.notice(said);
+        None
     }
 
     /// Enter while a command's console is open: send the line to the child.
