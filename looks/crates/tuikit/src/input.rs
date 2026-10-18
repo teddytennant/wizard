@@ -9,8 +9,11 @@
 //! [`Parser`] is a pure byte decoder and carries the tests. [`Input`] is the thread and the
 //! `SIGWINCH` listener around it, a `Stream` of [`Raw`] for `term::EventPump`.
 
+use std::ffi::c_void;
 use std::io;
-use std::os::raw::{c_int, c_ulong};
+use std::os::raw::c_int;
+#[cfg(target_os = "linux")]
+use std::os::raw::c_ulong;
 use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
@@ -700,10 +703,16 @@ struct PollFd {
     revents: i16,
 }
 
+/// `nfds_t`: `unsigned long` on Linux, `unsigned int` on the BSDs and macOS.
+#[cfg(target_os = "linux")]
+type Nfds = c_ulong;
+#[cfg(not(target_os = "linux"))]
+type Nfds = std::os::raw::c_uint;
+
 extern "C" {
-    fn poll(fds: *mut PollFd, n: c_ulong, timeout: c_int) -> c_int;
-    fn read(fd: c_int, buf: *mut u8, n: usize) -> isize;
-    fn write(fd: c_int, buf: *const u8, n: usize) -> isize;
+    fn poll(fds: *mut PollFd, n: Nfds, timeout: c_int) -> c_int;
+    fn read(fd: c_int, buf: *mut c_void, n: usize) -> isize;
+    fn write(fd: c_int, buf: *const c_void, n: usize) -> isize;
     fn pipe(fds: *mut c_int) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn isatty(fd: c_int) -> c_int;
@@ -733,7 +742,7 @@ impl Ctl {
     fn wake(&self) {
         let b = 1u8;
         unsafe {
-            write(self.wake_wr, &b, 1);
+            write(self.wake_wr, (&raw const b).cast(), 1);
         }
     }
 }
@@ -936,12 +945,12 @@ fn read_loop(
             // Drain the wake-up bytes; the flags are looked at at the top of the loop.
             let mut sink = [0u8; 64];
             unsafe {
-                read(wake_rd, sink.as_mut_ptr(), sink.len());
+                read(wake_rd, sink.as_mut_ptr().cast(), sink.len());
             }
             continue;
         }
         let events = if n > 0 {
-            let got = unsafe { read(fd, buf.as_mut_ptr(), buf.len()) };
+            let got = unsafe { read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if got <= 0 {
                 if got < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                     continue;

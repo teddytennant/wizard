@@ -2,11 +2,14 @@
 //! Terminal plumbing that `tuikit::term` does not cover: the startup capability probe, one
 //! `write(2)` per frame wrapped in synchronized output, and the extra restore bytes.
 
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem::ManuallyDrop;
 use std::os::fd::FromRawFd;
-use std::os::raw::{c_int, c_ulong};
+use std::os::raw::c_int;
+#[cfg(target_os = "linux")]
+use std::os::raw::c_ulong;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,9 +20,15 @@ struct PollFd {
     revents: i16,
 }
 
+/// `nfds_t`: `unsigned long` on Linux, `unsigned int` on the BSDs and macOS.
+#[cfg(target_os = "linux")]
+type Nfds = c_ulong;
+#[cfg(not(target_os = "linux"))]
+type Nfds = std::os::raw::c_uint;
+
 extern "C" {
-    fn poll(fds: *mut PollFd, n: c_ulong, timeout: c_int) -> c_int;
-    fn read(fd: c_int, buf: *mut u8, n: usize) -> isize;
+    fn poll(fds: *mut PollFd, n: Nfds, timeout: c_int) -> c_int;
+    fn read(fd: c_int, buf: *mut c_void, n: usize) -> isize;
     fn raise(sig: c_int) -> c_int;
 }
 
@@ -98,7 +107,7 @@ pub fn probe_keeping_input(timeout: Duration) -> (Caps, Vec<u8>) {
         if n <= 0 {
             break;
         }
-        let n = unsafe { read(0, buf.as_mut_ptr(), buf.len()) };
+        let n = unsafe { read(0, buf.as_mut_ptr().cast(), buf.len()) };
         if n <= 0 {
             break;
         }

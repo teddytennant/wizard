@@ -111,7 +111,15 @@ pub fn set_keyboard_enhancement_supported(supported: bool) {
 const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 mod sys {
-    use std::os::raw::{c_int, c_ulong};
+    use std::ffi::c_void;
+    use std::os::raw::c_int;
+    #[cfg(target_os = "linux")]
+    use std::os::raw::c_ulong;
+    /// `nfds_t`: `unsigned long` on Linux, `unsigned int` on the BSDs and macOS.
+    #[cfg(target_os = "linux")]
+    type Nfds = c_ulong;
+    #[cfg(not(target_os = "linux"))]
+    type Nfds = std::os::raw::c_uint;
     #[repr(C)]
     pub struct PollFd {
         pub fd: c_int,
@@ -119,8 +127,8 @@ mod sys {
         pub revents: i16,
     }
     extern "C" {
-        pub fn poll(fds: *mut PollFd, n: c_ulong, timeout: c_int) -> c_int;
-        pub fn read(fd: c_int, buf: *mut u8, n: usize) -> isize;
+        pub fn poll(fds: *mut PollFd, n: Nfds, timeout: c_int) -> c_int;
+        pub fn read(fd: c_int, buf: *mut c_void, n: usize) -> isize;
         pub fn isatty(fd: c_int) -> c_int;
     }
     pub const POLLIN: i16 = 1;
@@ -191,7 +199,7 @@ fn probe_keyboard(timeout: Duration) -> bool {
         if n <= 0 {
             break false;
         }
-        let n = unsafe { sys::read(fd, buf.as_mut_ptr(), buf.len()) };
+        let n = unsafe { sys::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
         if n <= 0 {
             break false;
         }
