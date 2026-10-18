@@ -2982,10 +2982,8 @@ mod look_hints {
         let mut rest = body;
         while let Some(open) = rest.find('(') {
             let after = rest[open + 1..].trim_start();
-            if let Some(s) = after.strip_prefix('"') {
-                if let Some(end) = s.find('"') {
-                    names.push(s[..end].to_string());
-                }
+            if let Some((name, _)) = after.strip_prefix('"').and_then(|s| s.split_once('"')) {
+                names.push(name.to_string());
             }
             rest = &rest[open + 1..];
         }
