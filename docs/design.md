@@ -164,7 +164,10 @@ was not in the output.
 Each wait has its own glyph, in the dim accent, one cell or three. The tick
 is about 100ms.
 
-- **Thinking, and the streaming tail.** Braille `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`.
+- **Thinking, and the streaming tail.** One cell. The turn rolls a cycle
+  from a small set (moons, blocks, a bounce, a pulse, corners, and the
+  rest) and holds it until the next turn. The tail uses the same cycle.
+  It is not the braille spinner.
 - **A tool or a shell command.** A thin line, `│╱─╲`.
 - **A subagent on the rail.** A pulsing dot, `● ◉ ○ ◉`, half speed.
 - **Waiting on a connect or a rebuild.** A dim ellipsis, `.  ` `.. ` `...`,

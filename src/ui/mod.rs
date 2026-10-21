@@ -74,7 +74,7 @@ use crate::vim::VimMode;
 mod codex;
 mod diff;
 mod grok;
-mod motion;
+pub(crate) mod motion;
 mod overlay;
 mod side;
 mod welcome;
@@ -83,10 +83,9 @@ pub(crate) use motion::fmt_tokens;
 
 use welcome::draw_welcome;
 
-/// The spinner frame for this tick, from the active skin. Every skin turns a
-/// different wheel — braille under `wizard`, a five-pointed star under
-/// `claude`, a half-circle under `grok` — and they have different frame
-/// counts, so the modulus has to come from the table rather than a constant.
+/// The spinner frame for this tick, from the active skin. Skins turn
+/// different wheels and the modulus comes from the table, not a constant.
+/// Wizard's thinking row does not use this; it rolls a cycle from [`motion`].
 pub(crate) fn spinner_frame(tick: u64) -> char {
     if reduced_motion() {
         return skin::glyphs::still();
@@ -95,9 +94,6 @@ pub(crate) fn spinner_frame(tick: u64) -> char {
     frames[(tick as usize) % frames.len()]
 }
 
-/// `WIZARD_REDUCED_MOTION=1` freezes the spinner. Read each frame so a test
-/// (and a user who exports it mid-session) does not need a restart to matter,
-/// and so nothing here queries the terminal.
 fn house_skin() -> bool {
     matches!(
         skin::active(),
@@ -109,6 +105,23 @@ fn house_skin() -> bool {
     )
 }
 
+fn wizard_skin() -> bool {
+    matches!(skin::active(), skin::Skin::Wizard)
+}
+
+/// Dashboard mark for a session that is working. Wizard deals that row its
+/// own cycle; other skins keep the skin's wheel.
+fn working_spinner(app: &App, session_id: &str) -> String {
+    if wizard_skin() {
+        motion::thinking_frame(motion::session_cycle(session_id), 0, app.tick)
+    } else {
+        spinner_frame(app.tick).to_string()
+    }
+}
+
+/// `WIZARD_REDUCED_MOTION=1` freezes the spinner. Read each frame so a test
+/// (and a user who exports it mid-session) does not need a restart to matter,
+/// and so nothing here queries the terminal.
 fn reduced_motion() -> bool {
     matches!(
         std::env::var("WIZARD_REDUCED_MOTION").as_deref(),
@@ -991,16 +1004,15 @@ pub(super) fn transcript_text(
             .of(BlockKind::Assistant)
             .content_width(width as u16) as usize;
         let mut text = render_markdown_streaming(streaming, content_width);
-        // The same braille the thinking row uses, one cell, so a stream and
-        // a wait read as the same kind of motion.
-        let tail = if matches!(
-            skin::active(),
-            skin::Skin::Wizard
-                | skin::Skin::Opencode
-                | skin::Skin::Pi
-                | skin::Skin::Jcode
-                | skin::Skin::Claude
-        ) {
+        // The same mark the thinking row uses, one cell, so a stream and a
+        // wait read as the same kind of motion. Wizard's is the cycle this
+        // turn rolled; the other house skins keep the braille.
+        let tail = if wizard_skin() {
+            Span::styled(
+                motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick),
+                dim(),
+            )
+        } else if house_skin() {
             Span::styled(motion::glyph(motion::Kind::Thinking, app.tick), dim())
         } else {
             Span::styled("▍", dim())
@@ -1052,7 +1064,9 @@ fn tool_running(view: &TranscriptView) -> bool {
 /// `[ui] spinner_verbs` list still puts its word after the spinner; the stock
 /// look has none.
 pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
-    let mark = if house_skin() {
+    let mark = if wizard_skin() {
+        motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick)
+    } else if house_skin() {
         motion::glyph(motion::Kind::Thinking, app.tick)
     } else {
         spinner_frame(app.tick).to_string()
@@ -2813,7 +2827,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, app: &App) {
     let [inner, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(body_area);
     let width = inner.width as usize;
-    let spinner = spinner_frame(app.tick);
+
     let now = now_unix();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -2844,7 +2858,10 @@ pub(super) fn draw_dashboard(frame: &mut Frame, app: &App) {
             let selected = i == app.dashboard_selected;
             let marker = if selected { "❯ " } else { "  " };
             let (icon, icon_style) = match session.state {
-                SessionState::Working => (spinner.to_string(), theme::style(Token::ToolRunning)),
+                SessionState::Working => (
+                    working_spinner(app, &session.id),
+                    theme::style(Token::ToolRunning),
+                ),
                 SessionState::NeedsInput => ("?".to_string(), accent().bold()),
                 SessionState::Idle => ("·".to_string(), dim()),
                 SessionState::Completed => ("✓".to_string(), theme::style(Token::ToolDone)),

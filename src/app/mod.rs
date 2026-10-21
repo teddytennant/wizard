@@ -418,6 +418,13 @@ pub struct App {
     /// Verb shown next to the busy spinner ("Conjuring…"); re-rolled at the
     /// start of each busy period by [`App::roll_spinner_verb`].
     pub spinner_verb: String,
+    /// Which thinking cycle the wizard busy row is on. Rolled with the verb.
+    pub spinner_ix: usize,
+    /// Frame offset for that cycle, so two turns on it do not open on the
+    /// same glyph.
+    pub spinner_phase: u64,
+    /// Shuffled deck of cycle indexes. Empty means reshuffle on the next roll.
+    spinner_bag: Vec<usize>,
     /// Number of verb rolls so far, mixed into the roll seed so back-to-back
     /// turns starting on the same tick still draw fresh verbs.
     verb_rolls: u64,
@@ -550,6 +557,13 @@ pub struct App {
     pub mesh: Option<Box<dyn SessionTee>>,
 }
 
+fn mix_seed(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E3779B97F4A7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^ (x >> 31)
+}
+
 impl App {
     pub fn new(config: Config) -> Self {
         // Install the active skin and theme before anything can draw. Both
@@ -649,6 +663,9 @@ impl App {
             turn_took: Duration::ZERO,
             rebuilding: None,
             spinner_verb,
+            spinner_ix: 0,
+            spinner_phase: 0,
+            spinner_bag: Vec::new(),
             verb_rolls: 0,
             pending_edit_config: false,
             pending_setup: None,
@@ -727,12 +744,35 @@ impl App {
             && !self.status.busy
     }
 
-    /// Pick a fresh spinner verb for a new busy period. The verb stays fixed
-    /// until the next roll, so one turn reads as one activity.
+    /// Pick a fresh spinner verb and thinking cycle for a new busy period.
+    /// Both stay fixed until the next roll, so one turn reads as one activity.
     pub fn roll_spinner_verb(&mut self) {
         self.verb_rolls = self.verb_rolls.wrapping_add(1);
         let seed = self.tick.wrapping_add(self.verb_rolls);
         self.spinner_verb = self.config.ui.spinner_verb(seed).to_string();
+        self.roll_thinking_cycle(seed);
+    }
+
+    fn roll_thinking_cycle(&mut self, seed: u64) {
+        let n = crate::ui::motion::thinking_count();
+        if n == 0 {
+            return;
+        }
+        if self.spinner_bag.is_empty() {
+            self.spinner_bag = (0..n).collect();
+            let mut state = seed;
+            for i in (1..n).rev() {
+                state = mix_seed(state);
+                let j = (state as usize) % (i + 1);
+                self.spinner_bag.swap(i, j);
+            }
+            // A fresh deck should not open on the cycle this turn is leaving.
+            if n > 1 && self.spinner_bag[0] == self.spinner_ix {
+                self.spinner_bag.swap(0, 1);
+            }
+        }
+        self.spinner_ix = self.spinner_bag.remove(0);
+        self.spinner_phase = mix_seed(seed.wrapping_add(self.spinner_ix as u64));
     }
 
     /// Append a system notice to the transcript.

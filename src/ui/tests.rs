@@ -1685,8 +1685,9 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     app.turn_started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
     let rows = render(&app);
     let screen = rows.join("\n");
+    let mark = motion::thinking_frame(0, 0, 0);
     assert!(
-        rows.iter().any(|row| row.trim() == "⠋ thinking"),
+        rows.iter().any(|row| row.trim() == format!("{mark} thinking")),
         "{screen}"
     );
     // One clock, on the status line.
@@ -1702,8 +1703,45 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     app.status.busy = true;
     app.turn_started = Some(std::time::Instant::now());
     let screen = render(&app).join("\n");
-    assert!(screen.contains("⠋ Pondering…"), "{screen}");
+    let mark = motion::thinking_frame(0, 0, 0);
+    assert!(screen.contains(&format!("{mark} Pondering…")), "{screen}");
     assert!(!screen.contains("Pondering… 0.0s"), "{screen}");
+}
+
+#[test]
+fn the_wizard_busy_row_uses_the_cycle_rolled_for_this_turn() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.tick = 7;
+    app.roll_spinner_verb();
+    app.status.busy = true;
+    let mark = motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick);
+    let rows = render(&app);
+    assert!(
+        rows.iter().any(|row| row.contains(&mark)),
+        "rolled cycle {mark} missing:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains('⠋')),
+        "the braille wheel leaked:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn other_house_skins_keep_the_braille_thinking_mark() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Opencode);
+    let mut app = App::new(crate::config::Config::default());
+    app.welcome_dismissed = true;
+    app.status.busy = true;
+    let rows = render(&app);
+    assert!(
+        rows.iter().any(|row| row.contains('⠋')),
+        "opencode thinking mark:\n{}",
+        rows.join("\n")
+    );
 }
 
 #[test]
@@ -2084,10 +2122,11 @@ fn a_streaming_reply_keeps_its_caret_and_the_composer() {
     let (rows, _) = screen_at(&app, 80, 24);
     let screen = rows.join("\n");
     assert!(screen.contains("The parser walks each token"), "{screen}");
+    let caret = motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick);
     assert!(
         rows.iter()
-            .any(|row| row.contains("The parser walks each token") && row.contains('⠋')),
-        "streaming caret is the thinking braille:\n{screen}"
+            .any(|row| row.contains("The parser walks each token") && row.contains(&caret)),
+        "streaming caret is the thinking mark:\n{screen}"
     );
     assert!(
         rows.iter().any(|row| row.contains('❯')),

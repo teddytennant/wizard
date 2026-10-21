@@ -12,7 +12,8 @@ use crate::theme::{self, Token};
 /// What the wait is. Each one has its own glyph.
 #[derive(Clone, Copy)]
 pub(super) enum Kind {
-    /// The model is thinking, or text is arriving.
+    /// The model is thinking, or text is arriving. Braille, for the house
+    /// skins that do not roll their own cycle. Wizard does; see [`THINKING`].
     Thinking,
     /// A tool or a shell command is running.
     Tool,
@@ -54,6 +55,52 @@ pub(super) fn glyph_at(kind: Kind, tick: u64, reduced: bool) -> String {
     } else {
         frame.to_string()
     }
+}
+
+/// One-cell cycles for the wizard thinking mark. A turn draws one and holds
+/// it; the next turn draws another, from a shuffled deck, so it is not the
+/// same wheel twice in a row and not the braille spinner.
+pub(crate) const THINKING: &[&[&str]] = &[
+    &["◐", "◓", "◑", "◒"],
+    &["▖", "▘", "▝", "▗"],
+    &["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂"],
+    &["·", "∘", "○", "●", "○", "∘"],
+    &["⌜", "⌝", "⌟", "⌞"],
+    &["◢", "◣", "◤", "◥"],
+    &["░", "▒", "▓", "█", "▓", "▒"],
+    &["◇", "◈", "◆", "◈"],
+    &["┤", "┘", "┴", "└", "├", "┌", "┬", "┐"],
+    &["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
+    &["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"],
+    &["▢", "▣", "■", "▣"],
+    &["╭", "╮", "╯", "╰"],
+    &["⋮", "⋯", "⋰", "⋱"],
+];
+
+pub(crate) fn thinking_count() -> usize {
+    THINKING.len()
+}
+
+/// Frame of cycle `ix`, shifted by `phase` so two turns on the same cycle
+/// do not open on the same glyph. Reduced motion freezes on frame 0.
+pub(crate) fn thinking_frame(ix: usize, phase: u64, tick: u64) -> String {
+    let frames = THINKING[ix % THINKING.len()];
+    if reduced() {
+        return frames[0].to_string();
+    }
+    let at = tick.wrapping_add(phase) as usize % frames.len();
+    frames[at].to_string()
+}
+
+/// Stable cycle for a dashboard row: one session keeps its animation, and
+/// two sessions do not share a look.
+pub(crate) fn session_cycle(id: &str) -> usize {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in id.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    (h as usize) % THINKING.len()
 }
 
 fn reduced() -> bool {
@@ -360,5 +407,22 @@ test fold::c ... FAILED
         assert_eq!(fmt_tokens(182_000), "182k");
         assert_eq!(fmt_tokens(41_000), "41k");
         assert_eq!(fmt_tokens(12), "12");
+    }
+
+    #[test]
+    fn thinking_cycles_are_one_cell_and_not_the_braille_spinner() {
+        let braille = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        assert!(THINKING.len() >= 8);
+        for cycle in THINKING {
+            assert!(cycle.len() >= 2, "{cycle:?}");
+            assert_ne!(cycle[0], cycle[1]);
+            assert_ne!(*cycle, &braille[..], "the generic braille spinner");
+            for glyph in *cycle {
+                assert_eq!(glyph.chars().count(), 1, "{glyph}");
+                assert_eq!(unicode_width::UnicodeWidthStr::width(*glyph), 1, "{glyph}");
+            }
+        }
+        assert_ne!(thinking_frame(0, 0, 0), thinking_frame(0, 0, 1));
+        assert_eq!(thinking_frame(0, 0, 0), thinking_frame(0, 0, 0));
     }
 }

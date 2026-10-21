@@ -59,9 +59,9 @@ pub trait ByteProgress: Send {
     fn finish(self: Box<Self>, msg: &str);
 }
 
-/// Braille frames matching the TUI spinner of the house skin (`WIZARD` in
-/// `src/skin/mod.rs`; the TUI reads whichever skin is active), plus a final
-/// check mark shown when a spinner finishes with a message.
+/// Braille frames for the headless spinner, plus a final check mark shown
+/// when a spinner finishes with a message. The wizard thinking row rolls a
+/// different cycle per turn; a log line stays on this one.
 const TICK_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓";
 
 /// Steady-tick cadence, close to the TUI's redraw feel.

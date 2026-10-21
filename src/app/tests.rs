@@ -250,10 +250,16 @@ fn spinner_verb_is_deterministic_and_stable_within_a_busy_period() {
     b.roll_spinner_verb();
     // Same tick and roll count -> same verb.
     assert_eq!(a.spinner_verb, b.spinner_verb);
-    // Ticks advancing mid-turn must not change the verb until a re-roll.
+    assert_eq!(a.spinner_ix, b.spinner_ix);
+    assert_eq!(a.spinner_phase, b.spinner_phase);
+    // Ticks advancing mid-turn must not change the verb or the cycle.
     let during = a.spinner_verb.clone();
+    let ix = a.spinner_ix;
+    let phase = a.spinner_phase;
     a.tick += 5;
     assert_eq!(a.spinner_verb, during);
+    assert_eq!(a.spinner_ix, ix);
+    assert_eq!(a.spinner_phase, phase);
 }
 
 #[test]
@@ -266,6 +272,31 @@ fn spinner_verb_rerolls_across_busy_periods() {
         seen.insert(app.spinner_verb.clone());
     }
     assert!(seen.len() > 1, "verb never varied across busy periods");
+}
+
+#[test]
+fn thinking_cycle_changes_every_turn_and_does_not_repeat_until_the_deck_is_spent() {
+    let mut app = app();
+    let n = crate::ui::motion::thinking_count();
+    let mut seen = Vec::new();
+    for i in 0..n {
+        app.tick = i as u64;
+        app.roll_spinner_verb();
+        seen.push(app.spinner_ix);
+    }
+    let unique: std::collections::HashSet<_> = seen.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        n,
+        "a deck should visit every cycle once: {seen:?}"
+    );
+    let last = *seen.last().unwrap();
+    app.tick = 99;
+    app.roll_spinner_verb();
+    assert_ne!(
+        app.spinner_ix, last,
+        "a new deck does not reopen on the last cycle"
+    );
 }
 
 #[test]

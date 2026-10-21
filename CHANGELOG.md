@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- The wizard thinking spinner deals a different one-cell cycle each turn, instead of the same braille wheel.
+
 ## [3.10.0] - 2026-10-17
 
 ### Changed
