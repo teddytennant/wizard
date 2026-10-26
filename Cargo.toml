@@ -4,7 +4,7 @@ version = "3.10.1"
 edition = "2024"
 # `AND`, not `OR`. This is not a dual-licensed crate offering the recipient a
 # choice: Wizard's own code is MIT, and the terminal-UI ports listed in NOTICE
-# (`src/ui/codex.rs`, `src/ui/grok.rs`, `src/ui/mod.rs`, `src/skin/blend.rs`,
+# (`src/ui/codex.rs`, `src/ui/grok/mod.rs`, `src/ui/mod.rs`, `src/skin/blend.rs`,
 # `src/skin/motion.rs`, `src/skin/layout.rs`) came from Apache-2.0 upstreams and
 # stay under Apache-2.0 wherever they go. A binary built from this tree
 # therefore carries both sets of terms at once, and both license files ship
@@ -102,7 +102,7 @@ default = [
 ]
 
 # `wizard acp`: the Agent Client Protocol server that lets Zed, Neovim and
-# Emacs embed Wizard over stdio. `src/plugins/acp.rs`.
+# Emacs embed Wizard over stdio. `src/plugins/acp/mod.rs`.
 #
 # The only plugin feature that gates a *dependency*: `agent-client-protocol` has
 # exactly one consumer and a build without this feature does not link the crate
@@ -251,7 +251,7 @@ tool-web = []
 # `git_status` and `git_diff`. `src/plugins/lua/git/`, and the first plugin
 # that is written in Lua rather than in Rust.
 #
-# It ships inside the binary — `include_str!` in `src/plugins/bundled.rs` —
+# It ships inside the binary — `include_str!` in `src/plugins/bundled/mod.rs` —
 # rather than as a file `install.sh` copies to `~/.wizard/plugins`, so it is
 # present in a `cargo test`, in a `cargo install`, and in a downloaded release
 # alike. That is also what lets it run as `PluginSource::FirstParty`
@@ -331,7 +331,7 @@ async-trait = "0.1"
 
 # Agent Client Protocol server (`wizard acp`): embeds Wizard in ACP editors
 # (Zed, Neovim, Emacs). ACP 2.0 owns stdio via its `Stdio` transport.
-# Optional, behind the `acp` feature (on by default): `src/plugins/acp.rs` is
+# Optional, behind the `acp` feature (on by default): `src/plugins/acp/mod.rs` is
 # its only consumer, so a build without that plugin should not link it.
 agent-client-protocol = { version = "2.0.0", optional = true }
 

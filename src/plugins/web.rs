@@ -16,7 +16,7 @@
 //! HTML-to-markdown reader, and the five search backends.
 //!
 //! The test is *who else would lose the code*. A Lua plugin's `wizard.http`
-//! (`src/plugins/host.rs`) is that client and that guard reached from another
+//! (`src/plugins/host/mod.rs`) is that client and that guard reached from another
 //! caller, and `generate_image` (`src/tools/image.rs`) walks the same redirect
 //! chain with a stricter hop rule. Neither has anything to do with whether the
 //! model can call `web_fetch`, and a build with `--no-default-features` still

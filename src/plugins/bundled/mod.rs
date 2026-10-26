@@ -116,22 +116,22 @@ fn bundled() -> Vec<BundledPlugin> {
     plugins.push(BundledPlugin {
         origin: "src/plugins/lua/git/plugin.lua",
         language: Language::Lua,
-        manifest: include_str!("lua/git/manifest.toml"),
-        script: include_str!("lua/git/plugin.lua"),
+        manifest: include_str!("../lua/git/manifest.toml"),
+        script: include_str!("../lua/git/plugin.lua"),
     });
     #[cfg(feature = "tool-publish")]
     plugins.push(BundledPlugin {
         origin: "src/plugins/lua/publish/plugin.lua",
         language: Language::Lua,
-        manifest: include_str!("lua/publish/manifest.toml"),
-        script: include_str!("lua/publish/plugin.lua"),
+        manifest: include_str!("../lua/publish/manifest.toml"),
+        script: include_str!("../lua/publish/plugin.lua"),
     });
     #[cfg(feature = "tool-json")]
     plugins.push(BundledPlugin {
         origin: "src/plugins/js/json/plugin.js",
         language: Language::Js,
-        manifest: include_str!("js/json/manifest.toml"),
-        script: include_str!("js/json/plugin.js"),
+        manifest: include_str!("../js/json/manifest.toml"),
+        script: include_str!("../js/json/plugin.js"),
     });
     plugins
 }

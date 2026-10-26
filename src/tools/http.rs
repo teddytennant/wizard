@@ -11,7 +11,7 @@
 //!
 //! Three callers share this file and only one of them is the web tool:
 //!
-//! - **`src/plugins/host.rs`** — a Lua plugin's `wizard.http` is this client,
+//! - **`src/plugins/host/mod.rs`** — a Lua plugin's `wizard.http` is this client,
 //!   this guard and this cap reached from another caller. A build with no web
 //!   tool still grants `Capability::Network`, and the guarantee that grant
 //!   makes is written here.

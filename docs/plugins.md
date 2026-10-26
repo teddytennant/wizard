@@ -82,7 +82,7 @@ plugin goes through — `Entrypoint` for `wizard gui` and `Subcommand` for
 trait, the one lookup, and the HTTP client/SSRF guard/redirect walk/body cap
 that the web tools, the image downloader and a Lua plugin's `wizard.http` all
 go through), `src/text.rs`,
-`src/config.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
+`src/config/mod.rs`, `src/logging.rs`, `src/trust.rs`, `src/cli.rs`, `src/main.rs`.
 
 Two rules keep the boundary honest, and CI enforces both:
 
@@ -863,7 +863,7 @@ ratchet in `contrib/check-plugin-work.sh` guards, and it went 2536 → 2557.
 
 ## As built: the host bridge
 
-`src/plugins/host.rs` is the `HostBridge` the section above left open, and
+`src/plugins/host/mod.rs` is the `HostBridge` the section above left open, and
 every namespace on it resolves to code that already existed:
 
 | Namespace | Reached through |
@@ -1409,7 +1409,7 @@ document means by "policy and orchestration".
 
 ### How a first-party Lua plugin ships: `include_str!`
 
-`src/plugins/bundled.rs` is `compiled_in()` for Lua — one line per plugin,
+`src/plugins/bundled/mod.rs` is `compiled_in()` for Lua — one line per plugin,
 behind the same kind of cargo feature — and each line `include_str!`s both
 `plugin.lua` and `manifest.toml`. The alternative, a directory `install.sh`
 copies into `~/.wizard/plugins/`, fails three ways:
@@ -1668,7 +1668,7 @@ those two plugins is the store itself, not the host bridge.
 ## As built: two more surfaces, and what three call sites did to `entrypoint.rs`
 
 `wizard acp` and `wizard fleet` went through the door the window opened.
-`src/acp.rs` (0.6k) is `src/plugins/acp.rs` behind `--features acp`;
+`src/acp.rs` (0.6k) is `src/plugins/acp/mod.rs` behind `--features acp`;
 `src/fleet/` (2.1k) is `src/plugins/fleet/` behind `--features fleet`. Both on
 by default, both independently removable, and the section above's "the other
 three surfaces are still core" is now down to `wizard gateway` and `mcp serve`.

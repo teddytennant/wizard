@@ -2037,5 +2037,4 @@ impl Config {
 }
 
 #[cfg(test)]
-#[path = "config/tests.rs"]
 mod tests;

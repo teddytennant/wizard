@@ -26,7 +26,7 @@ Copyright (c) X.AI Corp.
 Licensed under the Apache License, Version 2.0.
 
 Ported from crates/codegen/xai-grok-pager/ and
-crates/codegen/xai-grok-pager-render/ into src/ui/grok.rs, src/skin/layout.rs
+crates/codegen/xai-grok-pager-render/ into src/ui/grok/mod.rs, src/skin/layout.rs
 and src/skin/motion.rs.
 
 --------------------------------------------------------------------------------
