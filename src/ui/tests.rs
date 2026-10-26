@@ -1687,7 +1687,8 @@ fn the_busy_row_is_the_spinner_alone_unless_a_verb_was_configured() {
     let screen = rows.join("\n");
     let mark = motion::thinking_frame(0, 0, 0);
     assert!(
-        rows.iter().any(|row| row.trim() == format!("{mark} thinking")),
+        rows.iter()
+            .any(|row| row.trim() == format!("{mark} thinking")),
         "{screen}"
     );
     // One clock, on the status line.
