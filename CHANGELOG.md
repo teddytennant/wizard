@@ -6,9 +6,15 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-10-26
+
 ### Changed
 
 - The wizard thinking spinner deals a different one-cell cycle each turn, instead of the same braille wheel.
+
+### Fixed
+
+- `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.11 in the CLI and GUI, for RUSTSEC-2026-0381 and RUSTSEC-2026-0382, and tokio 1.53.3 for RUSTSEC-2026-0386.
 
 ## [3.10.0] - 2026-10-17
 
