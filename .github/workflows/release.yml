@@ -672,16 +672,26 @@ jobs:
       #         commit -m "Update to ${GITHUB_REF_NAME#v}"
       #       git -C "aur-${pkg}" push
       #     done
+      # Pushed with a deploy key on teddytennant/homebrew-tap (write access to
+      # that one repo, nothing else) instead of a PAT. GITHUB_TOKEN cannot
+      # write to another repository, and a PAT is scoped to an account rather
+      # than a repo. The host key below is GitHub's published ed25519 key
+      # (`gh api meta --jq .ssh_keys`), pinned so nothing is trusted on first
+      # use.
       - name: Rewrite the tap formula
         env:
-          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
           set -eu
-          if [ -z "${TAP_GITHUB_TOKEN}" ]; then
-            echo "::error::TAP_GITHUB_TOKEN is not set, so teddytennant/homebrew-tap still serves the previous release. Create a fine-grained PAT scoped to homebrew-tap with Contents: read and write, then: gh secret set TAP_GITHUB_TOKEN --repo ${GITHUB_REPOSITORY}" >&2
+          if [ -z "${TAP_DEPLOY_KEY}" ]; then
+            echo "::error::TAP_DEPLOY_KEY is not set, so teddytennant/homebrew-tap still serves the previous release. Add a write deploy key to the tap, then: gh secret set TAP_DEPLOY_KEY --repo ${GITHUB_REPOSITORY} < private_key" >&2
             exit 1
           fi
-          git clone --depth 1 https://github.com/teddytennant/homebrew-tap tap
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          git clone --depth 1 git@github.com:teddytennant/homebrew-tap.git tap
           contrib/homebrew/formula.sh "$GITHUB_REF_NAME" checksums.txt > wizard.rb.new
           mv wizard.rb.new tap/Formula/wizard.rb
           cd tap
@@ -693,7 +703,7 @@ jobs:
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -m "wizard ${GITHUB_REF_NAME#v}"
-          git push "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/teddytennant/homebrew-tap" HEAD:main
+          git push origin HEAD:main
           echo "Tap formula now at ${GITHUB_REF_NAME}" >>"$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------
