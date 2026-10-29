@@ -1049,6 +1049,12 @@ name = "claude-code"
 kind = "claudecode"
 base_url = ""
 model = "sonnet"
+
+[[providers]]
+name = "cursor"
+kind = "cursor"
+base_url = ""
+model = "auto"
 "#;
     let config = Config::from_toml(raw).expect("an existing config must parse");
 
@@ -1069,12 +1075,13 @@ model = "sonnet"
             "xaioauth",
             "chatgptoauth",
             "cloudflare",
-            "claudecode"
+            "claudecode",
+            "cursor"
         ]
     );
 
     // Every kind this build installs resolves to a registered backend, and
-    // every one of them builds. This is the "all nine keep working"
+    // every one of them builds. This is the "all ten keep working"
     // assertion: a constructor that moved to the wrong module, or a
     // descriptor that was never added to the table, fails right here.
     //
@@ -1093,7 +1100,7 @@ model = "sonnet"
         resolved += 1;
     }
     // The floor is what this build installs, not a literal: the fixture
-    // above names all nine kinds, so every kind the registry answers to has
+    // above names all ten kinds, so every kind the registry answers to has
     // to be one of them and has to have resolved. A provider that silently
     // stopped registering takes `kinds()` down with it and the two sides stay
     // equal, which is why the fixture's own coverage is asserted as well.

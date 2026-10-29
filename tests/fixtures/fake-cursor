@@ -1,0 +1,37 @@
+#!/bin/sh
+# Stands in for `cursor-agent` in the cursor plugin's tests. Tests symlink it
+# into a temp directory and it answers from the files beside that symlink.
+here=$(dirname "$0")
+case "$1" in
+status)
+    if [ -e "$here/signed-in" ]; then
+        echo '{"status": "authenticated", "isAuthenticated": true}'
+    else
+        echo '{"status": "unauthenticated", "isAuthenticated": false}'
+    fi
+    ;;
+login) [ -e "$here/login-fails" ] || touch "$here/signed-in" ;;
+models) printf 'Available models\n\nauto - Auto (default)\ncomposer-2.5 - Composer 2.5\n' ;;
+*)
+    printf '%s\n' "$@" >"$here/args"
+    [ -n "$CURSOR_API_KEY" ] && echo leaked >"$here/api-key"
+    echo started >>"$here/starts"
+    workspace=
+    while [ $# -gt 0 ]; do
+        [ "$1" = --workspace ] && workspace=$2
+        shift
+    done
+    cp "$workspace/AGENTS.md" "$here/system"
+    cp "$workspace/.cursor/cli.json" "$here/permissions"
+    cat >>"$here/stdin"
+    # A turn that calls a tool through the bridge the workspace names and
+    # waits for its result.
+    if [ -e "$here/call" ]; then
+        url=$(sed 's/.*"url":"\([^"]*\)".*/\1/' "$workspace/.cursor/mcp.json")
+        auth=$(sed 's/.*"Authorization":"\([^"]*\)".*/\1/' "$workspace/.cursor/mcp.json")
+        cat "$here/call-events"
+        curl -s -X POST -H "Authorization: $auth" -d "$(cat "$here/call")" "$url" >"$here/tool-result"
+    fi
+    cat "$here/events"
+    ;;
+esac

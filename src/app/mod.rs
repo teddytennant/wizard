@@ -201,6 +201,8 @@ pub enum SetupSection {
     Gateway,
     /// Find, install and sign in Claude Code, then switch to it.
     ClaudeCode,
+    /// Find and sign in `cursor-agent`, then switch to it.
+    Cursor,
 }
 
 /// Full TUI state. [`crate::ui::draw`] renders it; [`App::handle_event`]
@@ -3640,6 +3642,9 @@ impl App {
                                 }
                                 ProviderSetup::ClaudeCode => {
                                     self.pending_setup = Some(SetupSection::ClaudeCode);
+                                }
+                                ProviderSetup::Cursor => {
+                                    self.pending_setup = Some(SetupSection::Cursor);
                                 }
                                 // OpenAI-compatible custom — everything is
                                 // prompted, starting with the name.

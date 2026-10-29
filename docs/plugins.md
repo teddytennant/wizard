@@ -735,6 +735,7 @@ nothing else can put a kind in it.
 | `provider-xai` | `xai`, `xaioauth` | `src/plugins/xai.rs` |
 | `provider-chatgpt` | `chatgptoauth` | `src/plugins/chatgpt/` |
 | `provider-claude-code` | `claudecode` | `src/plugins/claude_code/` |
+| `provider-cursor` | `cursor` | `src/plugins/cursor/` |
 
 All on by default; a stock build behaves exactly as before.
 

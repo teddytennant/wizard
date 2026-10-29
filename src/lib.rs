@@ -459,8 +459,14 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             "claude" => tokio::task::spawn_blocking(plugins::claude_code::setup::ensure_ready)
                 .await?
                 .map(|_| 0),
+            #[cfg(feature = "provider-cursor")]
+            "cursor" => tokio::task::spawn_blocking(plugins::cursor::setup::ensure_ready)
+                .await?
+                .map(|_| 0),
             other => {
-                anyhow::bail!("unknown login provider '{other}' (supported: xai, chatgpt, claude)")
+                anyhow::bail!(
+                    "unknown login provider '{other}' (supported: xai, chatgpt, claude, cursor)"
+                )
             }
         };
     }

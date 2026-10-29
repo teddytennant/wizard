@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- **Cursor as a provider.** `/provider` has a **Cursor (subscription)** row, and `wizard --login cursor` signs in. Every request is made by your own `cursor-agent`, so Wizard holds no Cursor credential, and Wizard's tools reach the model over a local MCP server while Wizard runs them. `/model` lists what `cursor-agent models` does. See [getting-started.md](docs/getting-started.md#cursor-subscription).
+
 ## [3.10.1] - 2026-10-26
 
 ### Changed

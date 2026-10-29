@@ -87,6 +87,7 @@ default = [
   "provider-chatgpt",
   "provider-claude-code",
   "provider-cloudflare",
+  "provider-cursor",
   "provider-llamacpp",
   "provider-ollama",
   "provider-openai",
@@ -160,6 +161,11 @@ provider-claude-code = []
 
 # Cloudflare Workers AI. `kind = "cloudflare"`.
 provider-cloudflare = []
+
+# Cursor models on a Cursor subscription. `kind = "cursor"`. Every request is
+# made by the user's own `cursor-agent` binary, run as a child process; Wizard
+# holds no Cursor credential. See `src/plugins/cursor/`.
+provider-cursor = []
 
 # Local llama.cpp `llama-server`. `kind = "llamacpp"`. This is the backend
 # `Config::active` synthesizes when nothing is configured, so a build without

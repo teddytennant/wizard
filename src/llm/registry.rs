@@ -142,6 +142,8 @@ impl ProviderKind {
     pub const CLOUDFLARE: Self = Self::known("cloudflare");
     /// Claude on a Pro or Max subscription, through the user's own Claude Code.
     pub const CLAUDE_CODE: Self = Self::known("claudecode");
+    /// Cursor models on a subscription, through the user's own `cursor-agent`.
+    pub const CURSOR: Self = Self::known("cursor");
 }
 
 /// The on-disk strings a stock build's backends default to.

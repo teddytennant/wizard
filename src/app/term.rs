@@ -221,6 +221,18 @@ fn claude_code_setup() -> Result<Option<Config>> {
     Ok(None)
 }
 
+#[cfg(feature = "provider-cursor")]
+fn cursor_setup() -> Result<Option<Config>> {
+    crate::plugins::cursor::setup::run_blocking()
+}
+
+/// Never reached: the row that asks for it is offered only when the plugin is
+/// compiled in.
+#[cfg(not(feature = "provider-cursor"))]
+fn cursor_setup() -> Result<Option<Config>> {
+    Ok(None)
+}
+
 /// Suspend the TUI, run one of the setup wizards on the plain terminal, then
 /// restore the TUI and take the config it wrote. Driven by the `/setup` rows
 /// that ask questions; runs from the main loop because it owns `terminal`.
@@ -238,6 +250,7 @@ pub(super) fn run_setup_suspended(
         SetupSection::Wizard => crate::onboarding::run_full_blocking(false),
         SetupSection::Gateway => crate::onboarding::run_gateway_setup_blocking(),
         SetupSection::ClaudeCode => claude_code_setup(),
+        SetupSection::Cursor => cursor_setup(),
     };
     match setup_terminal() {
         Ok(new_terminal) => {

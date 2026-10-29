@@ -100,6 +100,8 @@ pub mod chatgpt;
 pub mod claude_code;
 #[cfg(feature = "provider-cloudflare")]
 pub mod cloudflare;
+#[cfg(feature = "provider-cursor")]
+pub mod cursor;
 #[cfg(feature = "provider-llamacpp")]
 pub mod llamacpp;
 // The Model Context Protocol, in both directions: the client that dials the
@@ -174,6 +176,8 @@ fn compiled_in() -> Vec<Arc<dyn Plugin>> {
     plugins.push(Arc::new(claude_code::ClaudeCodePlugin::new()));
     #[cfg(feature = "provider-cloudflare")]
     plugins.push(Arc::new(cloudflare::CloudflarePlugin::new()));
+    #[cfg(feature = "provider-cursor")]
+    plugins.push(Arc::new(cursor::CursorPlugin::new()));
     #[cfg(feature = "fleet")]
     plugins.push(Arc::new(fleet::FleetPlugin::new()));
     #[cfg(feature = "gateway")]
@@ -548,6 +552,11 @@ mod tests {
                 cfg!(feature = "provider-cloudflare"),
                 "cloudflare",
                 &[ProviderKind::CLOUDFLARE],
+            ),
+            (
+                cfg!(feature = "provider-cursor"),
+                "cursor",
+                &[ProviderKind::CURSOR],
             ),
             (
                 cfg!(feature = "provider-llamacpp"),

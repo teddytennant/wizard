@@ -177,6 +177,14 @@ pub const CATALOGUE: &[Entry] = &[
         present: cfg!(feature = "provider-cloudflare"),
     },
     Entry {
+        feature: "provider-cursor",
+        plugin: Some("cursor"),
+        backend: Some(Backend::Rust),
+        summary: "Cursor models on a subscription, through cursor-agent (kind = \"cursor\")",
+        default_on: true,
+        present: cfg!(feature = "provider-cursor"),
+    },
+    Entry {
         feature: "provider-llamacpp",
         plugin: Some("llamacpp"),
         backend: Some(Backend::Rust),

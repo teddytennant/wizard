@@ -60,6 +60,9 @@ pub(super) enum ProviderSetup {
     /// Claude Code's own sign-in, on the plain terminal; see
     /// [`SetupSection::ClaudeCode`](super::SetupSection::ClaudeCode).
     ClaudeCode,
+    /// `cursor-agent`'s own sign-in, on the plain terminal; see
+    /// [`SetupSection::Cursor`](super::SetupSection::Cursor).
+    Cursor,
     /// Everything prompted, starting with the name.
     Custom,
     /// One of [`crate::llm::compat::PRESETS`], by index into that table. The
@@ -144,6 +147,12 @@ pub(super) fn provider_types() -> Vec<ProviderType> {
             "Pro or Max · through Claude Code",
             ProviderSetup::ClaudeCode,
             ProviderKind::CLAUDE_CODE,
+        ),
+        row(
+            "Cursor (subscription)",
+            "Cursor models · through cursor-agent",
+            ProviderSetup::Cursor,
+            ProviderKind::CURSOR,
         ),
         row(
             "OpenAI-compatible — custom",
@@ -344,6 +353,7 @@ mod tests {
                 cfg!(feature = "provider-cloudflare"),
                 ProviderKind::CLOUDFLARE,
             ),
+            (cfg!(feature = "provider-cursor"), ProviderKind::CURSOR),
             (cfg!(feature = "provider-openai"), ProviderKind::OPENAI),
             (cfg!(feature = "provider-openai"), ProviderKind::OPENROUTER),
             (cfg!(feature = "provider-xai"), ProviderKind::XAI),
@@ -386,6 +396,7 @@ mod tests {
                 }
                 ProviderSetup::Anthropic => ProviderKind::ANTHROPIC,
                 ProviderSetup::ClaudeCode => ProviderKind::CLAUDE_CODE,
+                ProviderSetup::Cursor => ProviderKind::CURSOR,
             };
             assert_eq!(row.kind, expected, "{}", row.label);
         }
@@ -398,6 +409,7 @@ mod tests {
         feature = "provider-anthropic",
         feature = "provider-claude-code",
         feature = "provider-cloudflare",
+        feature = "provider-cursor",
         feature = "provider-openai",
         feature = "provider-xai",
     ))]
@@ -411,6 +423,7 @@ mod tests {
             "OpenAI — API key",
             "Anthropic (Claude) — API key",
             "Claude (subscription)",
+            "Cursor (subscription)",
             "OpenAI-compatible — custom",
         ];
         assert_eq!(&labels[..fixed.len()], &fixed);

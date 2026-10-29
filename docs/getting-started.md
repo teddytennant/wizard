@@ -413,6 +413,12 @@ Tokens land in `~/.wizard/chatgpt_oauth.json` (mode 0600). On success Wizard add
 
 Every request goes through Claude Code: Wizard starts your `claude` binary, keeps it running for the conversation, and reads its output. It never reads Claude Code's credentials and never calls Anthropic itself. Wizard's own prompt, tools and permission prompts stay in charge. The model calls Wizard's tools natively: Claude Code is given their descriptions over a local connection only it can use, and Wizard runs each call itself. `/model` takes Claude Code's aliases (`sonnet`, `opus`, `haiku`) or a full model id. The provider is stored as `kind = "claudecode"`. Without a terminal to ask on, a missing install or sign-in fails with the command to run.
 
+### Cursor subscription
+
+`/provider`, then **Add provider**, then **Cursor (subscription)** runs Wizard on your Cursor plan. It needs [`cursor-agent`](https://cursor.com/cli) installed and signed in; if it is missing Wizard prints Cursor's install command, and if it is signed out Wizard starts `cursor-agent login`. `wizard --login cursor` repeats the sign-in.
+
+Every request goes through `cursor-agent -p`, which Wizard starts in a throwaway workspace. Wizard's system prompt goes in as that workspace's `AGENTS.md`, Cursor's own shell, file and web tools are denied, and Wizard's tools reach the model as an MCP server only that process can use, so Wizard still runs every tool itself. It never reads Cursor's credentials. `/model` takes any id from `cursor-agent models`, and the default is `auto`. Two limits come from `cursor-agent`, which has no flag to remove its tools or replace its prompt: the model can still see its disabled tools, and a tool that runs longer than about 50 seconds is reported to the model as still running while Wizard finishes it and replays the result on the next turn. The provider is stored as `kind = "cursor"`.
+
 ### Signing in over SSH
 
 Both providers redirect to a fixed loopback address — `127.0.0.1:56121/callback` for xAI, `localhost:1455/auth/callback` for ChatGPT — and loopback belongs to whichever machine opens the browser. Over SSH that is your laptop, not the box running the sign-in, so the redirect never reaches the listener. `wizard --login` notices the remote session and prints both ways through:

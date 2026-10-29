@@ -45,6 +45,7 @@ PLUGINS=(
     provider-chatgpt
     provider-claude-code
     provider-cloudflare
+    provider-cursor
     provider-llamacpp
     provider-ollama
     provider-openai
