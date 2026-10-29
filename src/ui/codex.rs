@@ -571,7 +571,8 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
     }
     // Every cell carries the same two-column `• ` / `› ` prefix.
     app.text_origins.borrow_mut().extend(
-        (0..visible.len() as u16).map(|offset| (area.y + offset, area.x + LIVE_PREFIX_COLS)),
+        (0..visible.len() as u16)
+            .map(|offset| (area.y + offset, area.x + LIVE_PREFIX_COLS, area.right())),
     );
 
     let first_row_width = visible.first().map(|line| line.width() as u16).unwrap_or(0);

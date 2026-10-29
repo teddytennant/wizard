@@ -205,6 +205,9 @@ pub enum SetupSection {
     Cursor,
 }
 
+/// How long the "N characters copied" badge stays up after a drag-copy.
+const COPIED_FOR: Duration = Duration::from_secs(3);
+
 /// Full TUI state. [`crate::ui::draw`] renders it; [`App::handle_event`]
 /// mutates it.
 #[derive(Debug)]
@@ -298,11 +301,12 @@ pub struct App {
     /// The cells of the jump-to-bottom pill in the last-drawn frame, or `None`
     /// when the transcript is at its tail. A click inside returns there.
     pub jump_hit: std::cell::Cell<Option<ratatui::layout::Rect>>,
-    /// Where the text starts on each transcript row of the last-drawn frame,
-    /// as `(row, column)`. Everything left of it is gutter (margin, marker,
-    /// rail), so a drag-copy skips those cells. Rebuilt every frame like
+    /// Where the text sits on each transcript row of the last-drawn frame, as
+    /// `(row, first column, end column exclusive)`. Everything left of the
+    /// first is gutter (margin, marker, rail) and everything from the end on is
+    /// the scrollbar, so a drag-copy skips both. Rebuilt every frame like
     /// `card_hits`, and empty while an overlay covers the transcript.
-    pub text_origins: std::cell::RefCell<Vec<(u16, u16)>>,
+    pub text_origins: std::cell::RefCell<Vec<(u16, u16, u16)>>,
     /// What this terminal can draw an image with, and every image it has drawn
     /// recently. Starts at the half-block floor so a frame can be rendered
     /// before anything has asked the terminal; `run_tui` replaces it with
@@ -409,6 +413,9 @@ pub struct App {
     /// because a saved draft with no position (or the reverse) is not a state
     /// the recall can be in.
     history_browse: Option<HistoryBrowse>,
+    /// How many characters the last drag-copy put on the clipboard, and when.
+    /// Drawn on the composer's top rule until [`COPIED_FOR`] has passed.
+    pub copied: Option<(usize, Instant)>,
     /// When the in-flight turn started (drives the elapsed-time display).
     pub turn_started: Option<Instant>,
     /// How long the turn that last finished ran.
@@ -661,6 +668,7 @@ impl App {
             console_pending: None,
             history: Vec::new(),
             history_browse: None,
+            copied: None,
             turn_started: None,
             turn_took: Duration::ZERO,
             rebuilding: None,
@@ -2952,6 +2960,12 @@ impl App {
             }
             Event::Tick => {
                 self.tick = self.tick.wrapping_add(1);
+                if self
+                    .copied
+                    .is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR)
+                {
+                    self.copied = None;
+                }
                 // Keep the dashboard's session list current while it's open.
                 if self.show_dashboard {
                     // List is cheap (small files); peek reads a transcript tail

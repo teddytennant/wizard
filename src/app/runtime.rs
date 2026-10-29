@@ -1668,8 +1668,12 @@ fn copy_app_selection(terminal: &mut Tui, app: &mut App) {
             app.selection = None;
         } else {
             match copy_to_clipboard(&text) {
-                Ok(Some(notice)) => app.notice(notice),
-                Ok(None) => {}
+                Ok(notice) => {
+                    app.copied = Some((text.chars().count(), Instant::now()));
+                    if let Some(notice) = notice {
+                        app.notice(notice);
+                    }
+                }
                 Err(err) => {
                     app.notice(format!("could not copy selection: {err:#}"));
                 }

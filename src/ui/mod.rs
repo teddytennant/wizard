@@ -506,17 +506,23 @@ fn cell_is_word(cell: &ratatui::buffer::Cell) -> bool {
 }
 
 /// Visible text of row `y`, gutter skipped via `origins`. Triple-click uses this.
-pub(super) fn line_selection(buf: &Buffer, y: u16, origins: &[(u16, u16)]) -> Option<Selection> {
+pub(super) fn line_selection(
+    buf: &Buffer,
+    y: u16,
+    origins: &[(u16, u16, u16)],
+) -> Option<Selection> {
     let area = buf.area;
     if y >= area.height {
         return None;
     }
-    let start = origins
+    let (start, right) = origins
         .iter()
-        .find(|&&(row, _)| row == y)
-        .map_or(0, |&(_, col)| col)
-        .min(area.width.saturating_sub(1));
-    let mut end = area.width.saturating_sub(1);
+        .find(|&&(row, _, _)| row == y)
+        .map_or((0, area.width), |&(_, left, right)| {
+            (left, right.min(area.width))
+        });
+    let start = start.min(area.width.saturating_sub(1));
+    let mut end = right.saturating_sub(1).max(start);
     while end > start {
         let blank = buf
             .cell(Position::new(end, y))
@@ -568,19 +574,22 @@ pub(super) fn selection_rows(
 ///
 /// `origins` is the frame's [`App::text_origins`](crate::app::App): on a
 /// transcript row, the cells left of the text are gutter (the side margin,
-/// the `· `/`❯ `/`• ` marker, the grok rail) and are not copied. Shared
-/// leading spaces across the selected rows are then stripped too, which is
+/// the `· `/`❯ `/`• ` marker, the grok rail) and are not copied, and the
+/// cells from the recorded end on are the scrollbar, which is not either.
+/// Shared leading spaces across the selected rows are then stripped too, which is
 /// what handles a code block's inset and rows with no recorded origin.
-pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16)]) -> String {
+pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16, u16)]) -> String {
     let area = buf.area;
     let rows = selection_rows(selection, area.width, area.height);
     let mut lines: Vec<String> = Vec::with_capacity(rows.len());
     let mut starts: Vec<u16> = Vec::with_capacity(rows.len());
     for (y, start, end) in rows {
-        let start = origins
+        let (start, end) = origins
             .iter()
-            .find(|&&(row, _)| row == y)
-            .map_or(start, |&(_, x)| start.max(x));
+            .find(|&&(row, _, _)| row == y)
+            .map_or((start, end), |&(_, left, right)| {
+                (start.max(left), end.min(right))
+            });
         let mut line = String::new();
         for x in start..end {
             if let Some(cell) = buf.cell(Position::new(x, y)) {
@@ -722,7 +731,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) {
         indents[start..end]
             .iter()
             .enumerate()
-            .map(|(offset, indent)| (inner.y + offset as u16, inner.x + indent)),
+            .map(|(offset, indent)| (inner.y + offset as u16, inner.x + indent, inner.right())),
     );
 
     // Before the move: the scroll hint below needs to know whether the top row
@@ -2205,6 +2214,31 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
     }
 }
 
+/// "N characters copied", right-aligned on `row`, for a few seconds after a
+/// drag-copy. Painted over the rule rather than the transcript so it never
+/// hides text.
+fn draw_copied(frame: &mut Frame, app: &App, row: Rect) {
+    let Some((count, _)) = app.copied else {
+        return;
+    };
+    let noun = if count == 1 {
+        "character"
+    } else {
+        "characters"
+    };
+    let label = format!(" {count} {noun} copied ");
+    let width = label.width() as u16;
+    if width + 4 > row.width {
+        return;
+    }
+    let slot = Rect {
+        x: row.right() - width - 2,
+        width,
+        ..row
+    };
+    frame.render_widget(Paragraph::new(Span::styled(label, muted())), slot);
+}
+
 /// The composer's top rule while a command owns it: a labelled band naming
 /// what Enter is typing into.
 ///
@@ -2397,6 +2431,7 @@ pub(super) fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
             // status line is the row under the lower one.
             frame.render_widget(Paragraph::new(Text::from(vec![head])), top_row(area));
             frame.render_widget(Paragraph::new(Text::from(vec![rule])), bottom_row(area));
+            draw_copied(frame, app, top_row(area));
             (inset(area), 1usize)
         }
         // A box in the theme's border style. The console banner becomes its
@@ -3357,7 +3392,7 @@ pub(super) fn draw_pane(frame: &mut Frame, app: &App, pane: &SubagentPane, area:
         indents[start..end]
             .iter()
             .enumerate()
-            .map(|(offset, indent)| (inner.y + offset as u16, inner.x + indent)),
+            .map(|(offset, indent)| (inner.y + offset as u16, inner.x + indent, inner.right())),
     );
     frame.render_widget(
         Paragraph::new(Text::from(lines[start..end].to_vec())),

@@ -3331,9 +3331,15 @@ fn draw_scrollback(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     // Every block spends the rail and the left pad before its text.
-    app.text_origins.borrow_mut().extend(
-        (0..visible.len() as u16).map(|offset| (area.y + offset, area.x + ACCENT + PAD_LEFT)),
-    );
+    app.text_origins
+        .borrow_mut()
+        .extend((0..visible.len() as u16).map(|offset| {
+            (
+                area.y + offset,
+                area.x + ACCENT + PAD_LEFT,
+                area.right().saturating_sub(1),
+            )
+        }));
 
     let first_row_width = visible.first().map(|line| line.width() as u16).unwrap_or(0);
     frame.render_widget(Paragraph::new(Text::from(visible)), area);

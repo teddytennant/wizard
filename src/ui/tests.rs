@@ -128,8 +128,46 @@ fn word_selection_covers_the_identifier_under_the_cursor() {
 fn line_selection_skips_the_gutter_and_trailing_blanks() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
     buf.set_string(0, 0, "  hello   ", Style::default());
-    let sel = line_selection(&buf, 0, &[(0, 2)]).expect("line");
-    assert_eq!(selection_text(&buf, &sel, &[(0, 2)]), "hello");
+    let sel = line_selection(&buf, 0, &[(0, 2, 12)]).expect("line");
+    assert_eq!(selection_text(&buf, &sel, &[(0, 2, 12)]), "hello");
+}
+
+#[test]
+fn a_drag_copy_is_counted_on_the_composer_rule_until_it_expires() {
+    let _skin = crate::skin::pin(crate::skin::Skin::Wizard);
+    let mut app = App::new(crate::config::Config::default());
+    let (rows, _) = screen_at(&app, 90, 24);
+    assert!(!rows.iter().any(|row| row.contains("copied")));
+
+    app.copied = Some((142, std::time::Instant::now()));
+    let (rows, _) = screen_at(&app, 90, 24);
+    let rule = rows
+        .iter()
+        .find(|row| row.contains("142 characters copied"))
+        .expect("the count is on screen");
+    assert!(rule.starts_with('─') && rule.ends_with("─"), "{rule}");
+
+    app.copied = Some((1, std::time::Instant::now()));
+    let (rows, _) = screen_at(&app, 90, 24);
+    assert!(rows.iter().any(|row| row.contains(" 1 character copied ")));
+}
+
+#[test]
+fn a_drag_copy_leaves_the_scrollbar_column_behind() {
+    // The thumb sits in the last column. A blank row between two paragraphs
+    // used to copy as the whole width of spaces and then the thumb.
+    let mut buf = Buffer::empty(Rect::new(0, 0, 12, 3));
+    buf.set_string(2, 0, "hello", Style::default());
+    buf.set_string(11, 0, "▐", Style::default());
+    buf.set_string(11, 1, "▐", Style::default());
+    buf.set_string(2, 2, "world", Style::default());
+    let origins = [(0, 2, 10), (1, 2, 10), (2, 2, 10)];
+    assert_eq!(
+        selection_text(&buf, &sel((0, 0), (11, 2)), &origins),
+        "hello\n\nworld"
+    );
+    let line = line_selection(&buf, 1, &origins).expect("line");
+    assert_eq!(selection_text(&buf, &line, &origins), "");
 }
 
 #[test]
@@ -1829,7 +1867,7 @@ fn selection_skips_the_gutter_left_of_each_rows_text_origin() {
     buf.set_string(0, 0, " · hello", Style::default());
     buf.set_string(0, 1, "   world", Style::default());
     buf.set_string(0, 2, "     code", Style::default());
-    let origins = [(0, 3), (1, 3), (2, 3)];
+    let origins = [(0, 3, 12), (1, 3, 12), (2, 3, 12)];
     assert_eq!(
         selection_text(&buf, &sel((0, 0), (11, 2)), &origins),
         "hello\nworld\n  code"
