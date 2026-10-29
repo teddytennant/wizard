@@ -12,7 +12,7 @@ and glyphs that say something.
 
 ## Rules
 
-- **One accent, plus status colors.** The prompt glyph, the agent's `◆`, a
+- **One accent, plus status colors.** The prompt glyph and a
   focused name. Diffs and pass/fail use a sage and a dusty rose; yellow is a
   warning. Nothing else takes a hue. Emphasis elsewhere is bold or brightness.
   A single foreground cannot clear 4.5:1 on both a dark slate and a light

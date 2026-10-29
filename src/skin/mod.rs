@@ -375,7 +375,7 @@ pub struct Chrome {
 const WIZARD: Chrome = Chrome {
     blocks: Blocks {
         user: plain(Marker::hanging("❯ ", Token::Faint, true)),
-        assistant: plain(Marker::hanging("◆ ", Token::Accent, false)),
+        assistant: plain(Marker::hanging("  ", Token::Faint, false)),
         thinking: plain(Marker::hanging("◆ ", Token::Faint, false)),
         tool: plain(Marker::none()),
         notice: plain(Marker::hanging("  ", Token::Faint, false)),
