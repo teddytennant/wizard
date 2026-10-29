@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.11.2] - 2026-10-28
+
+### Fixed
+
+- The release workflow updates the Homebrew tap with a write deploy key on `homebrew-tap`. It asked for a `TAP_GITHUB_TOKEN` that was never set, so the step failed on 3.10.1, 3.11.0 and 3.11.1 and `brew upgrade` stayed a release behind until the formula was pushed by hand.
+
 ## [3.11.1] - 2026-10-28
 
 ### Changed
