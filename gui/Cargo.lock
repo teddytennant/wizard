@@ -13682,7 +13682,7 @@ dependencies = [
 
 [[package]]
 name = "zeron"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -13706,7 +13706,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-audio"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "base64 0.22.1",
  "cpal 0.18.2",
@@ -13720,7 +13720,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-client"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -13746,7 +13746,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-doc"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "chrono",
  "loro",
@@ -13760,7 +13760,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-engine"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13806,7 +13806,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-harness"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13834,14 +13834,14 @@ dependencies = [
 
 [[package]]
 name = "zeron-markdown"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "pulldown-cmark",
 ]
 
 [[package]]
 name = "zeron-mcp"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13861,7 +13861,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-mobile"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -13886,11 +13886,11 @@ dependencies = [
 
 [[package]]
 name = "zeron-orb"
-version = "3.11.0"
+version = "3.11.1"
 
 [[package]]
 name = "zeron-preview"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13918,7 +13918,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-proto"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "chrono",
  "pulldown-cmark",
@@ -13929,7 +13929,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-rpc"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -13946,7 +13946,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-sync"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "block2 0.6.2",
  "chrono",
@@ -13968,7 +13968,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-syntax"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
@@ -14002,7 +14002,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-text"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -14019,7 +14019,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-theme"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -14034,7 +14034,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-ui"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -14116,7 +14116,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-update"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -14139,11 +14139,11 @@ dependencies = [
 
 [[package]]
 name = "zeron-veil"
-version = "3.11.0"
+version = "3.11.1"
 
 [[package]]
 name = "zeron-visual"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "base64 0.22.1",
  "gltf",
@@ -14155,7 +14155,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-visual-gpu"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "image",
  "pollster 0.4.0",
@@ -14166,7 +14166,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-voice"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "anyhow",
  "cpal 0.17.3",
@@ -14183,7 +14183,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-voice-media"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "async-trait",
  "semver",
@@ -14198,7 +14198,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-voice-session"
-version = "3.11.0"
+version = "3.11.1"
 dependencies = [
  "async-trait",
  "futures",

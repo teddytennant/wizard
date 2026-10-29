@@ -6,6 +6,18 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.11.1] - 2026-10-28
+
+### Changed
+
+- Replies in the house look no longer start with a `◆`. The text keeps its column.
+- A drag-copy puts `N characters copied` on the composer's top rule for three seconds.
+
+### Fixed
+
+- Starting the TUI read and parsed every saved session to fill the welcome card's three recent entries. With 1,750 sessions that was most of a 1.7 s wait before the first frame. It reads the newest few and stops.
+- A drag-copy took the scrollbar column with it, so a blank row came out as a full line of spaces ending in `▐`.
+
 ## [3.11.0] - 2026-10-28
 
 ### Added
