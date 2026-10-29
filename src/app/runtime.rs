@@ -202,10 +202,8 @@ pub async fn run_tui(
     app.handed_over = handed_over;
     app.project_root = project_root.clone();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
-        app.recent_sessions = crate::agent::session::summaries(&dir)
+        app.recent_sessions = crate::agent::session::recent_summaries(&dir, 3, &session_id)
             .into_iter()
-            .filter(|session| session.id != session_id)
-            .take(3)
             .map(|session| {
                 let summary = session
                     .summary

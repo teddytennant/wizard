@@ -168,77 +168,96 @@ pub struct SessionSummary {
 /// message records). Best-effort: unreadable or corrupt files are dropped.
 /// Each file is scanned once for its first prompt and message count.
 pub fn summaries(dir: &Path) -> Vec<SessionSummary> {
-    if !dir.is_dir() {
-        return Vec::new();
-    }
+    let mut out: Vec<SessionSummary> = session_files(dir)
+        .iter()
+        .filter_map(|(id, path)| summarize(id, path))
+        .collect();
+    out.sort_by(|a, b| b.id.cmp(&a.id));
+    out
+}
+
+/// The `limit` newest non-empty sessions other than `skip`, newest first.
+/// Unlike [`summaries`] it stops reading once it has them, so the cost does
+/// not grow with the number of sessions on disk; the welcome card calls this
+/// before the first paint.
+pub fn recent_summaries(dir: &Path, limit: usize, skip: &str) -> Vec<SessionSummary> {
+    let mut files = session_files(dir);
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files
+        .iter()
+        .filter(|(id, _)| id != skip)
+        .filter_map(|(id, path)| summarize(id, path))
+        .take(limit)
+        .collect()
+}
+
+/// `(id, path)` of every `.jsonl` file in `dir`; empty if it cannot be read.
+fn session_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "jsonl") {
-            continue;
-        }
-        let Some(id) = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-        else {
-            continue;
-        };
-        let Ok(file) = std::fs::File::open(&path) else {
-            continue;
-        };
-        let mut messages = 0usize;
-        let mut marker_prompt: Option<String> = None;
-        let mut first_user: Option<String> = None;
-        let mut cwd: Option<String> = None;
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if line.trim().is_empty() {
-                continue;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "jsonl") {
+                return None;
             }
-            match serde_json::from_str::<SessionLine>(&line) {
-                Ok(SessionLine::Message(record)) => {
-                    // System notes (hook context, background-task notes) are
-                    // not conversation: a session holding nothing else has had
-                    // nothing said in it, and listing it as "(no prompt)" is
-                    // noise in both the /resume picker and the GUI sidebar.
-                    if record.message.role != Role::System {
-                        messages += 1;
-                    }
-                    if first_user.is_none() && record.message.role == Role::User {
-                        first_user = record.message.text().lines().next().map(str::to_string);
-                    }
-                }
-                Ok(SessionLine::Marker(marker)) => {
-                    if marker_prompt.is_none() && !marker.prompt.is_empty() {
-                        marker_prompt = Some(marker.prompt);
-                    }
-                }
-                Ok(SessionLine::Header(header)) => {
-                    if cwd.is_none() {
-                        cwd = Some(header.cwd);
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-        if messages == 0 {
+            let id = path.file_stem()?.to_string_lossy().into_owned();
+            Some((id, path))
+        })
+        .collect()
+}
+
+/// Scan one session file; `None` if it is unreadable or holds no messages.
+fn summarize(id: &str, path: &Path) -> Option<SessionSummary> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut messages = 0usize;
+    let mut marker_prompt: Option<String> = None;
+    let mut first_user: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
             continue;
         }
-        let summary = marker_prompt
-            .or(first_user)
-            .unwrap_or_else(|| "(no prompt)".to_string());
-        out.push(SessionSummary {
-            id,
-            summary,
-            messages,
-            cwd,
-        });
+        match serde_json::from_str::<SessionLine>(&line) {
+            Ok(SessionLine::Message(record)) => {
+                // System notes (hook context, background-task notes) are
+                // not conversation: a session holding nothing else has had
+                // nothing said in it, and listing it as "(no prompt)" is
+                // noise in both the /resume picker and the GUI sidebar.
+                if record.message.role != Role::System {
+                    messages += 1;
+                }
+                if first_user.is_none() && record.message.role == Role::User {
+                    first_user = record.message.text().lines().next().map(str::to_string);
+                }
+            }
+            Ok(SessionLine::Marker(marker)) => {
+                if marker_prompt.is_none() && !marker.prompt.is_empty() {
+                    marker_prompt = Some(marker.prompt);
+                }
+            }
+            Ok(SessionLine::Header(header)) => {
+                if cwd.is_none() {
+                    cwd = Some(header.cwd);
+                }
+            }
+            Err(_) => {}
+        }
     }
-    // Ids are zero-padded timestamps, so lexical order is chronological.
-    out.sort_by(|a, b| b.id.cmp(&a.id));
-    out
+    if messages == 0 {
+        return None;
+    }
+    let summary = marker_prompt
+        .or(first_user)
+        .unwrap_or_else(|| "(no prompt)".to_string());
+    Some(SessionSummary {
+        id: id.to_string(),
+        summary,
+        messages,
+        cwd,
+    })
 }
 
 /// Handle to one session file. Append-only; cheap to clone the path out of.
@@ -1005,6 +1024,28 @@ mod tests {
         assert_eq!(list[0].messages, 1);
         assert_eq!(list[1].summary, "fix the parser");
         assert_eq!(list[1].messages, 2);
+    }
+
+    #[test]
+    fn recent_summaries_takes_the_newest_and_skips_the_current_session() {
+        let tmp = TempDir::new();
+        for (id, prompt) in [
+            ("2026-06-09T08-00-00", "oldest"),
+            ("2026-06-09T09-00-00", "middle"),
+            ("2026-06-09T10-00-00", "newest"),
+        ] {
+            let session = Session::create(&tmp.0).unwrap();
+            std::fs::rename(session.path(), tmp.0.join(format!("{id}.jsonl"))).unwrap();
+            let session = Session::open_by_id(&tmp.0, id).unwrap().unwrap();
+            session.append(&ChatMessage::user(prompt)).unwrap();
+        }
+        // Empty sessions do not count toward the limit.
+        Session::create(&tmp.0).unwrap();
+
+        let list = recent_summaries(&tmp.0, 2, "2026-06-09T10-00-00");
+        let ids: Vec<&str> = list.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["2026-06-09T09-00-00", "2026-06-09T08-00-00"]);
+        assert!(recent_summaries(&tmp.0.join("missing"), 3, "").is_empty());
     }
 
     #[test]
