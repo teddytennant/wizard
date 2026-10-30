@@ -118,7 +118,7 @@ fn load_with(project_root: &Path, globals: &[PathBuf]) -> Option<String> {
     files.extend(chain.into_iter().map(|path| (path, Includes::Confined)));
 
     for (path, _) in &files {
-        let global = global == Some(path.as_path());
+        let global = globals.iter().any(|g| g == path);
         crate::hooks::emit_detached(
             crate::hooks::event::HookEvent::InstructionsLoaded,
             Some("session_start".to_string()),
