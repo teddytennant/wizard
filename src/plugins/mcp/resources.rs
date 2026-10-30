@@ -174,7 +174,32 @@ impl Tool for ReadResourceTool {
             Err(err) if super::is_method_not_found(&err) => Ok(ToolOutput::error(format!(
                 "Server \"{server}\" does not support resources"
             ))),
+            // oracle: the real tool answers an unknown URI (-32002) with an
+            // ordinary result, not an error, and tells the model what to do next.
+            Err(err) if format!("{err:#}").contains("JSON-RPC error -32002") => {
+                Ok(ToolOutput::ok(not_found_text(&uri)))
+            }
             Err(err) => Ok(ToolOutput::error(format!("{err:#}"))),
         }
+    }
+}
+
+fn not_found_text(uri: &str) -> String {
+    format!(
+        "Resource not found: {uri} \u{2014} it may have been deleted or the URI is stale. \
+         Re-run {LIST_NAME} to refresh."
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_resource_reads_like_the_real_tools_answer() {
+        assert_eq!(
+            not_found_text("test://missing"),
+            "Resource not found: test://missing \u{2014} it may have been deleted or the URI is stale. Re-run ListMcpResourcesTool to refresh."
+        );
     }
 }
