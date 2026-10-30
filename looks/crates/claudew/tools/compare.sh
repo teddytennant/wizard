@@ -4,6 +4,8 @@
 #   crates/claudew/tools/compare.sh                  the look against tests/fixtures/ref
 #   REF=live crates/claudew/tools/compare.sh         capture the real `claude` first
 #   REF=live SAVE=1 crates/claudew/tools/compare.sh  ... and store it as the new fixtures
+#   REF=fake crates/claudew/tools/compare.sh         the same against a fake Anthropic server, in a
+#                                                    HOME of its own: no account, no ~/.claude
 #
 #   WIZARD_BIN=path/to/wizard crates/claudew/tools/compare.sh
 #                                                    ... and the live-Wizard scenes (live.py)
@@ -47,22 +49,41 @@ printf 'fn main() {\n    println!("hello");\n}\n' > "$xcwd/main.rs"
 (cd "$root" && cargo build -q -p claudew)
 bin="${CARGO_TARGET_DIR:-$root/target}/debug/claudew"
 
-if [ "${REF:-}" = live ]; then
+# refrun runs a reference capture. REF=fake gives it a HOME of its own and an Anthropic
+# endpoint that is fake_anthropic.py, so nothing reaches an account or ~/.claude.
+refrun() { "$@"; }
+if [ "${REF:-}" = fake ]; then
+    port=${FAKE_PORT:-18997}
+    fakehome="$work/claude-ref-home"
+    mkdir -p "$fakehome"
+    key=sk-ant-api03-fake00000000000000000000000000000000000000
+    python3 "$here/fake_anthropic.py" "$port" "$work/fake-anthropic.log" &
+    fakepid=$!
+    trap 'kill $fakepid' EXIT
+    cat > "$fakehome/.claude.json" <<EOF
+{"hasCompletedOnboarding": true, "theme": "dark", "customApiKeyResponses": {"approved": ["$(printf %s "$key" | tail -c 20)"], "rejected": []},
+ "projects": {"$cwd": {"hasTrustDialogAccepted": true}, "$xcwd": {"hasTrustDialogAccepted": true}}}
+EOF
+    fakeenv="ANTHROPIC_BASE_URL=http://127.0.0.1:$port ANTHROPIC_API_KEY=$key DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+    refrun() { env HOME="$fakehome" LOOK_ENV="$fakeenv" "$@"; }
+fi
+
+if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     ref="$work/ref"
     claude=${CLAUDE_BIN:-claude}
     cmd="$claude --setting-sources project --strict-mcp-config --permission-mode default --model haiku"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\",\"theme\":\"light\"}'" --cwd "$cwd" --out "$ref" --group light --sizes "$sizes"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn --sizes "$sizes" \
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\",\"theme\":\"light\"}'" --cwd "$cwd" --out "$ref" --group light --sizes "$sizes"
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn --sizes "$sizes" \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn2 --sizes 80x24,120x40 \
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn2 --sizes 80x24,120x40 \
         --before "rm -rf w.txt .git"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
     # the scenes live wizard is compared with cell by cell, and a session resuming them
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
-    python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared-resume --sizes 120x40
+    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared-resume --sizes 120x40
     # scrub what is personal: the account's address and organisation, the home directory
     python3 - "$ref" <<'PY'
 import glob, re, sys
@@ -113,7 +134,7 @@ python3 "$here/compare.py" "$ref" "$work/look" --report "$work/report" --sizes "
 # --version names this crate's version and the reference's
 crate_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
 # the installed claude when capturing live, the fixtures' otherwise
-if [ "${REF:-}" = live ]; then
+if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     claude_version=$("${CLAUDE_BIN:-claude}" --version | sed -n 's/^\([0-9][0-9.]*\).*/\1/p')
 else
     claude_version=$(sed 's/\x1b\[[0-9;]*m//g' "$ref/home-80x24.ansi" | sed -n 's/.*Claude Code v\([0-9.]*\).*/\1/p' | head -1)
