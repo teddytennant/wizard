@@ -173,7 +173,7 @@ Rewritten before parsing, so the agent's `run_command` gate and every surface se
 | `/output-style [name]` | Lists and switches output styles. |
 | `/skills` | Skills, their source file and rough prompt cost. |
 | `/release-notes` | The newest released section of the changelog embedded in the binary. |
-| `/keybindings [init]` | Prints, or creates, `~/.wizard/keybindings.json`. The file is read by nothing yet; see missing. |
+| `/keybindings [init]` | Prints, or creates, `~/.wizard/keybindings.json`. The file is read; see [Keys and the prompt](#keys-and-the-prompt). |
 | `/feedback [note]` | Where to report a bug and what to attach. |
 | `/schedule` | Lists `~/.wizard/schedule.toml`; `wizard schedule` manages it. |
 | `/logout <xai\|chatgpt>` | Removes the stored sign-in. The account is named on purpose. |
@@ -209,7 +209,7 @@ directory as part of the task; it does not widen a file-access sandbox, because 
 | `/branch` | Needs a copy of the session file under a new id. |
 | `/cd` | The project root is fixed for a session. `--cwd` or `--worktree` at launch. |
 | `/rename` | Sessions have no display name. |
-| `/color`, `/focus`, `/tui`, `/scroll-speed`, `/stickers`, `/radio`, `/powerup`, `/statusline` | Terminal UI work, owned elsewhere. |
+| `/color`, `/focus`, `/tui`, `/scroll-speed`, `/stickers`, `/radio`, `/powerup` | Terminal UI work, owned elsewhere. |
 | `/loop` | Closest are `/goal` and `wizard schedule`. |
 | `/sandbox` | Wizard has no OS sandbox to toggle. |
 | `/voice` | No dictation. |
@@ -297,9 +297,76 @@ since the user named them.
 
 ### Not covered
 
-- `keybindings.json`: `/keybindings init` creates the file and nothing reads it yet. Remapping needs the TUI's
-  key handling, which is another worker's code.
-- Claude Code `settings.json` (permissions, hooks, env, `statusLine`): the settings work.
+- Claude Code `settings.json` (permissions, hooks, env): the settings work. The terminal reads two keys from it,
+  `editorMode` and `statusLine`, see below.
 - `.claude/settings.json` plugin enablement for Wizard-installed plugins: those are enabled by being installed;
   `/plugin disable` turns one off.
 - `!` commands inside command files and `allowed-tools`/`model` frontmatter on commands.
+
+## Keys and the prompt
+
+Compared against Claude Code 2.1.314, driven through tmux with no account (`looks/crates/claudew/tools`).
+The same engines serve the house terminal UI and `wizard-ui-claude`: `src/vim.rs` and `src/keybindings.rs`
+are compiled into both, so the two cannot read a key differently.
+
+### Vim mode
+
+`editorMode: "vim"` in `~/.claude/settings.json`, the project's `.claude/settings.json` or its
+`settings.local.json` turns it on in both UIs; so does `/vim`, which also keeps the choice (`[ui] vim` in the
+house UI, `editorMode` in `~/.claude/settings.json` in the claude look). The prompt starts in INSERT, Esc goes
+to NORMAL, Enter submits from either.
+
+Present: `h j k l`, `w b e W B E`, `0 ^ $`, `gg G` with a count, `f F t T` and `; ,`, `%`; the operators `d c y`
+with a motion, doubled (`dd`), or a text object (`iw aw iW aW`, quotes, `( [ { <`); `x r s S D C Y p P J ~ u .`,
+`>> <<`, `i a I A o O`, counts, and VISUAL and VISUAL LINE (`v V`, motions, `d x y c s p r ~ u U > < J o`, text
+objects). `j` and `k` at the first or last line recall history. `-- INSERT --`, `-- VISUAL --` and
+`-- VISUAL LINE --` show in the footer; NORMAL shows nothing, as in Claude Code.
+
+How it was checked: `tests/fixtures/vim-cases.tsv` holds 500 key sequences. `looks/crates/claudew/tools/vimdiff.py`
+typed each into the real 2.1.314 in vim mode and read back the prompt and the cursor (`vim-claude.tsv`);
+`vim::tests::matches_claude_code_2_1_314` replays them against the engine. Where Claude Code does something
+other than vim, the engine follows Claude Code: `F` and `T` operators take the character under the cursor, `<<`
+removes up to two blanks, `w` on the last word rests one past it, `dw` on an empty line removes the line break,
+`d1G` means line 1, a change is two undo steps (the deletion, then what was typed), typing is an undo step of its
+own. One case it does not follow: `3dd` on exactly three lines leaves the text alone in 2.1.314 (`2dd` and `5dd`
+delete), which looks like a bug there; the list of exceptions is `NOT_FOLLOWED` in `src/vim_tests.rs`.
+
+Not covered: `vimInsertModeRemaps`, `gj`/`gk` on soft-wrapped lines (they move by logical line), Ctrl+V block mode
+(Claude Code has none either), and graphemes (the engine moves by `char`).
+
+### keybindings.json
+
+Read from `~/.wizard/keybindings.json` (what `/keybindings init` writes), then `~/.claude/keybindings.json`, then
+the project's `.claude/keybindings.json`; later wins. Changes are picked up on the next key, no restart.
+
+The format is Claude Code's: `bindings` blocks of `{ "context": "Chat", "bindings": { "ctrl+k": "chat:stash",
+"ctrl+s": null } }`. `null` unbinds a default. Modifiers `ctrl`, `alt`/`opt`/`meta`, `shift`, `cmd`; a space makes
+a chord that has three seconds per step; `command:<name>` runs a slash command. Unknown contexts, actions and
+the reserved keys (`ctrl+c`, `ctrl+d`, `ctrl+m`, `ctrl+[`, `ctrl+i`, `ctrl+h`) are skipped with a warning and the
+default stays.
+
+What runs: `app:exit`, `app:toggleTodos`, `app:toggleTranscript`, `history:search`, `history:previous`,
+`history:next`, `chat:cancel`, `chat:cycleMode`, `chat:modelPicker`, `chat:submit`, `chat:newline`,
+`chat:externalEditor`, `chat:clearInput`, `command:<name>` in the house UI; the claude look also has `chat:undo`,
+`chat:stash`, `chat:sendNow`, the autocomplete and confirm actions and `transcript:exit`. An action Wizard has no
+use for is accepted and does nothing. The `?` panel shows a key as rebound. Not read: `Footer`, `Agents`, `Pane`
+and the other contexts of screens Wizard does not have.
+
+### Status line
+
+`statusLine` in the same settings files: `{ "type": "command", "command": "...", "padding": 0,
+"refreshInterval": 5 }`. In the house UI the command runs with Claude Code's JSON on stdin (`session_id`,
+`transcript_path`, `model`, `workspace`, `cwd`, `version`, `output_style`, `cost`, `context_window`,
+`exceeds_200k_tokens`, and `vim.mode` when vim mode is on), `COLUMNS`, `LINES` and `CLAUDE_CODE_CHILD_SESSION=1`
+in its environment, and its lines (up to four, ANSI colour kept) are drawn under the composer, above the status
+bar. It runs on start, after each turn, on a vim mode change and on the timer, debounced to 300 ms, in a thread
+with a five second limit. `/statusline <command>` sets it, `/statusline off` removes it, `/statusline` says what
+is set. Not in the payload: `cost.total_cost_usd` is 0, no rate limits, no `prompt_cache`, no PR or worktree
+fields. The claude look does not run it yet.
+
+### Footer, cursor, placeholder
+
+`← for agents` follows `? for shortcuts` on an empty prompt, and ← opens `/agents`. The terminal cursor is hidden
+and an inverse cell is painted where it is, as 2.1.314 does. The `Try "..."` example is kept: 2.1.314 fills it from
+a cache that only a signed-in account refreshes, so a capture with a made-up key shows none and the one in
+`tests/fixtures/ref` (a subscription) shows it.

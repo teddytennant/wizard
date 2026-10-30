@@ -1,7 +1,8 @@
 //! `keybindings.json`, the way Claude Code reads it.
 //!
 //! The file lives at `~/.claude/keybindings.json` (and `.claude/keybindings.json` in the
-//! project, which is read after it and wins):
+//! project, which is read after it and wins; `~/.wizard/keybindings.json`, which
+//! `/keybindings init` writes, is read before both):
 //!
 //! ```json
 //! { "bindings": [ { "context": "Chat", "bindings": { "ctrl+k": "chat:stash", "ctrl+s": null } } ] }
@@ -362,7 +363,9 @@ impl Keymap {
     /// [`Keymap::reload`].
     pub fn load(home: &Path, project: &Path) -> Keymap {
         let mut km = Keymap::new();
+        // the file `/keybindings init` writes comes first, so Claude's own files win over it
         km.files = vec![
+            (home.join(".wizard/keybindings.json"), None),
             (home.join(".claude/keybindings.json"), None),
             (project.join(".claude/keybindings.json"), None),
         ];

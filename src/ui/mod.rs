@@ -2567,6 +2567,11 @@ pub(super) fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let chars = composer_chars(app);
     let cursor = app.cursor.min(chars.len());
     let normal = app.vim.is_normal();
+    // the selection, unless the composer is showing something other than the text (masked)
+    let visual = app
+        .vim
+        .selection(&app.input, app.cursor)
+        .filter(|_| chars.len() == app.input.chars().count());
 
     let rows = wrap_rows(&chars, budget);
     let (crow, ccol) = cursor_visual(&rows, cursor);
@@ -2603,7 +2608,24 @@ pub(super) fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         };
         let mut spans = vec![Span::raw(" ".repeat(pad)), leading];
 
-        if normal && is_cursor_row {
+        if let Some((from, to)) = visual {
+            // VISUAL: the selection is drawn reversed, the cursor's cell with it, so there is
+            // no separate caret.
+            let mut run = String::new();
+            let mut on = false;
+            for (k, ch) in row.iter().enumerate() {
+                let selected = rs + k >= from && rs + k < to;
+                if selected != on && !run.is_empty() {
+                    spans.push(Span::styled(
+                        std::mem::take(&mut run),
+                        if on { block } else { Style::new() },
+                    ));
+                }
+                on = selected;
+                run.push(*ch);
+            }
+            spans.push(Span::styled(run, if on { block } else { Style::new() }));
+        } else if normal && is_cursor_row {
             // Vim Normal mode paints its own block cursor (reversed cell) so the
             // mode is legible without a hardware caret.
             let rel = ccol.min(row.len());
