@@ -175,7 +175,7 @@ fn selection_highlight_uses_reverse_on_house_cells() {
     let _pinned = theme::pin(theme::minimal());
     let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
     buf.set_string(0, 0, "abcd", Style::default());
-    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1));
+    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1), &[]);
     assert!(
         buf.cell(Position::new(1, 0))
             .unwrap()
@@ -193,6 +193,31 @@ fn selection_highlight_uses_reverse_on_house_cells() {
 }
 
 #[test]
+fn the_highlight_covers_exactly_the_cells_a_copy_takes() {
+    // Margin and marker on the left, a scrollbar thumb on the right, blanks
+    // after the text. None of them is copied, so none of them is lit.
+    let _pinned = theme::pin(theme::minimal());
+    let mut buf = Buffer::empty(Rect::new(0, 0, 14, 2));
+    buf.set_string(0, 0, "  hello      ▐", Style::default());
+    buf.set_string(0, 1, "  world      ▐", Style::default());
+    let origins = [(0, 2, 13), (1, 2, 13)];
+    let selection = sel((0, 0), (13, 1));
+    let area = buf.area;
+    paint_selection(&mut buf, &selection, area, &origins);
+    let lit = |x: u16, y: u16| {
+        buf.cell(Position::new(x, y))
+            .unwrap()
+            .modifier
+            .contains(Modifier::REVERSED)
+    };
+    for y in 0..2 {
+        let row: String = (0..14).map(|x| if lit(x, y) { '#' } else { '.' }).collect();
+        assert_eq!(row, "..#####.......", "row {y}");
+    }
+    assert_eq!(selection_text(&buf, &selection, &origins), "hello\nworld");
+}
+
+#[test]
 fn selection_highlight_swaps_painted_backgrounds() {
     // Grok paints BgBase on every cell and leaves fg Reset. Reverse of
     // that is terminal-defined and often invisible over SSH.
@@ -204,7 +229,7 @@ fn selection_highlight_swaps_painted_backgrounds() {
         "abcd",
         Style::default().bg(theme::color(Token::BgBase)),
     );
-    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1));
+    paint_selection(&mut buf, &sel((0, 0), (2, 0)), Rect::new(0, 0, 4, 1), &[]);
     let cell = buf.cell(Position::new(1, 0)).unwrap();
     assert_eq!(cell.fg, theme::color(Token::BgBase));
     assert_eq!(cell.bg, theme::color(Token::Muted));

@@ -3262,7 +3262,12 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     // The selection highlight paints last so it covers whatever ended up on
     // screen, overlay included.
     if let Some(selection) = app.selection {
-        super::paint_selection(frame.buffer_mut(), &selection, area);
+        super::paint_selection(
+            frame.buffer_mut(),
+            &selection,
+            area,
+            &app.text_origins.borrow(),
+        );
     }
 }
 

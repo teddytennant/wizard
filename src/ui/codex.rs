@@ -511,7 +511,12 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     // up on screen.
     if let Some(selection) = app.selection {
         let area = frame.area();
-        super::paint_selection(frame.buffer_mut(), &selection, area);
+        super::paint_selection(
+            frame.buffer_mut(),
+            &selection,
+            area,
+            &app.text_origins.borrow(),
+        );
     }
 }
 

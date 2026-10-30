@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Fixed
+
+- The drag-copy highlight lit the margin, the reply marker, the scrollbar and the blank cells after each line, so it looked like whitespace was selected even though the copy skipped it. The highlight now covers exactly the cells that are copied.
+
 ## [3.11.2] - 2026-10-28
 
 ### Fixed

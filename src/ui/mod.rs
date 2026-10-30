@@ -285,7 +285,7 @@ fn draw_house(frame: &mut Frame, app: &App) {
     if let Some(selection) = app.selection {
         let area = frame.area();
         let buf = frame.buffer_mut();
-        paint_selection(buf, &selection, area);
+        paint_selection(buf, &selection, area, &app.text_origins.borrow());
     }
 }
 
@@ -428,10 +428,15 @@ fn todo_height(app: &App, total_height: u16, input_rows: u16, rail_rows: u16) ->
 /// terminal-defined and often invisible over SSH. Swap the concrete colors
 /// instead, filling a missing fg from `Token::Muted` so the selection is a
 /// dark-on-light slab the user can actually see.
-pub(super) fn paint_selection(buf: &mut Buffer, selection: &Selection, area: Rect) {
-    for (y, start, end) in selection_rows(selection, area.width, area.height) {
-        for x in start..end {
-            if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+pub(super) fn paint_selection(
+    buf: &mut Buffer,
+    selection: &Selection,
+    area: Rect,
+    origins: &[(u16, u16, u16)],
+) {
+    for row in selected_rows(buf, selection, area, origins) {
+        for x in row.start..row.end {
+            if let Some(cell) = buf.cell_mut(Position::new(x, row.y)) {
                 highlight_cell(cell);
             }
         }
@@ -568,39 +573,77 @@ pub(super) fn selection_rows(
     rows
 }
 
-/// Extract the text under a selection from a rendered cell buffer, in reading
-/// order, one `\n` per screen row. Trailing whitespace is trimmed per line so
-/// the copy isn't padded out to the row width.
+/// One screen row of a selection: the cells `start..end` on row `y` are what a
+/// copy takes from it and what the highlight covers, and `text` is the copy.
+struct SelectedRow {
+    y: u16,
+    start: u16,
+    end: u16,
+    text: String,
+}
+
+/// The rows of `selection` as copied and as highlighted, which are the same
+/// cells so that what is shown selected is exactly what lands on the clipboard.
 ///
 /// `origins` is the frame's [`App::text_origins`](crate::app::App): on a
 /// transcript row, the cells left of the text are gutter (the side margin,
-/// the `· `/`❯ `/`• ` marker, the grok rail) and are not copied, and the
-/// cells from the recorded end on are the scrollbar, which is not either.
-/// Shared leading spaces across the selected rows are then stripped too, which is
-/// what handles a code block's inset and rows with no recorded origin.
-pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16, u16)]) -> String {
-    let area = buf.area;
-    let rows = selection_rows(selection, area.width, area.height);
-    let mut lines: Vec<String> = Vec::with_capacity(rows.len());
-    let mut starts: Vec<u16> = Vec::with_capacity(rows.len());
-    for (y, start, end) in rows {
-        let (start, end) = origins
-            .iter()
-            .find(|&&(row, _, _)| row == y)
-            .map_or((start, end), |&(_, left, right)| {
-                (start.max(left), end.min(right))
-            });
-        let mut line = String::new();
-        for x in start..end {
-            if let Some(cell) = buf.cell(Position::new(x, y)) {
-                line.push_str(cell.symbol());
+/// the `· `/`❯ `/`• ` marker, the grok rail) and the cells from the recorded
+/// end on are the scrollbar. Neither is taken. Trailing blanks are dropped
+/// per row, so the copy isn't padded out to the row width. Shared leading
+/// spaces across the rows are then skipped too, which is what handles a code
+/// block's inset and rows with no recorded origin.
+fn selected_rows(
+    buf: &Buffer,
+    selection: &Selection,
+    area: Rect,
+    origins: &[(u16, u16, u16)],
+) -> Vec<SelectedRow> {
+    let mut rows: Vec<SelectedRow> = selection_rows(selection, area.width, area.height)
+        .into_iter()
+        .map(|(y, start, end)| {
+            let (start, end) = origins
+                .iter()
+                .find(|&&(row, _, _)| row == y)
+                .map_or((start, end), |&(_, left, right)| {
+                    (start.max(left), end.min(right))
+                });
+            let mut text = String::new();
+            let mut last = start;
+            for x in start..end {
+                if let Some(cell) = buf.cell(Position::new(x, y)) {
+                    text.push_str(cell.symbol());
+                    if !cell.symbol().trim().is_empty() {
+                        last = x + cell.symbol().width().max(1) as u16;
+                    }
+                }
             }
-        }
-        lines.push(line.trim_end().to_string());
-        starts.push(start);
+            SelectedRow {
+                y,
+                start,
+                end: last.min(end),
+                text: text.trim_end().to_string(),
+            }
+        })
+        .collect();
+    let lines: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+    let starts: Vec<u16> = rows.iter().map(|row| row.start).collect();
+    let skips = shared_indent_skips(&lines, &starts);
+    for (row, skip) in rows.iter_mut().zip(skips) {
+        row.text = row.text.chars().skip(skip).collect();
+        row.start = (row.start + skip as u16).min(row.end);
     }
-    strip_shared_leading_indent(&mut lines, &starts);
-    let out = lines.join("\n");
+    rows
+}
+
+/// Extract the text under a selection from a rendered cell buffer, in reading
+/// order, one `\n` per screen row. See [`selected_rows`] for what is left out.
+pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16, u16)]) -> String {
+    let rows = selected_rows(buf, selection, buf.area, origins);
+    let out = rows
+        .iter()
+        .map(|row| row.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     // A selection of only blank cells trims to nothing; report it as empty so
     // the caller skips the copy.
     if out.trim().is_empty() {
@@ -610,7 +653,8 @@ pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16,
     }
 }
 
-/// Drop the run of leading spaces every non-blank line shares.
+/// How many leading spaces to drop from each line: the run every non-blank
+/// line shares.
 ///
 /// A drag across a Wizard transcript almost always includes the gutter: the
 /// body is inset one column from the terminal edge, assistant rows start
@@ -623,7 +667,7 @@ pub fn selection_text(buf: &Buffer, selection: &Selection, origins: &[(u16, u16,
 /// their text origin), so indent is compared by the column the text lands
 /// in, not by how many spaces each line happens to begin with. Comparing
 /// space counts is how a copy used to grow a left margin after line one.
-fn strip_shared_leading_indent(lines: &mut [String], starts: &[u16]) {
+fn shared_indent_skips(lines: &[&str], starts: &[u16]) -> Vec<usize> {
     // A one-line drag of indented code has nothing to compare against, so the
     // indent is content. The gutter only becomes obvious across several rows.
     let leading = |line: &str| line.chars().take_while(|c| *c == ' ').count();
@@ -638,21 +682,20 @@ fn strip_shared_leading_indent(lines: &mut [String], starts: &[u16]) {
         count += 1;
         min = Some(min.map_or(n, |m: usize| m.min(n)));
     }
-    if count < 2 {
-        return;
-    }
-    let Some(indent) = min else {
-        return;
+    let Some(indent) = min.filter(|_| count >= 2) else {
+        return vec![0; lines.len()];
     };
-    for (index, line) in lines.iter_mut().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let skip = indent.saturating_sub(starts[index] as usize);
-        if skip > 0 {
-            *line = line.chars().skip(skip).collect();
-        }
-    }
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if line.is_empty() {
+                0
+            } else {
+                indent.saturating_sub(starts[index] as usize)
+            }
+        })
+        .collect()
 }
 
 /// Chat transcript: user/assistant messages with streaming markdown and
