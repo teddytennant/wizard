@@ -277,7 +277,7 @@ starts. Nothing is dropped silently.
 | `--bare`, `--safe-mode` | No discovery of instruction files, `.claude` commands, skills, agents, styles, plugins or `.mcp.json`. Named flags still apply. Hooks are the hooks work's to honor. |
 | `--disable-slash-commands` | No custom commands and no skills. |
 | `--verbose`, `-d` / `--debug[=filter]` | Sets `WIZARD_LOG` for the run (log file, not stderr). |
-| `--dangerously-skip-permissions` | Accepted, same as `--permission-mode bypassPermissions`. |
+| `--dangerously-skip-permissions` | Same as `--permission-mode bypassPermissions`. |
 | `--include-partial-messages`, `--include-hook-events`, `--replay-user-messages` | Accepted, no effect: the structured formats already carry that. |
 | `[prompt]` | The words after the flags are the task. |
 

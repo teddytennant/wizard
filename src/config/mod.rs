@@ -2108,8 +2108,12 @@ impl Config {
         };
         self.run_permissions.allow = split(&cli.allowed_tools);
         self.run_permissions.deny = split(&cli.disallowed_tools);
-        self.run_permissions.mode = cli.permission_mode;
-        let mut mode = cli.permission_mode.or(self.permissions.mode);
+        let flag_mode = cli.permission_mode.or(cli
+            .claude
+            .dangerously_skip_permissions
+            .then_some(crate::permissions::PermissionMode::BypassPermissions));
+        self.run_permissions.mode = flag_mode;
+        let mut mode = flag_mode.or(self.permissions.mode);
         if mode.is_none()
             && let Ok(root) = std::env::current_dir()
         {

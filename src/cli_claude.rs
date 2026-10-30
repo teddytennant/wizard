@@ -1,11 +1,10 @@
 //! Claude Code's command-line flags, accepted by Wizard.
 //!
-//! Each flag does one of three things, and `docs/claude-code-parity.md` lists
+//! Each flag does one of two things, and `docs/claude-code-parity.md` lists
 //! which: it maps onto something Wizard has (`--model`, `--effort`,
-//! `--max-turns`, `--add-dir`, `--system-prompt`, ...), it is a no-op because
-//! Wizard has nothing to switch (`--dangerously-skip-permissions`: there is no
-//! permission prompt), or it is accepted and reported on stderr as not
-//! supported. Nothing is silently dropped.
+//! `--max-turns`, `--add-dir`, `--system-prompt`,
+//! `--dangerously-skip-permissions`, ...), or it is accepted and reported on
+//! stderr as not supported. Nothing is silently dropped.
 //!
 //! Settings that other subsystems read are published as environment variables
 //! before the runtime starts ([`ClaudeFlags::publish`]), the way `--harness-dir`
@@ -131,7 +130,7 @@ pub struct ClaudeFlags {
     #[arg(short = 'd', long, num_args = 0..=1, require_equals = true, value_name = "FILTER")]
     pub debug: Option<Option<String>>,
 
-    /// Accepted; Wizard never asks for permission, so there is nothing to skip.
+    /// Same as `--permission-mode bypassPermissions`.
     #[arg(long)]
     pub dangerously_skip_permissions: bool,
 

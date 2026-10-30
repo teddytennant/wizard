@@ -1816,3 +1816,23 @@ fn computer_use_is_off_until_configured() {
     assert_eq!(config.computer.vm.vnc_address(), "127.0.0.1:5910");
     assert_eq!(config.computer.vm.width, 1280, "unset keys keep defaults");
 }
+
+#[test]
+fn dangerously_skip_permissions_runs_in_bypass_mode_unless_a_mode_is_named() {
+    use crate::permissions::PermissionMode;
+    let mut config = Config::default();
+    config.apply_permission_flags(&cli(&["--dangerously-skip-permissions", "-p", "x"]));
+    assert_eq!(
+        config.run_permissions.mode,
+        Some(PermissionMode::BypassPermissions)
+    );
+    let mut config = Config::default();
+    config.apply_permission_flags(&cli(&[
+        "--dangerously-skip-permissions",
+        "--permission-mode",
+        "plan",
+        "-p",
+        "x",
+    ]));
+    assert_eq!(config.run_permissions.mode, Some(PermissionMode::Plan));
+}
