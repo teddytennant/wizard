@@ -132,6 +132,20 @@ fn dont_ask_needs_an_allow_rule_for_each_subcommand() {
 }
 
 #[test]
+fn dont_ask_lets_read_only_commands_ride_along() {
+    // oracle: p_dontask_plain with `echo`, p_dontask_allow with `touch && echo`
+    let none = policy(PermissionMode::DontAsk, &[], &[], &[]);
+    assert_eq!(run(&none, "echo hi"), Decision::Allow);
+    assert_eq!(run(&none, "ls | wc -l"), Decision::Allow);
+    assert!(is_deny(&run(&none, "echo hi > out")));
+    let p = policy(PermissionMode::DontAsk, &["Bash(touch:*)"], &[], &[]);
+    assert_eq!(
+        run(&p, "touch zz.tmp && echo hi-from-bash"),
+        Decision::Allow
+    );
+}
+
+#[test]
 fn dont_ask_lets_read_only_tools_through() {
     let p = policy(PermissionMode::DontAsk, &[], &[], &[]);
     assert_eq!(

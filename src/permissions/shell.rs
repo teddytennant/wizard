@@ -180,10 +180,7 @@ const WRAPPERS: [&str; 5] = ["time", "nohup", "nice", "timeout", "command"];
 /// [`WRAPPERS`] removed, so `FOO=1 timeout 5 rm x` is matched as `rm x`.
 pub fn strip_prefixes(cmd: &str) -> String {
     let mut words: Vec<&str> = cmd.split_whitespace().collect();
-    loop {
-        let Some(first) = words.first().copied() else {
-            break;
-        };
+    while let Some(first) = words.first().copied() {
         if is_assignment(first) {
             words.remove(0);
         } else if WRAPPERS.contains(&first) {
@@ -200,6 +197,63 @@ pub fn strip_prefixes(cmd: &str) -> String {
         }
     }
     words.join(" ")
+}
+
+/// Commands that only read. Claude Code runs these without asking in every
+/// mode that would otherwise ask, and so does Wizard's `dontAsk`: a compound
+/// like `touch x && echo done` needs a rule for `touch` and none for `echo`.
+const READ_ONLY: [&str; 36] = [
+    "echo", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "which", "whoami", "date",
+    "uname", "true", "false", "file", "stat", "du", "df", "printenv", "sort", "uniq", "cut", "tr",
+    "diff", "basename", "dirname", "realpath", "id", "hostname", "tree", "nl", "seq", "cd", "type",
+    "test",
+];
+
+/// Git subcommands that do not change the repository.
+const READ_ONLY_GIT: [&str; 9] = [
+    "status",
+    "diff",
+    "log",
+    "show",
+    "blame",
+    "rev-parse",
+    "ls-files",
+    "describe",
+    "shortlog",
+];
+
+/// True when one subcommand cannot change anything: a read-only program,
+/// with no redirection and no substitution that could smuggle something in.
+pub fn is_read_only(cmd: &str) -> bool {
+    if cmd.contains('>') || cmd.contains('`') || cmd.contains("$(") {
+        return false;
+    }
+    let mut words = cmd.split_whitespace();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    match first {
+        "git" => {
+            // `git -C dir diff`: `-C` and `-c` take a value; skip it.
+            let mut sub = None;
+            while let Some(word) = words.next() {
+                if matches!(word, "-C" | "-c") {
+                    words.next();
+                } else if !word.starts_with('-') {
+                    sub = Some(word);
+                    break;
+                }
+            }
+            sub.is_some_and(|sub| READ_ONLY_GIT.contains(&sub))
+        }
+        "find" => !cmd.split_whitespace().any(|w| {
+            matches!(
+                w,
+                "-exec" | "-execdir" | "-delete" | "-ok" | "-fprint" | "-fprintf"
+            )
+        }),
+        other => READ_ONLY.contains(&other),
+    }
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -253,6 +307,33 @@ mod tests {
         assert!(split("echo 'oops").unparseable);
         assert!(split("echo $(oops").unparseable);
         assert!(!split("a && b").unparseable);
+    }
+
+    #[test]
+    fn read_only_commands_are_recognised() {
+        for yes in [
+            "echo hi",
+            "ls -la",
+            "git status",
+            "git -C x diff --stat",
+            "find . -name x",
+            "cat a b",
+        ] {
+            assert!(is_read_only(yes), "{yes}");
+        }
+        for no in [
+            "touch x",
+            "echo hi > out",
+            "echo $(rm x)",
+            "git push",
+            "git commit -m x",
+            "find . -delete",
+            "find . -exec rm {} ;",
+            "rm -rf x",
+            "",
+        ] {
+            assert!(!is_read_only(no), "{no}");
+        }
     }
 
     #[test]

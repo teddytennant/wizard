@@ -260,11 +260,11 @@ fn path_matches(pattern: &str, root: &Path, cwd: &Path, path: &str, widen: bool)
     }
     let anchored = if let Some(abs) = pattern.strip_prefix("//") {
         Some(format!("/{abs}"))
-    } else if pattern.starts_with("~/") {
+    } else if let Some(rest) = pattern.strip_prefix("~/") {
         Some(
             dirs::home_dir()
                 .unwrap_or_default()
-                .join(&pattern[2..])
+                .join(rest)
                 .to_string_lossy()
                 .into_owned(),
         )

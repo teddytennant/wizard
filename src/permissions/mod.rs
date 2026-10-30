@@ -231,9 +231,11 @@ impl Policy {
             return false;
         }
         parts.commands.iter().all(|sub| {
-            self.allow
-                .iter()
-                .any(|rule| rule.names(tool) && rule.matches_command(sub, false))
+            shell::is_read_only(sub)
+                || self
+                    .allow
+                    .iter()
+                    .any(|rule| rule.names(tool) && rule.matches_command(sub, false))
         })
     }
 
