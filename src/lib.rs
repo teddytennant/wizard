@@ -14,6 +14,7 @@ pub mod claude_session;
 pub mod claude_stream;
 pub mod cli;
 pub mod cli_claude;
+pub mod cli_compat;
 pub mod commands;
 pub mod config;
 pub mod credentials;
@@ -120,7 +121,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // `wizard --plan resume` through with the flag silently dropped.
     rewrite_setup_subcommand(&mut cli);
     if let Some(command) = &cli.command
-        && !matches!(command, cli::Command::Agents)
+        && !matches!(command, cli::Command::Agents { .. })
     {
         let ignored = cli.ignored_top_level_flags();
         if !ignored.is_empty() {
@@ -130,6 +131,13 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
                 ignored.join(", ")
             );
         }
+    }
+
+    // Claude Code's subcommands (`mcp`, `plugin`, `auth`, `install`, `purge`,
+    // ...). The ones that are a spelling of something below rewrite `cli` and
+    // fall through; the rest finish here, before any config load.
+    if let Some(code) = cli_compat::dispatch(&mut cli).await? {
+        return Ok(code);
     }
 
     // Harness bundle tooling is self-contained: no config, no LLM.
@@ -571,7 +579,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
 
     // `wizard agents` always opens the TUI dashboard, regardless of the
     // configured default mode.
-    if matches!(cli.command, Some(cli::Command::Agents)) {
+    if matches!(cli.command, Some(cli::Command::Agents { .. })) {
         // Passive self-update: print any cached "update available" notice now,
         // before the TUI takes the alternate screen, then refresh the cache in
         // the background (fire-and-forget, so it never delays the TUI).

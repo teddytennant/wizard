@@ -497,6 +497,11 @@ fn find_marketplace(name: &str) -> Option<PathBuf> {
 /// `/plugin marketplace add <source>`: a git repo (`owner/repo` or URL) is
 /// cloned; a local directory is remembered where it is.
 pub fn marketplace_add(source: &str) -> Result<String, String> {
+    marketplace_add_named(source).map(|(_, message)| message)
+}
+
+/// [`marketplace_add`], also saying what the marketplace is called.
+pub fn marketplace_add_named(source: &str) -> Result<(String, String), String> {
     let dir = marketplaces_dir()?;
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     if is_git_source(source) {
@@ -513,10 +518,8 @@ pub fn marketplace_add(source: &str) -> Result<String, String> {
         let target = dir.join(&name);
         let _ = std::fs::remove_dir_all(&target);
         std::fs::rename(&staging, &target).map_err(|err| err.to_string())?;
-        return Ok(format!(
-            "added marketplace {name} ({} plugins)",
-            plugins.len()
-        ));
+        let message = format!("added marketplace {name} ({} plugins)", plugins.len());
+        return Ok((name, message));
     }
     let path = expand_home(source);
     let (name, plugins) = read_marketplace(&path)?;
@@ -526,11 +529,12 @@ pub fn marketplace_add(source: &str) -> Result<String, String> {
         canonical.display().to_string(),
     )
     .map_err(|err| err.to_string())?;
-    Ok(format!(
+    let message = format!(
         "added marketplace {name} from {} ({} plugins)",
         canonical.display(),
         plugins.len()
-    ))
+    );
+    Ok((name, message))
 }
 
 pub fn marketplace_remove(name: &str) -> Result<String, String> {
@@ -716,6 +720,72 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
         "{} {name}",
         if on { "enabled" } else { "disabled" }
     ))
+}
+
+/// `wizard plugin update <name>`: refresh the marketplaces and install again
+/// from wherever the plugin came from.
+pub fn update(name: &str) -> Result<String, String> {
+    let dir = installed_dir()?.join(name);
+    let origin = std::fs::read_to_string(dir.join(".wizard-origin"))
+        .map_err(|_| format!("'{name}' was not installed with `wizard plugin install`"))?;
+    let origin = origin.trim();
+    if origin.contains('@') {
+        let _ = marketplace_update();
+    }
+    let was_disabled = dir.join(".disabled").exists();
+    let message = install(origin)?;
+    if was_disabled {
+        set_enabled(name, false)?;
+    }
+    Ok(message)
+}
+
+/// Every plugin `wizard plugin install` put in place, disabled ones included:
+/// `(name, enabled)`.
+pub fn installed_names() -> Vec<(String, bool)> {
+    let Ok(dir) = installed_dir() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, bool)> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| {
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        !entry.path().join(".disabled").exists(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// `wizard plugin details <name>`: the manifest's own fields and what the
+/// plugin holds.
+pub fn details(name: &str, project_root: &Path) -> Result<String, String> {
+    let plugin = enabled(project_root)
+        .into_iter()
+        .find(|plugin| plugin.name == name)
+        .or_else(|| read_plugin(&installed_dir().ok()?.join(name), "installed"))
+        .ok_or_else(|| format!("no plugin named '{name}'"))?;
+    let mut out = plugin.name.clone();
+    if let Some(version) = &plugin.version {
+        out.push_str(&format!(" {version}"));
+    }
+    out.push_str(&format!(
+        "\n  from: {} ({})",
+        plugin.root.display(),
+        plugin.origin
+    ));
+    if let Some(description) = &plugin.description {
+        out.push_str(&format!("\n  {description}"));
+    }
+    out.push_str(&format!("\n  holds: {}", summary(&plugin.root)));
+    Ok(out)
 }
 
 /// `/plugin validate <dir>`.

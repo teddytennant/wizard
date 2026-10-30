@@ -441,6 +441,11 @@ fn schedule_report() -> String {
     out
 }
 
+/// `/logout <account>`, also `wizard auth logout`.
+pub fn sign_out(account: &str) -> Result<String, String> {
+    logout(account)
+}
+
 fn logout(args: &str) -> Result<String, String> {
     let file = match args {
         "xai" => "xai_oauth.json",

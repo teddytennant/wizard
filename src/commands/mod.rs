@@ -50,6 +50,7 @@ mod loop_cmd;
 mod misc;
 pub mod plugin;
 mod session_cmds;
+pub use session_cmds::stop as stop_background_session;
 pub mod surface;
 mod views;
 

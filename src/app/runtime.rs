@@ -262,7 +262,7 @@ pub async fn run_tui(
         Err(err) => app.notice(format!("{err:#}")),
     }
     // `wizard agents` opens straight into the dashboard.
-    if matches!(cli.command, Some(crate::cli::Command::Agents)) {
+    if matches!(cli.command, Some(crate::cli::Command::Agents { .. })) {
         app.show_dashboard = true;
         app.refresh_sessions();
         app.refresh_peek();

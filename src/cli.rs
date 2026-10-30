@@ -341,7 +341,20 @@ pub enum Command {
     /// Open the agent dashboard: every running Wizard session on the machine.
     /// Dispatch background sessions, watch their state, peek their output, and
     /// stop them. Same view as `/dashboard` inside a session.
-    Agents,
+    ///
+    /// With `--json` it prints the running sessions as a JSON array instead
+    /// and exits, like `claude agents --json`.
+    Agents {
+        /// Print the running sessions as a JSON array and exit.
+        #[arg(long)]
+        json: bool,
+        /// With --json, also include finished background sessions.
+        #[arg(long, requires = "json")]
+        all: bool,
+        /// With --json, only sessions started under this directory.
+        #[arg(long = "cwd", value_name = "PATH", requires = "json")]
+        under: Option<PathBuf>,
+    },
 
     /// Harness bundle tooling: export the compiled harness defaults
     /// (system prompt, tool descriptions, skills, subagents) as an editable
@@ -419,6 +432,7 @@ pub enum Command {
     /// pacman or Nix installed is left alone; this prints that manager's
     /// upgrade command instead. Self-contained: never loads config or
     /// triggers onboarding.
+    #[command(alias = "upgrade")]
     Update {
         /// Report whether a newer release exists without installing anything.
         #[arg(long)]
@@ -558,7 +572,7 @@ pub enum Command {
     // holding a second one.
     // Spelled `builtins` so it can't be mistaken for `wizard plugins`, which
     // installs Pi packages. `plugin` stays as a hidden alias for old scripts.
-    #[command(name = "builtins", alias = "plugin")]
+    #[command(name = "builtins")]
     Plugin {
         #[command(subcommand)]
         cmd: Option<PluginCmd>,
@@ -587,6 +601,102 @@ pub enum Command {
     /// search, Claude import), then start Wizard. The same as `--onboard`;
     /// the first run asks one question and `/setup` in the TUI has the rest.
     Setup,
+
+    /// Configure and manage MCP servers: `add`, `add-json`, `get`, `list`,
+    /// `remove`, `serve`, as in Claude Code. Servers go in `~/.wizard/mcp.toml`
+    /// (user), `.mcp.json` (project) or a per-project private file (local).
+    Mcp {
+        #[command(subcommand)]
+        cmd: crate::cli_compat::McpCmd,
+    },
+
+    /// Manage Claude-format plugins and marketplaces, as `claude plugin` does.
+    /// (`wizard plugins` installs Pi packages; `wizard builtins` reports the
+    /// plugins compiled into this binary.)
+    #[command(name = "plugin")]
+    ClaudePlugin {
+        #[command(subcommand)]
+        cmd: crate::cli_compat::PluginCmd,
+    },
+
+    /// Sign in to, out of, or report on provider accounts.
+    Auth {
+        #[command(subcommand)]
+        cmd: crate::cli_compat::AuthCmd,
+    },
+
+    /// Set up a long-lived token. Wizard has none of its own; with Claude
+    /// Code installed this runs `claude setup-token`.
+    SetupToken,
+
+    /// Install or reinstall Wizard: the same as `wizard update`, with
+    /// `stable`/`latest` or a version as the target.
+    Install {
+        /// `stable`, `latest`, or a version such as `0.5.0`.
+        target: Option<String>,
+        /// Reinstall even when already up to date.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Import configuration from Claude Code (MCP servers and custom
+    /// commands) into ~/.wizard.
+    Import {
+        /// Which agent to import from. Only `claude` is supported.
+        source: Option<String>,
+        /// Show what would be imported without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Delete a project's Wizard conversations from this machine.
+    Purge {
+        /// The project directory (default: the current one).
+        path: Option<PathBuf>,
+        /// Every project.
+        #[arg(long)]
+        all: bool,
+        /// List what would be deleted without deleting it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Prompt for each conversation.
+        #[arg(short = 'i', long)]
+        interactive: bool,
+        /// Do not ask for confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Stop a background session (see `wizard agents`). The conversation is
+    /// kept; `wizard --resume <id>` reopens it.
+    #[command(alias = "kill")]
+    Stop { id: String },
+
+    /// Forget a finished background session.
+    Rm { id: String },
+
+    /// Claude Code subcommands with no Wizard counterpart. They parse so a
+    /// script written for `claude` gets a sentence instead of a usage error.
+    #[command(hide = true, disable_help_flag = true)]
+    Attach(StubArgs),
+    #[command(hide = true, disable_help_flag = true)]
+    Logs(StubArgs),
+    #[command(hide = true, disable_help_flag = true)]
+    Respawn(StubArgs),
+    #[command(name = "auto-mode", hide = true, disable_help_flag = true)]
+    AutoMode(StubArgs),
+    #[command(hide = true, disable_help_flag = true)]
+    Ultrareview(StubArgs),
+}
+
+/// Everything after a stubbed subcommand, unparsed.
+#[derive(Debug, Clone, clap::Args)]
+pub struct StubArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    pub rest: Vec<String>,
 }
 
 /// `wizard computer` subcommands.
@@ -1495,7 +1605,7 @@ mod tests {
     /// answers `wizard builtins` with a usage error instead of the report, which
     /// is the whole surface refusing its most obvious invocation.
     #[test]
-    fn builtins_is_the_name_and_plugin_still_parses() {
+    fn builtins_is_the_name_and_plugins_is_pi() {
         let cli = parse(&["builtins"]).expect("bare `builtins` parses");
         assert!(matches!(cli.command, Some(Command::Plugin { cmd: None })));
         let cli = parse(&["plugins", "list"]).expect("`plugins list` is the Pi installer");
@@ -1504,10 +1614,10 @@ mod tests {
 
     #[test]
     fn plugin_subcommands_parse_and_the_bare_form_is_allowed() {
-        let cli = parse(&["plugin"]).expect("bare `plugin` parses");
+        let cli = parse(&["builtins"]).expect("bare `builtins` parses");
         assert!(matches!(cli.command, Some(Command::Plugin { cmd: None })));
 
-        let cli = parse(&["plugin", "list"]).expect("`plugin list` parses");
+        let cli = parse(&["builtins", "list"]).expect("`builtins list` parses");
         assert!(matches!(
             cli.command,
             Some(Command::Plugin {
@@ -1515,7 +1625,7 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["plugin", "list", "--json"]).expect("`--json` parses");
+        let cli = parse(&["builtins", "list", "--json"]).expect("`--json` parses");
         assert!(matches!(
             cli.command,
             Some(Command::Plugin {
@@ -1523,24 +1633,24 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["plugin", "show", "mesh"]).expect("`plugin show` parses");
+        let cli = parse(&["builtins", "show", "mesh"]).expect("`builtins show` parses");
         let Some(Command::Plugin {
             cmd: Some(PluginCmd::Show { name, json }),
         }) = cli.command
         else {
-            panic!("expected `plugin show`");
+            panic!("expected `builtins show`");
         };
         assert_eq!(name, "mesh");
         assert!(!json);
 
         assert!(matches!(
-            parse(&["plugin", "missing"]).expect("parses").command,
+            parse(&["builtins", "missing"]).expect("parses").command,
             Some(Command::Plugin {
                 cmd: Some(PluginCmd::Missing { json: false })
             })
         ));
         assert!(matches!(
-            parse(&["plugin", "profiles"]).expect("parses").command,
+            parse(&["builtins", "profiles"]).expect("parses").command,
             Some(Command::Plugin {
                 cmd: Some(PluginCmd::Profiles { json: false })
             })
@@ -1548,7 +1658,7 @@ mod tests {
 
         // `show` needs a name. A missing one is a usage error rather than a
         // report on nothing.
-        assert!(parse(&["plugin", "show"]).is_err());
+        assert!(parse(&["builtins", "show"]).is_err());
     }
 
     #[test]
