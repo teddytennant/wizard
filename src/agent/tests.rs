@@ -1306,7 +1306,7 @@ async fn plan_mode_blocks_non_read_only_tools_but_the_turn_continues() {
 
     let feedback = tool_feedback_of(&provider, 1);
     assert!(
-        feedback.contains("blocked by plan mode"),
+        feedback.contains("while in plan mode"),
         "block reason fed to the model: {feedback}"
     );
     assert!(feedback.contains("exit_plan"), "{feedback}");
@@ -1492,7 +1492,7 @@ async fn headless_two_phase_turn_blocks_then_plans_then_executes() {
 
     // The phases happened in order: blocked, approved, executed.
     assert!(
-        tool_feedback_of(&provider, 1).contains("blocked by plan mode"),
+        tool_feedback_of(&provider, 1).contains("while in plan mode"),
         "phase 1: the write is blocked"
     );
     assert!(

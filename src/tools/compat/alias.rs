@@ -463,7 +463,11 @@ fn finish_ask_user(mut out: ToolOutput, _args: &Value) -> ToolOutput {
         if let Some(q) = line.strip_prefix("Q: ") {
             question = Some(q.to_string());
         } else if let (Some(a), Some(q)) = (line.strip_prefix("A: "), question.take()) {
-            let answer = if a == "(skipped)" { "(no option selected)" } else { a };
+            let answer = if a == "(skipped)" {
+                "(no option selected)"
+            } else {
+                a
+            };
             pairs.push(format!("\"{q}\"=\"{answer}\""));
         }
     }
@@ -662,7 +666,10 @@ mod tests {
             out.content,
             "Your questions have been answered: \"Which?\"=\"A\", \"Why?\"=\"(no option selected)\". You can now continue with these answers in mind."
         );
-        let declined = finish_ask_user(ToolOutput::ok("The user dismissed the interview"), &json!({}));
+        let declined = finish_ask_user(
+            ToolOutput::ok("The user dismissed the interview"),
+            &json!({}),
+        );
         assert_eq!(declined.content, "The user dismissed the interview");
     }
 

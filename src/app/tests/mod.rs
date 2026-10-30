@@ -5195,7 +5195,9 @@ fn the_keys_overlay_gives_way_to_typing() {
     assert!(!app.keys_help);
 }
 
-fn open_permission(app: &mut App) -> tokio::sync::oneshot::Receiver<crate::agent::PermissionAnswer> {
+fn open_permission(
+    app: &mut App,
+) -> tokio::sync::oneshot::Receiver<crate::agent::PermissionAnswer> {
     let (gate, rx) = crate::agent::PermissionGate::open();
     app.handle_agent_event(AgentEvent::PermissionRequest {
         tool: "execute".to_string(),
@@ -5217,7 +5219,10 @@ fn a_permission_request_opens_a_prompt_that_takes_the_keys() {
     let mut rx = open_permission(&mut app);
     assert_eq!(app.permission_prompts.len(), 1);
     assert!(
-        matches!(app.session_state(), crate::session_registry::SessionState::NeedsInput),
+        matches!(
+            app.session_state(),
+            crate::session_registry::SessionState::NeedsInput
+        ),
         "the session is waiting on the user"
     );
     // typing goes to the dialog, not the composer
@@ -5243,7 +5248,11 @@ fn escape_refuses_the_prompt_and_two_prompts_queue() {
         first.try_recv(),
         Ok(crate::agent::PermissionAnswer::Deny { feedback: None })
     );
-    assert_eq!(app.permission_prompts.len(), 1, "the second is on screen now");
+    assert_eq!(
+        app.permission_prompts.len(),
+        1,
+        "the second is on screen now"
+    );
     press(&mut app, KeyCode::Enter);
     assert_eq!(
         second.try_recv(),
