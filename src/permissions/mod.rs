@@ -324,6 +324,9 @@ impl Policy {
     /// Rules grouped for `/permissions`.
     pub fn summary(&self) -> String {
         let mut out = format!("mode: {}\n", self.mode);
+        if self.claude_defaults && self.mode == PermissionMode::Default {
+            out.push_str("asks before file edits, commands, the web and MCP tools\n");
+        }
         for (label, rules) in [
             ("deny", &self.deny),
             ("ask", &self.ask),

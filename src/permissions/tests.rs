@@ -518,3 +518,17 @@ fn plan_mode_runs_read_only_command_lines() {
     assert!(!is_read_only_command("ls &&"));
     assert!(!is_read_only_command(""));
 }
+
+#[test]
+fn the_summary_says_when_the_mode_asks() {
+    assert!(
+        named_default(&[])
+            .summary()
+            .contains("asks before file edits")
+    );
+    assert!(
+        !policy(PermissionMode::Default, &[], &[], &[])
+            .summary()
+            .contains("asks before")
+    );
+}
