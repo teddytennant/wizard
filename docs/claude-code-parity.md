@@ -118,11 +118,20 @@ Compared against the real binary:
   as `/hello`, `.claude/agents/rev.md` as agent `rev`, and `.mcp.json` as a `project` server.
   Wizard's loaders follow the same names.
 
-Not compared, because it needs a login the isolated home does not have:
+- Live turns against a fake Messages server (`looks/crates/claudew/tools/fake_anthropic.py`, with
+  `ANTHROPIC_BASE_URL` and a fake `CLAUDE_CODE_OAUTH_TOKEN`, in a throwaway `HOME` and `CLAUDE_CONFIG_DIR`): the
+  `stream-json` message shapes, `--include-partial-messages`, `json`, `--input-format stream-json` with
+  `control_request` and `--replay-user-messages`, `--max-turns` and `--max-budget-usd` results, and the exit codes.
+  Wizard's side ran against a mock OpenAI server doing the same scripts, and the two were diffed key by key
+  ("Headless output" below).
 
-- Live model turns: the text of `claude -p` answers, `stream-json` message shapes
-  (`assistant`, `user`, `result` lines with a real model), cost fields, `--max-budget-usd`,
-  `--json-schema` validation, `--fallback-model` behaviour.
+Not compared:
+
+- The text of real model answers, `--fallback-model` against a real overloaded API (Wizard's was tried against a
+  mock that answers 529), and `--json-schema` against a model that calls Claude Code's structured-output tool: the
+  fake server never makes that call.
+- The new slash commands against the real ones, which need the interactive UI; `/loop`, `/branch` and the rest were
+  checked against Claude Code's documented behaviour and Wizard's own tests.
 - Anything that talks to Anthropic services: `/login`, `/usage`, cloud sessions, `/schedule`.
 - The interactive editing surface (vim mode, prompt input, voice).
 
@@ -166,14 +175,23 @@ Rewritten before parsing, so the agent's `run_command` gate and every surface se
 
 | Command | What it does |
 |---|---|
-| `/permissions` | Shows the mode, plan mode and the project's trust decision. Wizard has no per-tool prompt, so there are no allow/deny rules to edit yet. **Depends on the permissions work**: when rules exist this is where they list. |
-| `/hooks` | Lists the hooks in `~/.wizard/hooks.toml` and the project's. **Depends on the hooks work**; it reads the files directly so it does not break when the hooks module changes. |
+| `/permissions [allow\|ask\|deny\|remove <rule>]` | The mode and what it means, plan mode, the project's trust decision, and every rule grouped by where it was written (user settings, project settings, `--allowedTools`, `config.toml`), plus the settings files read. With a rule it adds it to `~/.wizard/settings.json` (`remove` takes it out); that applies from the next session. The agent may list but not edit. |
+| `/hooks` | Hooks by event (Claude's event names), each with its matcher, handler type (`command`, `http`, `prompt`, `agent`, `mcp_tool`), timeout, `async` and `if` notes and the file it came from. Read through the loader a session uses, so a project's hooks show only once it is trusted. |
 | `/context` | Model, next-request size when known, session token totals, instruction size, skill, command and MCP counts. No coloured grid. |
 | `/mcp [reload]` | Servers from `mcp.toml`, `.mcp.json`, plugins and `--mcp-config`, with the reason a project's `.mcp.json` is waiting (see Trust below). |
 | `/output-style [name]` | Lists and switches output styles. |
 | `/skills` | Skills, their source file and rough prompt cost. |
 | `/release-notes` | The newest released section of the changelog embedded in the binary. |
 | `/keybindings [init]` | Prints, or creates, `~/.wizard/keybindings.json`. The file is read by nothing yet; see missing. |
+| `/loop [interval] <prompt>` | `/loop 5m check the deploy` writes a recurring `cron-loop-<id>` entry to `~/.wizard/schedule.toml` (every N minutes, hours or days; seconds round up to a minute; gone after 7 days; each run capped at 1 hour). With no interval it is self-paced: one run in a minute, told to call `ScheduleWakeup` for the next or stop. `/loop list`, `/loop stop [id\|all]`. Each tick is its own headless run, not a turn in this session, and `wizard scheduler` has to be running. Claude Code's `/loop` queues prompts into the live session. |
+| `/branch [name]`, `/fork` | `/branch` copies the conversation to a new session file, names it, and switches to it; `/resume <old id>` comes back. A bare `/fork` is `/branch`, as in Claude Code; `/fork <task>` stays the background side quest. |
+| `/rename [name]` | Names the session (a `<id>.name` file beside it). The name shows in `/resume` and works as `--resume <name>`. |
+| `/cd <dir>` | Moves the process into another directory, so tools that resolve relative paths follow. Instructions, hooks and settings were read for the original project and stay it. Partial: Claude Code re-roots the whole session. |
+| `/background [task]`, `/stop [id]` | `/background` copies the conversation and continues the copy in a detached `wizard --bg` run, which shows in `/dashboard`. `/stop` lists background sessions and `/stop <id>` ends one (SIGTERM to its process group). Claude Code detaches the live session itself; Wizard cannot hand a running TUI session to another process. |
+| `/statusline [command\|off]` | Shows, sets or removes `statusLine` in `~/.wizard/settings.json`. Settings side only: the terminal UI draws the line. |
+| `/autocompact [tokens\|off]` | Shows or sets `max_context_tokens`, the window compaction counts (it starts at 80%). `200k` and `1m` work; applies from the next session. |
+| `/focus` | Alias of `/view`, which flips the compact transcript. |
+| `/fast`, `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/privacy-settings`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/fast` points at `/effort low`, `/advisor` at `/fusion` and `/ultra`, `/voice` says there is no audio stack). They change nothing. |
 | `/feedback [note]` | Where to report a bug and what to attach. |
 | `/schedule` | Lists `~/.wizard/schedule.toml`; `wizard schedule` manages it. |
 | `/logout <xai\|chatgpt>` | Removes the stored sign-in. The account is named on purpose. |
@@ -203,22 +221,15 @@ directory as part of the task; it does not widen a file-access sandbox, because 
 
 | Claude Code | Why |
 |---|---|
-| `/advisor`, `/fast` | Anthropic model features. `/fusion` and `/ultra` are Wizard's multi-model equivalents. |
-| `/autocompact` | Compaction follows thresholds in config; no per-session knob. |
-| `/background`, `/stop` | Needs detach and reattach for a live session. `wizard agents` and `/dashboard` list and stop sessions started from there. |
-| `/branch` | Needs a copy of the session file under a new id. |
-| `/cd` | The project root is fixed for a session. `--cwd` or `--worktree` at launch. |
-| `/rename` | Sessions have no display name. |
-| `/color`, `/focus`, `/tui`, `/scroll-speed`, `/stickers`, `/radio`, `/powerup`, `/statusline` | Terminal UI work, owned elsewhere. |
-| `/loop` | Closest are `/goal` and `wizard schedule`. |
+| `/tui`, `/scroll-speed`, `/stickers`, `/radio`, `/powerup` | Terminal UI work, owned elsewhere. |
 | `/sandbox` | Wizard has no OS sandbox to toggle. |
-| `/voice` | No dictation. |
 | `/chrome`, `/claude-in-chrome` | The `computer` tool covers browser driving differently. |
 | `/desktop`, `/mobile` | `wizard gui` and the Android app are separate products. |
 | `/teleport`, `/remote-control`, `/remote-env`, `/cloud`, `/autofix-pr`, `/ultrareview`, `/web-setup`, `/install-github-app`, `/install-slack-app` | Anthropic cloud and GitHub App features. |
 | `/design*`, `/slides`, `/artifacts`, `/artifact-*`, `/dataviz`, `/deep-research`, `/claude-api`, `/batch`, `/workflows`, `/workflow-authoring`, `/plugin-authoring`, `/run`, `/run-skill-generator`, `/team-onboarding`, `/skill-doctor` | Bundled skills and workflows tied to Anthropic products; skills in `.claude/skills` still load. |
 | `/fewer-permission-prompts` | Wizard has no prompts to reduce. |
-| `/heapdump`, `/insights`, `/upgrade`, `/usage-credits`, `/passes`, `/privacy-settings`, `/rate-limit-options`, `/restart`, `/setup-bedrock`, `/setup-vertex` | Account, billing or runtime plumbing specific to Claude Code. `wizard update` updates in place. |
+
+`/theme` is still `/ui`: a skin carries its palette, so Claude's theme names (`dark`, `light-daltonized`, ...) do not map to anything.
 
 ## CLI flags
 
@@ -231,10 +242,18 @@ starts. Nothing is dropped silently.
 | Flag | Wizard |
 |---|---|
 | `-p` / `--print` | `--print` runs headless whatever the saved mode is. A bare `-p` (end of line, or another flag next) means `--print`. `-p "task"` keeps its older meaning (the task; in a terminal it opens the TUI with it). The prompt comes from `-p`, the words after the flags, and stdin. A piped stdin plus a prompt is both, stdin first. A lone word close to a subcommand name (`wizard doctr`) stops with a suggestion instead of starting a run. |
-| `--output-format text\|json\|stream-json` | As before. `json` also carries Claude Code's result keys. `stream-json` keeps Wizard's event lines, not Claude's message objects. |
-| `--input-format text\|stream-json` | `stream-json` reads every `{"type":"user"}` line as part of one prompt; it is not a live multi-turn input stream. |
+| `--output-format text\|json\|stream-json` | `json` is Claude Code's `result` object plus Wizard's keys. `stream-json` is Claude Code's lines (`system` init, `assistant` and `user` messages with `tool_use` and `tool_result` blocks, `result`), with Wizard's own event lines (`notice`, `plan`, `todo`, `task_*`, `subagent_*`, ...) between them. See "Headless output" below. |
+| `--input-format text\|stream-json` | `stream-json` is a conversation: each `{"type":"user"}` line is a turn, answered with its own `init` and `result`, and `control_request` lines (`initialize`, `interrupt`, `set_model`) get a `control_response`. Needs `--output-format stream-json`, as in Claude Code. |
 | `-c` / `--continue` | `--resume` (most recent session here). |
-| `-r` / `--resume [id]` | `-r` is short for `--resume`. `--resume <id>` opens that session in the terminal; headless runs continue the latest. |
+| `-r` / `--resume [id]` | `-r` is short for `--resume`. `<id>` is a session id, a unique prefix of one, or a name given with `--name`; terminal and headless runs both open it. |
+| `--session-id <id>` | Starts a new session under that id (letters, digits, `-`, `_`, `.`). It fails if the id exists, and with `--resume` or `--continue` it needs `--fork-session`. |
+| `-n` / `--name <name>` | Names the session; `/resume` shows it and `--resume <name>` finds it. |
+| `--fork-session` | With `--resume` or `--continue`: a new session holding a copy of that conversation. |
+| `--no-session-persistence` | Headless: the session files are removed when the run ends. |
+| `--fallback-model <models>` | Headless: when the model is down (two "LLM unavailable" reports in a turn), fails outright or trips the circuit breaker, the turn is cut short and the task continues on the next model, same provider. Also tried if the first model does not start. Comma separated; `fallbackModel` in settings is the default. |
+| `--max-budget-usd <n>` | Headless: the run is cancelled once its estimated cost (the configured rates, or the price table) passes `n`. The `result` is `error_max_budget_usd` with `terminal_reason: budget_exhausted`, and the exit code is 1. The cost is an estimate from reported tokens, not a bill. |
+| `--settings <file-or-json>` | One more Claude-format settings layer, read after the project's files and before managed ones. A JSON string is written to a private temp file. |
+| `--agent <name>` | The session's system prompt gains that agent's prompt (built-in `worker`, `.claude/agents`, plugins, `--agents`; Claude's `general-purpose`, `Explore` and `Plan` are the worker). The agent's `tools` and `model` are not applied. |
 | `--system-prompt`, `--system-prompt-file` | Published as `WIZARD_SYSTEM_PROMPT`, the override the prompt builder already reads. |
 | `--append-system-prompt`, `--append-system-prompt-file` | Added to the instructions block. File text first, as in Claude Code. |
 | `--add-dir <dirs...>` | A line in the system prompt naming the directories. |
@@ -242,7 +261,7 @@ starts. Nothing is dropped silently.
 | `--mcp-config <file-or-json...>`, `--strict-mcp-config` | Merged into the MCP servers; strict drops `mcp.toml`'s. |
 | `--agents <json>` | Subagents for this run. A file path (the `--print` form) is not read. |
 | `--plugin-dir <dir>` | A plugin directory, or a folder of them, for this run. `.zip` is not read. |
-| `--json-schema <schema>` | Asks for a final JSON answer in the system prompt. Not validated. |
+| `--json-schema <schema>` | The system prompt asks for a final JSON answer, and headless runs check it: the last message (or the first fenced or braced JSON in it) is validated against the schema (`type`, `properties`, `required`, `enum`, `items`, bounds, `pattern`, `anyOf`/`oneOf`/`allOf`, local `$ref`), sent back for a fix up to twice, and put in the `result` as `structured_output`. If it still fails the `result` is `error_max_structured_output_retries` and the exit code is 1. Claude Code does this through a tool call; Wizard checks the text. |
 | `-w` / `--worktree [name]` | `git worktree add` under `.claude/worktrees/<name>`, then works there. |
 | `--bare`, `--safe-mode` | No discovery of instruction files, `.claude` commands, skills, agents, styles, plugins or `.mcp.json`. Named flags still apply. Hooks are the hooks work's to honor. |
 | `--disable-slash-commands` | No custom commands and no skills. |
@@ -253,8 +272,9 @@ starts. Nothing is dropped silently.
 
 ### Accepted and reported as unsupported
 
-`--session-id`, `--name`/`-n`, `--fork-session`, `--no-session-persistence`, `--fallback-model`,
-`--max-budget-usd`, `--settings`, `--agent`.
+`--no-session-persistence`, `--fallback-model` and `--max-budget-usd` in a run that opens the terminal UI: they say
+so on stderr, since they only mean something for a headless run. Everything else that was on this list is mapped
+above.
 
 ### Removed with a warning
 
@@ -285,7 +305,7 @@ shadows the user's.
 | Instructions | `CLAUDE.md` (already read), `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`, `~/.claude/rules` | `WIZARD.md` and `AGENTS.md` still shadow `CLAUDE.md` in the same directory. A rule with `paths:` is skipped, since nothing here injects per file. |
 | MCP servers | `<project>/.mcp.json` | Held back until the project is trusted (below). |
 | Output styles | `~/.claude/output-styles`, `<project>/.claude/output-styles`, `~/.wizard/output-styles`, `<project>/.wizard/output-styles`; built-ins `default`, `explanatory`, `learning` | Chosen with `/output-style`, stored in `~/.wizard/output-style`; falls back to `outputStyle` in `.claude/settings.json`. Applied when the agent is built, so `/output-style` reloads. |
-| Plugins | `~/.claude/plugins/installed_plugins.json` entries enabled in `enabledPlugins`; `~/.wizard/claude-plugins/installed`; `--plugin-dir` | Commands (`plugin:cmd`), skills, agents, output styles and `.mcp.json`. Plugin hooks are not loaded. |
+| Plugins | `~/.claude/plugins/installed_plugins.json` entries enabled in `enabledPlugins`; `~/.wizard/claude-plugins/installed`; `--plugin-dir` | Commands (`plugin:cmd`), skills, agents, output styles, `.mcp.json` and hooks. A plugin's `hooks/hooks.json` (or the manifest's `hooks`, a path or an inline object) goes through the hooks engine like a Claude-format settings hook, with `${CLAUDE_PLUGIN_ROOT}` filled in; `/hooks` lists them as `plugin <name>` and `disableAllHooks` turns them off. |
 | Marketplaces | `~/.wizard/claude-plugins/marketplaces`, and Claude Code's `known_marketplaces.json` | `owner/repo` and URL sources are cloned with `git`; relative, `github` and `url` plugin sources install, others are named as unsupported. |
 
 ### Trust
@@ -299,7 +319,62 @@ since the user named them.
 
 - `keybindings.json`: `/keybindings init` creates the file and nothing reads it yet. Remapping needs the TUI's
   key handling, which is another worker's code.
-- Claude Code `settings.json` (permissions, hooks, env, `statusLine`): the settings work.
 - `.claude/settings.json` plugin enablement for Wizard-installed plugins: those are enabled by being installed;
   `/plugin disable` turns one off.
 - `!` commands inside command files and `allowed-tools`/`model` frontmatter on commands.
+
+### Settings keys
+
+Read from the same layers as hooks and permissions (see `src/config/claude.rs`). Honored:
+
+| Key | What Wizard does |
+|---|---|
+| `permissions`, `hooks`, `env`, `disableAllHooks` | The permissions and hooks work. |
+| `outputStyle` | The active style when `/output-style` has not chosen one. |
+| `statusLine` | Stored and reported by `/statusline`; the terminal UI draws it. |
+| `model` | Wizard-named files only, since a Claude model id means nothing to another provider. |
+| `modelOverrides` | A name mapped to the model it stands for, applied to `--model` and `/model`: `{"opus": "grok-4.3"}`. |
+| `availableModels` | When set, `--model` and `/model` refuse anything else. |
+| `effortLevel` | The reasoning effort when `--effort` is not given. |
+| `fallbackModel` | The default for `--fallback-model` in headless runs. |
+| `language` | Adds "Respond in X" to the system prompt. |
+| `attribution.commit`, `attribution.pr` | Text the model is told to end commit messages and pull request descriptions with; an empty string tells it to add none. Wizard adds no attribution by default, so `includeCoAuthoredBy` has nothing to switch. |
+| `cleanupPeriodDays` | Sessions not written to for that many days are deleted at startup (0 means never). A session named by `--resume` is kept. |
+| `apiKeyHelper` | A command run once at startup (10 second limit); its output becomes the active provider's key unless that provider's variable is already set. User and managed files only: a project cannot name a command to run. |
+
+Not honored, and why: `sandbox.*` (no OS sandbox), `voice*` and `spinnerTips*` (no audio stack, other UI), `theme`
+and `tui` (the skin carries them), `forceLogin*`, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper` and the
+managed-policy keys (`allowManaged*`, `strictKnownMarketplaces`, ...: Anthropic account and enterprise plumbing),
+`autoMode*`, `fastMode*` and `advisorModel` (Anthropic model features), `worktree.*` and `plansDirectory`
+(Wizard's worktree and plan locations are fixed), `includeCoAuthoredBy` (see above), `permissions.additionalDirectories`
+(the permissions work). Keys not listed here are read and ignored.
+
+### Headless output
+
+Captured from Claude Code 2.1.314 driven against a fake Messages server and compared with Wizard against a mock
+OpenAI server, by the shape of every line (`stream-json --verbose`, `--include-partial-messages`, `json`, and
+`--input-format stream-json` with `--replay-user-messages`).
+
+Matches: the `system` init keys (`cwd`, `session_id`, `tools`, `model`, `permissionMode`, `slash_commands`,
+`skills`, `agents`, `plugins`, `mcp_servers`, `output_style`, `claude_code_version`, ...); `assistant` messages
+with the same keys (`message.id`, `content` blocks, `usage`, `parent_tool_use_id`, `uuid`), one per content block as
+in Claude Code; `user` messages carrying `tool_result` blocks with the matching `tool_use_id`, and `tool_use_result`
+for `Bash`; the `stream_event` sequence (`message_start`, `content_block_start`, `content_block_delta`,
+`content_block_stop`, `message_delta`, `message_stop`) and the `system` `status` line; the `result` keys
+(`subtype`, `is_error`, `num_turns`, `result`, `session_id`, `total_cost_usd`, `usage`, `modelUsage`,
+`permission_denials`, `terminal_reason`, `errors`, ...) with `error_max_turns`, `error_max_budget_usd` and their
+`terminal_reason` and `errors` strings; the per-turn `init` and `result` of a stream-json conversation, and
+`--replay-user-messages` echoes with `isReplay`.
+
+Tool names in `tool_use` blocks and the init `tools` list are Claude's (`Bash`, `Read`, ...), through the same map the
+hooks use, with `path` renamed `file_path`. Wizard's own fields stay on the `result`: `reason`, `turns`, `steps`,
+`usage.prompt_tokens` and `completion_tokens`, and for `json` also `text` (every step's text, where `result` is the
+last step's, as in Claude Code), `tool_calls`, `images`.
+
+Differs: `stream-json` no longer ends with a `{"type":"done"}` line and the old `tool_call`, `tool_result`,
+`text_delta`, `usage`, `step` and `turn_done` lines are gone; the `result` line replaces them. The costs are
+estimates and token counts carry no cache split. Not carried: `rate_limit_event`, the timing fields (`ttft_ms`, ...),
+`subagent_stats`, `fast_mode_*`, `safety_stops`, `memory_paths`, `capabilities`, `tool_result_meta`, and
+`tool_use_result` for tools other than `Bash` (Claude's carry a per-tool object). `thinking` blocks have an empty
+`signature`. `num_turns` counts model calls. Claude Code's `--json-schema` result has no `structured_output` when the
+model never called its tool; Wizard sets it whenever the text validated.
