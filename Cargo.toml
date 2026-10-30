@@ -399,6 +399,7 @@ croner = "3"
 
 # File matching for list_files / skills discovery
 globset = "0.4"
+regex = "1"
 
 # Copy-on-write (reflink) file cloning for fast fleet worktrees. reflink_or_copy
 # falls back to a plain byte copy when the filesystem lacks FICLONE/clonefile.

@@ -39,6 +39,7 @@ pub mod memory;
 pub mod mux;
 pub mod onboarding;
 pub mod output;
+pub mod permissions;
 pub mod pi_plugins;
 pub mod platform;
 pub mod starter;

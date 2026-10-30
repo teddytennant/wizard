@@ -5333,6 +5333,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "reflink-copy",
+ "regex",
  "reqwest",
  "rquickjs",
  "rustls",
