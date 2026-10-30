@@ -58,7 +58,11 @@ fn read_json(path: &Path) -> Option<Value> {
 /// Everything `.mcp.json`, active plugins and the user's own Claude Code and
 /// `wizard mcp add` entries contribute for `project_root`.
 pub fn discover(project_root: &Path) -> Found {
-    let mut found = discover_with(project_root, project_trusted(project_root));
+    let mut found = discover_with(
+        project_root,
+        project_trusted(project_root),
+        &Approvals::read(project_root),
+    );
     if !found.strict && !super::bare() {
         let (servers, unsupported) = user_owned(project_root);
         found.servers.extend(servers);
@@ -68,7 +72,50 @@ pub fn discover(project_root: &Path) -> Found {
     found
         .servers
         .retain(|server| seen.insert(server.name.clone()));
+    for server in &mut found.servers {
+        expand_server(server, &|name| std::env::var(name).ok());
+    }
     found
+}
+
+/// `${VAR}` and `${VAR:-default}` in a string, as Claude Code expands them in
+/// `.mcp.json`. A variable that is unset and has no default is left as
+/// written, so the failure shows up as the server's own error.
+pub(crate) fn expand_vars(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let body = &after[..end];
+        let (name, default) = match body.split_once(":-") {
+            Some((name, default)) => (name, Some(default)),
+            None => (body, None),
+        };
+        match lookup(name).or_else(|| default.map(str::to_string)) {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(&rest[start..start + 2 + end + 1]),
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn expand_server(server: &mut McpServerConfig, lookup: &dyn Fn(&str) -> Option<String>) {
+    let expand = |text: &str| expand_vars(text, lookup);
+    server.command = server.command.as_deref().map(expand);
+    server.url = server.url.as_deref().map(expand);
+    for arg in &mut server.args {
+        *arg = expand(arg);
+    }
+    for value in server.env.values_mut().chain(server.headers.values_mut()) {
+        *value = expand(value);
+    }
 }
 
 /// `~/.wizard/local-mcp.json`: servers added with `wizard mcp add` at the
@@ -125,7 +172,53 @@ fn user_owned(project_root: &Path) -> (Vec<McpServerConfig>, Vec<String>) {
     (servers, unsupported)
 }
 
-fn discover_with(project_root: &Path, trusted: bool) -> Found {
+/// What the user's own settings say about `.mcp.json` servers. Claude Code
+/// records these when you approve a server in its dialog, and Wizard honors
+/// them so a project you already approved there does not ask again.
+///
+/// Read from `~/.claude/settings.json` and the project's
+/// `.claude/settings.local.json` only. The shared `.claude/settings.json`
+/// arrives with a clone, so it cannot approve its own servers.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Approvals {
+    /// `enableAllProjectMcpServers`.
+    pub all: bool,
+    /// `enabledMcpjsonServers`.
+    pub enabled: Vec<String>,
+    /// `disabledMcpjsonServers`: never connected, even when trusted.
+    pub disabled: Vec<String>,
+}
+
+impl Approvals {
+    pub fn read(project_root: &Path) -> Self {
+        let mut files = Vec::new();
+        if let Some(user) = super::user_dir() {
+            files.push(user.join("settings.json"));
+        }
+        files.push(project_root.join(".claude/settings.local.json"));
+        Self::from_documents(files.iter().filter_map(|path| read_json(path)))
+    }
+
+    fn from_documents(documents: impl Iterator<Item = Value>) -> Self {
+        let mut out = Self::default();
+        for doc in documents {
+            if doc.get("enableAllProjectMcpServers").and_then(Value::as_bool) == Some(true) {
+                out.all = true;
+            }
+            for (key, list) in [
+                ("enabledMcpjsonServers", &mut out.enabled),
+                ("disabledMcpjsonServers", &mut out.disabled),
+            ] {
+                if let Some(names) = doc.get(key).and_then(Value::as_array) {
+                    list.extend(names.iter().filter_map(Value::as_str).map(str::to_string));
+                }
+            }
+        }
+        out
+    }
+}
+
+fn discover_with(project_root: &Path, trusted: bool, approvals: &Approvals) -> Found {
     let mut found = Found::default();
     let (named, skipped) = cli_servers();
     found.servers.extend(named);
@@ -145,10 +238,15 @@ fn discover_with(project_root: &Path, trusted: bool) -> Found {
     if let Some(json) = read_json(&project_root.join(".mcp.json")) {
         let (servers, unsupported) = crate::import_claude::parse_mcp_servers(&json);
         found.unsupported.extend(unsupported);
-        if trusted {
-            found.servers.extend(servers);
-        } else {
-            found.pending.extend(servers.into_iter().map(|s| s.name));
+        for server in servers {
+            if approvals.disabled.contains(&server.name) {
+                continue;
+            }
+            if trusted || approvals.all || approvals.enabled.contains(&server.name) {
+                found.servers.push(server);
+            } else {
+                found.pending.push(server.name);
+            }
         }
     }
     found
@@ -179,12 +277,12 @@ mod tests {
             ".mcp.json",
             r#"{"mcpServers":{"fs":{"command":"echo","args":["x"]},"remote":{"type":"sse","url":"http://x"}}}"#,
         );
-        let held = discover_with(tmp.path(), false);
+        let held = discover_with(tmp.path(), false, &Approvals::default());
         assert!(held.servers.is_empty());
         assert_eq!(held.pending, ["fs"]);
         assert_eq!(held.unsupported, ["remote"]);
 
-        let trusted = discover_with(tmp.path(), true);
+        let trusted = discover_with(tmp.path(), true, &Approvals::default());
         assert_eq!(trusted.servers.len(), 1);
         assert_eq!(trusted.servers[0].name, "fs");
         assert!(trusted.pending.is_empty());
@@ -209,9 +307,45 @@ mod tests {
     }
 
     #[test]
+    fn settings_approve_and_disable_project_servers_by_name() {
+        let tmp = Tmp::new("mcp4");
+        tmp.write(
+            ".mcp.json",
+            r#"{"mcpServers":{"a":{"command":"x"},"b":{"command":"x"},"c":{"command":"x"}}}"#,
+        );
+        let approvals = Approvals::from_documents(
+            [serde_json::json!({
+                "enabledMcpjsonServers": ["a"],
+                "disabledMcpjsonServers": ["c"],
+            })]
+            .into_iter(),
+        );
+        let found = discover_with(tmp.path(), false, &approvals);
+        let names: Vec<_> = found.servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["a"]);
+        assert_eq!(found.pending, ["b"]);
+
+        let all = Approvals::from_documents(
+            [serde_json::json!({"enableAllProjectMcpServers": true})].into_iter(),
+        );
+        let found = discover_with(tmp.path(), false, &all);
+        assert_eq!(found.servers.len(), 3);
+    }
+
+    #[test]
+    fn dollar_brace_variables_expand_like_claude_code() {
+        let lookup = |name: &str| (name == "TOKEN").then(|| "abc".to_string());
+        assert_eq!(expand_vars("Bearer ${TOKEN}", &lookup), "Bearer abc");
+        assert_eq!(expand_vars("${NOPE:-fallback}/x", &lookup), "fallback/x");
+        assert_eq!(expand_vars("${NOPE}", &lookup), "${NOPE}");
+        assert_eq!(expand_vars("a ${unterminated", &lookup), "a ${unterminated");
+        assert_eq!(expand_vars("no vars", &lookup), "no vars");
+    }
+
+    #[test]
     fn no_file_finds_nothing() {
         let tmp = Tmp::new("mcp2");
-        let found = discover_with(tmp.path(), true);
+        let found = discover_with(tmp.path(), true, &Approvals::default());
         assert!(found.servers.is_empty() && found.pending.is_empty());
     }
 }
