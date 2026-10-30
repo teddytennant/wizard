@@ -148,13 +148,24 @@ impl Harness {
     }
 }
 
+/// A capture of the real program: `ref` (Claude Code 2.1.300, a subscription) first, then
+/// `ref-2.1.314` (the scenes captured later against the installed 2.1.314).
+fn ref_file(name: &str, ext: &str) -> PathBuf {
+    let old = fixtures().join("ref").join(format!("{name}.{ext}"));
+    if old.exists() {
+        old
+    } else {
+        fixtures().join("ref-2.1.314").join(format!("{name}.{ext}"))
+    }
+}
+
 /// A reference capture painted into a buffer of its size.
 pub fn reference(name: &str) -> Buffer {
     let size = name.rsplit('-').next().unwrap();
     let (w, h) = size.split_once('x').unwrap();
     let (w, h): (u16, u16) = (w.parse().unwrap(), h.parse().unwrap());
-    let text = std::fs::read_to_string(fixtures().join("ref").join(format!("{name}.ansi")))
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let text =
+        std::fs::read_to_string(ref_file(name, "ansi")).unwrap_or_else(|e| panic!("{name}: {e}"));
     let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
     let mut style = Style::new();
     for (y, line) in text.split('\n').enumerate().take(h as usize) {
@@ -332,8 +343,7 @@ pub fn assert_matches(hn: &mut Harness, name: &str, extra: &[&str]) {
     let mut t = hn.render();
     // Claude Code 2.1.300 showed the terminal's cursor; 2.1.314 hides it and paints an inverse
     // cell. A capture of the older one has no such cell, so the look's is taken off for it.
-    let meta = std::fs::read_to_string(fixtures().join("ref").join(format!("{name}.meta")))
-        .unwrap_or_default();
+    let meta = std::fs::read_to_string(ref_file(name, "meta")).unwrap_or_default();
     if meta.contains("visible=1") {
         if let Some((x, y)) = hn.app.cursor {
             t.buffer_mut()[(x, y)].modifier.remove(Modifier::REVERSED);

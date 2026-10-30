@@ -5,6 +5,7 @@ pub mod dialogs;
 pub mod diff;
 pub mod markdown;
 pub mod prompt;
+pub mod tasks;
 pub mod transcript;
 
 use ratatui::buffer::Buffer;

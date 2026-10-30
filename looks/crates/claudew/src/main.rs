@@ -182,6 +182,7 @@ async fn real_main(opts: AppOpts) -> Result<()> {
     let wizard = opts.backend == BackendKind::Wizard;
     let mut app = App::new(opts, tx, msg_tx.clone());
     app.init_modal();
+    app.load_status_line();
     // the header names wizard's version from the first frame, before the session answers
     if wizard && app.cfg.backend.is_empty() {
         if let Some(v) = wizard_version() {
