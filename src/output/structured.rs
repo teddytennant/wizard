@@ -259,6 +259,7 @@ impl<W: Write + Send> StreamJsonSink<W> {
             AgentEvent::PermissionRequest { gate, .. } => {
                 // Nobody here to ask; the call is refused.
                 gate.answer(crate::agent::PermissionAnswer::Unavailable);
+                json!({"type": "permission_request", "answered": false})
             }
             AgentEvent::Interview { questions, gate } => {
                 // No interactive user: report the questions, then decline so
