@@ -518,7 +518,7 @@ while True:
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.zz"), "x").unwrap();
         let script = dir.path().join("exit_now.sh");
-        std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::write(&script, "#!/bin/sh\necho no toolchain >&2\nexit 1\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let spec = ServerSpec {
             name: "dead".to_string(),
@@ -538,6 +538,11 @@ while True:
         assert!(
             out.content.starts_with("Error performing hover:"),
             "{}",
+            out.content
+        );
+        assert!(
+            out.content.contains("server said: no toolchain"),
+            "the server's own words say why: {}",
             out.content
         );
     }

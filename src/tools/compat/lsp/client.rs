@@ -68,6 +68,8 @@ pub struct Server {
     open: Mutex<HashMap<String, (i64, String)>>,
     started: Instant,
     ready: Mutex<bool>,
+    /// The end of what the server wrote to stderr, for saying why it died.
+    stderr: Arc<std::sync::Mutex<String>>,
     _child: Child,
 }
 
@@ -115,13 +117,17 @@ impl Server {
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", spec.command))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stdin = Arc::new(Mutex::new(stdin));
+        let stderr_tail: Arc<std::sync::Mutex<String>> = Arc::default();
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_tail)));
+        }
         let pending: Pending = Arc::default();
         let activity: Arc<std::sync::Mutex<Activity>> = Arc::default();
         tokio::spawn(read_loop(
@@ -138,6 +144,7 @@ impl Server {
             open: Mutex::new(HashMap::new()),
             started: Instant::now(),
             ready: Mutex::new(false),
+            stderr: stderr_tail,
             _child: child,
         });
         let root_uri = path_to_uri(root);
@@ -173,9 +180,21 @@ impl Server {
         });
         server
             .request_within("initialize", params, INIT_TIMEOUT)
-            .await?;
+            .await
+            .map_err(|err| server.explain(err))?;
         server.notify("initialized", json!({})).await?;
         Ok(server)
+    }
+
+    /// `err`, with the last of the server's stderr when it has said anything.
+    fn explain(&self, err: String) -> String {
+        let tail = self.stderr.lock().unwrap_or_else(|e| e.into_inner());
+        let tail = tail.trim();
+        if tail.is_empty() {
+            err
+        } else {
+            format!("{err} (server said: {tail})")
+        }
     }
 
     async fn send(&self, message: &Value) -> Result<(), String> {
@@ -207,7 +226,11 @@ impl Server {
         }
         match tokio::time::timeout(limit, rx).await {
             Ok(Ok(answer)) => answer,
-            Ok(Err(_)) => Err("the language server exited".to_string()),
+            Ok(Err(_)) => {
+                // Let the stderr reader catch up with whatever it said last.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Err(self.explain("the language server exited".to_string()))
+            }
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
                 Err(format!(
@@ -289,6 +312,25 @@ impl Server {
             }
         }
         Ok(uri)
+    }
+}
+
+/// Keep the last few hundred bytes of the server's stderr.
+async fn drain_stderr(stderr: tokio::process::ChildStderr, tail: Arc<std::sync::Mutex<String>>) {
+    let mut lines = BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
+        if !tail.is_empty() {
+            tail.push(' ');
+        }
+        tail.push_str(line.trim());
+        if tail.len() > 600 {
+            let cut = tail.len() - 600;
+            let at = (cut..tail.len())
+                .find(|i| tail.is_char_boundary(*i))
+                .unwrap_or(tail.len());
+            *tail = tail[at..].to_string();
+        }
     }
 }
 
