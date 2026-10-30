@@ -10,6 +10,8 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
+pub mod claude;
+
 use crate::cli::Cli;
 use crate::llm::provider::LlmProvider;
 // `ProviderKind` is re-exported from here (see below) because twenty-three
@@ -1443,6 +1445,34 @@ pub struct Config {
     /// on. See [`ComputerConfig`].
     #[serde(default)]
     pub computer: ComputerConfig,
+    /// Permission rules and mode (`[permissions]`).
+    #[serde(default)]
+    pub permissions: PermissionsConfig,
+    /// Permission flags for this run only (`--permission-mode`,
+    /// `--allowedTools`, `--disallowedTools`). Never written to disk.
+    #[serde(skip)]
+    pub run_permissions: PermissionsConfig,
+}
+
+/// Permission rules in `config.toml` (`[permissions]`). The same lists a
+/// Claude Code `settings.json` has under `permissions`, in the same rule
+/// syntax; see `docs/permissions.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionsConfig {
+    /// `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` or
+    /// `auto`. Unset is `default`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::permissions::PermissionMode>,
+    /// Rules that let a call run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    /// Rules that need approval.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<String>,
+    /// Rules that refuse a call. They win over the other two lists.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
 }
 
 /// Default port for the local llama.cpp `llama-server`. Deliberately not 8080:
@@ -1502,6 +1532,8 @@ impl Default for Config {
             decisions: None,
             code_mode: false,
             computer: ComputerConfig::default(),
+            permissions: PermissionsConfig::default(),
+            run_permissions: PermissionsConfig::default(),
         }
     }
 }
@@ -1689,6 +1721,7 @@ impl Config {
         } else {
             Self::default()
         };
+        config.apply_wizard_settings_model();
         config.apply_env();
         if let Some(program) = config.shell.program.as_deref().filter(|p| !p.is_empty()) {
             crate::platform::shell::set_program(program);
@@ -1703,6 +1736,26 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// `model` from `~/.wizard/settings.json`, the Claude-format file Wizard
+    /// owns. `config.toml` is read first and this wins over it, because a
+    /// user who writes the key into a second file means it. The environment
+    /// still wins over both.
+    fn apply_wizard_settings_model(&mut self) {
+        let Ok(dir) = Self::wizard_dir() else { return };
+        let settings = claude::load_from(
+            std::path::Path::new("/nonexistent-wizard-project"),
+            &[(dir, true)],
+            &[],
+            claude::Trust::Refused,
+        );
+        if let Some(model) = settings.model.filter(|m| !m.trim().is_empty()) {
+            self.model = model.clone();
+            if let Some(index) = self.active_index() {
+                self.providers[index].model = model;
+            }
+        }
     }
 
     /// Parse a config file. Unknown keys are ignored; missing keys take the
@@ -1976,7 +2029,13 @@ impl Config {
         let path = Self::path()?;
         let raw = toml::to_string_pretty(self).context("serializing config")?;
         crate::platform::secrets::write_atomic(&path, raw.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", path.display()))?;
+        crate::hooks::emit_detached(
+            crate::hooks::event::HookEvent::ConfigChange,
+            Some("user_settings".to_string()),
+            serde_json::json!({ "source": "user_settings", "file_path": path }),
+        );
+        Ok(())
     }
 
     /// The `[computer]` table as it is on disk now, or `None` when there is no
@@ -2033,7 +2092,60 @@ impl Config {
             self.plan_first = true;
         }
         self.max_steps = self.max_steps.for_mode(self.mode);
+        self.apply_permission_flags(cli);
     }
+
+    /// `--permission-mode`, `--allowedTools` and `--disallowedTools`, and a
+    /// `plan` default mode from any settings layer. Plan mode is Wizard's own
+    /// read-only-then-approve loop, so it becomes `plan_first` and not a rule.
+    fn apply_permission_flags(&mut self, cli: &Cli) {
+        let split = |values: &[String]| -> Vec<String> {
+            values.iter().flat_map(|v| split_rules(v)).collect()
+        };
+        self.run_permissions.allow = split(&cli.allowed_tools);
+        self.run_permissions.deny = split(&cli.disallowed_tools);
+        self.run_permissions.mode = cli.permission_mode;
+        let mut mode = cli.permission_mode.or(self.permissions.mode);
+        if mode.is_none()
+            && let Ok(root) = std::env::current_dir()
+        {
+            mode = claude::load(&root, claude::Trust::Refused).default_mode;
+        }
+        if mode == Some(crate::permissions::PermissionMode::Plan) {
+            self.plan_first = true;
+        }
+    }
+}
+
+/// Split a `--allowedTools` value on commas and spaces that sit outside
+/// parentheses, so `"Bash(git diff:*),Read"` and `Bash(git diff:*) Read`
+/// both give two rules.
+pub fn split_rules(text: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    for c in text.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(c);
+            }
+            ',' | ' ' if depth == 0 => {
+                if !current.is_empty() {
+                    rules.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        rules.push(current);
+    }
+    rules
 }
 
 #[cfg(test)]

@@ -345,10 +345,26 @@ fn full_file_round_trips() {
                 ..ComputerVmConfig::default()
             },
         },
+        permissions: PermissionsConfig {
+            mode: Some(crate::permissions::PermissionMode::AcceptEdits),
+            allow: vec!["Bash(ls:*)".to_string()],
+            ask: Vec::new(),
+            deny: vec!["Read(.env)".to_string()],
+        },
+        run_permissions: PermissionsConfig {
+            deny: vec!["Bash".to_string()],
+            ..PermissionsConfig::default()
+        },
     };
     let raw = toml::to_string_pretty(&original).expect("serialize");
     let parsed: Config = toml::from_str(&raw).expect("parse back");
     assert_eq!(parsed.model, original.model);
+    assert_eq!(parsed.permissions, original.permissions);
+    assert_eq!(
+        parsed.run_permissions,
+        PermissionsConfig::default(),
+        "a run's flags are never written to disk"
+    );
     assert_eq!(parsed.ollama_host, original.ollama_host);
     assert_eq!(parsed.llamacpp_host, original.llamacpp_host);
     assert_eq!(parsed.gguf_path, original.gguf_path);

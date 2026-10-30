@@ -156,6 +156,23 @@ pub struct Cli {
     #[arg(long, value_name = "PROFILE")]
     pub token_profile: Option<String>,
 
+    /// How strictly tool calls are checked: default, acceptEdits, plan,
+    /// dontAsk, bypassPermissions or auto. Same names and meaning as Claude
+    /// Code; see docs/permissions.md. `plan` starts the session in plan mode,
+    /// like `--plan`.
+    #[arg(long = "permission-mode", value_name = "MODE")]
+    pub permission_mode: Option<crate::permissions::PermissionMode>,
+
+    /// Permission rules that let matching tool calls run, such as
+    /// `"Bash(git diff:*)" Read`. Space or comma separated, repeatable.
+    #[arg(long = "allowedTools", visible_alias = "allowed-tools", value_name = "RULE", num_args = 1.., action = clap::ArgAction::Append)]
+    pub allowed_tools: Vec<String>,
+
+    /// Permission rules that refuse matching tool calls, such as
+    /// `"Bash(rm:*)"`. Deny wins over allow and ask.
+    #[arg(long = "disallowedTools", visible_alias = "disallowed-tools", value_name = "RULE", num_args = 1.., action = clap::ArgAction::Append)]
+    pub disallowed_tools: Vec<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -225,6 +242,15 @@ impl Cli {
         }
         if self.login.is_some() {
             ignored.push("--login");
+        }
+        if self.permission_mode.is_some() {
+            ignored.push("--permission-mode");
+        }
+        if !self.allowed_tools.is_empty() {
+            ignored.push("--allowedTools");
+        }
+        if !self.disallowed_tools.is_empty() {
+            ignored.push("--disallowedTools");
         }
         ignored
     }

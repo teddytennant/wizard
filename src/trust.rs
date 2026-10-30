@@ -51,7 +51,19 @@ pub const PROJECT_HOOKS_FILE: &str = ".wizard/hooks.toml";
 /// contents feed the fingerprint, so a change to any of them re-opens the
 /// trust question. Grow this list whenever a new project file becomes
 /// executable.
-const EXECUTABLE_SURFACE: [&str; 1] = [PROJECT_HOOKS_FILE];
+///
+/// The settings files count only when they carry a key that runs something
+/// (`hooks`, `env`, `statusLine`, a helper command); see
+/// [`crate::config::claude::is_executable`]. A `.claude/settings.json` that
+/// holds nothing but permission rules is data, and asking about it would
+/// train people to say yes.
+const EXECUTABLE_SURFACE: [&str; 5] = [
+    PROJECT_HOOKS_FILE,
+    ".claude/settings.json",
+    ".wizard/settings.json",
+    ".claude/settings.local.json",
+    ".wizard/settings.local.json",
+];
 
 /// Environment opt-in for unattended runs: `WIZARD_TRUST_PROJECT=1` (also
 /// `true` / `yes`) trusts projects that have no decision on record, for this
@@ -186,6 +198,9 @@ impl Surface {
             .filter_map(|rel| {
                 let path = root.join(rel);
                 let contents = std::fs::read(&path).ok()?;
+                if rel.ends_with(".json") && !crate::config::claude::is_executable(&contents) {
+                    return None;
+                }
                 Some(SurfaceFile {
                     rel,
                     path,
