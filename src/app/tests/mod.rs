@@ -4993,3 +4993,31 @@ fn a_handed_over_session_never_lands_in_config_toml() {
     app.keep(crate::skin::handoff::Setting::Mode);
     assert_eq!(app.config_to_save().mode, Mode::Sovereign);
 }
+
+/// Claude Code's shortcuts panel is not a mode: typing dismisses it and the
+/// character lands in the composer, Backspace and `?` dismiss it, and nothing
+/// else is swallowed behind it.
+#[test]
+fn the_keys_overlay_gives_way_to_typing() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('?'));
+    assert!(app.keys_help);
+    press(&mut app, KeyCode::Char('h'));
+    assert!(!app.keys_help);
+    assert_eq!(app.input, "h");
+
+    let mut app = crate::app::tests::app();
+    press(&mut app, KeyCode::Char('?'));
+    press(&mut app, KeyCode::Backspace);
+    assert!(!app.keys_help);
+    assert!(app.input.is_empty());
+
+    press(&mut app, KeyCode::Char('?'));
+    press(&mut app, KeyCode::Char('?'));
+    assert!(!app.keys_help);
+    assert!(app.input.is_empty());
+
+    press(&mut app, KeyCode::Char('?'));
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.keys_help);
+}
