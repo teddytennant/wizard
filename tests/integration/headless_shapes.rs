@@ -164,15 +164,31 @@ fn exists(dir: &Path, name: &str) -> bool {
 fn stream_json_has_claude_codes_message_shapes() {
     let mock = Mock::start();
     let home = Home::new(&mock);
-    let out = home.run(&["-p", "echo hi", "--output-format", "stream-json", "--verbose"]);
+    let out = home.run(&[
+        "-p",
+        "echo hi",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]);
     let values = lines(&out);
     let types = kinds(&values);
-    assert_eq!(types.first().map(String::as_str), Some("system/init"), "{types:?}");
+    assert_eq!(
+        types.first().map(String::as_str),
+        Some("system/init"),
+        "{types:?}"
+    );
     assert!(
-        types.windows(3).any(|w| w == ["assistant", "user", "assistant"]),
+        types
+            .windows(3)
+            .any(|w| w == ["assistant", "user", "assistant"]),
         "tool_use, tool_result, answer: {types:?}"
     );
-    assert_eq!(types.last().map(String::as_str), Some("result"), "{types:?}");
+    assert_eq!(
+        types.last().map(String::as_str),
+        Some("result"),
+        "{types:?}"
+    );
 
     let tool_use = values
         .iter()
@@ -205,9 +221,25 @@ fn json_is_the_result_object_with_wizards_keys() {
     assert_eq!(values.len(), 1);
     let result = &values[0];
     for key in [
-        "type", "subtype", "is_error", "duration_ms", "num_turns", "result", "session_id",
-        "total_cost_usd", "usage", "modelUsage", "permission_denials", "terminal_reason", "uuid",
-        "reason", "turns", "steps", "tool_calls", "errors", "text",
+        "type",
+        "subtype",
+        "is_error",
+        "duration_ms",
+        "num_turns",
+        "result",
+        "session_id",
+        "total_cost_usd",
+        "usage",
+        "modelUsage",
+        "permission_denials",
+        "terminal_reason",
+        "uuid",
+        "reason",
+        "turns",
+        "steps",
+        "tool_calls",
+        "errors",
+        "text",
     ] {
         assert!(result.get(key).is_some(), "result lacks {key}: {result}");
     }
@@ -234,7 +266,10 @@ fn partial_messages_add_the_stream_events() {
         "event/message_delta",
         "event/message_stop",
     ] {
-        assert!(types.iter().any(|t| t == expected), "no {expected} in {types:?}");
+        assert!(
+            types.iter().any(|t| t == expected),
+            "no {expected} in {types:?}"
+        );
     }
 }
 
@@ -262,7 +297,14 @@ fn session_flags_name_fork_and_discard_sessions() {
     let mock = Mock::start();
     let home = Home::new(&mock);
     let first = home.run(&[
-        "-p", "say hello", "--output-format", "json", "--session-id", "first-1", "--name", "my work",
+        "-p",
+        "say hello",
+        "--output-format",
+        "json",
+        "--session-id",
+        "first-1",
+        "--name",
+        "my work",
     ]);
     assert_eq!(lines(&first)[0]["session_id"], "first-1");
     assert!(exists(&home.sessions(), "first-1.jsonl"));
@@ -273,16 +315,32 @@ fn session_flags_name_fork_and_discard_sessions() {
     assert!(String::from_utf8_lossy(&reuse.stderr).contains("already in use"));
 
     let forked = home.run(&[
-        "-p", "more", "--output-format", "json", "--resume", "my work", "--fork-session",
-        "--session-id", "second-1",
+        "-p",
+        "more",
+        "--output-format",
+        "json",
+        "--resume",
+        "my work",
+        "--fork-session",
+        "--session-id",
+        "second-1",
     ]);
     assert_eq!(lines(&forked)[0]["session_id"], "second-1");
     let original = std::fs::read_to_string(home.sessions().join("first-1.jsonl")).unwrap();
     let copy = std::fs::read_to_string(home.sessions().join("second-1.jsonl")).unwrap();
-    assert!(copy.len() > original.len(), "the fork continued; the original did not");
+    assert!(
+        copy.len() > original.len(),
+        "the fork continued; the original did not"
+    );
 
     let gone = home.run(&[
-        "-p", "bye", "--output-format", "json", "--no-session-persistence", "--session-id", "gone-1",
+        "-p",
+        "bye",
+        "--output-format",
+        "json",
+        "--no-session-persistence",
+        "--session-id",
+        "gone-1",
     ]);
     assert_eq!(lines(&gone)[0]["session_id"], "gone-1");
     assert!(!exists(&home.sessions(), "gone-1.jsonl"));
@@ -312,7 +370,14 @@ fn stream_json_input_is_a_conversation() {
     let mock = Mock::start();
     let home = Home::new(&mock);
     let mut child = Command::new(env!("CARGO_BIN_EXE_wizard"))
-        .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
+        .args([
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ])
         .env("HOME", &home.0)
         .env("WIZARD_HOME", home.0.join(".wizard"))
         .current_dir(&home.0)
@@ -323,16 +388,40 @@ fn stream_json_input_is_a_conversation() {
         .expect("spawn");
     {
         let stdin = child.stdin.as_mut().expect("stdin");
-        writeln!(stdin, r#"{{"type":"control_request","request_id":"r1","request":{{"subtype":"initialize"}}}}"#).unwrap();
-        writeln!(stdin, r#"{{"type":"user","message":{{"role":"user","content":"say hello"}}}}"#).unwrap();
-        writeln!(stdin, r#"{{"type":"user","message":{{"role":"user","content":"say it again"}}}}"#).unwrap();
+        writeln!(
+            stdin,
+            r#"{{"type":"control_request","request_id":"r1","request":{{"subtype":"initialize"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"type":"user","message":{{"role":"user","content":"say hello"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"type":"user","message":{{"role":"user","content":"say it again"}}}}"#
+        )
+        .unwrap();
     }
     drop(child.stdin.take());
     let out = child.wait_with_output().expect("exit");
     let types = kinds(&lines(&out));
-    assert_eq!(types.first().map(String::as_str), Some("control_response"), "{types:?}");
-    assert_eq!(types.iter().filter(|t| *t == "result").count(), 2, "{types:?}");
-    assert_eq!(types.iter().filter(|t| *t == "system/init").count(), 2, "{types:?}");
+    assert_eq!(
+        types.first().map(String::as_str),
+        Some("control_response"),
+        "{types:?}"
+    );
+    assert_eq!(
+        types.iter().filter(|t| *t == "result").count(),
+        2,
+        "{types:?}"
+    );
+    assert_eq!(
+        types.iter().filter(|t| *t == "system/init").count(),
+        2,
+        "{types:?}"
+    );
 }
 
 #[test]
@@ -340,7 +429,13 @@ fn stream_json_input_needs_stream_json_output() {
     let mock = Mock::start();
     let home = Home::new(&mock);
     let mut child = Command::new(env!("CARGO_BIN_EXE_wizard"))
-        .args(["--print", "--input-format", "stream-json", "--output-format", "json"])
+        .args([
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "json",
+        ])
         .env("HOME", &home.0)
         .env("WIZARD_HOME", home.0.join(".wizard"))
         .current_dir(&home.0)
