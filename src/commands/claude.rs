@@ -164,6 +164,31 @@ const READ_ONLY: &[&str] = &[
     "auto-mode-setup",
 ];
 
+/// The `DISABLE_<NAME>_COMMAND` variable that turns a command off, if one is
+/// set: Claude Code's way to take `/login`, `/logout`, `/upgrade`,
+/// `/feedback` (and `/bug`), `/doctor`, `/usage-credits` (its extra-usage
+/// command) and `/install-github-app` away from users of a managed install.
+pub fn disabled_by(command: &str, get: &dyn Fn(&str) -> Option<String>) -> Option<&'static str> {
+    let vars: &[&'static str] = match command {
+        "login" => &["DISABLE_LOGIN_COMMAND"],
+        "logout" => &["DISABLE_LOGOUT_COMMAND"],
+        "upgrade" => &["DISABLE_UPGRADE_COMMAND"],
+        "feedback" => &["DISABLE_FEEDBACK_COMMAND", "DISABLE_BUG_COMMAND"],
+        "doctor" => &["DISABLE_DOCTOR_COMMAND"],
+        "usage-credits" => &["DISABLE_EXTRA_USAGE_COMMAND"],
+        "install-github-app" => &["DISABLE_INSTALL_GITHUB_APP_COMMAND"],
+        _ => return None,
+    };
+    vars.iter().copied().find(|var| {
+        get(var).is_some_and(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            )
+        })
+    })
+}
+
 pub fn is_compat(name: &str) -> bool {
     COMPAT.contains(&name)
 }
@@ -653,6 +678,22 @@ impl SlashCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disable_command_variables_turn_a_command_off() {
+        let set = |var: &'static str| move |name: &str| (name == var).then(|| "1".to_string());
+        assert_eq!(
+            disabled_by("login", &set("DISABLE_LOGIN_COMMAND")),
+            Some("DISABLE_LOGIN_COMMAND")
+        );
+        assert_eq!(
+            disabled_by("feedback", &set("DISABLE_BUG_COMMAND")),
+            Some("DISABLE_BUG_COMMAND")
+        );
+        assert_eq!(disabled_by("login", &set("DISABLE_LOGOUT_COMMAND")), None);
+        assert_eq!(disabled_by("model", &set("DISABLE_LOGIN_COMMAND")), None);
+        assert_eq!(disabled_by("login", &|_| Some("0".to_string())), None);
+    }
 
     #[test]
     fn an_alias_is_rewritten_to_the_real_command_keeping_its_arguments() {

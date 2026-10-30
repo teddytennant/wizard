@@ -85,6 +85,11 @@ pub struct ClaudeFlags {
     #[arg(long, value_name = "N")]
     pub max_turns: Option<u32>,
 
+    /// Context size compaction counts for this run: `auto`, or a token count
+    /// such as `200k` or `1m`.
+    #[arg(long, value_name = "auto|TOKENS")]
+    pub autocompact: Option<String>,
+
     /// MCP servers for this run, from JSON files or JSON strings.
     #[arg(long, num_args = 1.., value_name = "FILE_OR_JSON")]
     pub mcp_config: Vec<String>,
@@ -436,6 +441,9 @@ impl ClaudeFlags {
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
         }
+        if let Some(window) = self.autocompact.as_deref().and_then(parse_window) {
+            config.max_context_tokens = window;
+        }
         if let Some(turns) = self
             .max_turns
             .or_else(|| crate::config::claude_env::max_turns(&get))
@@ -461,6 +469,20 @@ pub fn set_model(config: &mut Config, model: &str) {
         provider.model = model.to_string();
         provider.model_pinned = Some(true);
     }
+}
+
+/// `--autocompact` as a token count: `200k`, `1m`, or plain digits. `auto`
+/// and anything unreadable leave the configured window alone.
+fn parse_window(raw: &str) -> Option<u32> {
+    let text = raw.trim().to_ascii_lowercase();
+    let (digits, scale) = match text.strip_suffix('k') {
+        Some(rest) => (rest, 1_000),
+        None => match text.strip_suffix('m') {
+            Some(rest) => (rest, 1_000_000),
+            None => (text.as_str(), 1),
+        },
+    };
+    digits.parse::<u32>().ok()?.checked_mul(scale)
 }
 
 fn parse_effort(raw: &str) -> Option<ReasoningEffort> {
@@ -536,6 +558,8 @@ pub fn normalize_args(
         }
         let next = argv.get(i + 1).and_then(|n| n.to_str());
         match text {
+            // Claude Code's short form of `--version`.
+            "-v" => out.push("--version".into()),
             "-p" | "--prompt" => {
                 let valueless = match next {
                     None => true,
@@ -627,9 +651,24 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
         "no screen-reader mode",
     ),
     (
-        "--autocompact",
+        "--tools",
+        Takes::Many,
+        "the tool set is fixed; --allowedTools and --disallowedTools narrow what runs",
+    ),
+    (
+        "--permission-prompts",
         Takes::One,
-        "compaction follows the config thresholds",
+        "headless runs never wait for a prompt",
+    ),
+    (
+        "--permission-prompt-tool",
+        Takes::One,
+        "no permission prompt tool",
+    ),
+    (
+        "--allow-dangerously-skip-permissions",
+        Takes::Nothing,
+        "--permission-mode bypassPermissions is always available",
     ),
     ("--advisor", Takes::One, "see /fusion and /ultra"),
     (
@@ -1059,6 +1098,35 @@ mod tests {
             norm(&["wizard", "--resume", "doctor"]),
             ["wizard", "--resume", "doctor"]
         );
+    }
+
+    #[test]
+    fn dash_v_is_version_and_the_last_permission_flags_are_stripped() {
+        assert_eq!(norm(&["wizard", "-v"]), ["wizard", "--version"]);
+        assert_eq!(
+            strip(&["wizard", "--tools", "Bash", "Edit", "--model", "m"]),
+            (vec!["wizard".into(), "--model".into(), "m".into()], 1)
+        );
+        assert_eq!(
+            strip(&["wizard", "--permission-prompts", "none", "q"]),
+            (vec!["wizard".into(), "q".into()], 1)
+        );
+        assert_eq!(
+            strip(&["wizard", "--allow-dangerously-skip-permissions", "q"]),
+            (vec!["wizard".into(), "q".into()], 1)
+        );
+    }
+
+    #[test]
+    fn autocompact_takes_a_token_count_and_auto_leaves_the_window_alone() {
+        assert_eq!(parse_window("200k"), Some(200_000));
+        assert_eq!(parse_window("1M"), Some(1_000_000));
+        assert_eq!(parse_window("150000"), Some(150_000));
+        assert_eq!(parse_window("auto"), None);
+        let cli = parse(&["wizard", "--autocompact", "300k", "-p", "x"]);
+        let mut config = Config::default();
+        cli.claude.apply_to(&mut config);
+        assert_eq!(config.max_context_tokens, 300_000);
     }
 
     #[test]

@@ -548,6 +548,9 @@ impl SlashCommand {
         let mut parts = rest.split_whitespace();
         let command = parts.next().unwrap_or("");
         let args: Vec<&str> = parts.collect();
+        if let Some(var) = claude::disabled_by(command, &|name| std::env::var(name).ok()) {
+            return Some(Err(format!("/{command} is turned off by {var}")));
+        }
 
         let parsed = match command {
             "help" => Ok(Self::Help),
