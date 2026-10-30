@@ -86,6 +86,7 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
         --before "rm -rf w.txt .git"
     group turn3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
+    group think && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group think --sizes 80x24,120x40
     # the scenes live wizard is compared with cell by cell, and a session resuming them
     group shared && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
@@ -121,12 +122,13 @@ while IFS="$(printf '\t')" read -r id bytes; do
     head -c "$bytes" /dev/zero | tr '\0' ' ' > "$work/claude-home/.wizard/sessions/$id.jsonl"
 done < "$work/replay/session-files.tsv"
 for size in $(echo "$sizes" | tr , ' '); do
-    for group in static turn light turn2 turn3 wizard; do
+    for group in static turn light turn2 turn3 think wizard; do
         script="$work/replay/$group-$size.jsonl" theme=dark home="$work/claude-home"
         [ "$group" = wizard ] && home="$work/wizard-home"
         [ "$group" = light ] && script="$work/replay/static-$size.jsonl" theme=light
         [ -f "$ref/md-$size.ansi" ] || [ "$group" != turn2 ] || continue
         [ -f "$ref/plan-$size.ansi" ] || [ "$group" != turn3 ] || continue
+        [ -f "$ref/think-done-$size.ansi" ] || [ "$group" != think ] || continue
         reset
         rm -rf "$cwd/w.txt" "$cwd/.git"
         python3 "$here/drive.py" --target look --cwd "$cwd" --out "$work/look" --group "$group" --sizes "$size" \

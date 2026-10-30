@@ -283,6 +283,17 @@ def turn2(ref, cwd, size):
     ]
 
 
+def think(head):
+    """A reply with a thinking block and then its answer, for the `think` scenes."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    return head + [
+        wait('prompt'), ev('TurnStart'), sleep(400),
+        ev({'ThoughtDelta': 'Two plus two is four, so the answer is 4.'}), sleep(1200),
+        ev({'TextDelta': 'The answer is 4.'}), ev({'TurnEnd': 'end_turn'}),
+    ]
+
+
 def wizard_head(cwd):
     """Wizard's own models, efforts, modes and commands, from a recorded `wizard acp` session."""
     options, commands = [], []
@@ -429,6 +440,7 @@ def main():
         ha = head(ref, cwd, size, auto=True)
         open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + turn3(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'think-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(think(h)) + '\n')
         open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')
 

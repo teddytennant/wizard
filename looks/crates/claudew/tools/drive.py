@@ -335,12 +335,43 @@ WIZARD = [
                   ('keys', 'Escape'), ('wait', 0.5)]),
 ]
 
-GROUPS = {'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
+# Vim mode (`editorMode: "vim"` in the settings) and a keybindings.json that binds alt+j to
+# a newline; both programs read them from $HOME/.claude. One key at a time: a burst in NORMAL
+# mode reads as a paste.
+VIM = [
+    ('vim-insert', [('type', 'foo bar baz'), ('snap', '')]),
+    ('vim-normal', [('keys', 'Escape', '0', 'd', 'w'), ('snap', '')]),
+    ('vim-visual', [('keys', 'v', 'e'), ('snap', ''), ('keys', 'Escape')]),
+    ('vim-visual-line', [('keys', 'V'), ('snap', ''), ('keys', 'Escape')]),
+]
+KEYS = [
+    ('keys-newline', [('type', 'first'), ('keys', 'M-j'), ('type', 'second'), ('snap', '')]),
+]
+
+# A reply with a thinking block, and the detailed transcript (ctrl+o) that shows it.
+THINK = [
+    ('think', [('type', 'Think it over: add two and two'), ('keys', 'Enter'), ('until', r'done \d+:\d\d [AP]M', 30),
+               ('wait', 1.0), ('snap', '-done'), ('keys', 'C-o'), ('wait', 0.6), ('snap', '-detail'),
+               ('keys', 'C-o'), ('wait', 0.4)]),
+]
+
+GROUPS = {'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
           'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
           'live-btw': LIVE_BTW, 'live-early-cmd': LIVE_EARLY_CMD, 'live-slash': LIVE_SLASH,
           'shared-resume': SHARED_RESUME}
+
+
+def pix(target, pane, name, size):
+    """PIX_DIR=dir PIX_SCENES=a,b: a pixel screenshot of these scenes too (see pix.py)."""
+    d = os.environ.get('PIX_DIR')
+    if d and name in os.environ.get('PIX_SCENES', '').split(','):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import pix as shooter
+        os.makedirs(d, exist_ok=True)
+        shooter.shoot(SOCKET, pane.name, os.path.join(d, '%s-%s-%s.png' % (target, name, size)), size,
+                      os.environ.get('LOOK_TMUX_TMPDIR', '/tmp'))
 
 
 def tmux(*args, check=True):
@@ -486,6 +517,7 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
                 pane.snap(os.path.join(out, '%s%s%s-%s' % (prefix, scene, step[1], size)), settle=False)
             elif op == 'snap':
                 pane.snap(os.path.join(out, '%s%s%s-%s' % (prefix, scene, step[1], size)))
+                pix(target, pane, scene + step[1], size)
         time.sleep(0.8)
     pane.kill()
 
