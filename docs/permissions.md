@@ -28,6 +28,7 @@ Path patterns follow gitignore rules with these anchors: `//path` is the filesys
 For shell commands:
 
 - A compound command (`a && b`, `a | b`, `a; b`, newlines) is split. A `deny` or `ask` rule applies if **any** piece matches, including pieces inside `$(...)` and backticks, and past leading `VAR=value` assignments and wrappers like `timeout` and `nice`. An `allow` rule applies only if **every** piece is covered, and never to a command Wizard cannot split cleanly (an unclosed quote, a trailing `&&`).
+- Read-only commands (`echo`, `ls`, `cat`, `grep`, `git status`, `git diff` and a few more, without redirection) need no `allow` rule even in `dontAsk` mode, so `touch x && echo done` needs a rule only for `touch`. This matches Claude Code.
 - Rules match command text, not programs. `Bash(rm:*)` does not stop `python -c 'import os; os.remove(...)'`. Enforcement that must not depend on spelling belongs in a `pre_tool_use` hook.
 
 A `Read` deny on a path also stops the edit tools on it.

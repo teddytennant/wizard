@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- Hooks cover 34 events (all 33 Claude Code events plus `turn_end`), with `command`, `http`, `prompt`, `agent` and `mcp_tool` handlers, Claude's JSON decision protocol on stdout, and exit code 2 blocking. Hooks are also read from Claude-format `settings.json` files (`~/.claude/`, `.claude/settings.json`, `.claude/settings.local.json`, and `.wizard/` twins). `hooks.toml` files that worked keep working unchanged. See `docs/hooks.md`.
+- Permission rules in Claude Code's syntax (`Bash(git diff:*)`, `Read(./secrets/**)`, `mcp__server__tool`), with deny, then ask, then allow evaluation, the modes `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` and `auto`, and the flags `--permission-mode`, `--allowedTools` and `--disallowedTools`. With no rules set, nothing changes. See `docs/permissions.md`.
+- `env`, `permissions`, `hooks` and a few other keys are read from Claude-format settings files, layered user, project, local. A project's settings files that carry hooks or `env` need the same trust decision as `.wizard/hooks.toml`.
+
 ### Fixed
 
 - The drag-copy highlight lit the margin, the reply marker, the scrollbar and the blank cells after each line, so it looked like whitespace was selected even though the copy skipped it. The highlight now covers exactly the cells that are copied.

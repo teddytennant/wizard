@@ -34,6 +34,7 @@ to do.
 | [Code mode](code-mode.md) | `run_code`: one Lua program per call, calling Wizard's own tools |
 | [MCP](mcp.md) | Runtime MCP clients, and `wizard mcp-serve` in the other direction |
 | [Hooks](hooks.md) | Lifecycle hooks, and the project trust gate |
+| [Permissions](permissions.md) | Allow, ask and deny rules, permission modes, and which Claude Code settings keys Wizard reads |
 | [Loadout](loadout.md) | Shipping a preconfigured tool surface |
 | [Fork and distribute](market.md) | `/publish`, and the `wizard skills` registry client |
 | [Pi plugins](pi-plugins.md) | `wizard plugins` and `/plugins`: Pi packages in Wizard (beta) |
