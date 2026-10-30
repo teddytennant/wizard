@@ -3242,6 +3242,59 @@ async fn drain_finished_notifications_reports_and_persists_once() {
 }
 
 #[tokio::test]
+async fn monitor_lines_and_agent_mail_reach_history_once() {
+    let (mut agent, _provider, _tmp) = test_agent(vec![]);
+    let child = tokio::process::Command::new("sh")
+        .args(["-c", "echo build ok; echo tests failed"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh spawns");
+    let id = agent
+        .ctx
+        .tasks
+        .spawn_monitor("ci", "echo", child, Duration::from_secs(10));
+    agent.ctx.inbox.push("agent:1 worker", "found the bug");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !agent
+        .ctx
+        .tasks
+        .status(id)
+        .is_some_and(|status| status.is_finished())
+    {
+        assert!(Instant::now() < deadline, "monitor finished");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    agent.drain_finished_notifications();
+    let notes: Vec<String> = agent
+        .history()
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .map(|m| m.text())
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "[message from agent:1 worker] found the bug"),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "[monitor #1 'ci']\nbuild ok\ntests failed"),
+        "{notes:?}"
+    );
+    let before = agent.history().len();
+    agent.drain_finished_notifications();
+    assert_eq!(
+        agent.history().len(),
+        before,
+        "each line, message and exit is reported once"
+    );
+}
+
+#[tokio::test]
 async fn side_question_answers_without_touching_history_or_session() {
     let (agent, provider, _tmp) = test_agent(vec![vec![final_chunk("forty-two")]]);
     let before = agent.history().len();

@@ -981,6 +981,19 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
 /// reported exactly once) and announce it. Called at the top of every step of a
 /// turn, and between cycles by the perpetual runner.
 pub(super) async fn drain_background(host: &mut impl Host, sink: &Sink) {
+    // Monitor lines first, so a monitor that printed and then exited reads in
+    // the order it happened.
+    let batches = host.ctx().tasks.drain_monitor_events();
+    for batch in batches {
+        host.push(ChatMessage::system(super::monitor_note(&batch)));
+    }
+    let mail = host.ctx().inbox.take();
+    for message in mail {
+        host.push(ChatMessage::system(format!(
+            "[message from {}] {}",
+            message.from, message.text
+        )));
+    }
     let tasks = host.ctx().tasks.drain_completed();
     for task in tasks {
         host.push(ChatMessage::system(super::task_note(&task)));

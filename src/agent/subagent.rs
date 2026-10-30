@@ -441,6 +441,9 @@ pub struct SpawnOptions {
     /// runs do not each have to prove; a caller that has none gets a fresh
     /// one, which still bounds that run on its own.
     pub breaker: breaker::LlmBreaker,
+    /// Where `SendMessage` leaves mail for this run. Set for a background
+    /// run, whose id is how it is addressed; a foreground run has none.
+    pub inbox: Option<Arc<crate::tools::subagent_tasks::Inbox>>,
 }
 
 impl Default for SpawnOptions {
@@ -456,6 +459,7 @@ impl Default for SpawnOptions {
             cancel: None,
             deadline: Some(DEFAULT_DEADLINE),
             breaker: breaker::LlmBreaker::new(),
+            inbox: None,
         }
     }
 }
@@ -471,6 +475,12 @@ const FORK_TOOL_DENYLIST: &[&str] = &[
     "run_command",
     "exit_plan",
     "interview",
+    // The Claude Code names for the same four, which `compat` registers on
+    // top of the tools above.
+    "Agent",
+    "ExitPlanMode",
+    "EnterPlanMode",
+    "AskUserQuestion",
     // Compact is parent-loop only; a fork calling it just gets an error.
     crate::tools::compact::COMPACT_TOOL_NAME,
 ];
@@ -948,6 +958,18 @@ async fn run_loop(
         // already means nothing is announced; this says why, and holds even if
         // a later change starts forwarding a subagent's raw events.
         console: crate::tools::ConsoleAccess::None,
+        // Its own mail, and a way to reach whoever started it. A fork shares
+        // the parent's task board the way it shares the todo list.
+        inbox: options.inbox.clone().unwrap_or_default(),
+        parent_inbox: Some(Arc::clone(&ctx.inbox)),
+        board: if options.inherited_history.is_some() {
+            Arc::clone(&ctx.board)
+        } else {
+            Arc::default()
+        },
+        // A child cannot ExitWorktree out from under its parent. Its `cwd` is
+        // already the worktree, which is all it needs.
+        worktree: Arc::default(),
         ..ctx.clone()
     };
 
@@ -1257,7 +1279,11 @@ impl Tool for SpawnSubagentTool {
             let registry = Arc::clone(&self.registry);
             let hooks = Arc::clone(&self.hooks);
             let fut_ctx = ctx.clone();
-            let fut_options = options.clone();
+            // Reserved before the future is built so the run can be handed the
+            // inbox its id is addressed by.
+            let id = ctx.subagents.reserve(&name, &args.task);
+            let mut fut_options = options.clone();
+            fut_options.inbox = ctx.subagents.inbox_of(id);
             let fut = async move {
                 match spawn(
                     run,
@@ -1291,10 +1317,8 @@ impl Tool for SpawnSubagentTool {
                     }
                 }
             };
-            // Reserve the id and announce the run *before* attaching the
-            // driver, so the pane exists by the time the subagent's first
-            // event lands in it.
-            let id = ctx.subagents.reserve(&name, &args.task);
+            // Announce the run *before* attaching the driver, so the pane
+            // exists by the time the subagent's first event lands in it.
             if let Some(events) = &ctx.events {
                 super::emit(
                     events,

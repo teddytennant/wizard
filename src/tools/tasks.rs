@@ -146,6 +146,42 @@ struct TaskEntry {
     /// Generation counter bumped on every output append, so a surface can
     /// poll cheaply ("has anything new landed since I last rendered?").
     output_gen: u64,
+    /// Present when the task is a `Monitor`: its stdout lines are events.
+    monitor: Option<MonitorState>,
+}
+
+/// Most lines of one monitor reported at once; the rest of a burst is counted.
+pub const MONITOR_BATCH_LINES: usize = 100;
+
+/// A monitor that has produced this many events is stopped. A watch that
+/// matches this often is not selective enough to be worth the context.
+pub const MONITOR_MAX_EVENTS: usize = 5000;
+
+/// Event bookkeeping for a `Monitor` task.
+#[derive(Debug, Default)]
+struct MonitorState {
+    description: String,
+    /// Bytes of an unfinished line.
+    partial: Vec<u8>,
+    /// Complete lines not yet reported.
+    pending: Vec<String>,
+    /// Lines dropped from `pending` since the last report.
+    dropped: usize,
+    /// Lines seen over the monitor's life.
+    total: usize,
+}
+
+/// New output lines of one monitor, returned once by
+/// [`TaskRegistry::drain_monitor_events`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorBatch {
+    pub id: u32,
+    pub description: String,
+    pub lines: Vec<String>,
+    /// Lines beyond [`MONITOR_BATCH_LINES`] that were counted and dropped.
+    pub dropped: usize,
+    /// The monitor was stopped for producing [`MONITOR_MAX_EVENTS`] lines.
+    pub flooded: bool,
 }
 
 impl TaskEntry {
@@ -190,9 +226,100 @@ impl TaskRegistry {
                 started: Instant::now(),
                 finished: None,
                 output_gen: 0,
+                monitor: None,
             },
         );
         id
+    }
+
+    /// Register and start a `Monitor`: like [`spawn_with_timeout`](Self::spawn_with_timeout),
+    /// except that every complete line the child writes to stdout is also an
+    /// event for [`drain_monitor_events`](Self::drain_monitor_events). Stderr
+    /// goes to the output buffer only, as in Claude Code.
+    pub fn spawn_monitor(
+        self: &Arc<Self>,
+        description: &str,
+        command_line: &str,
+        mut child: tokio::process::Child,
+        timeout: Duration,
+    ) -> u32 {
+        let id = self.add(command_line);
+        if let Some(entry) = self.lock().get_mut(&id) {
+            entry.monitor = Some(MonitorState {
+                description: description.to_string(),
+                ..MonitorState::default()
+            });
+        }
+        let readers = vec![
+            tokio::spawn(read_monitor(Arc::clone(self), id, child.stdout.take())),
+            tokio::spawn(read_into(Arc::clone(self), id, child.stderr.take())),
+        ];
+        self.attach(id, child, readers, timeout);
+        id
+    }
+
+    /// Feed stdout bytes of a monitor: the output buffer gets them, and each
+    /// completed line becomes a pending event.
+    fn push_monitor_bytes(&self, id: u32, data: &[u8]) {
+        let flood = {
+            let mut tasks = self.lock();
+            let Some(entry) = tasks.get_mut(&id) else {
+                return;
+            };
+            entry.output.append(data);
+            entry.output_gen = entry.output_gen.saturating_add(1);
+            let Some(monitor) = entry.monitor.as_mut() else {
+                return;
+            };
+            monitor.partial.extend_from_slice(data);
+            while let Some(end) = monitor.partial.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = monitor.partial.drain(..=end).collect();
+                let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                monitor.total += 1;
+                if monitor.pending.len() < MONITOR_BATCH_LINES {
+                    monitor.pending.push(text);
+                } else {
+                    monitor.dropped += 1;
+                }
+            }
+            monitor.total >= MONITOR_MAX_EVENTS
+        };
+        if flood {
+            self.kill(id);
+        }
+    }
+
+    /// Lines every monitor wrote since the last call, each reported once. A
+    /// line still being written (no newline yet) waits for its end, or for
+    /// the monitor to exit, which flushes it.
+    pub fn drain_monitor_events(&self) -> Vec<MonitorBatch> {
+        let mut batches: Vec<MonitorBatch> = Vec::new();
+        for (id, entry) in self.lock().iter_mut() {
+            let finished = entry.status.is_finished();
+            let Some(monitor) = entry.monitor.as_mut() else {
+                continue;
+            };
+            if finished && !monitor.partial.is_empty() {
+                let text = String::from_utf8_lossy(&monitor.partial)
+                    .trim_end()
+                    .to_string();
+                monitor.partial.clear();
+                monitor.total += 1;
+                monitor.pending.push(text);
+            }
+            if monitor.pending.is_empty() && monitor.dropped == 0 {
+                continue;
+            }
+            batches.push(MonitorBatch {
+                id: *id,
+                description: monitor.description.clone(),
+                lines: std::mem::take(&mut monitor.pending),
+                dropped: std::mem::take(&mut monitor.dropped),
+                flooded: monitor.total >= MONITOR_MAX_EVENTS,
+            });
+        }
+        batches.sort_unstable_by_key(|batch| batch.id);
+        batches
     }
 
     /// Take ownership of an already-spawned child: register it, capture its
@@ -395,6 +522,22 @@ async fn kill_tree(child: &mut tokio::process::Child) {
         crate::platform::process::kill_group(pid);
     }
     let _ = child.kill().await;
+}
+
+/// Stream a monitor's stdout into its tail buffer and its event queue.
+async fn read_monitor(
+    registry: Arc<TaskRegistry>,
+    id: u32,
+    stream: Option<impl tokio::io::AsyncRead + Unpin + Send + 'static>,
+) {
+    let Some(mut stream) = stream else { return };
+    let mut buf = [0u8; 8192];
+    loop {
+        match stream.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => registry.push_monitor_bytes(id, &buf[..n]),
+        }
+    }
 }
 
 /// Stream a child's stdout or stderr into the task's tail buffer.

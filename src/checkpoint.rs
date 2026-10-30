@@ -360,7 +360,12 @@ pub fn snapshot_edit_target(registry: &ToolRegistry, name: &str, args: &Value, c
     {
         return;
     }
-    let paths = match args.get("path").and_then(Value::as_str) {
+    // `path` is Wizard's argument; `file_path` and `notebook_path` are the
+    // Claude Code names the `compat` tools take.
+    let named = ["path", "file_path", "notebook_path"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(Value::as_str));
+    let paths = match named {
         Some(path) => vec![path.to_string()],
         None => crate::tools::patch::targets(args),
     };
