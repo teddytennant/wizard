@@ -507,6 +507,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // the session is built so the first turn already uses it, and persist the
     // resolved id so a later offline start does not fall back to a stale stamp.
     llm::xai_oauth::refresh_unpinned_flagship(&mut config).await;
+    config = apply_provider_flag(config, &cli).await?;
     config.apply_cli(&cli);
     crate::token_profile::init(config.token_profile.as_deref());
 
@@ -603,6 +604,37 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     }
 }
 
+/// `--provider NAME` for this run. `claude` installs and signs in Claude Code
+/// first, on the terminal, before anything else starts; any other name has to
+/// be a provider already in `config.toml`.
+async fn apply_provider_flag(mut config: Config, cli: &cli::Cli) -> Result<Config> {
+    let Some(name) = cli.provider.clone() else {
+        return Ok(config);
+    };
+    if matches!(name.as_str(), "claude" | "claude-code" | "claudecode") {
+        #[cfg(feature = "provider-claude-code")]
+        {
+            let assume_yes = cli.yes;
+            return tokio::task::spawn_blocking(move || {
+                plugins::claude_code::setup::select_for_run(&mut config, assume_yes)?;
+                Ok(config)
+            })
+            .await?;
+        }
+        #[cfg(not(feature = "provider-claude-code"))]
+        anyhow::bail!("this build has no Claude Code provider (feature `provider-claude-code`)");
+    }
+    if !config.providers.iter().any(|p| p.name == name) {
+        let known: Vec<_> = config.providers.iter().map(|p| p.name.as_str()).collect();
+        anyhow::bail!(
+            "no provider named '{name}' in config.toml (have: {}); `claude` also works",
+            known.join(", ")
+        );
+    }
+    config.active_provider = Some(name);
+    Ok(config)
+}
+
 /// Whether a sovereign mode that came from `config.toml` rather than this
 /// command line opens the TUI.
 fn saved_sovereign_opens_the_tui(config: &Config, cli: &cli::Cli, terminal: bool) -> bool {
@@ -627,7 +659,7 @@ async fn run_interactive(
             let _ = skin::handoff::Handoff::take();
             match skin::launch::run(skin, handoff.take().as_ref()).await {
                 Ok(code) => {
-                    config = Config::load()?;
+                    config = apply_provider_flag(Config::load()?, &cli).await?;
                     config.apply_cli(&cli);
                     if config.ui.skin == saved {
                         return Ok(code);
@@ -659,7 +691,7 @@ async fn run_interactive(
                 // The prompt was this TUI's first message; the next house TUI
                 // starts clean rather than sending it again.
                 cli.prompt = None;
-                config = Config::load()?;
+                config = apply_provider_flag(Config::load()?, &cli).await?;
                 config.apply_cli(&cli);
                 look = Some(skin);
                 handoff = from_tui;

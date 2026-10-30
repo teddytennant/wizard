@@ -142,6 +142,18 @@ pub struct Cli {
     #[arg(long, value_name = "PROVIDER")]
     pub login: Option<String>,
 
+    /// Use this provider for this run: `claude` (your Claude Pro or Max
+    /// subscription, driven through Claude Code, installed and signed in
+    /// first if needed) or the name of a provider in config.toml. Nothing is
+    /// saved; `/provider` saves a choice.
+    #[arg(long, value_name = "NAME")]
+    pub provider: Option<String>,
+
+    /// With `--provider claude`: run Anthropic's installer without asking when
+    /// Claude Code is missing. Without a terminal this is the only way it runs.
+    #[arg(long, requires = "provider")]
+    pub yes: bool,
+
     /// Harness bundle directory (sets `$WIZARD_HARNESS_DIR`): per-component
     /// overrides for the compiled harness defaults — system_prompt.md,
     /// tool_descriptions/, skills/, subagents/. Missing files fall back to
