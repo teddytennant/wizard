@@ -59,6 +59,83 @@ fn validate(path: &Path, strict: bool) -> Result<String, String> {
     Ok(report)
 }
 
+/// `plugin init`: a manifest, a command and a README, so `plugin validate`
+/// passes on the first try.
+fn init(name: &str, parent: &Path) -> Result<String, String> {
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('/') {
+        return Err("a plugin name is one word without spaces or slashes".into());
+    }
+    let dir = parent.join(name);
+    if dir.exists() {
+        return Err(format!("{} already exists", dir.display()));
+    }
+    let write = |rel: &str, text: String| -> Result<(), String> {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        std::fs::write(&path, text).map_err(|err| format!("{}: {err}", path.display()))
+    };
+    write(
+        ".claude-plugin/plugin.json",
+        format!(
+            "{{\n  \"name\": \"{name}\",\n  \"version\": \"0.1.0\",\n  \"description\": \"\"\n}}\n"
+        ),
+    )?;
+    write(
+        "commands/hello.md",
+        "---\ndescription: say hello\n---\nSay hello to $ARGUMENTS.\n".into(),
+    )?;
+    write(
+        "README.md",
+        format!("# {name}\n\nA Claude-format plugin.\n"),
+    )?;
+    Ok(format!("created {}", dir.display()))
+}
+
+/// `plugin tag`: `<name>--v<version>` from the manifest.
+fn tag(path: &Path, dry_run: bool, force: bool, push: bool) -> Result<String, String> {
+    let manifest = path.join(".claude-plugin").join("plugin.json");
+    let raw = std::fs::read_to_string(&manifest)
+        .map_err(|_| format!("{} is missing", manifest.display()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|err| format!("{}: {err}", manifest.display()))?;
+    let field = |key: &str| {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+    };
+    let name = field("name").ok_or("plugin.json needs a name")?;
+    let version = field("version").ok_or("plugin.json needs a version to tag")?;
+    let tag = format!("{name}--v{version}");
+    if dry_run {
+        return Ok(format!("would create tag {tag}"));
+    }
+    let git = |args: &[&str]| -> Result<(), String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .map_err(|err| format!("git: {err}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    };
+    let mut args = vec!["tag"];
+    if force {
+        args.push("-f");
+    }
+    args.push(&tag);
+    git(&args)?;
+    if push {
+        git(&["push", "origin", &tag])?;
+    }
+    Ok(format!("tagged {tag}"))
+}
+
 pub fn run(cmd: PluginCmd) -> Result<i32> {
     let root = std::env::current_dir()?;
     Ok(match cmd {
@@ -174,6 +251,21 @@ pub fn run(cmd: PluginCmd) -> Result<i32> {
             println!("Validating {}\n", path.display());
             emit(validate(&path, strict), as_json)
         }
+        PluginCmd::Init { name } => emit(init(&name, &root), false),
+        PluginCmd::Tag {
+            path,
+            dry_run,
+            force,
+            push,
+        } => emit(
+            tag(path.as_deref().unwrap_or(&root), dry_run, force, push),
+            false,
+        ),
+        PluginCmd::Prune { scope, .. } => {
+            warn_scope(&scope);
+            println!("Wizard installs no plugin dependencies, so there is nothing to prune.");
+            0
+        }
         PluginCmd::Details { name } => match plugins::details(&name, &root) {
             Ok(text) => {
                 println!("{text}");
@@ -247,6 +339,31 @@ mod tests {
         assert!(validate(tmp.path(), true).is_err());
         std::fs::write(tmp.path().join("README.md"), "demo").unwrap();
         assert!(validate(tmp.path(), true).is_ok());
+    }
+
+    #[test]
+    fn init_scaffolds_a_plugin_that_validates() {
+        let tmp = tempfile::tempdir().unwrap();
+        init("demo", tmp.path()).unwrap();
+        assert!(
+            validate(&tmp.path().join("demo"), true)
+                .unwrap()
+                .starts_with("demo: valid")
+        );
+        assert!(init("demo", tmp.path()).is_err(), "never overwrites");
+        assert!(init("two words", tmp.path()).is_err());
+    }
+
+    #[test]
+    fn tag_reads_name_and_version_from_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        init("demo", tmp.path()).unwrap();
+        let dir = tmp.path().join("demo");
+        assert_eq!(
+            tag(&dir, true, false, false).unwrap(),
+            "would create tag demo--v0.1.0"
+        );
+        assert!(tag(tmp.path(), true, false, false).is_err());
     }
 
     #[test]

@@ -235,6 +235,34 @@ pub enum PluginCmd {
     /// Show a plugin's component inventory.
     Details { name: String },
 
+    /// Scaffold a new plugin in `./<name>`.
+    #[command(visible_alias = "new")]
+    Init { name: String },
+
+    /// Tag a plugin release `<name>--v<version>` in git.
+    Tag {
+        /// The plugin directory (default: the current one).
+        path: Option<std::path::PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        push: bool,
+    },
+
+    /// Remove auto-installed dependencies no longer needed. Wizard installs
+    /// none, so there is never anything to remove.
+    #[command(visible_alias = "autoremove")]
+    Prune {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(short = 's', long)]
+        scope: Option<String>,
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Manage marketplaces.
     Marketplace {
         #[command(subcommand)]
