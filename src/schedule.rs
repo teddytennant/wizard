@@ -89,9 +89,28 @@ pub struct ScheduleEntry {
     /// Disabled entries are kept in the file but never fired.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Fire once, then remove the entry. What `CronCreate` with
+    /// `recurring = false` writes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
+    /// After this instant the entry is removed: on the pass that fires it, or
+    /// on the first pass after it when nothing was due. What keeps a
+    /// forgotten `CronCreate` job from running forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<chrono::Utc>>,
 }
 
 impl ScheduleEntry {
+    /// Whether the entry is spent after the pass at `now` fired it.
+    pub fn spent_after_firing(&self, now: DateTime<chrono::Utc>) -> bool {
+        self.once || self.is_expired(now)
+    }
+
+    /// Whether the entry's `expires_at` has passed.
+    pub fn is_expired(&self, now: DateTime<chrono::Utc>) -> bool {
+        self.expires_at.is_some_and(|at| at <= now)
+    }
+
     /// This entry's wall-clock budget: `None` when it has no limit, `Err`
     /// when the number in the file is not one [`max_hours_duration`] accepts.
     pub fn max_duration(&self) -> Result<Option<Duration>> {
@@ -138,6 +157,8 @@ pub async fn run(cmd: ScheduleCmd) -> Result<i32> {
                 mode,
                 max_hours,
                 enabled: true,
+                once: false,
+                expires_at: None,
             };
             add_entry(&path, entry.clone())?;
             let next = next_occurrence(&entry, &Local::now())?;
@@ -495,6 +516,47 @@ pub fn due_entries<'a, Tz: TimeZone>(
         .collect()
 }
 
+/// Remove entries whose `expires_at` has passed without being due on this
+/// pass. The ones that were due have already fired and gone.
+fn prune_expired(path: &Path, entries: &[ScheduleEntry], log_path: &Path) {
+    let now = chrono::Utc::now();
+    for entry in entries.iter().filter(|e| e.is_expired(now)) {
+        if remove_entry(path, &entry.name).is_ok() {
+            log_line(
+                log_path,
+                &format!("'{}' expired and was removed", entry.name),
+            );
+        }
+    }
+}
+
+/// Whether a `wizard scheduler` daemon holds the lock right now. A schedule
+/// entry written while none does is stored and fires nothing until one starts.
+#[cfg(unix)]
+pub fn daemon_running() -> bool {
+    use std::os::unix::io::AsRawFd;
+    let Ok(dir) = Config::wizard_dir() else {
+        return false;
+    };
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join("scheduler.lock"))
+    else {
+        return false;
+    };
+    // SAFETY: flock on a descriptor this function owns.
+    let acquired = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    // Dropping the file releases the lock taken just now.
+    !acquired
+}
+
+/// No lock file semantics off Unix; assume the daemon is not known to run.
+#[cfg(not(unix))]
+pub fn daemon_running() -> bool {
+    false
+}
+
 /// Earliest next fire across enabled, valid entries, strictly after `now`.
 pub fn next_fire_across<Tz: TimeZone>(
     entries: &[ScheduleEntry],
@@ -791,6 +853,18 @@ pub async fn run_daemon() -> Result<i32> {
             .collect();
         for entry in due {
             last_fired.insert(entry.name.clone(), now);
+            if entry.spent_after_firing(now.with_timezone(&chrono::Utc)) {
+                match remove_entry(&schedule_path, &entry.name) {
+                    Ok(()) => log_line(
+                        &log_path,
+                        &format!("'{}' fires one last time and is removed", entry.name),
+                    ),
+                    Err(err) => log_line(
+                        &log_path,
+                        &format!("could not remove spent '{}': {err:#}", entry.name),
+                    ),
+                }
+            }
             match spawn_job(&entry, &jobs_dir) {
                 Ok(job) => {
                     log_line(
@@ -813,6 +887,8 @@ pub async fn run_daemon() -> Result<i32> {
                 }
             }
         }
+
+        prune_expired(&schedule_path, &entries, &log_path);
 
         let sleep_for = match next_fire_across(&entries, &Local::now()) {
             Some(next) => (next - Local::now())
@@ -874,6 +950,8 @@ mod tests {
             mode: "sovereign".to_string(),
             max_hours: None,
             enabled: true,
+            once: false,
+            expires_at: None,
         }
     }
 
@@ -1008,6 +1086,70 @@ mod tests {
 
     fn utc(s: &str) -> DateTime<Utc> {
         s.parse().expect("test timestamp parses")
+    }
+
+    /// A one-shot or an expired entry is gone after the pass that fires it, and
+    /// the two fields survive the round trip through the file.
+    #[test]
+    fn once_and_expires_at_retire_an_entry_and_round_trip() {
+        let now = utc("2026-01-10T00:00:00Z");
+        let mut plain = entry("plain", "* * * * *");
+        assert!(!plain.spent_after_firing(now));
+
+        plain.once = true;
+        assert!(plain.spent_after_firing(now));
+
+        let mut aging = entry("aging", "* * * * *");
+        aging.expires_at = Some(utc("2026-01-11T00:00:00Z"));
+        assert!(!aging.spent_after_firing(now));
+        assert!(aging.spent_after_firing(utc("2026-01-11T00:00:01Z")));
+        assert!(aging.is_expired(utc("2026-01-11T00:00:00Z")));
+
+        let dir = std::env::temp_dir().join(format!("wizard-once-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("schedule.toml");
+        save_schedule(
+            &path,
+            &ScheduleFile {
+                entries: vec![plain, aging],
+            },
+        )
+        .expect("write");
+        let loaded = load_schedule(&path).expect("read back");
+        assert!(loaded.entries[0].once);
+        assert_eq!(
+            loaded.entries[1].expires_at,
+            Some(utc("2026-01-11T00:00:00Z"))
+        );
+        let text = std::fs::read_to_string(&path).expect("file");
+        assert_eq!(
+            text.matches("once").count(),
+            1,
+            "false is not written: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An expired entry nothing was due for is pruned; a live one stays.
+    #[test]
+    fn prune_expired_removes_only_the_expired() {
+        let dir = std::env::temp_dir().join(format!("wizard-prune-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("schedule.toml");
+        let mut old = entry("old", "0 3 * * *");
+        old.expires_at = Some(utc("2020-01-01T00:00:00Z"));
+        let live = entry("live", "0 3 * * *");
+        let entries = vec![old, live];
+        save_schedule(
+            &path,
+            &ScheduleFile {
+                entries: entries.clone(),
+            },
+        )
+        .expect("write");
+        prune_expired(&path, &entries, &dir.join("scheduler.log"));
+        let left = load_schedule(&path).expect("read back").entries;
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].name, "live");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
