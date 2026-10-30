@@ -293,6 +293,7 @@ pub struct Keymap {
     pending: Vec<Stroke>,
     pending_at: Option<Instant>,
     files: Vec<(PathBuf, Option<SystemTime>)>,
+    checked: Option<Instant>,
     pub warnings: Vec<String>,
 }
 
@@ -455,6 +456,14 @@ impl Keymap {
 
     /// Re-read the files when one has changed. Cheap enough to call on every key.
     pub fn reload(&mut self) -> bool {
+        // looking at the files once a second is enough, and keys come faster than that
+        if self
+            .checked
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            return false;
+        }
+        self.checked = Some(Instant::now());
         let stale = self
             .files
             .iter()

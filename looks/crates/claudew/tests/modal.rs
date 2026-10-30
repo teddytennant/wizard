@@ -198,3 +198,15 @@ fn the_permission_prompt_offers_auto_mode_and_picking_it_switches_mode() {
         "{sent:?}"
     );
 }
+
+#[test]
+fn the_agents_hint_is_in_the_footer_for_ten_seconds_after_the_session_opens() {
+    let mut hn = Harness::new("static-120x40.jsonl", 120, 40);
+    assert!(row_containing(
+        &mut hn,
+        "? for shortcuts \u{b7} \u{2190} for agents"
+    ));
+    hn.advance(11_000);
+    assert!(row_containing(&mut hn, "? for shortcuts"));
+    assert!(!row_containing(&mut hn, "for agents"));
+}

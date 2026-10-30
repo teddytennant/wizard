@@ -355,7 +355,9 @@ THINK = [
                ('keys', 'C-o'), ('wait', 0.4)]),
 ]
 
-GROUPS = {'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
+HOME = [('home', [('snap', '')])]
+
+GROUPS = {'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
           'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,

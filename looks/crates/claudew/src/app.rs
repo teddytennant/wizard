@@ -387,6 +387,9 @@ pub struct App {
     pub submitted: bool,
     /// `/plan` toggles sent for shift+tab whose turn and answer stay out of the transcript.
     silent: usize,
+    /// When the session opened, on the clock: `← for agents` is in the footer for ten seconds
+    /// after it.
+    pub opened_at: Duration,
     /// Vim mode for the prompt (`editorMode: "vim"`).
     pub vim: VimState,
     /// The bindings from `keybindings.json`.
@@ -468,6 +471,7 @@ impl App {
             rewind_answer: None,
             rewinding: None,
             silent: 0,
+            opened_at: Duration::ZERO,
             vim: VimState::default(),
             keymap: Keymap::new(),
             mode_steps: Default::default(),
@@ -773,6 +777,7 @@ impl App {
         self.export.apply(&ev);
         match ev {
             Event::Ready { session_id, config } => {
+                self.opened_at = self.clock.elapsed();
                 // wizard opens every session, new, loaded or rewound, on its config's defaults:
                 // what the user chose (flags at first, then picks and presses) goes back on it
                 let first = !self.ready;
@@ -2793,6 +2798,12 @@ impl App {
                 .map_or(self.now_unix, |d| d.as_secs() as i64);
         }
         let now = self.clock.elapsed();
+        // the footer's `← for agents` goes away ten seconds in
+        if now.saturating_sub(self.opened_at) >= AGENTS_HINT_FOR
+            && now.saturating_sub(self.opened_at) < AGENTS_HINT_FOR + Duration::from_secs(1)
+        {
+            self.dirty = true;
+        }
         if self.notice_until.is_some_and(|until| now >= until) {
             self.notice = None;
             self.notice_until = None;
@@ -2869,6 +2880,9 @@ pub enum Choice {
 pub fn is_plan(req: &PermissionRequest) -> bool {
     req.input.get("plan").is_some_and(|p| p.is_string())
 }
+
+/// How long after a session opens the footer says `← for agents` (2.1.314 hides it then).
+pub const AGENTS_HINT_FOR: Duration = Duration::from_secs(10);
 
 /// "Thought for 3s": whole seconds, and never less than one.
 fn thought_secs(took: Duration) -> u64 {

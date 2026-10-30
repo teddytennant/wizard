@@ -265,7 +265,9 @@ fn footer_row(app: &App) -> Row {
         row.push(" · esc to interrupt", th.dim());
     } else if first && app.editor.is_empty() && app.menu == Menu::None {
         row.push(" · ? for shortcuts", th.dim());
-        row.push(" · \u{2190} for agents", th.dim());
+        if app.clock.elapsed().saturating_sub(app.opened_at) < crate::app::AGENTS_HINT_FOR {
+            row.push(" · \u{2190} for agents", th.dim());
+        }
     }
     row
 }

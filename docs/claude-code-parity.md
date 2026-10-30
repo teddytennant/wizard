@@ -366,7 +366,7 @@ fields. The claude look does not run it yet.
 
 ### Footer, cursor, placeholder
 
-`← for agents` follows `? for shortcuts` on an empty prompt, and ← opens `/agents`. The terminal cursor is hidden
+`← for agents` follows `? for shortcuts` on an empty prompt for the first ten seconds of a session (2.1.314 hides it then), and ← opens `/agents`. The terminal cursor is hidden
 and an inverse cell is painted where it is, as 2.1.314 does. The `Try "..."` example is kept: 2.1.314 fills it from
 a cache that only a signed-in account refreshes, so a capture with a made-up key shows none and the one in
 `tests/fixtures/ref` (a subscription) shows it.
