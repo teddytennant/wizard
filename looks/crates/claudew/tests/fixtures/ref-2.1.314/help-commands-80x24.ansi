@@ -1,0 +1,24 @@
+  [38;5;246mslightly more expensive. Claude can make mistakes that allow harmful [39m
+  [38;5;246mcommands to run, it's recommended to only use in isolated [39m
+  [38;5;246menvironments. Shift+Tab to change mode.[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+[39m   [1m[38;5;110mHelp[0m  General  [1m[38;5;16m[48;5;110m Commands [0m  Custom commands
+
+
+   Browse default commands
+
+   [38;5;246m❯[39m /add-dir
+     [38;5;246mAdd a new working directory[39m
+     /auto-mode-setup
+     [38;5;246mTeach auto mode about your environment, plus optional rule tweaks[39m
+     /autocompact
+     [38;5;246mSet how full the context gets before auto-summarizing[39m
+     /background
+     [38;5;246mSend this session to the background and free the terminal[39m
+
+     [38;5;246m↓ 76 more[39m
+
+
+   For more help: ]8;id=sdguk7;https://code.claude.com/docs/en/overview\https://code.claude.com/docs/en/overview]8;;\
+
+   [3m[38;5;246mEsc to cancel[0m

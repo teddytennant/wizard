@@ -1,7 +1,9 @@
 #!/bin/sh
 # Compare wizard-ui-claude with Claude Code, cell by cell, in a private tmux server.
 #
-#   crates/claudew/tools/compare.sh                  the look against tests/fixtures/ref
+#   crates/claudew/tools/compare.sh                  the look against tests/fixtures/ref-2.1.314
+#   REFDIR=crates/claudew/tests/fixtures/ref crates/claudew/tools/compare.sh
+#                                                    ... against the older 2.1.300 capture
 #   REF=live crates/claudew/tools/compare.sh         capture the real `claude` first
 #   REF=live SAVE=1 crates/claudew/tools/compare.sh  ... and store it as the new fixtures
 #   REF=fake crates/claudew/tools/compare.sh         the same against a fake Anthropic server, in a
@@ -30,7 +32,7 @@ work=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/claudew-compare.XXXXXX")}
 sizes=${SIZES:-80x24,120x40,200x50}
 # The directory the fixtures were captured in, user name scrubbed. The header shows it,
 # and its length decides wraps, so both programs run in exactly this path.
-cwd=/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj
+cwd=${COMPARE_CWD:-/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj}
 reset() {
     # a project wizard has run in has .wizard/, and the @ menu lists it; claude's own
     # .claude/ would not be there in real use
@@ -41,6 +43,16 @@ reset() {
     echo 'pub fn add(a: i32, b: i32) -> i32 { a + b }' > "$cwd/src/lib.rs"
 }
 reset
+# statusline_setup GROUP: the project settings the status line scenes run under
+statusline_setup() {
+    case "$1" in
+    statusline) line="{\"statusLine\":{\"type\":\"command\",\"command\":\"$here/statusline-a.sh\"}}" ;;
+    statusline-pad) line="{\"statusLine\":{\"type\":\"command\",\"command\":\"$here/statusline-pad.sh\",\"padding\":2}}" ;;
+    *) return 0 ;;
+    esac
+    mkdir -p "$cwd/.claude"
+    printf '%s\n' "$line" > "$cwd/.claude/settings.json"
+}
 # the scenes compared with live wizard run in a project of their own, so the sessions /resume
 # lists are only theirs
 xcwd=$(dirname "$cwd")/proj-x
@@ -71,11 +83,14 @@ if [ "${REF:-}" = fake ]; then
  "projects": {"$cwd": {"hasTrustDialogAccepted": true}, "$xcwd": {"hasTrustDialogAccepted": true}}}
 EOF
     fakeenv="ANTHROPIC_BASE_URL=http://127.0.0.1:$port ANTHROPIC_API_KEY=$key DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
-    refrun() { env HOME="$fakehome" LOOK_ENV="$fakeenv" "$@"; }
+    # the task tools are on for the models 2.1.314 knows; the fake key's haiku needs this
+    refrun() { env HOME="$fakehome" LOOK_ENV="$fakeenv ${EXTRA_REF_ENV:-}" "$@"; }
 fi
 
 if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     ref="$work/ref"
+    # REF_BASE=dir starts from an earlier capture, so REF_GROUPS can add or redo a few scenes
+    if [ -n "${REF_BASE:-}" ]; then mkdir -p "$ref" && cp -r "$REF_BASE/." "$ref/"; fi
     claude=${CLAUDE_BIN:-claude}
     cmd="$claude --setting-sources project --strict-mcp-config --permission-mode default --model haiku"
     group static && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
@@ -91,6 +106,17 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     group shared && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
     group shared-resume && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared-resume --sizes 120x40
+    for g in statusline statusline-pad; do
+        if group $g; then
+            statusline_setup $g
+            refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group $g --sizes "$sizes"
+            rm -rf "$cwd/.claude"
+        fi
+    done
+    group plan2 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group plan2 --sizes "$sizes"
+    for g in todo todo-many; do
+        group $g && EXTRA_REF_ENV=CLAUDE_CODE_ENABLE_TODO_TOOLS=1 refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group $g --sizes "$sizes"
+    done
     # scrub what is personal: the account's address and organisation, the home directory
     python3 - "$ref" <<'PY'
 import glob, re, sys
@@ -103,13 +129,23 @@ for f in glob.glob(sys.argv[1] + '/*.ansi'):
     open(f, 'w', encoding='utf-8').write(t)
 PY
     if [ "${SAVE:-}" = 1 ]; then
-        rm -f "$crate/tests/fixtures/ref"/*
-        cp "$ref"/* "$crate/tests/fixtures/ref/"
-        python3 "$here/mkreplay.py" "$ref" "$cwd" "$crate/tests/fixtures/replay"
+        if [ "${REF:-}" = fake ]; then
+            # the fake-key capture goes to its own directory and leaves the tests' replay alone
+            mkdir -p "$crate/tests/fixtures/ref-2.1.314"
+            cp "$ref"/* "$crate/tests/fixtures/ref-2.1.314/"
+            run_id=$(printf '%s\n' "$cwd" | sed -n 's#.*/\(00000000-0000-0000-0000-[0-9a-f]*\)/scratchpad/.*#\1#p')
+            sed -i "s#$run_id#00000000-0000-0000-0000-000000000000#" "$crate"/tests/fixtures/ref-2.1.314/*.ansi
+        else
+            rm -f "$crate/tests/fixtures/ref"/*
+            cp "$ref"/* "$crate/tests/fixtures/ref/"
+            python3 "$here/mkreplay.py" "$ref" "$cwd" "$crate/tests/fixtures/replay"
+        fi
     fi
 else
-    # REFDIR=captures keeps an earlier capture as the reference (no new one is taken)
-    ref="${REFDIR:-$crate/tests/fixtures/ref}"
+    # REFDIR=captures keeps an earlier capture as the reference (no new one is taken). The
+    # default is the stored capture of the installed 2.1.314; REFDIR=$crate/tests/fixtures/ref
+    # is the older 2.1.300 one from a subscription.
+    ref="${REFDIR:-$crate/tests/fixtures/ref-2.1.314}"
 fi
 
 python3 "$here/mkreplay.py" "$ref" "$cwd" "$work/replay"
@@ -122,14 +158,23 @@ while IFS="$(printf '\t')" read -r id bytes; do
     head -c "$bytes" /dev/zero | tr '\0' ' ' > "$work/claude-home/.wizard/sessions/$id.jsonl"
 done < "$work/replay/session-files.tsv"
 for size in $(echo "$sizes" | tr , ' '); do
-    for group in static turn light turn2 turn3 think wizard; do
+    for group in static turn light turn2 turn3 think wizard statusline statusline-pad todo todo-many plan2; do
+        # LOOK_GROUPS="todo todo-many" runs only those
+        [ -z "${LOOK_GROUPS:-}" ] || case " $LOOK_GROUPS " in *" $group "*) ;; *) continue ;; esac
         script="$work/replay/$group-$size.jsonl" theme=dark home="$work/claude-home"
+        [ "$group" = statusline-pad ] && script="$work/replay/static-$size.jsonl"
         [ "$group" = wizard ] && home="$work/wizard-home"
         [ "$group" = light ] && script="$work/replay/static-$size.jsonl" theme=light
         [ -f "$ref/md-$size.ansi" ] || [ "$group" != turn2 ] || continue
         [ -f "$ref/plan-$size.ansi" ] || [ "$group" != turn3 ] || continue
         [ -f "$ref/think-done-$size.ansi" ] || [ "$group" != think ] || continue
+        [ -f "$ref/sl-home-$size.ansi" ] || [ "$group" != statusline ] || continue
+        [ -f "$ref/slp-home-$size.ansi" ] || [ "$group" != statusline-pad ] || continue
+        [ -f "$ref/plan-approve-$size.ansi" ] || [ "$group" != plan2 ] || continue
+        [ -f "$ref/todo-$size.ansi" ] || [ "$group" != todo ] || continue
+        [ -f "$ref/todo-many-$size.ansi" ] || [ "$group" != todo-many ] || continue
         reset
+        statusline_setup "$group"
         rm -rf "$cwd/w.txt" "$cwd/.git"
         python3 "$here/drive.py" --target look --cwd "$cwd" --out "$work/look" --group "$group" --sizes "$size" \
             --cmd "env HOME=$home CLAUDEW_BACKEND=replay CLAUDEW_REPLAY=$script $bin --theme $theme --cwd $cwd" > /dev/null
@@ -137,7 +182,7 @@ for size in $(echo "$sizes" | tr , ' '); do
 done
 echo "captures and report in $work"
 status=0
-python3 "$here/compare.py" "$ref" "$work/look" --report "$work/report" --sizes "$sizes" \
+python3 "$here/compare.py" "$ref" "$work/look" --report "$work/report" --sizes "$sizes" ${COMPARE_ARGS:-} \
     --version "$(cat "$work/replay/version.txt")" --cwd "$cwd" || status=1
 
 # --version names this crate's version and the reference's
@@ -145,11 +190,11 @@ crate_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1
 # the installed claude when capturing live, the fixtures' otherwise
 if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     claude_version=$("${CLAUDE_BIN:-claude}" --version | sed -n 's/^\([0-9][0-9.]*\).*/\1/p')
-elif [ -n "${REFDIR:-}" ]; then
-    claude_version=$(sed 's/\x1b\[[0-9;]*m//g' "$ref/home-80x24.ansi" | sed -n 's/.*Claude Code v\([0-9.]*\).*/\1/p' | head -1)
 else
-    # tests/fixtures/ref is an older capture (2.1.300); the look follows 2.1.314
-    claude_version=$(sed -n 's/.*CLAUDE_VERSION: &str = "\(.*\)";.*/\1/p' "$crate/src/app.rs")
+    # what the stored capture says it is; the older tests/fixtures/ref is 2.1.300 and the look
+    # follows 2.1.314, so against that one the look's own number stands in
+    claude_version=$(sed 's/\x1b\[[0-9;]*m//g' "$ref/home-80x24.ansi" | sed -n 's/.*Claude Code v\([0-9.]*\).*/\1/p' | head -1)
+    [ "${ref%/ref}" = "$ref" ] || claude_version=$(sed -n 's/.*CLAUDE_VERSION: &str = "\(.*\)";.*/\1/p' "$crate/src/app.rs")
 fi
 want="wizard-ui-claude $crate_version (claude look $claude_version)"
 got=$("$bin" --version)

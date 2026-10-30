@@ -20,7 +20,7 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 
 # (scene name, steps). A step is ('type', text), ('keys', k1, k2, ...), ('wait', seconds),
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
-# (no waiting after), ('quit',) (ctrl+c until the alternate screen closes)
+# (no waiting after), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
 # reference only.
 STATIC = [
@@ -355,9 +355,48 @@ THINK = [
                ('keys', 'C-o'), ('wait', 0.4)]),
 ]
 
+# Claude Code's statusLine: a command that prints rows under the prompt (compare.sh writes the
+# settings and the command). The rows go away under the shortcuts table, and the mode line loses
+# its `? for shortcuts`.
+STATUSLINE = [
+    ('sl-home', [('wait', 1.5), ('snap', '')]),
+    ('sl-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+    ('sl-typed', [('since', 13), ('type', 'hello'), ('snap', ''), ('keys', 'BSpace', 'BSpace', 'BSpace', 'BSpace', 'BSpace')]),
+    ('sl-slash', [('type', '/'), ('snap', ''), ('keys', 'C-c'), ('wait', 2.5)]),
+    ('sl-modes', [('keys', 'BTab'), ('snap', '')]),
+    ('sl-turn', [('type', 'what is 2+2'), ('keys', 'Enter'), ('until', r'done \d+:\d\d [AP]M', 30), ('wait', 1.5),
+                 ('snap', '')]),
+]
+# Three rows indented by `padding`, one of them longer than the screen, another with wide characters.
+STATUSLINE_PAD = [
+    ('slp-home', [('wait', 1.5), ('snap', '')]),
+    ('slp-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+]
+
+# Claude Code's task list: under the spinner while a turn runs, above the prompt after it, ctrl+t
+# hides it. The turn holds its answer for a few seconds so the running view can be captured.
+TODO = [
+    ('todo', [('type', 'Make a task list'), ('keys', 'Enter'), ('until', r'Change hello to hi…', 30),
+              ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', ''),
+              ('keys', 'C-t'), ('wait', 0.6), ('snap', '-hidden'), ('keys', 'C-t'), ('wait', 0.6),
+              ('snap', '-shown')]),
+]
+TODO_MANY = [
+    ('todo-many', [('type', 'Make many tasks'), ('keys', 'Enter'), ('until', r'◼ Step 4 of the long job', 30),
+                   ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', '')]),
+]
+
+# A plan approved: the reference offers three ways out and the look two; Down picks the
+# reference's "manually approve edits", Enter alone approves in the look.
+PLAN2 = [
+    ('plan-approve', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                      ('until', r'Ready to code', 120), ('wait', 2.0), ('ref_keys', 'Down'), ('keys', 'Enter'),
+                      ('idle',), ('wait', 1.5), ('snap', '')]),
+]
+
 HOME = [('home', [('snap', '')])]
 
-GROUPS = {'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
+GROUPS = {'plan2': PLAN2, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
           'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
@@ -389,6 +428,7 @@ def tmux(*args, check=True):
 class Pane:
     def __init__(self, name, w, h, cwd, cmd):
         self.name = name
+        self.t0 = time.time()
         tmux('kill-session', '-t', name, check=False)
         tmux('-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', str(w), '-y', str(h), '-c', cwd,
              'env', '-i', 'HOME=' + os.environ['HOME'], 'PATH=' + os.environ['PATH'],
@@ -511,6 +551,10 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
                 tmux('resize-window', '-t', pane.name, '-x', str(step[1]), '-y', str(step[2]))
             elif op == 'wait':
                 time.sleep(step[1])
+            elif op == 'since':
+                # until this many seconds after the program started: the effort notice is gone
+                # ten seconds in, and the look is quicker than the reference to get here
+                time.sleep(max(0.0, pane.t0 + step[1] - time.time()))
             elif op == 'idle':
                 pane.idle()
             elif op == 'until':

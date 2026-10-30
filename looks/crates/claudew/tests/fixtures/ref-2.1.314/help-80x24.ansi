@@ -1,0 +1,24 @@
+  [38;5;246mcommands to run, it's recommended to only use in isolated [39m
+  [38;5;246menvironments. Shift+Tab to change mode.[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+[39m   [1m[38;5;110mHelp[0m [1m[38;5;16m[48;5;110m General [0m  Commands   Custom commands
+
+   Claude understands your codebase, makes edits with your permission, and
+   executes commands — right from your terminal.
+   [1mShortcuts[0m
+   ! for shell mode      double tap esc to clear       ctrl + shift + _ to
+   / for commands        input                         undo
+   @ for file paths      shift + tab to auto-accept    ctrl + z to suspend
+   /btw for side         edits                         ctrl + v to paste
+   question              ctrl + o for verbose output   images
+                         ctrl + t to toggle tasks      alt + p to switch
+                         \⏎ for newline                model
+                                                       ctrl + s to stash
+                                                       prompt
+                                                       ctrl + g to edit in
+                                                       $EDITOR
+                                                       /keybindings to
+                                                       customize
+
+   For more help: ]8;id=sdguk7;https://code.claude.com/docs/en/overview\https://code.claude.com/docs/en/overview]8;;\
+

@@ -1,0 +1,24 @@
+  [38;5;246mchecks each tool call for risky actions and prompt injection before [39m
+  [38;5;246mexecuting. Actions Claude identifies as safe are executed, while [39m
+  [38;5;246mactions Claude identifies as risky are blocked and Claude may try a [39m
+  [38;5;246mdifferent approach. Ideal for long-running tasks. Sessions are [39m
+  [38;5;246mslightly more expensive. Claude can make mistakes that allow harmful [39m
+  [38;5;246mcommands to run, it's recommended to only use in isolated [39m
+  [38;5;246menvironments. Shift+Tab to change mode.[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[39m [38;5;246m◐ medium · /effort[38;5;153m ▔
+[39m   [1m[38;5;153mSelect model[0m
+   [38;5;246mSwitch between Claude models. Your pick becomes the default for new [39m
+   [38;5;246msessions. For other/previous model names, specify with --model.[39m
+
+   [38;5;246m↑[39m [38;5;246m3. [39mFable                  [38;5;246mFable 5.1 · Most capable for your hardest and [39m
+                               [38;5;246mlongest-running tasks · $10/$50 per Mtok[39m
+     [38;5;246m4. [39mSonnet                 [38;5;246mSonnet 5.5 · Efficient for routine tasks · [39m
+                               [38;5;246m$2/$10 per Mtok[39m
+   [38;5;153m❯[39m [38;5;246m5. [38;5;114mHaiku[39m [38;5;114m✔[39m                [38;5;246mHaiku 5.5 · Fastest for quick answers · [39m
+                               [38;5;246m$0.10/$0.50 per Mtok ($0.50/$2.50 for prompts [39m
+                               [38;5;246mover 100k)[39m
+
+
+   [38;5;174m◐[38;5;246m Medium effort (default)[38;5;239m ←/→ to adjust[39m
+
+   [38;5;246mEnter to set as default · s to use this session only · Esc to cancel[39m
