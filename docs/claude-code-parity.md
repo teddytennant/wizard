@@ -36,7 +36,7 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `Glob` | `list_files` | new | Real ripgrep `--files --glob` semantics, oldest first by mtime, capped at 100 with a truncation line, dotfiles included, `.gitignore` not applied, absolute patterns split at their static prefix. Falls back to a directory walk without `rg`. Claude Code does not offer it on Linux and macOS (its `Bash` searches instead), so there was no real binary to compare. |
 | `Grep` | `search_files` | new | `output_mode`, `-A`/`-B`/`-C`/`context`, `-n`, `-i`, `type`, `glob`, `head_limit` (default 250, 0 for all), `offset`, `multiline`; numbers and booleans may arrive as strings; `file_path` is accepted for `path`. Result wording ported from the leaked source. Falls back to `grep -E` without `rg`, which cannot do `multiline` or `type`. Not offered on Linux by the real binary, so the comparison was against its `Bash` running `grep`, not `Grep`. |
 | `ListAgents` | `subagent_status` | partial | Lists running background subagents of this session, and `main` for a subagent. No other local sessions, teammates, cloud or Remote Control sessions. |
-| `ListMcpResourcesTool`, `ReadMcpResourceTool` | none | new | `resources/list` and `resources/read` on the connected servers, registered with the MCP tools when any server is up. Result wording from the leaked source. No MCP server was on hand to run them against. |
+| `ListMcpResourcesTool`, `ReadMcpResourceTool` | none | new | `resources/list` and `resources/read` on the connected servers, registered with the MCP tools when any server is up. Run through the real binary against a stdio test server with two resources: the list is a JSON array of `{name, uri, description, mimeType, server}`, an unknown server is the error `Server "nope" not found. Available servers: res`, a read is `{"contents":[{uri, mimeType, text}]}`, and an unknown URI (JSON-RPC -32002) is an ordinary result, `Resource not found: <uri> — it may have been deleted or the URI is stale. Re-run ListMcpResourcesTool to refresh.`; Wizard's wording matches all four, and its list keys come out in alphabetical order instead of Claude's. The real binary only offers the pair when a connected server has resources. The Wizard side was exercised by its unit tests against a scripted server, not driven through a turn. |
 | `LSP` | none | new | A real client. The first call for a file starts the language server for its extension (`rust-analyzer`, `pyright-langserver`, `basedpyright-langserver`, `pylsp`, `typescript-language-server`, `gopls` or `clangd`, whichever is on `PATH`, or a server named in `.lsp.json` in Claude's plugin format, project first, then `~/.wizard/lsp.json`), waits up to 45s for it to stop reporting progress, and keeps it for the session. `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation` and the three call-hierarchy operations take Claude's input schema and answer in the wording of the leaked formatters. Changes made on disk are sent to the server before each call. `workspaceSymbol` sends an empty query, as Claude does. With no server for the file type it says `No LSP server available for file type: .rs (install rust-analyzer or name another in .lsp.json)`. The wording was ported from source and the client was run against a scripted server; the real binary exposes no `LSP` over `mcp serve`, so it could not be diffed. |
 | `Monitor` | `execute` with `run_in_background` | new | A background task whose stdout lines are put into the conversation at the top of each step, batched, capped at 100 lines per batch and stopped at 5000 events. `timeout_ms` defaults to 5 minutes, capped at 30. Events arrive between steps and do not wake an idle session. The `ws` source is refused; use `websocat` in a command. `TaskStop` and `task_kill` stop it. |
 | `NotebookEdit` | `edit_file` | new | Edits by cell id (or `cell-N`): replace, insert after, delete. New ids are 8 hex digits, only for nbformat 4.5 and later. Replacing a code cell clears outputs. Written with Jupyter's one-space indent. Checked against the real tool over MCP, including its error strings. |
@@ -77,8 +77,8 @@ property set and required list of each of those schemas
 (`tools::compat::tests::schemas_accept_everything_claude_code_2_1_314_accepts`).
 
 Not comparable that way, and taken from the leaked source and the specs alone:
-`Glob` and `Grep` (not shipped on Linux), `LSP`, `ListMcpResourcesTool`,
-`ReadMcpResourceTool`, `PushNotification` and `SendUserFile`. The model-facing
+`Glob` and `Grep` (not shipped on Linux), `LSP`, `PushNotification` and
+`SendUserFile`. The model-facing
 result text of every tool is the string the leaked source's
 `mapToolResultToToolResultBlockParam` builds where there is one; `mcp serve`
 returns the structured output instead, so those strings could not be diffed.
@@ -88,10 +88,11 @@ real binary (`-p`, and interactive in a `tmux -L` session): the permission
 refusals of `default`, `acceptEdits`, `plan`, `bypassPermissions` and `dontAsk`;
 the model-facing text of `Bash` (failure, silence, timeout, a result past 30000
 characters, `run_in_background`); `AskUserQuestion` answered in the dialog; and
-`SendMessage` to `main`. In that setup 2.1.314 offers neither `TodoWrite` nor the
-`Task*` tools (`TodoWrite is disabled for this session`), `Grep`, `Glob`,
-`EnterPlanMode` nor the MCP resource tools, even interactively, so they have no
-reference output; Wizard's versions stand on the leaked source. A model-free
+`SendMessage` to `main`; and the two MCP resource tools, against a small stdio
+test server (`--mcp-config`). In that setup 2.1.314 offers neither `TodoWrite`
+nor the `Task*` tools (`TodoWrite is disabled for this session`), `Grep`,
+`Glob` nor `EnterPlanMode`, even interactively, so they have no reference
+output; Wizard's versions stand on the leaked source. A model-free
 comparison of the permission dialog's own layout was not done: it needs the
 terminal pixels, and the claude look owns that.
 
