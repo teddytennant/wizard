@@ -13,6 +13,9 @@
 //!
 //! Enter is not handled here: in INSERT and NORMAL it submits, so it is passed back.
 
+// Shared with the looks workspace, which is edition 2021 and has no `let` chains to collapse into.
+#![allow(clippy::collapsible_if)]
+
 /// Which half of modal editing the prompt is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VimMode {
@@ -1215,10 +1218,11 @@ impl VimState {
         match kind {
             Kind::Op(op, Tg::M(mo)) => self.op_motion(d, kind, op, mo, n),
             Kind::Op(_, Tg::Line) => self.op_line(d, kind, n),
-            Kind::Op(_, Tg::Obj(inner, ch)) => match text_object(d, d.cur, inner, ch) {
-                Some((a, b)) => self.apply_range(d, kind, n, a, b, false),
-                None => {}
-            },
+            Kind::Op(_, Tg::Obj(inner, ch)) => {
+                if let Some((a, b)) = text_object(d, d.cur, inner, ch) {
+                    self.apply_range(d, kind, n, a, b, false);
+                }
+            }
             Kind::X => {
                 if d.len() == 0 || d.at(d.cur) == '\n' {
                     return;

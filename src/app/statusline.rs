@@ -144,23 +144,22 @@ impl App {
     /// True when the rows changed.
     pub fn statusline_tick(&mut self) -> bool {
         let mut changed = false;
-        if let Some(rx) = &self.status_line.rx {
-            if let Ok(lines) = rx.try_recv() {
-                changed = lines != self.status_line.lines;
-                self.status_line.lines = lines;
-                self.status_line.rx = None;
-            }
+        if let Some(rx) = &self.status_line.rx
+            && let Ok(lines) = rx.try_recv()
+        {
+            changed = lines != self.status_line.lines;
+            self.status_line.lines = lines;
+            self.status_line.rx = None;
         }
         let st = &mut self.status_line;
         let Some(cfg) = st.cfg.clone() else {
             return changed;
         };
-        if st.wanted_at.is_none() {
-            if let (Some(every), Some(last)) = (cfg.refresh, st.last_run) {
-                if last.elapsed() >= every {
-                    st.wanted_at = Some(Instant::now() - DEBOUNCE);
-                }
-            }
+        if st.wanted_at.is_none()
+            && let (Some(every), Some(last)) = (cfg.refresh, st.last_run)
+            && last.elapsed() >= every
+        {
+            st.wanted_at = Some(Instant::now() - DEBOUNCE);
         }
         if st.wanted_at.is_some_and(|at| at.elapsed() >= DEBOUNCE) {
             st.wanted_at = None;

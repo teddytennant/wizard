@@ -258,10 +258,10 @@ impl App {
             }
             "chat:externalEditor" => self.edit_request = true,
             "chat:stash" => self.toggle_stash(),
-            "chat:sendNow" | "chat:queueSubmit" => {
-                if self.busy.is_some() && !self.queued.is_empty() {
-                    self.send(super::Request::Cancel);
-                }
+            "chat:sendNow" | "chat:queueSubmit"
+                if self.busy.is_some() && !self.queued.is_empty() =>
+            {
+                self.send(super::Request::Cancel);
             }
             "transcript:exit" => self.detail = false,
             "scroll:pageUp" => self.scroll_by(self.page() as isize),

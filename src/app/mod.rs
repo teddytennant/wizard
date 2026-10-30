@@ -2316,7 +2316,7 @@ impl App {
             .filter_map(|f| std::fs::read_to_string(f).ok())
             .filter_map(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .filter_map(|d| d.get("editorMode")?.as_str().map(|m| m == "vim"))
-            .last()
+            .next_back()
             .unwrap_or(false);
             self.vim.set_enabled(vim);
         }
@@ -2774,10 +2774,10 @@ impl App {
         }
 
         // Rules from keybindings.json come before the built-in keys.
-        if self.prompt.is_none() {
-            if let Some(action) = self.keymap_key(key) {
-                return Ok(action);
-            }
+        if self.prompt.is_none()
+            && let Some(action) = self.keymap_key(key)
+        {
+            return Ok(action);
         }
 
         // Global chords, regardless of input mode.
@@ -3470,10 +3470,10 @@ impl App {
         // Modal (vim) editing. In Normal mode keys are motions/operators, not
         // text; in Insert mode the only extra binding is Esc → Normal, and
         // everything else falls through to ordinary line editing below.
-        if self.vim.enabled {
-            if let Some(action) = self.vim_key(key) {
-                return Ok(action);
-            }
+        if self.vim.enabled
+            && let Some(action) = self.vim_key(key)
+        {
+            return Ok(action);
         }
 
         if let Some(action) = self.starter_key(&key) {

@@ -18,6 +18,9 @@
 //! read the file alike. Each TUI turns a resolved action into what it does; what it cannot do
 //! it ignores, and the key then does nothing.
 
+// Shared with the looks workspace, which is edition 2021 and has no `let` chains to collapse into.
+#![allow(clippy::collapsible_if)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -485,8 +488,7 @@ impl Keymap {
             .bindings
             .iter()
             .filter(active)
-            .filter(|b| b.chord == chord)
-            .last();
+            .rfind(|b| b.chord == chord);
         let longer = self
             .bindings
             .iter()
