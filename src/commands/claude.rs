@@ -40,6 +40,7 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("marketplace", "plugin", "marketplace "),
     ("routines", "schedule", ""),
     ("theme", "ui", ""),
+    ("focus", "view", ""),
 ];
 
 /// The commands [`run`] implements. Every name has a row in the table.
@@ -61,6 +62,28 @@ pub const COMPAT: &[&str] = &[
     "plugin",
     "terminal-setup",
     "ide",
+    "loop",
+    "branch",
+    "rename",
+    "cd",
+    "background",
+    "stop",
+    "statusline",
+    "autocompact",
+    "fast",
+    "advisor",
+    "color",
+    "voice",
+    "usage-credits",
+    "passes",
+    "upgrade",
+    "rate-limit-options",
+    "privacy-settings",
+    "heapdump",
+    "insights",
+    "restart",
+    "setup-bedrock",
+    "setup-vertex",
 ];
 
 /// Those of [`COMPAT`] that only read state, which the agent may run itself.
@@ -73,6 +96,20 @@ const READ_ONLY: &[&str] = &[
     "skills",
     "schedule",
     "ide",
+    "fast",
+    "advisor",
+    "color",
+    "voice",
+    "usage-credits",
+    "passes",
+    "upgrade",
+    "rate-limit-options",
+    "privacy-settings",
+    "heapdump",
+    "insights",
+    "restart",
+    "setup-bedrock",
+    "setup-vertex",
 ];
 
 pub fn is_compat(name: &str) -> bool {
@@ -144,11 +181,43 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
     let root = surface.project_root();
     let args = args.trim();
     match name {
-        "permissions" => {
-            let text = permissions_report(&surface.snapshot(), &root);
-            surface.notice(text);
+        "permissions" => match super::views::permissions(&surface.snapshot(), &root, args) {
+            Ok(text) => surface.notice(text),
+            Err(message) => surface.error(message),
+        },
+        "hooks" => surface.notice(super::views::hooks(&root)),
+        "loop" => match super::loop_cmd::run(args, &root) {
+            Ok(text) => surface.notice(text),
+            Err(message) => surface.error(message),
+        },
+        "branch" => {
+            match super::session_cmds::branch(surface.snapshot().session.as_deref(), args) {
+                Ok((id, message)) => {
+                    surface.notice(message);
+                    surface.resume(id).await;
+                }
+                Err(message) => surface.error(message),
+            }
         }
-        "hooks" => surface.notice(hooks_report(&root)),
+        "rename" => reply(
+            surface,
+            super::session_cmds::rename(surface.snapshot().session.as_deref(), args),
+        ),
+        "cd" => reply(surface, super::session_cmds::change_dir(args, &root)),
+        "background" => reply(
+            surface,
+            super::session_cmds::background(surface.snapshot().session.as_deref(), args, &root),
+        ),
+        "stop" => reply(surface, super::session_cmds::stop(args)),
+        "statusline" => reply(surface, super::misc::statusline(args, &root)),
+        "autocompact" => reply(surface, super::misc::autocompact(args)),
+        other if super::misc::not_available(other).is_some() => {
+            surface.notice(
+                super::misc::not_available(other)
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
         "context" => {
             let text = context_report(&surface.snapshot(), &root);
             surface.notice(text);
@@ -205,67 +274,11 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
     }
 }
 
-fn permissions_report(session: &super::surface::SessionSnapshot, root: &Path) -> String {
-    let mode = match session.mode {
-        crate::config::Mode::Genie => "genie: tool calls run without a prompt",
-        crate::config::Mode::Sovereign => "sovereign: autonomous, tool calls run without a prompt",
-        crate::config::Mode::Chat => "chat: no project tools",
-    };
-    let trust = match crate::trust::status(root) {
-        crate::trust::Status::Trusted => "trusted",
-        crate::trust::Status::Denied => "denied",
-        crate::trust::Status::Unknown => "no decision",
-    };
-    format!(
-        "permissions\n  mode: {mode}\n  plan mode: {}\n  project trust ({}): {trust}\n\n\
-         Wizard does not prompt per tool call; /hooks lists the pre_tool_use hooks that gate them, \
-         and plan mode (/plan) makes the agent read-only until a plan is approved.",
-        if session.plan.plan || session.plan.omakase {
-            "on"
-        } else {
-            "off"
-        },
-        root.display()
-    )
-}
-
-fn hooks_report(root: &Path) -> String {
-    let mut files = Vec::new();
-    if let Ok(dir) = crate::config::Config::wizard_dir() {
-        files.push(dir.join("hooks.toml"));
+fn reply<S: CommandSurface + Send + ?Sized>(surface: &mut S, outcome: Result<String, String>) {
+    match outcome {
+        Ok(text) => surface.notice(text),
+        Err(message) => surface.error(message),
     }
-    files.push(root.join(".wizard").join("hooks.toml"));
-    let mut out = String::from("hooks\n");
-    let mut any = false;
-    for file in files {
-        let Ok(raw) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let Ok(doc) = raw.parse::<toml::Table>() else {
-            out.push_str(&format!("  {}: not valid TOML\n", file.display()));
-            continue;
-        };
-        for hook in doc
-            .get("hooks")
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            any = true;
-            let field = |key: &str| hook.get(key).and_then(toml::Value::as_str).unwrap_or("-");
-            out.push_str(&format!(
-                "  {:<16} {:<14} {}   ({})\n",
-                field("event"),
-                field("matcher"),
-                field("command"),
-                file.display()
-            ));
-        }
-    }
-    if !any {
-        out.push_str("  none; declare them in ~/.wizard/hooks.toml (docs/hooks.md)\n");
-    }
-    out
 }
 
 fn context_report(session: &super::surface::SessionSnapshot, root: &Path) -> String {

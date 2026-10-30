@@ -46,8 +46,12 @@ use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::import_claude::ImportSelection;
 
 pub mod claude;
+mod loop_cmd;
+mod misc;
 pub mod plugin;
+mod session_cmds;
 pub mod surface;
+mod views;
 
 pub use plugin::{CommandFuture, CommandHandler, PluginCommand};
 pub use surface::Surface;
@@ -630,7 +634,9 @@ impl SlashCommand {
                     .trim_start()
                     .to_string();
                 if task.is_empty() {
-                    Err("usage: /fork <task>".to_string())
+                    // Claude Code's `/fork` is `/branch`: no task, no side
+                    // quest, so copy the conversation instead.
+                    Ok(Self::compat("branch", ""))
                 } else {
                     Ok(Self::Fork(task))
                 }
@@ -838,6 +844,11 @@ impl SlashCommand {
 
             // The Claude Code commands that only read state. The rest change
             // files or settings on the user's behalf.
+            // `/permissions allow ...` edits the rules the agent itself runs
+            // under, so only the bare listing is the agent's.
+            Compat { name, args } if name == "permissions" && !args.trim().is_empty() => {
+                Err("`/permissions` with arguments edits the rules and is the user's call".into())
+            }
             Compat { name, .. } if claude::agent_may_run(name) => Ok(()),
             Compat { name, .. } => Err(format!("`/{name}` is the user's call")),
         }
@@ -1508,6 +1519,108 @@ pub const COMMANDS: &[CommandSpec] = &[
         everywhere
     ),
     compat_row!("ide", "", "how to use Wizard from an editor", everywhere),
+    compat_row!(
+        "loop",
+        "[interval] <prompt>",
+        "run a prompt again and again on the scheduler (list, stop <id>)",
+        local
+    ),
+    compat_row!(
+        "branch",
+        "[name]",
+        "copy the conversation to a new session and switch to it (also /fork)",
+        local
+    ),
+    compat_row!("rename", "[name]", "name this session", local),
+    compat_row!("cd", "<dir>", "move tools into another directory", local),
+    compat_row!(
+        "background",
+        "[task]",
+        "continue this conversation in a detached session",
+        local
+    ),
+    compat_row!("stop", "[id]", "list or stop background sessions", local),
+    compat_row!(
+        "statusline",
+        "[command|off]",
+        "show or set the statusLine setting",
+        local
+    ),
+    compat_row!(
+        "autocompact",
+        "[tokens|off]",
+        "show or set the context size compaction aims under",
+        local
+    ),
+    compat_row!("fast", "", "fast mode (not available here)", everywhere),
+    compat_row!(
+        "advisor",
+        "",
+        "advisor model (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "color",
+        "",
+        "prompt bar colour (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "voice",
+        "",
+        "voice dictation (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "usage-credits",
+        "",
+        "Anthropic credits (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "passes",
+        "",
+        "guest passes (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "upgrade",
+        "",
+        "plan upgrade (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "rate-limit-options",
+        "",
+        "rate-limit tiers (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "privacy-settings",
+        "",
+        "privacy settings (not available here)",
+        everywhere
+    ),
+    compat_row!("heapdump", "", "heap dump (not available here)", everywhere),
+    compat_row!(
+        "insights",
+        "",
+        "session insights (not available here)",
+        everywhere
+    ),
+    compat_row!("restart", "", "restart (not available here)", everywhere),
+    compat_row!(
+        "setup-bedrock",
+        "",
+        "Bedrock setup (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "setup-vertex",
+        "",
+        "Vertex setup (not available here)",
+        everywhere
+    ),
     compat_row!(
         "keybindings",
         "[init]",
@@ -2752,8 +2865,8 @@ mod tests {
             parse("/fork   keep  internal   spaces"),
             Ok(SlashCommand::Fork("keep  internal   spaces".into()))
         );
-        assert_eq!(parse("/fork"), Err("usage: /fork <task>".to_string()));
-        assert_eq!(parse("/fork   "), Err("usage: /fork <task>".to_string()));
+        assert_eq!(parse("/fork"), Ok(SlashCommand::compat("branch", "")));
+        assert_eq!(parse("/fork   "), Ok(SlashCommand::compat("branch", "")));
         assert!(SlashCommand::Fork("hi".into()).agent_runnable().is_err());
     }
 

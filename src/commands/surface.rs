@@ -566,7 +566,17 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
         SlashCommand::Clear => surface.clear().await,
 
         SlashCommand::Model(None) => choose(surface, Chooser::Model, spec).await,
-        SlashCommand::Model(Some(tag)) => surface.set_model(tag).await,
+        SlashCommand::Model(Some(tag)) => {
+            let settings = crate::config::claude::load(
+                &surface.project_root(),
+                crate::config::claude::Trust::Refused,
+            );
+            let tag = settings.resolve_model(&tag);
+            match settings.refuse_model(&tag) {
+                Some(why) => surface.error(why),
+                None => surface.set_model(tag).await,
+            }
+        }
 
         SlashCommand::Mode(None) => choose(surface, Chooser::Mode, spec).await,
         SlashCommand::Mode(Some(mode)) => {
