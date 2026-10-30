@@ -13,6 +13,7 @@ to do.
 | [Usage](usage.md) | The TUI, slash commands, agent-managed context |
 | [Token profiles](token-profiles.md) | How much harness each request carries: `safe`, `stock`, `lean`, `min` |
 | [Commands](commands.md) | Every slash command, and what each surface allows |
+| [Claude Code parity](claude-code-parity.md) | Which Claude Code commands, flags and `.claude` files Wizard answers to, and what is missing |
 | [Modes](modes.md) | Genie, sovereign, `--continuous`, plan mode |
 | [Startup benchmark](../bench/startup/README.md) | Cold and warm start, memory and install size next to six other agents, and `run.sh` |
 
