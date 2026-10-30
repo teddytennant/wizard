@@ -6,7 +6,25 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-10-30
+
+### Added
+
+- **The goal indicator shows how long a goal has been active**, as `◎ /goal active (3d)`, then the round, or `critic reviewing` while a critic is out. It is on the status line in the house look and the codex and grok looks, and it survives a restart. `/goal` reports the same.
+- **`/goal clear`** stops the loop and deletes the goal. **`/goal resume`** picks a stopped goal back up with its clock and round count. Before, `/goal clear` set the goal to the word "clear".
+
+### Changed
+
+- **The goal critic examines the work every time the agent stops.** It used to run only if the agent ended a reply with `GOAL ACHIEVED`, and any other stop got a "keep going" turn nobody checked. That marker is gone: what the agent says about its own work no longer decides whether it gets looked at, and each rejection tells it what needs to change. A turn cut off by its step budget continues without a critic.
+
 ### Fixed
+
+- A session that ended with a goal running now says so on the next launch and offers `/goal resume`, instead of forgetting the loop. It does not restart by itself.
+- A goal loop could stall with the indicator still on, after `/clear`, a crashed turn, or a full message queue. Every exit now goes through one path, and a goal turn can no longer be dropped by the queue cap.
+- A critic's verdict that arrived after the goal was stopped or replaced could land on the new goal. Stopping a loop now also stops its critic.
+- An agent that kept saying it had finished without doing anything could loop against the critic forever, and a critic that could not run cost a builder turn per attempt. Both now stop the loop after three in a row.
+- The agent could replace the goal it was being held to by running `/goal <text>` mid-loop. It is refused, and so are `/goal clear` and `/goal resume`.
+- A crash while saving `.wizard/mission.toml` could truncate it. It is now replaced atomically.
 
 - The drag-copy highlight lit the margin, the reply marker, the scrollbar and the blank cells after each line, so it looked like whitespace was selected even though the copy skipped it. The highlight now covers exactly the cells that are copied.
 

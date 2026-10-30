@@ -765,6 +765,23 @@ fn goal_parses_show_and_set() {
         SlashCommand::parse("/goal ship the thing"),
         Some(Ok(SlashCommand::Goal(Some("ship the thing".into()))))
     );
+    assert_eq!(
+        SlashCommand::parse("/goal clear"),
+        Some(Ok(SlashCommand::GoalClear))
+    );
+    assert_eq!(
+        SlashCommand::parse("/goal CLEAR"),
+        Some(Ok(SlashCommand::GoalClear))
+    );
+    assert_eq!(
+        SlashCommand::parse("/goal resume"),
+        Some(Ok(SlashCommand::GoalResume))
+    );
+    // Only the bare word is the verb: a goal may start with it.
+    assert_eq!(
+        SlashCommand::parse("/goal clear the backlog"),
+        Some(Ok(SlashCommand::Goal(Some("clear the backlog".into()))))
+    );
 }
 
 #[test]
@@ -2876,10 +2893,8 @@ fn goal_kickoff_arms_the_critic_loop() {
     );
     assert_eq!(app.goal_idle_turns, 0);
     assert!(
-        app.message_queue[0]
-            .text
-            .contains(crate::agent::critic::GOAL_ACHIEVED_MARKER),
-        "the kickoff tells the builder how to claim the goal"
+        app.message_queue[0].text.contains("Every time you stop"),
+        "the kickoff tells the builder a critic examines every stop"
     );
     // The exact queued prompt is armed so the turn that runs it is recognized
     // as a goal turn (and a user message queued ahead is not).
@@ -2905,7 +2920,7 @@ fn a_queued_goal_rework_re_arms() {
 }
 
 #[test]
-fn goal_kickoff_respects_the_queue_cap() {
+fn a_full_queue_cannot_lose_a_goal_turn() {
     let mut app = app();
     app.status.busy = true;
     for i in 0..MESSAGE_QUEUE_CAP {
@@ -2913,13 +2928,170 @@ fn goal_kickoff_respects_the_queue_cap() {
         press(&mut app, KeyCode::Enter);
     }
     app.queue_goal_kickoff("rewrite spore in assembly");
-    assert_eq!(app.message_queue.len(), MESSAGE_QUEUE_CAP);
+    assert_eq!(app.message_queue.len(), MESSAGE_QUEUE_CAP + 1);
+    assert_eq!(
+        app.expected_goal_prompt.as_deref(),
+        app.message_queue.back().map(|queued| queued.text.as_str()),
+        "a user's messages stay ahead of it, and it is still armed"
+    );
+}
+
+/// A loop in every kind of partial state a stop could catch it in.
+fn app_mid_goal(dir: &std::path::Path) -> App {
+    use crate::agent::mission::Mission;
+    let mut app = app();
+    app.project_root = dir.to_path_buf();
+    Mission::new("ship it").save(dir).unwrap();
+    app.queue_goal_kickoff("ship it");
+    type_str(&mut app, "my own message");
+    app.status.busy = true;
+    press(&mut app, KeyCode::Enter);
+    app.status.busy = false;
+    app.goal_turn_running = true;
+    app.goal_inflight = true;
+    app.goal_idle_turns = 2;
+    app.goal_critic_failures = 1;
+    app
+}
+
+fn assert_no_loop_left(app: &App) {
+    assert_eq!(app.active_goal, None);
+    assert_eq!(app.goal_since, None);
+    assert_eq!(app.expected_goal_prompt, None);
+    assert!(!app.goal_turn_running);
+    assert!(!app.goal_inflight);
+    assert_eq!(app.goal_idle_turns, 0);
+    assert_eq!(app.goal_critic_failures, 0);
+    assert_eq!(
+        app.message_queue
+            .iter()
+            .map(|queued| queued.text.as_str())
+            .collect::<Vec<_>>(),
+        ["my own message"],
+        "the goal's turn goes and the user's own message stays"
+    );
+}
+
+#[test]
+fn stopping_a_goal_keeps_the_goal_and_nothing_else() {
+    use crate::agent::mission::Mission;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_mid_goal(tmp.path());
+    assert!(Mission::load(tmp.path()).unwrap().unwrap().goal_running);
+    let epoch = app.goal_epoch;
+
+    app.stop_goal_loop("the turn was stopped");
+
+    assert_no_loop_left(&app);
+    assert_ne!(
+        app.goal_epoch, epoch,
+        "a verdict still in flight goes stale"
+    );
+    let mission = Mission::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(mission.goal, "ship it");
+    assert!(!mission.goal_running);
     assert!(
         matches!(
             app.transcript.last(),
-            Some(TranscriptItem::Notice(n)) if n.contains("full")
+            Some(TranscriptItem::Notice(n)) if n.contains("/goal resume")
         ),
-        "a full queue surfaces a notice instead of auto-starting"
+        "the way back is on screen"
+    );
+}
+
+#[test]
+fn a_new_goal_takes_over_cleanly_from_a_running_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_mid_goal(tmp.path());
+    let epoch = app.goal_epoch;
+    let old_prompt = app.expected_goal_prompt.clone().unwrap();
+
+    app.queue_goal_kickoff("cut a patch release");
+
+    assert!(!app.goal_inflight && !app.goal_turn_running);
+    assert_ne!(app.goal_epoch, epoch);
+    assert!(
+        !app.message_queue
+            .iter()
+            .any(|queued| queued.text == old_prompt),
+        "the old goal's turn must not run after the new goal is set"
+    );
+    assert_eq!(app.active_goal.as_deref(), Some("cut a patch release"));
+}
+
+#[test]
+fn a_resumed_goal_keeps_its_clock_and_its_round() {
+    use crate::agent::mission::Mission;
+    let tmp = tempfile::tempdir().unwrap();
+    let three_days_ago = chrono::Utc::now() - chrono::Duration::days(3);
+    let mut mission = Mission::new("ship it");
+    mission.goal_since = Some(three_days_ago);
+    mission.goal_rounds = 4;
+    mission.save(tmp.path()).unwrap();
+
+    let mut app = app();
+    app.project_root = tmp.path().to_path_buf();
+    app.queue_goal_kickoff("ship it");
+
+    assert_eq!(app.goal_since, Some(three_days_ago));
+    assert_eq!(app.goal_rounds, 4);
+    assert!(Mission::load(tmp.path()).unwrap().unwrap().goal_running);
+}
+
+#[test]
+fn a_finished_goal_says_how_long_it_took() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_mid_goal(tmp.path());
+    app.finish_goal_loop();
+    assert_no_loop_left(&app);
+    assert!(
+        matches!(
+            app.transcript.last(),
+            Some(TranscriptItem::Notice(n)) if n.starts_with("goal achieved after")
+        ),
+        "{:?}",
+        app.transcript.last()
+    );
+}
+
+#[test]
+fn a_session_that_died_mid_goal_is_announced_once_and_not_restarted() {
+    use crate::agent::mission::Mission;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut mission = Mission::new("ship it");
+    mission.goal_running = true;
+    mission.save(tmp.path()).unwrap();
+
+    let mut app = app();
+    app.project_root = tmp.path().to_path_buf();
+    app.announce_interrupted_goal();
+
+    assert_eq!(app.active_goal, None, "opening a terminal spends nothing");
+    assert!(app.message_queue.is_empty());
+    assert!(matches!(
+        app.transcript.last(),
+        Some(TranscriptItem::Notice(n)) if n.contains("/goal resume") && n.contains("ship it")
+    ));
+    assert!(!Mission::load(tmp.path()).unwrap().unwrap().goal_running);
+
+    let notices = app.transcript.len();
+    app.announce_interrupted_goal();
+    assert_eq!(app.transcript.len(), notices, "once");
+}
+
+#[test]
+fn a_counted_round_reaches_the_mission() {
+    use crate::agent::mission::Mission;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_mid_goal(tmp.path());
+    app.count_goal_round();
+    app.count_goal_round();
+    app.note_critique("NOT ACHIEVED: parser.rs panics");
+    let mission = Mission::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(mission.goal_rounds, 2);
+    assert_eq!(
+        mission.notes.last().map(String::as_str),
+        Some("round 2: critic: NOT ACHIEVED: parser.rs panics")
     );
 }
 

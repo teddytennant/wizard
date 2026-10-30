@@ -357,6 +357,9 @@ impl CommandContext<'_> {
         // Drop any prompts queued behind a previous turn — a cleared
         // conversation shouldn't auto-fire messages the user typed mid-turn.
         self.app.message_queue.clear();
+        // That queue may have held the goal's next turn, and the conversation
+        // it was continuing is gone.
+        self.app.stop_goal_loop("the conversation was cleared");
         self.app.scroll_to_bottom();
         // Mirror the agent's counter reset so the status bar drops the old
         // conversation's totals immediately (not after the next Usage event).
@@ -1970,6 +1973,10 @@ impl CommandSurface for CommandContext<'_> {
     async fn start_goal(&mut self, goal: String) -> bool {
         self.app.queue_goal_kickoff(&goal);
         true
+    }
+
+    async fn clear_goal(&mut self) {
+        self.app.clear_goal_loop();
     }
 
     async fn evolve(&mut self, deep: bool, description: String) {

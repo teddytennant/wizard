@@ -372,6 +372,10 @@ pub trait CommandSurface {
     /// [`dispatch`] says so.
     async fn start_goal(&mut self, goal: String) -> bool;
 
+    /// `/goal clear`: stop the live goal loop. Nothing to do on a surface with
+    /// no loop; [`dispatch`] removes the mission either way.
+    async fn clear_goal(&mut self) {}
+
     /// `/evolve`: add a skill, a scripted tool, or an MCP server.
     async fn evolve(&mut self, deep: bool, description: String);
 
@@ -671,6 +675,31 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
                 surface.notice(notice);
             }
         },
+        SlashCommand::GoalClear => {
+            surface.clear_goal().await;
+            match crate::agent::mission::Mission::clear(&surface.project_root()) {
+                Ok(true) => surface.notice("goal cleared".to_string()),
+                Ok(false) => surface.notice("no standing goal to clear".to_string()),
+                Err(err) => surface.error(format!("could not clear the goal: {err:#}")),
+            }
+        }
+        SlashCommand::GoalResume => {
+            match crate::agent::mission::Mission::load(&surface.project_root()) {
+                Err(err) => surface.error(format!("could not read mission: {err:#}")),
+                Ok(None) => surface.error("no standing goal to resume: use `/goal <text>`".into()),
+                Ok(Some(mission)) if mission.goal_running => {
+                    surface.notice("the goal loop is already running".to_string());
+                }
+                Ok(Some(mission)) => {
+                    let started = surface.start_goal(mission.goal.clone()).await;
+                    let mut notice = format!("resuming goal:\n{}", mission.goal);
+                    if !started {
+                        notice.push_str("\nsend a message to start working toward it");
+                    }
+                    surface.notice(notice);
+                }
+            }
+        }
 
         SlashCommand::Evolve { deep, description } => {
             surface.notice(format!(
@@ -1107,11 +1136,20 @@ fn goal_report(project_root: &Path) -> String {
     match crate::agent::mission::Mission::load(project_root) {
         Err(err) => format!("could not read mission: {err:#}"),
         Ok(None) => "no standing goal set — use `/goal <text>` to set one \
-                     (drives sovereign/continuous mode)"
+                     (drives sovereign/continuous mode); `/goal clear` drops one"
             .to_string(),
         Ok(Some(mission)) => {
+            let age = crate::agent::mission::age_label(mission.since(), chrono::Utc::now());
+            let state = if mission.goal_running {
+                format!("active for {age}  ·  round {}", mission.goal_rounds)
+            } else {
+                format!(
+                    "not running  ·  set {age} ago  ·  round {}  ·  `/goal resume` continues it",
+                    mission.goal_rounds
+                )
+            };
             let mut text = format!(
-                "goal: {}\ncycles: {}  ·  updated {}",
+                "goal: {}\nstatus: {state}\ncycles: {}  ·  updated {}",
                 mission.goal,
                 mission.cycles,
                 mission.updated.format("%Y-%m-%d %H:%M UTC"),
@@ -1138,8 +1176,7 @@ fn save_goal(project_root: &Path, text: &str) -> Result<String, String> {
     let mission = match crate::agent::mission::Mission::load(project_root) {
         Err(err) => return Err(format!("could not read mission: {err:#}")),
         Ok(Some(mut mission)) => {
-            mission.goal = text.to_string();
-            mission.note(format!("goal changed to: {text}"));
+            mission.set_goal(text);
             mission
         }
         Ok(None) => crate::agent::mission::Mission::new(text),
@@ -1268,6 +1305,9 @@ mod tests {
         async fn start_goal(&mut self, _goal: String) -> bool {
             self.verb("start_goal");
             true
+        }
+        async fn clear_goal(&mut self) {
+            self.verb("clear_goal");
         }
         async fn evolve(&mut self, _deep: bool, _description: String) {
             self.verb("evolve");
@@ -1505,7 +1545,7 @@ mod tests {
         let text = help_text(Surface::Gui);
         assert!(
             text.contains(
-                "/goal [text] — show the standing goal, or set one and work on it under an independent critic"
+                "/goal [text|clear|resume] — show the standing goal, or set one and work on it under an independent critic"
             )
         );
         assert!(text.contains("/diff"));
@@ -1614,6 +1654,9 @@ mod tests {
             }
             async fn start_goal(&mut self, goal: String) -> bool {
                 self.0.start_goal(goal).await
+            }
+            async fn clear_goal(&mut self) {
+                self.0.clear_goal().await;
             }
             async fn evolve(&mut self, deep: bool, description: String) {
                 self.0.evolve(deep, description).await;
@@ -1740,6 +1783,7 @@ mod tests {
         );
         save_goal(tmp.path(), "cut a patch release").unwrap();
         let text = goal_report(tmp.path());
+        assert!(text.contains("status: not running"), "got: {text}");
         assert!(text.contains("goal: cut a patch release"), "got: {text}");
         assert!(
             text.contains("goal changed to: cut a patch release"),

@@ -3704,6 +3704,9 @@ fn status_chip_spans(app: &App) -> Vec<Span<'static>> {
     let mut chips: Vec<Vec<Span<'static>>> = Vec::new();
     let spinner = SPINNER[(app.tick / SPINNER_DIVISOR) as usize % SPINNER.len()];
 
+    if let Some(goal) = super::goal_indicator(app) {
+        chips.push(vec![Span::styled(goal, theme::style(Token::Accent))]);
+    }
     if app.status.background_tasks > 0 {
         chips.push(vec![Span::styled(
             format!("{DIAMOND} {}", app.status.background_tasks),

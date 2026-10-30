@@ -134,7 +134,7 @@ Advertised:
 | `/diff` | the working tree's git diff, as text |
 | `/todos` | the todo list, as text |
 | `/cost`, `/usage`, `/status`, `/bashes`, `/doctor`, `/computer` | reports |
-| `/memory [read\|forget <name>]`, `/turing`, `/goal [text]` | as in the TUI |
+| `/memory [read\|forget <name>]`, `/turing`, `/goal [text\|clear\|resume]` | as in the TUI, except that no critic loop runs here: the goal is saved or cleared, and the next message starts the work |
 | `/reload` | skills and scripted tools (MCP servers stay connected) |
 | `/help` | this list |
 

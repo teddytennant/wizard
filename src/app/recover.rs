@@ -62,7 +62,11 @@ pub(super) fn panic_message(payload: &(dyn Any + Send)) -> String {
 /// A send failure is not an error here. The receiver is gone only when the
 /// main loop has already finished, at which point there is no latch left to
 /// release and nothing to tell.
-pub(super) fn spawn_answering<F>(notify: mpsc::Sender<Event>, fallback: Event, task: F)
+pub(super) fn spawn_answering<F>(
+    notify: mpsc::Sender<Event>,
+    fallback: Event,
+    task: F,
+) -> tokio::task::JoinHandle<()>
 where
     F: std::future::Future<Output = Option<Event>> + Send + 'static,
 {
@@ -82,7 +86,7 @@ where
         {
             tracing::debug!("main loop already gone; background answer dropped");
         }
-    });
+    })
 }
 
 /// Turn one finished turn task into the message the transcript should show,

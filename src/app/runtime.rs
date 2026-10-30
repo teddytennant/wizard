@@ -201,6 +201,7 @@ pub async fn run_tui(
     app.omakase |= handed_omakase;
     app.handed_over = handed_over;
     app.project_root = project_root.clone();
+    app.announce_interrupted_goal();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
         app.recent_sessions = crate::agent::session::recent_summaries(&dir, 3, &session_id)
             .into_iter()
@@ -654,25 +655,39 @@ pub async fn run_tui(
             continue;
         }
 
-        // The independent goal critic returned its verdict on a claim of
-        // done. `ACHIEVED` ends the loop; `NOT ACHIEVED` queues a turn carrying
-        // the critic's feedback (drained below). The verdict summary was
-        // already shown as a notice by the critic task.
-        if let Event::GoalCritiqued(verdict) = event {
+        // The independent goal critic returned its verdict on a stopped turn.
+        // `ACHIEVED` ends the loop; `NOT ACHIEVED` queues a turn carrying the
+        // critic's feedback (drained below). The verdict summary was already
+        // shown as a notice by the critic task.
+        if let Event::GoalCritiqued {
+            epoch,
+            ran,
+            verdict,
+        } = event
+        {
+            use crate::agent::critic;
+            // The user stopped or replaced the loop while the critic was out.
+            if epoch != app.goal_epoch {
+                continue;
+            }
             app.goal_inflight = false;
-            // The user may have stopped the loop while the critic was out.
+            app.goal_critic = None;
+            app.goal_critic_failures = if ran {
+                0
+            } else {
+                app.goal_critic_failures.saturating_add(1)
+            };
             if let Some(goal) = app.active_goal.clone() {
-                match crate::agent::critic::plan_after_verdict(
-                    crate::agent::critic::Claim::Finished(&goal),
+                app.note_critique(&verdict.summary());
+                match critic::plan_after_critique(
+                    &goal,
                     &verdict,
+                    app.goal_idle_turns,
+                    app.goal_critic_failures,
                 ) {
-                    crate::agent::critic::CriticAction::Accept => {
-                        app.notice("goal achieved: the independent critic signed off.");
-                        app.active_goal = None;
-                    }
-                    crate::agent::critic::CriticAction::Rework(prompt) => {
-                        app.queue_goal_turn(prompt);
-                    }
+                    critic::GoalOutcome::Achieved => app.finish_goal_loop(),
+                    critic::GoalOutcome::Rework(prompt) => app.queue_goal_turn(prompt),
+                    critic::GoalOutcome::Stop(why) => app.stop_goal_loop(&why),
                 }
             }
             continue;
@@ -1112,21 +1127,18 @@ pub async fn run_tui(
                     // mid-turn snapshots so a follow-up `/btw` or `/fork` sees it.
                     side_question_snapshot = Some(agent.side_question_context());
                     fork_snapshot = Some(agent.fork_context());
-                    // A goal turn just finished. If the builder claimed the
-                    // goal, a fresh critic judges the claim off the event loop
-                    // (a model call must not freeze the TUI) and reports back
-                    // via `Event::GoalCritiqued`. If it stopped without
-                    // claiming, the loop keeps it working. The critic, not the
-                    // builder's say-so, decides whether the goal is met.
+                    // A goal turn just finished. Every time the builder stops,
+                    // a fresh critic examines the work off the event loop (a
+                    // model call must not freeze the TUI) and reports back via
+                    // `Event::GoalCritiqued`. The critic, not the builder's
+                    // say-so, decides whether the goal is met.
                     let was_goal_turn = app.goal_turn_running;
                     if app.goal_turn_running && !app.goal_inflight {
                         app.goal_turn_running = false;
                         if let Some(goal) = app.active_goal.clone() {
                             use crate::agent::critic;
-                            let claimed = critic::last_reply(agent.history())
-                                .is_some_and(|reply| critic::claims_goal_achieved(&reply));
                             let did_work = agent.effects() > app.review_effects_mark;
-                            app.goal_idle_turns = if claimed || did_work {
+                            app.goal_idle_turns = if did_work {
                                 0
                             } else {
                                 app.goal_idle_turns.saturating_add(1)
@@ -1134,44 +1146,12 @@ pub async fn run_tui(
                             match critic::plan_after_goal_turn(
                                 &goal,
                                 done_reason.unwrap_or(DoneReason::Stopped),
-                                claimed,
                                 app.goal_idle_turns,
                             ) {
                                 critic::GoalStep::Continue(prompt) => app.queue_goal_turn(prompt),
-                                critic::GoalStep::Stop(why) => {
-                                    app.notice(format!("goal loop stopped: {why}"));
-                                    app.active_goal = None;
-                                }
+                                critic::GoalStep::Stop(why) => app.stop_goal_loop(&why),
                                 critic::GoalStep::Critique => {
-                                    app.goal_inflight = true;
-                                    app.notice(
-                                        "goal claimed: an independent critic is checking it",
-                                    );
-                                    let ctx = agent.critique_context(None);
-                                    let notify = events.sender();
-                                    spawn_answering(
-                                notify.clone(),
-                                Event::GoalCritiqued(critic::GoalVerdict::NotAchieved(
-                                    "the goal critic crashed before it could check anything; \
-                                     verify the work yourself and claim again"
-                                        .to_string(),
-                                )),
-                                async move {
-                                    let verdict = ctx.critique(critic::Claim::Finished(&goal)).await.unwrap_or_else(|err| {
-                                        critic::GoalVerdict::NotAchieved(format!(
-                                            "the goal critic could not run ({err:#}); verify the \
-                                             work yourself and claim again"
-                                        ))
-                                    });
-                                    let _ = notify
-                                        .send(Event::Notice(format!(
-                                            "goal critic: {}",
-                                            verdict.summary()
-                                        )))
-                                        .await;
-                                    Some(Event::GoalCritiqued(verdict))
-                                },
-                            );
+                                    spawn_goal_critic(&mut app, &agent, goal, &events);
                                 }
                             }
                         }
@@ -1217,6 +1197,9 @@ pub async fn run_tui(
                     // before any of this, and the rebuild below will run them.
                     app.notice(format!("agent task crashed: {err}"));
                     app.end_turn_abruptly("the turn crashed");
+                    if app.goal_turn_running {
+                        app.stop_goal_loop("the turn crashed");
+                    }
                     spawn_session_rebuild(
                         &mut app,
                         &client,
@@ -1255,9 +1238,7 @@ pub async fn run_tui(
             app.message_queue.clear();
             // Interrupting a goal turn stops the whole critic-gated loop; the
             // dropped rework and the arm go with the queue.
-            app.active_goal = None;
-            app.expected_goal_prompt = None;
-            app.goal_turn_running = false;
+            app.stop_goal_loop("the turn was interrupted");
             // Same for a review's rework: the turn it was going to fix is gone.
             app.expected_review_rework = None;
             app.review_request = None;
@@ -1418,6 +1399,7 @@ fn start_agent_turn(
     if app.expected_goal_prompt.as_deref() == Some(prompt.as_str()) {
         app.goal_turn_running = true;
         app.expected_goal_prompt = None;
+        app.count_goal_round();
     }
     // What the completion review will judge this turn against, and what it
     // counts as work. A turn starting on the review's own rework continues the
@@ -1465,6 +1447,63 @@ fn start_agent_turn(
         agent
     }));
     true
+}
+
+/// Start the goal critic on the turn that just stopped.
+///
+/// Runs off the event loop, and bounded, because the loop waits on its answer.
+/// A critic that cannot produce one comes back as `ran: false` and a
+/// `NotAchieved`: nothing was verified, so nothing is signed off.
+fn spawn_goal_critic(app: &mut App, agent: &Agent, goal: String, events: &EventLoop) {
+    use crate::agent::critic;
+
+    app.goal_inflight = true;
+    app.notice("the agent stopped: an independent critic is examining the goal");
+    let ctx = agent.critique_context(None);
+    let notify = events.sender();
+    let epoch = app.goal_epoch;
+    let task = spawn_answering(
+        notify.clone(),
+        Event::GoalCritiqued {
+            epoch,
+            ran: false,
+            verdict: critic::GoalVerdict::NotAchieved(
+                "the goal critic crashed before it could check anything; verify the work \
+                 yourself and stop again"
+                    .to_string(),
+            ),
+        },
+        async move {
+            let review = ctx.critique(critic::Claim::Finished(&goal));
+            let outcome = tokio::time::timeout(critic::GOAL_CRITIC_TIMEOUT, review).await;
+            let (ran, verdict) = match outcome {
+                Ok(Ok(verdict)) => (true, verdict),
+                Ok(Err(err)) => (
+                    false,
+                    critic::GoalVerdict::NotAchieved(format!(
+                        "the goal critic could not run ({err:#}); verify the work yourself \
+                         and stop again"
+                    )),
+                ),
+                Err(_) => (
+                    false,
+                    critic::GoalVerdict::NotAchieved(
+                        "the goal critic timed out; verify the work yourself and stop again"
+                            .to_string(),
+                    ),
+                ),
+            };
+            let _ = notify
+                .send(Event::Notice(format!("goal critic: {}", verdict.summary())))
+                .await;
+            Some(Event::GoalCritiqued {
+                epoch,
+                ran,
+                verdict,
+            })
+        },
+    );
+    app.goal_critic = Some(task.abort_handle());
 }
 
 /// Start a completion review of the turn that just finished, when one is due.
@@ -1630,6 +1669,12 @@ async fn drain_agent_commands(
         let Some(Ok(command)) = SlashCommand::parse(&line) else {
             continue;
         };
+        // The critic judges the goal the user set. A builder that could swap
+        // it mid-loop could pass by asking for less.
+        if app.active_goal.is_some() && matches!(command, SlashCommand::Goal(Some(_))) {
+            app.notice("refused the agent's `/goal`: a goal loop is running on the user's goal");
+            continue;
+        }
         CommandContext {
             app: &mut *app,
             client: &mut *client,

@@ -53,7 +53,9 @@ impl Tool for RunCommandTool {
          Interactive pickers require the choice as an argument (`/effort` \
          alone is refused; `/effort high` is fine). Session-ending and \
          external-setup commands (`/quit`, `/clear`, `/rewind`, `/resume`, \
-         `/provider`, `/login`, `/publish`, `/evolve`) are refused. Run \
+         `/provider`, `/login`, `/publish`, `/evolve`) are refused, and so \
+         are `/goal clear` and `/goal resume`, and setting a new goal while \
+         a goal loop is running. Run \
          `/help` to list every command."
     }
 
