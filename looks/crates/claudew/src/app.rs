@@ -262,6 +262,8 @@ pub struct App {
     pub msg_tx: UnboundedSender<Msg>,
     pub size: (u16, u16),
     pub theme: Theme,
+    /// Draw the reference's RGB instead of its 256-colour indexes: the terminal takes 24-bit.
+    pub truecolor: bool,
     pub clock: Clock,
     /// Wall clock override for tests: hour and minute.
     pub fixed_hm: Option<(u32, u32)>,
@@ -388,6 +390,7 @@ impl App {
         let plan = opts.plan || handed.is_some();
         let pending_prompts = opts.prompts.clone();
         let mut app = App {
+            truecolor: crate::truecolor::supported(),
             opts,
             tx,
             msg_tx,
@@ -3139,6 +3142,9 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App) -> Result<()> {
             let area = f.area();
             app.size = (area.width, area.height);
             crate::ui::draw(f.buffer_mut(), app);
+            if app.truecolor {
+                crate::truecolor::paint(f.buffer_mut(), app.opts.light);
+            }
             if let Some(c) = app.cursor {
                 f.set_cursor_position(c);
             }
@@ -3159,11 +3165,20 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App) -> Result<()> {
         let _ = crossterm::queue!(out, SavePosition);
         for (x, y, text, url, color) in &app.link_spots {
             let _ = crossterm::queue!(out, MoveTo(*x, *y), Print(format!("\x1b]8;;{url}\x1b\\")));
-            if let ratatui::style::Color::Indexed(n) = color {
-                let _ = crossterm::queue!(
-                    out,
-                    SetForegroundColor(crossterm::style::Color::AnsiValue(*n))
-                );
+            match crate::truecolor::map_if(app.truecolor, *color, app.opts.light) {
+                ratatui::style::Color::Indexed(n) => {
+                    let _ = crossterm::queue!(
+                        out,
+                        SetForegroundColor(crossterm::style::Color::AnsiValue(n))
+                    );
+                }
+                ratatui::style::Color::Rgb(r, g, b) => {
+                    let _ = crossterm::queue!(
+                        out,
+                        SetForegroundColor(crossterm::style::Color::Rgb { r, g, b })
+                    );
+                }
+                _ => {}
             }
             let _ = crossterm::queue!(out, Print(text), ResetColor, Print("\x1b]8;;\x1b\\"));
         }

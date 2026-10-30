@@ -3983,8 +3983,16 @@ impl App {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         if self.keys_help {
-            if key.code == KeyCode::Esc {
-                self.keys_help = false;
+            match key.code {
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('?') => self.keys_help = false,
+                // Claude Code's panel gives way to typing: the key lands in the composer,
+                // which is empty because `?` only opens this over an empty one.
+                KeyCode::Char(c) if plain => {
+                    self.keys_help = false;
+                    self.insert_char(c);
+                    self.sync_input_mode();
+                }
+                _ => {}
             }
             return Ok(None);
         }

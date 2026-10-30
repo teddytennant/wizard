@@ -8,4 +8,5 @@ pub mod replay;
 pub mod term;
 pub mod text;
 pub mod theme;
+pub mod truecolor;
 pub mod ui;

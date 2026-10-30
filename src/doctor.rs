@@ -767,6 +767,17 @@ async fn check_provider(provider: &ProviderConfig) -> Check {
     }
 }
 
+/// Claude Code is installed, new enough and signed in: where it was found,
+/// its version, or the one line that says what to run.
+#[cfg(feature = "provider-claude-code")]
+async fn check_claude_code() -> Check {
+    match tokio::task::spawn_blocking(crate::plugins::claude_code::doctor).await {
+        Ok(Ok(detail)) => Check::pass("claude code", detail),
+        Ok(Err(err)) => Check::fail("claude code", format!("{err:#}")),
+        Err(err) => Check::fail("claude code", format!("check panicked: {err}")),
+    }
+}
+
 /// Every `[[server]]` in `mcp.toml` completes the MCP handshake, at the same
 /// budget a session connects under — so a server that works in the app never
 /// fails doctor on startup time alone.
@@ -821,6 +832,13 @@ pub async fn run_checks(project_root: &Path) -> Vec<Check> {
             };
             for provider in &providers {
                 checks.push(check_provider(provider).await);
+            }
+            #[cfg(feature = "provider-claude-code")]
+            if providers
+                .iter()
+                .any(|p| p.kind == crate::llm::registry::ProviderKind::CLAUDE_CODE)
+            {
+                checks.push(check_claude_code().await);
             }
             checks.extend(check_gateway(&config));
             checks.push(check_system_prompt(config.mode));

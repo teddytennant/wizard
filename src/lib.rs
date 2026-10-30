@@ -505,7 +505,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // No config and no wizard: a headless job still runs on the defaults
         // (`WIZARD_LLAMACPP_HOST` and friends are how a cron or fleet child
         // is configured); anything else is told to run `wizard` once.
-        if !config::Config::path()?.exists() && !headless_job(&cli) {
+        if !config::Config::path()?.exists() && !headless_job(&cli) && cli.provider.is_none() {
             anyhow::bail!("no config yet: run `wizard` once to pick a provider");
         }
         config::Config::load()?
@@ -514,6 +514,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // the session is built so the first turn already uses it, and persist the
     // resolved id so a later offline start does not fall back to a stale stamp.
     llm::xai_oauth::refresh_unpinned_flagship(&mut config).await;
+    config = apply_provider_flag(config, &cli).await?;
     config.apply_cli(&cli);
     crate::token_profile::init(config.token_profile.as_deref());
 
@@ -616,6 +617,37 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     }
 }
 
+/// `--provider NAME` for this run. `claude` installs and signs in Claude Code
+/// first, on the terminal, before anything else starts; any other name has to
+/// be a provider already in `config.toml`.
+async fn apply_provider_flag(mut config: Config, cli: &cli::Cli) -> Result<Config> {
+    let Some(name) = cli.provider.clone() else {
+        return Ok(config);
+    };
+    if matches!(name.as_str(), "claude" | "claude-code" | "claudecode") {
+        #[cfg(feature = "provider-claude-code")]
+        {
+            let assume_yes = cli.yes;
+            return tokio::task::spawn_blocking(move || {
+                plugins::claude_code::setup::select_for_run(&mut config, assume_yes)?;
+                Ok(config)
+            })
+            .await?;
+        }
+        #[cfg(not(feature = "provider-claude-code"))]
+        anyhow::bail!("this build has no Claude Code provider (feature `provider-claude-code`)");
+    }
+    if !config.providers.iter().any(|p| p.name == name) {
+        let known: Vec<_> = config.providers.iter().map(|p| p.name.as_str()).collect();
+        anyhow::bail!(
+            "no provider named '{name}' in config.toml (have: {}); `claude` also works",
+            known.join(", ")
+        );
+    }
+    config.active_provider = Some(name);
+    Ok(config)
+}
+
 /// Whether a sovereign mode that came from `config.toml` rather than this
 /// command line opens the TUI.
 fn saved_sovereign_opens_the_tui(config: &Config, cli: &cli::Cli, terminal: bool) -> bool {
@@ -640,7 +672,7 @@ async fn run_interactive(
             let _ = skin::handoff::Handoff::take();
             match skin::launch::run(skin, handoff.take().as_ref()).await {
                 Ok(code) => {
-                    config = Config::load()?;
+                    config = apply_provider_flag(Config::load()?, &cli).await?;
                     config.apply_cli(&cli);
                     if config.ui.skin == saved {
                         return Ok(code);
@@ -672,7 +704,7 @@ async fn run_interactive(
                 // The prompt was this TUI's first message; the next house TUI
                 // starts clean rather than sending it again.
                 cli.prompt = None;
-                config = Config::load()?;
+                config = apply_provider_flag(Config::load()?, &cli).await?;
                 config.apply_cli(&cli);
                 look = Some(skin);
                 handoff = from_tui;
@@ -778,6 +810,10 @@ fn should_onboard_given(cli: &cli::Cli, interactive: bool) -> Result<bool> {
     if cli.onboard {
         return Ok(true);
     }
+    // `--provider` already answers the first question.
+    if cli.provider.is_some() {
+        return Ok(false);
+    }
     // A prompt on the command line is a job, not a first visit: it never
     // stops to ask questions, whatever the mode.
     if cli.prompt.is_some() {
@@ -799,6 +835,24 @@ mod tests {
     #[test]
     fn onboard_flag_forces_onboarding_in_an_interactive_terminal() {
         assert!(should_onboard_given(&parse(&["wizard", "--onboard"]), true).unwrap());
+    }
+
+    #[test]
+    fn a_provider_flag_skips_first_run_onboarding() {
+        let cli = parse(&["wizard", "--provider", "claude"]);
+        assert!(!should_onboard_given(&cli, true).unwrap());
+        assert!(
+            should_onboard_given(
+                &parse(&["wizard", "--provider", "claude", "--onboard"]),
+                true
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn yes_needs_a_provider() {
+        assert!(cli::Cli::try_parse_from(["wizard", "--yes"]).is_err());
     }
 
     #[test]

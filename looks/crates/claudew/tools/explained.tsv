@@ -1,5 +1,4 @@
 # scene glob, side (ref, look, both, drop, block, cursor), row pattern, reason. See compare.py.
-*	ref	^[ ▐▛█▜▝▀▌▘]{9}(?=  \S)	brand mark: Wizard draws its own in the same nine columns
 *	ref	 · ← \d+ agents?(?=\s*$)	agent switcher: the reference counts its background agents in the footer (← opens them); Wizard's ACP reports no background agents
 *	ref	(?<=^.{11})\S+ [0-9.]+( with \w+ effort)? · Wizard \w+\s*$	model line: the reference names its model and plan, Wizard its model and provider
 modes-3	ref	⏵⏵ auto mode on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode cycle: the reference's third stop is auto mode; the replay gives the look two modes, so its third press is back at the first (wz-modes compares Wizard's own four)

@@ -3,7 +3,7 @@
 # into a temp directory and it answers from the files beside that symlink.
 here=$(dirname "$0")
 case "$1 $2" in
-"--version "*) echo "9.9.9 (Claude Code)" ;;
+"--version "*) if [ -e "$here/version" ]; then cat "$here/version"; else echo "9.9.9 (Claude Code)"; fi ;;
 "auth status")
     if [ -e "$here/signed-in" ]; then
         echo '{"loggedIn": true, "authMethod": "claude.ai"}'
