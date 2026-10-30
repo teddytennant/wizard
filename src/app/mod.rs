@@ -3,6 +3,7 @@
 //! [`crate::event`].
 
 mod command;
+mod goal;
 mod paste;
 mod picker;
 mod prompts;
@@ -490,10 +491,13 @@ pub struct App {
     /// rather than stacked.
     pub btw_inflight: bool,
     /// The standing goal a critic-gated `/goal` loop is pursuing, or `None`
-    /// when no loop is active. Set by `/goal`, cleared when the critic returns
-    /// `ACHIEVED`, when a goal turn is stopped or fails, or when the builder
-    /// idles for [`crate::agent::critic::GOAL_IDLE_LIMIT`] turns.
+    /// when no loop is active. Set by `/goal`, and only ever cleared through
+    /// the exits in [`goal`], so nothing can strand part of the loop.
     pub active_goal: Option<String>,
+    /// When the goal was set, from the mission so it outlasts a restart.
+    pub goal_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Working turns spent on the goal so far.
+    pub goal_rounds: u32,
     /// The exact next prompt that counts as a goal turn (the kickoff or a
     /// rework). When [`start_agent_turn`](crate::app::runtime) starts a turn on
     /// this prompt it flags the turn as a goal turn and clears this. Matching on
@@ -505,8 +509,15 @@ pub struct App {
     pub goal_turn_running: bool,
     /// True while that critic is judging, so nothing else starts a second one.
     pub goal_inflight: bool,
-    /// Goal turns in a row that neither claimed the goal nor did any work.
+    /// Goal turns in a row that did no work.
     pub goal_idle_turns: u32,
+    /// Critics in a row that failed to reach a verdict.
+    pub goal_critic_failures: u32,
+    /// Which loop the critic in flight belongs to. Advanced whenever a loop
+    /// ends or is replaced, so a stale verdict is recognized and dropped.
+    pub goal_epoch: u64,
+    /// The critic in flight, so ending the loop stops spending on it.
+    pub goal_critic: Option<tokio::task::AbortHandle>,
     /// The request the in-flight turn is answering, kept for the completion
     /// review. The user's own words, not a summary of them: the agent's
     /// reading of the request is the thing under review.
@@ -698,6 +709,8 @@ impl App {
             pending_btw: None,
             btw_inflight: false,
             active_goal: None,
+            goal_since: None,
+            goal_rounds: 0,
             expected_goal_prompt: None,
             goal_turn_running: false,
             review_request: None,
@@ -707,6 +720,9 @@ impl App {
             review_effects_mark: 0,
             goal_inflight: false,
             goal_idle_turns: 0,
+            goal_critic_failures: 0,
+            goal_epoch: 0,
+            goal_critic: None,
             pending_fork: None,
             mcp_merge_pending: false,
             pending_agent_commands: Vec::new(),
@@ -3004,7 +3020,7 @@ impl App {
             | Event::StarterPrompts(_)
             | Event::BtwFinished
             | Event::PluginsChanged(_)
-            | Event::GoalCritiqued(_)
+            | Event::GoalCritiqued { .. }
             | Event::CompletionReviewed(_) => Ok(None),
         }
     }
@@ -4365,36 +4381,6 @@ impl App {
     /// turn returns the agent and any post-turn agent commands have run.
     pub fn pop_queued_message(&mut self) -> Option<crate::commands::Preprocessed> {
         self.message_queue.pop_front()
-    }
-
-    /// Queue the first working turn for a freshly set `/goal`, and arm the
-    /// critic-gated loop: the goal becomes the standing one, the loop keeps
-    /// queuing turns until the builder claims it achieved, and each claim is
-    /// judged by an independent critic (see [`crate::agent::critic`]). The
-    /// prompt lands in the transcript and the message queue, so the main loop's
-    /// post-command drain starts it when the agent is idle, or right after the
-    /// current turn otherwise.
-    pub fn queue_goal_kickoff(&mut self, goal: &str) {
-        self.active_goal = Some(goal.to_string());
-        self.goal_idle_turns = 0;
-        self.queue_goal_turn(crate::agent::critic::goal_kickoff_prompt(goal));
-    }
-
-    /// Queue the next turn of an active `/goal` loop (a continuation, or a
-    /// rework the critic asked for), arming the same post-turn handling. No-op
-    /// with a warning if the queue is full, so a turn is never silently lost.
-    pub fn queue_goal_turn(&mut self, prompt: String) {
-        if self.message_queue.len() >= MESSAGE_QUEUE_CAP {
-            self.notice(format!(
-                "goal saved, but the message queue is full ({MESSAGE_QUEUE_CAP}): \
-                 work will not auto-start; send a message once a turn finishes"
-            ));
-            return;
-        }
-        self.expected_goal_prompt = Some(prompt.clone());
-        self.record_prompt(prompt.clone());
-        self.message_queue
-            .push_back(crate::commands::Preprocessed::text_only(prompt));
     }
 
     /// Queue one agent turn on `prompt`, with nothing armed on it. Used by the

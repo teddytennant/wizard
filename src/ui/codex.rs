@@ -2102,6 +2102,9 @@ fn context_line(app: &App, full: bool) -> Line<'static> {
     if app.status.mode != Mode::Genie {
         chips.push(vec![super::mode_span(app.status.mode)]);
     }
+    if let Some(goal) = super::goal_indicator(app) {
+        chips.push(vec![Span::styled(goal, accent())]);
+    }
     if app.fusion_active {
         chips.push(vec![Span::styled("fusion", accent().bold())]);
     }

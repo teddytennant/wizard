@@ -3204,6 +3204,24 @@ fn the_status_line_opens_with_the_vim_mode_and_the_goal() {
         "{}",
         status(&app)
     );
+    app.goal_since = Some(chrono::Utc::now() - chrono::Duration::days(3));
+    assert!(
+        status(&app).starts_with(" ◎ /goal active (3d) · "),
+        "{}",
+        status(&app)
+    );
+    app.goal_rounds = 4;
+    assert!(
+        status(&app).starts_with(" ◎ /goal active (3d · round 4) · "),
+        "{}",
+        status(&app)
+    );
+    app.goal_inflight = true;
+    assert!(
+        status(&app).starts_with(" ◎ /goal active (3d · critic reviewing) · "),
+        "{}",
+        status(&app)
+    );
 }
 
 #[test]

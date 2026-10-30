@@ -1748,6 +1748,27 @@ fn edit_diff_lines(
 
 /// `0.4s`, `12s`, `2m05s`: as much precision as the number has. `None`
 /// under 100 ms, where the figure would round to `0.0s` and say nothing.
+/// The running `/goal` loop, for a status line: how long the goal has been
+/// active, then the critic while it is out, or else the round once there has
+/// been more than one.
+pub(super) fn goal_indicator(app: &App) -> Option<String> {
+    app.active_goal.as_ref()?;
+    let mut detail = Vec::new();
+    if let Some(since) = app.goal_since {
+        detail.push(crate::agent::mission::age_label(since, chrono::Utc::now()));
+    }
+    if app.goal_inflight {
+        detail.push("critic reviewing".to_string());
+    } else if app.goal_rounds > 1 {
+        detail.push(format!("round {}", app.goal_rounds));
+    }
+    Some(if detail.is_empty() {
+        "◎ /goal active".to_string()
+    } else {
+        format!("◎ /goal active ({})", detail.join(" · "))
+    })
+}
+
 pub(super) fn fmt_elapsed(took: std::time::Duration) -> Option<String> {
     let secs = took.as_secs_f64();
     if secs < 0.1 {
@@ -2069,8 +2090,8 @@ pub(super) fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, suggesti
         spans.push(Span::styled(format!("-- {label} --"), style));
         spans.push(sep());
     }
-    if app.active_goal.is_some() {
-        spans.push(Span::styled("◎ /goal active", accent()));
+    if let Some(goal) = goal_indicator(app) {
+        spans.push(Span::styled(goal, accent()));
         spans.push(sep());
     }
     spans.push(model_span(app));

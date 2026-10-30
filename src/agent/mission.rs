@@ -73,6 +73,18 @@ pub struct Mission {
     /// and how close it is to `max_consecutive_failures`.
     #[serde(default)]
     pub consecutive_failures: u32,
+    /// When the current goal was set. Separate from [`Mission::created`],
+    /// which a changed goal keeps. `None` on a mission written by a build that
+    /// predates the field; [`Mission::since`] falls back to `created` then.
+    #[serde(default)]
+    pub goal_since: Option<DateTime<Utc>>,
+    /// Working turns the interactive `/goal` loop has spent on this goal.
+    #[serde(default)]
+    pub goal_rounds: u32,
+    /// An interactive `/goal` loop is live on this goal. Stays set if the
+    /// process dies, which is how the next session knows one was cut off.
+    #[serde(default)]
+    pub goal_running: bool,
 }
 
 impl Mission {
@@ -88,7 +100,29 @@ impl Mission {
             phase: None,
             heartbeat: None,
             consecutive_failures: 0,
+            goal_since: Some(now),
+            goal_rounds: 0,
+            goal_running: false,
         }
+    }
+
+    /// When the current goal was set.
+    pub fn since(&self) -> DateTime<Utc> {
+        self.goal_since.unwrap_or(self.created)
+    }
+
+    /// Replace the goal, keeping the mission's history. The clock and the
+    /// round count belong to the goal, so they restart with a different one and
+    /// stand when the same text is set again.
+    pub fn set_goal(&mut self, goal: impl Into<String>) {
+        let goal = goal.into();
+        if goal == self.goal {
+            return;
+        }
+        self.note(format!("goal changed to: {goal}"));
+        self.goal = goal;
+        self.goal_since = Some(Utc::now());
+        self.goal_rounds = 0;
     }
 
     /// Load the mission for `project_root`, returning `Ok(None)` if none exists.
@@ -104,15 +138,33 @@ impl Mission {
         Ok(Some(mission))
     }
 
+    /// Delete the mission for `project_root`. `false` when there was none.
+    pub fn clear(project_root: &Path) -> Result<bool> {
+        let path = mission_path(project_root);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => {
+                Err(err).with_context(|| format!("removing mission file at {}", path.display()))
+            }
+        }
+    }
+
     /// Persist the mission to `<project_root>/.wizard/mission.toml`.
+    ///
+    /// Written beside the target and renamed over it, so a crash mid-write
+    /// leaves the old mission rather than a truncated file that fails to parse.
     pub fn save(&self, project_root: &Path) -> Result<()> {
         let dir = control_dir(project_root);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating control dir at {}", dir.display()))?;
         let path = mission_path(project_root);
         let serialized = toml::to_string_pretty(self).context("serializing mission to TOML")?;
-        std::fs::write(&path, serialized)
-            .with_context(|| format!("writing mission file at {}", path.display()))?;
+        let staged = dir.join(format!(".mission.toml.{}", std::process::id()));
+        std::fs::write(&staged, serialized)
+            .with_context(|| format!("writing mission file at {}", staged.display()))?;
+        std::fs::rename(&staged, &path)
+            .with_context(|| format!("replacing mission file at {}", path.display()))?;
         Ok(())
     }
 
@@ -176,6 +228,18 @@ impl Mission {
     }
 }
 
+/// How long `since` was, to the largest whole unit: `42s`, `5m`, `2h`, `3d`.
+/// A clock that moved backwards reads `0s`.
+pub fn age_label(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let secs = (now - since).num_seconds().max(0);
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3_600 => format!("{}m", secs / 60),
+        3_600..86_400 => format!("{}h", secs / 3_600),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +282,75 @@ mod tests {
         assert_eq!(loaded.goal, "ship the sovereign loop");
         assert_eq!(loaded.cycles, 1);
         assert_eq!(loaded.notes, vec!["first pass".to_string()]);
+    }
+
+    #[test]
+    fn age_reads_in_its_largest_whole_unit() {
+        let now = Utc::now();
+        let age = |secs| age_label(now - chrono::Duration::seconds(secs), now);
+        assert_eq!(age(0), "0s");
+        assert_eq!(age(59), "59s");
+        assert_eq!(age(60), "1m");
+        assert_eq!(age(3_599), "59m");
+        assert_eq!(age(3_600), "1h");
+        assert_eq!(age(86_399), "23h");
+        assert_eq!(age(86_400), "1d");
+        assert_eq!(age(3 * 86_400 + 5), "3d");
+        assert_eq!(age(-30), "0s", "a clock that moved back is not negative");
+    }
+
+    #[test]
+    fn a_changed_goal_restarts_its_clock_and_the_same_goal_does_not() {
+        let mut mission = Mission::new("ship it");
+        let long_ago = Utc::now() - chrono::Duration::days(3);
+        mission.goal_since = Some(long_ago);
+        mission.goal_rounds = 7;
+
+        mission.set_goal("ship it");
+        assert_eq!(mission.since(), long_ago);
+        assert_eq!(mission.goal_rounds, 7);
+        assert!(mission.notes.is_empty());
+
+        mission.set_goal("cut a patch release");
+        assert!(mission.since() > long_ago);
+        assert_eq!(mission.goal_rounds, 0);
+        assert_eq!(mission.notes, vec!["goal changed to: cut a patch release"]);
+    }
+
+    #[test]
+    fn a_mission_from_before_the_goal_fields_loads_with_its_creation_time() {
+        let tmp = TempDir::new();
+        let path = mission_path(&tmp.0);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "goal = \"old\"\ncreated = \"2026-01-02T03:04:05Z\"\n\
+             updated = \"2026-01-02T03:04:05Z\"\ncycles = 2\n",
+        )
+        .unwrap();
+        let loaded = Mission::load(&tmp.0).unwrap().unwrap();
+        assert_eq!(loaded.since(), loaded.created);
+        assert!(!loaded.goal_running);
+    }
+
+    #[test]
+    fn clear_removes_the_mission_and_says_whether_there_was_one() {
+        let tmp = TempDir::new();
+        assert!(!Mission::clear(&tmp.0).unwrap());
+        Mission::new("ship it").save(&tmp.0).unwrap();
+        assert!(Mission::clear(&tmp.0).unwrap());
+        assert!(Mission::load(&tmp.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn save_leaves_nothing_but_the_mission_behind() {
+        let tmp = TempDir::new();
+        Mission::new("ship it").save(&tmp.0).unwrap();
+        let names: Vec<_> = std::fs::read_dir(control_dir(&tmp.0))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["mission.toml"]);
     }
 
     #[test]

@@ -10,14 +10,16 @@
 //!
 //! # The goal critic
 //!
-//! Mission scope, for `/goal`: *is the standing goal achieved?* The builder keeps working until it says so, by ending a reply
-//! with [`GOAL_ACHIEVED_MARKER`]. A turn that stops without that line is not a
-//! claim and gets a "keep going" turn, no critic. A turn that makes the claim
-//! gets a harsh critic that can read the tree and run commands but not write,
-//! and its verdict is binary: `ACHIEVED` ends the loop, `NOT ACHIEVED` sends
-//! the critic's own account of what to do differently back to the builder.
+//! Mission scope, for `/goal`: *is the standing goal achieved?* Every time the
+//! builder stops, whatever it said about the work, a harsh critic that can read
+//! the tree and run commands but not write examines the project. Its verdict is
+//! binary: `ACHIEVED` ends the loop, `NOT ACHIEVED` sends the critic's own
+//! account of what has to change back to the builder. The builder's opinion of
+//! its own work is not an input, so it cannot summon the critic or dodge it.
 //! There is no third verdict that lets the loop give up. The loop stops when
-//! the critic signs off, the user interrupts, or the turn itself fails.
+//! the critic signs off, the user stops it, the turn itself fails, or a bound
+//! trips: [`GOAL_IDLE_LIMIT`] turns that changed nothing, or
+//! [`GOAL_CRITIC_FAILURE_LIMIT`] critics that could not run.
 //! [`crate::agent::Agent::critique_goal`] runs it.
 //!
 //! # The completion review
@@ -48,6 +50,7 @@ use crate::agent::subagent::SubagentConfig;
 use crate::config::StepBudget;
 use crate::llm::{ChatMessage, Role};
 use std::path::Path;
+use std::time::Duration;
 
 /// How many steps the goal critic may take. Enough to read the deliverables,
 /// build, run the test suite and poke at an edge case or two. It cannot write,
@@ -61,14 +64,21 @@ const MAX_GAP_CHARS: usize = 600;
 /// asked for a list of what to change, not one line, so it gets more room.
 const MAX_FEEDBACK_CHARS: usize = 4000;
 
-/// The line the builder ends its reply with to claim the goal is achieved.
-/// Only this line summons the critic; anything else is a turn still working.
-pub const GOAL_ACHIEVED_MARKER: &str = "GOAL ACHIEVED";
-
-/// Turns in a row that neither did any work nor claimed the goal before the
-/// loop decides the builder is stuck and stops. A turn that wrote a file or
-/// ran a command resets it, so an honest long grind never trips it.
+/// Turns in a row that did no work before the loop decides the builder is
+/// stuck and stops. A turn that wrote a file or ran a command resets it, so an
+/// honest long grind never trips it, and one that only says it is finished
+/// counts, so a builder arguing with the critic cannot run forever.
 pub const GOAL_IDLE_LIMIT: u32 = 3;
+
+/// Critics in a row that failed to reach a verdict before the loop stops. A
+/// verdict nobody could produce tells the builder nothing, and an outage would
+/// otherwise be billed a builder turn per attempt.
+pub const GOAL_CRITIC_FAILURE_LIMIT: u32 = 3;
+
+/// How long one goal critic may run. Long enough to sit through a slow build
+/// and test suite. A hung critic otherwise holds the loop forever, with
+/// nothing on screen to say so but `critic reviewing`.
+pub const GOAL_CRITIC_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// The critic's verdict on whether the goal is achieved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,10 +103,12 @@ impl GoalVerdict {
 /// spawned with a fresh context and no history, so it physically cannot see the
 /// builder's turn, and this prompt tells it not to reconstruct one.
 const CRITIC_SYSTEM_PROMPT: &str = "\
-You are a harsh, independent critic. An agent working toward a goal claims the \
-goal is achieved. You never saw it work and you get none of its reasoning, \
-summary or claims: only the goal and the project on disk. Your default \
-position is that the claim is wrong, and your job is to find out how.\n\
+You are a harsh, independent critic. An agent working toward a goal has \
+stopped, and every time it stops you examine the result. It may believe it is \
+finished or it may have stalled partway. You never saw it work and you get \
+none of its reasoning, summary or claims: only the goal and the project on \
+disk. Your default position is that the goal is not achieved, and your job is \
+to find out how.\n\
 \n\
 Check the real thing, not a description of it.\n\
 1. Restate the goal and list every requirement it states or clearly implies.\n\
@@ -115,9 +127,9 @@ The FIRST line of your reply is your verdict, exactly one of:\n\
   ACHIEVED       every requirement holds and you ran something that shows it\n\
   NOT ACHIEVED   anything less\n\
 \n\
-After NOT ACHIEVED, tell the agent what to do differently: each concrete \
-problem you found, the evidence (a path, a command and its output), and what \
-has to change. Most important first. No praise, no scores, no summary of what \
+After NOT ACHIEVED, tell the agent what needs to change: each concrete problem \
+you found, the evidence (a path, a command and its output), what has to change, \
+and what is still missing. Most important first. No praise, no scores, no summary of what \
 is fine. If you could not verify something, that is NOT ACHIEVED, and say \
 what stopped you. When in doubt, it is NOT ACHIEVED.";
 
@@ -140,8 +152,9 @@ pub fn critic_config() -> SubagentConfig {
 /// spare: the critic forms its own view from the files, not from a briefing.
 pub fn critic_task(goal: &str, project_root: &Path) -> String {
     format!(
-        "The goal, verbatim between the markers:\n\n<goal>\n{goal}\n</goal>\n\nThe agent claims \
-         it is achieved. The project is at {root}. Check it and return your verdict now.",
+        "The goal, verbatim between the markers:\n\n<goal>\n{goal}\n</goal>\n\nThe agent has \
+         stopped working on it. The project is at {root}. Check it and return your verdict \
+         now.",
         root = project_root.display()
     )
 }
@@ -197,28 +210,12 @@ pub fn parse_verdict(output: &str) -> Option<GoalVerdict> {
 }
 
 /// The text of the builder's last reply, if its last message has any.
-///
-/// Only the final assistant message counts. A claim from an earlier turn
-/// must not be read as this turn's.
 pub fn last_reply(history: &[ChatMessage]) -> Option<String> {
     history
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
         .map(ChatMessage::text)
-}
-
-/// Does this reply claim the goal is achieved? True when some line is the
-/// marker on its own, give or take markdown and punctuation around it. The
-/// marker inside a sentence ("I will write GOAL ACHIEVED when done") is not a
-/// claim.
-pub fn claims_goal_achieved(reply: &str) -> bool {
-    reply.lines().any(|line| {
-        let bare = line.trim().trim_matches(|c: char| {
-            c.is_whitespace() || matches!(c, '*' | '_' | '`' | '#' | '>' | '.' | '!' | ':' | '-')
-        });
-        bare.eq_ignore_ascii_case(GOAL_ACHIEVED_MARKER)
-    })
 }
 
 /// The gap text after a verdict token: whatever follows it on its own line,
@@ -269,70 +266,94 @@ fn brief(text: &str, max: usize) -> String {
     out
 }
 
-/// How the builder is told to claim the goal. Shared by every goal prompt so
-/// the instruction cannot drift between them.
-fn claim_instruction() -> String {
-    format!(
-        "Do not stop at a checkpoint to report progress; keep going. When, and only when, you \
-         have verified the goal is fully achieved, end your reply with a line containing \
-         exactly `{GOAL_ACHIEVED_MARKER}`. An independent critic then checks the project, and \
-         if it disagrees you get its feedback and keep working."
-    )
-}
+/// How the builder is told the loop works. Shared by every goal prompt so the
+/// instruction cannot drift between them.
+const STOP_INSTRUCTION: &str = "Do not stop at a checkpoint to report progress; keep going. Stop \
+     when you have verified the goal is fully achieved. Every time you stop, an independent \
+     critic examines the project, and unless it signs off you get what it says needs to change \
+     and keep working.";
 
 /// The first turn of a freshly set goal.
 pub fn goal_kickoff_prompt(goal: &str) -> String {
     format!(
-        "A standing goal was just set for this project:\n\n{goal}\n\nWork toward it now until it \
-         is achieved. {}",
-        claim_instruction()
+        "A standing goal is set for this project:\n\n{goal}\n\nWork toward it now until it is \
+         achieved. {STOP_INSTRUCTION}"
     )
 }
 
-/// The turn after one that stopped without claiming the goal.
+/// The turn after one that ran out of steps.
 pub fn goal_continue_prompt(goal: &str) -> String {
     format!(
-        "You stopped, but you have not claimed the goal achieved, so the goal loop is still \
-         running. The goal:\n\n{goal}\n\nKeep working on what remains. {}",
-        claim_instruction()
+        "You ran out of steps before you finished, so the goal loop is still running. The \
+         goal:\n\n{goal}\n\nKeep working on what remains. {STOP_INSTRUCTION}"
     )
 }
 
 /// What the loop does after a goal turn ends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalStep {
-    /// The builder claimed the goal: run the critic.
+    /// The builder stopped: run the critic.
     Critique,
-    /// It stopped without claiming: send this prompt and keep going.
+    /// It was cut off mid-work: send this prompt and keep going.
     Continue(String),
     /// End the loop and report why.
     Stop(String),
 }
 
 /// Decide the next move after a goal turn. `idle_turns` counts turns in a row,
-/// this one included, that neither claimed the goal nor did any work.
-pub fn plan_after_goal_turn(
-    goal: &str,
-    reason: DoneReason,
-    claimed: bool,
-    idle_turns: u32,
-) -> GoalStep {
+/// this one included, that did no work.
+///
+/// A turn that ran out of steps did not stop, it was stopped, so there is
+/// nothing finished to judge yet and a critic would be reading a half-made
+/// change. Every turn that ended on its own gets the critic.
+pub fn plan_after_goal_turn(goal: &str, reason: DoneReason, idle_turns: u32) -> GoalStep {
     match reason {
-        DoneReason::Completed | DoneReason::MaxSteps if claimed => GoalStep::Critique,
-        DoneReason::Completed | DoneReason::MaxSteps if idle_turns >= GOAL_IDLE_LIMIT => {
-            GoalStep::Stop(format!(
-                "{idle_turns} turns in a row did no work and did not claim the goal; send a \
-                 message or `/goal` again to resume"
-            ))
+        DoneReason::Completed => GoalStep::Critique,
+        DoneReason::MaxSteps if idle_turns >= GOAL_IDLE_LIMIT => {
+            GoalStep::Stop(format!("{idle_turns} turns in a row did no work"))
         }
-        DoneReason::Completed | DoneReason::MaxSteps => {
-            GoalStep::Continue(goal_continue_prompt(goal))
-        }
+        DoneReason::MaxSteps => GoalStep::Continue(goal_continue_prompt(goal)),
         DoneReason::Stopped => GoalStep::Stop("the turn was stopped".to_string()),
         DoneReason::TimeLimit => GoalStep::Stop("the time limit was reached".to_string()),
         DoneReason::CircuitBreaker => {
             GoalStep::Stop("the circuit breaker tripped on repeated failures".to_string())
         }
+    }
+}
+
+/// What the loop does with a critic's verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalOutcome {
+    /// The critic signed off.
+    Achieved,
+    /// Send the critic's feedback back to the builder.
+    Rework(String),
+    /// End the loop and report why.
+    Stop(String),
+}
+
+/// Decide what a verdict means for the loop. `idle_turns` and `critic_failures`
+/// are the current streaks, this verdict included.
+///
+/// The critic always gets to look first, so a turn that did nothing but finds
+/// the goal already met still ends in `Achieved`.
+pub fn plan_after_critique(
+    goal: &str,
+    verdict: &GoalVerdict,
+    idle_turns: u32,
+    critic_failures: u32,
+) -> GoalOutcome {
+    match plan_after_verdict(Claim::Finished(goal), verdict) {
+        CriticAction::Accept => GoalOutcome::Achieved,
+        CriticAction::Rework(_) if critic_failures >= GOAL_CRITIC_FAILURE_LIMIT => {
+            GoalOutcome::Stop(format!(
+                "the critic could not run {critic_failures} times in a row"
+            ))
+        }
+        CriticAction::Rework(_) if idle_turns >= GOAL_IDLE_LIMIT => GoalOutcome::Stop(format!(
+            "{idle_turns} turns in a row did no work and the critic still says it is not achieved"
+        )),
+        CriticAction::Rework(prompt) => GoalOutcome::Rework(prompt),
     }
 }
 
@@ -506,11 +527,10 @@ pub fn plan_after_verdict(claim: Claim<'_>, verdict: &GoalVerdict) -> CriticActi
         }
         (GoalVerdict::NotAchieved(feedback), Claim::Finished(goal)) => {
             CriticAction::Rework(format!(
-                "You claimed the goal is achieved. An independent critic checked the project and \
-             says it is NOT. What it says to do differently:\n\n{feedback}\n\nThe goal:\n\n\
+                "You stopped, and an independent critic checked the project. It says the goal is \
+             NOT achieved. What it says needs to change:\n\n{feedback}\n\nThe goal:\n\n\
              {goal}\n\nAddress every point, not just the first. Run the build and tests \
-             yourself. The critic decides whether the goal is met, not you. {}",
-                claim_instruction()
+             yourself. The critic decides whether the goal is met, not you. {STOP_INSTRUCTION}"
             ))
         }
     }
@@ -865,72 +885,29 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_is_the_marker_on_its_own_line() {
-        assert!(claims_goal_achieved(
-            "All done, tests pass.\n\nGOAL ACHIEVED"
-        ));
-        assert!(claims_goal_achieved("**GOAL ACHIEVED**"));
-        assert!(claims_goal_achieved("`GOAL ACHIEVED`\n"));
-        assert!(!claims_goal_achieved(
-            "Parser is half done. I will say GOAL ACHIEVED when it is finished."
-        ));
-        assert!(!claims_goal_achieved("Progress so far: the lexer works."));
-    }
-
-    #[test]
-    fn only_the_last_assistant_message_is_the_reply() {
-        let history = vec![
-            ChatMessage::new(
-                Role::Assistant,
-                vec![crate::llm::ContentBlock::text("GOAL ACHIEVED")],
-            ),
-            ChatMessage::new(
-                Role::User,
-                vec![crate::llm::ContentBlock::text("keep going")],
-            ),
-            ChatMessage::new(
-                Role::Assistant,
-                vec![crate::llm::ContentBlock::text("still on it")],
-            ),
-        ];
-        let reply = last_reply(&history).unwrap();
-        assert!(!claims_goal_achieved(&reply));
-    }
-
-    #[test]
-    fn a_claim_goes_to_the_critic() {
-        assert_eq!(
-            plan_after_goal_turn("g", DoneReason::Completed, true, 0),
-            GoalStep::Critique
-        );
-        assert_eq!(
-            plan_after_goal_turn("g", DoneReason::MaxSteps, true, 0),
-            GoalStep::Critique
-        );
-    }
-
-    #[test]
-    fn stopping_without_a_claim_keeps_working() {
-        for reason in [DoneReason::Completed, DoneReason::MaxSteps] {
-            let GoalStep::Continue(prompt) =
-                plan_after_goal_turn("ship the parser", reason, false, 1)
-            else {
-                panic!("expected continue on {reason:?}");
-            };
-            assert!(prompt.contains("ship the parser"));
-            assert!(prompt.contains(GOAL_ACHIEVED_MARKER));
+    fn every_turn_that_stops_goes_to_the_critic() {
+        // Idle or not: the critic looks first, so a turn that did nothing on a
+        // goal already met still ends the loop as achieved.
+        for idle in [0, 1, GOAL_IDLE_LIMIT, GOAL_IDLE_LIMIT + 5] {
+            assert_eq!(
+                plan_after_goal_turn("g", DoneReason::Completed, idle),
+                GoalStep::Critique
+            );
         }
     }
 
     #[test]
-    fn an_idle_builder_is_stopped() {
+    fn a_turn_cut_off_by_its_step_budget_keeps_working() {
+        let GoalStep::Continue(prompt) =
+            plan_after_goal_turn("ship the parser", DoneReason::MaxSteps, 0)
+        else {
+            panic!("expected continue");
+        };
+        assert!(prompt.contains("ship the parser"));
+        assert!(prompt.contains("independent critic"));
         assert!(matches!(
-            plan_after_goal_turn("g", DoneReason::Completed, false, GOAL_IDLE_LIMIT),
+            plan_after_goal_turn("g", DoneReason::MaxSteps, GOAL_IDLE_LIMIT),
             GoalStep::Stop(_)
-        ));
-        assert!(matches!(
-            plan_after_goal_turn("g", DoneReason::Completed, false, GOAL_IDLE_LIMIT - 1),
-            GoalStep::Continue(_)
         ));
     }
 
@@ -941,12 +918,54 @@ mod tests {
             DoneReason::TimeLimit,
             DoneReason::CircuitBreaker,
         ] {
-            // Even with a claim: nobody should be judging a turn the user stopped.
             assert!(matches!(
-                plan_after_goal_turn("g", reason, true, 0),
+                plan_after_goal_turn("g", reason, 0),
                 GoalStep::Stop(_)
             ));
         }
+    }
+
+    #[test]
+    fn the_critics_sign_off_ends_the_loop_whatever_the_streaks() {
+        assert_eq!(
+            plan_after_critique("g", &GoalVerdict::Achieved, GOAL_IDLE_LIMIT, 0),
+            GoalOutcome::Achieved
+        );
+    }
+
+    #[test]
+    fn a_rejection_sends_the_feedback_back_while_the_loop_is_moving() {
+        let verdict = GoalVerdict::NotAchieved("parser.rs panics on empty input".into());
+        let GoalOutcome::Rework(prompt) =
+            plan_after_critique("ship the parser", &verdict, GOAL_IDLE_LIMIT - 1, 0)
+        else {
+            panic!("expected rework");
+        };
+        assert!(prompt.contains("parser.rs panics on empty input"));
+    }
+
+    #[test]
+    fn a_builder_that_stops_doing_anything_cannot_loop_forever() {
+        let verdict = GoalVerdict::NotAchieved("nothing changed".into());
+        assert!(matches!(
+            plan_after_critique("g", &verdict, GOAL_IDLE_LIMIT, 0),
+            GoalOutcome::Stop(_)
+        ));
+    }
+
+    #[test]
+    fn a_critic_that_keeps_failing_stops_the_loop() {
+        let verdict = GoalVerdict::NotAchieved("could not run".into());
+        assert!(matches!(
+            plan_after_critique("g", &verdict, 0, GOAL_CRITIC_FAILURE_LIMIT - 1),
+            GoalOutcome::Rework(_)
+        ));
+        let GoalOutcome::Stop(why) =
+            plan_after_critique("g", &verdict, 0, GOAL_CRITIC_FAILURE_LIMIT)
+        else {
+            panic!("expected stop");
+        };
+        assert!(why.contains("could not run"), "{why}");
     }
 
     #[test]
@@ -967,7 +986,8 @@ mod tests {
         };
         assert!(prompt.contains("parser.rs panics on empty input"));
         assert!(prompt.contains("ship the parser"));
-        assert!(prompt.contains(GOAL_ACHIEVED_MARKER));
+        assert!(prompt.contains("independent critic"));
+        assert!(!prompt.contains("You claimed"), "{prompt}");
     }
 
     // --- continuous cycles --------------------------------------------------
@@ -1076,7 +1096,6 @@ mod tests {
             assert!(!prompt.contains("report done again"), "{prompt}");
             assert!(!prompt.contains("request's own check"), "{prompt}");
             assert!(!prompt.contains("claimed the goal is achieved"), "{prompt}");
-            assert!(!prompt.contains(GOAL_ACHIEVED_MARKER), "{prompt}");
         }
         // A true report lands, and a cycle review still gets only its one round.
         assert_eq!(
@@ -1098,10 +1117,10 @@ mod tests {
     }
 
     #[test]
-    fn kickoff_tells_the_builder_how_to_claim() {
+    fn kickoff_tells_the_builder_a_critic_examines_every_stop() {
         let prompt = goal_kickoff_prompt("rewrite spore in assembly");
         assert!(prompt.contains("rewrite spore in assembly"));
-        assert!(prompt.contains(GOAL_ACHIEVED_MARKER));
+        assert!(prompt.contains("Every time you stop"));
     }
 
     // --- the completion review ---------------------------------------------

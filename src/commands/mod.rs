@@ -144,6 +144,11 @@ pub enum SlashCommand {
     /// shows the current goal; `Some` sets it (drives sovereign/continuous
     /// mode), persisting to `<project_root>/.wizard/mission.toml`.
     Goal(Option<String>),
+    /// `/goal clear` — stop any goal loop and drop the standing goal.
+    GoalClear,
+    /// `/goal resume` — pick the standing goal's loop back up, keeping its
+    /// clock and its round count.
+    GoalResume,
     /// `/publish [branch]` — fork Wizard and get a one-line installer.
     Publish {
         branch: Option<String>,
@@ -634,6 +639,10 @@ impl SlashCommand {
                 let text = args.join(" ");
                 if text.is_empty() {
                     Ok(Self::Goal(None))
+                } else if text.eq_ignore_ascii_case("clear") {
+                    Ok(Self::GoalClear)
+                } else if text.eq_ignore_ascii_case("resume") {
+                    Ok(Self::GoalResume)
                 } else {
                     Ok(Self::Goal(Some(text)))
                 }
@@ -746,6 +755,12 @@ impl SlashCommand {
             | Help
             | Fusion(FusionAction::Toggle)
             | Ultra(UltraAction::Toggle) => Ok(()),
+
+            // The goal is the user's bar. Dropping it would let the builder
+            // walk out of the critic it is being held to.
+            GoalClear | GoalResume => Err(
+                "`/goal clear` and `/goal resume` are the user's; keep working on the goal".into(),
+            ),
 
             // A side question is the user's aside; the agent already has the
             // conversation and should not spend a turn asking itself.
@@ -867,7 +882,7 @@ impl SlashCommand {
             Bashes => "bashes",
             Btw(_) => "btw",
             Fork(_) => "fork",
-            Goal(_) => "goal",
+            Goal(_) | GoalClear | GoalResume => "goal",
             Publish { .. } => "publish",
             Fusion(_) => "fusion",
             Ultra(_) => "ultra",
@@ -1405,7 +1420,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "goal",
-        args: "[text]",
+        args: "[text|clear|resume]",
         description: "show the standing goal, or set one and work on it under an independent critic",
         takes_args: false,
         tui: Execution::Agent,
@@ -2311,6 +2326,8 @@ mod tests {
     fn the_agent_allowlist_is_the_server_table_minus_what_the_gate_refuses() {
         let allowed = agent_commands();
         assert!(allowed.contains(&"goal"), "the agent may set the mission");
+        assert!(SlashCommand::GoalClear.agent_runnable().is_err());
+        assert!(SlashCommand::GoalResume.agent_runnable().is_err());
         assert!(allowed.contains(&"model"), "and switch its own model");
         assert!(allowed.contains(&"effort"));
         assert!(allowed.contains(&"status"));
