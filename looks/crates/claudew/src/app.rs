@@ -24,7 +24,7 @@ pub use modal::editor_mode_is_vim;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The Claude Code release this look reproduces.
-pub const CLAUDE_VERSION: &str = "2.1.300";
+pub const CLAUDE_VERSION: &str = "2.1.314";
 pub const LOOK: &str = "claude";
 
 pub const SPINNER_FRAMES: [&str; 6] = ["·", "✢", "*", "✶", "✻", "✽"];

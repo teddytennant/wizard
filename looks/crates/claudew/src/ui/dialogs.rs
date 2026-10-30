@@ -877,7 +877,7 @@ fn rewind_confirm(app: &App, nth: usize, sel: usize, w: usize) -> Panel {
     top.push(Row::new());
     // wizard's /rewind truncates the conversation and puts back the files later turns changed
     top.push(Row::of(
-        "   The conversation will be truncated here.",
+        "   This message and everything after it will be removed.",
         th.dim(),
     ));
     // what going back undoes in the files: the later turns' added lines go, removed ones return
@@ -923,7 +923,7 @@ fn rewind_confirm(app: &App, nth: usize, sel: usize, w: usize) -> Panel {
     if restores_code {
         top.push(Row::new());
         top.push(Row::of(
-            "   ⚠ Rewinding does not affect files edited manually or via bash.",
+            "   \u{26a0} Restored files go back whole, losing later changes by anyone. Bash changes to other files are not undone.",
             th.dim(),
         ));
     }

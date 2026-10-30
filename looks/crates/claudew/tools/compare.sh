@@ -145,8 +145,11 @@ crate_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1
 # the installed claude when capturing live, the fixtures' otherwise
 if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     claude_version=$("${CLAUDE_BIN:-claude}" --version | sed -n 's/^\([0-9][0-9.]*\).*/\1/p')
-else
+elif [ -n "${REFDIR:-}" ]; then
     claude_version=$(sed 's/\x1b\[[0-9;]*m//g' "$ref/home-80x24.ansi" | sed -n 's/.*Claude Code v\([0-9.]*\).*/\1/p' | head -1)
+else
+    # tests/fixtures/ref is an older capture (2.1.300); the look follows 2.1.314
+    claude_version=$(sed -n 's/.*CLAUDE_VERSION: &str = "\(.*\)";.*/\1/p' "$crate/src/app.rs")
 fi
 want="wizard-ui-claude $crate_version (claude look $claude_version)"
 got=$("$bin" --version)
