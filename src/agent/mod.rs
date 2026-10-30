@@ -1477,6 +1477,16 @@ impl Agent {
         &self.hooks
     }
 
+    /// Names of the tools this agent can call, for the stream-json init line.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.dispatcher
+            .registry()
+            .specs()
+            .into_iter()
+            .map(|spec| spec.function.name)
+            .collect()
+    }
+
     /// Fire the `session_start` hooks. Hook stdout is appended to the
     /// session as system context, visible to the model on every turn.
     pub async fn fire_session_start(&mut self, events: &mpsc::Sender<AgentEvent>) {

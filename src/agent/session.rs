@@ -249,7 +249,8 @@ fn summarize(id: &str, path: &Path) -> Option<SessionSummary> {
     if messages == 0 {
         return None;
     }
-    let summary = marker_prompt
+    let summary = crate::session_flags::name_for(path)
+        .or(marker_prompt)
         .or(first_user)
         .unwrap_or_else(|| "(no prompt)".to_string());
     Some(SessionSummary {
@@ -288,6 +289,56 @@ impl Session {
     /// workspaces other than its own.
     pub fn create_in(dir: &Path, cwd: &Path) -> Result<Self> {
         Self::create_with_cwd(dir, Some(cwd.display().to_string()))
+    }
+
+    /// [`Session::create`] under a chosen id (`--session-id`). Fails when a
+    /// session with that id is already on disk.
+    pub fn create_with_id(dir: &Path, id: &str) -> Result<Self> {
+        anyhow::ensure!(
+            !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+            "a session id is letters, digits, '-', '_' and '.', got '{id}'"
+        );
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string());
+        let path = dir.join(format!("{id}.jsonl"));
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                anyhow::bail!("session id '{id}' is already in use")
+            }
+            Err(err) => return Err(err).with_context(|| format!("creating {}", path.display())),
+        };
+        if let Some(cwd) = &cwd {
+            let header = SessionHeader {
+                timestamp: Utc::now(),
+                cwd: cwd.clone(),
+                version: SESSION_FORMAT_VERSION,
+            };
+            let line = serde_json::to_string(&header).context("serializing session header")?;
+            writeln!(file, "{line}").with_context(|| format!("writing {}", path.display()))?;
+        }
+        Ok(Self {
+            id: id.to_string(),
+            path,
+            cwd,
+        })
+    }
+
+    /// A new session in `dir` holding a copy of this one's file, under `id`
+    /// or a fresh timestamp id (`--fork-session`, `/branch`).
+    pub fn fork(&self, dir: &Path, id: Option<&str>) -> Result<Self> {
+        let copy = match id {
+            Some(id) => Self::create_with_id(dir, id)?,
+            None => Self::create(dir)?,
+        };
+        std::fs::copy(&self.path, &copy.path)
+            .with_context(|| format!("copying {}", self.path.display()))?;
+        Ok(Self::from_path(copy.path))
     }
 
     fn create_with_cwd(dir: &Path, cwd: Option<String>) -> Result<Self> {

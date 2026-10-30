@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 pub mod claude;
+pub mod key_helper;
 
 use crate::cli::Cli;
 use crate::llm::provider::LlmProvider;

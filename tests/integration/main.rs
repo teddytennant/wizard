@@ -20,6 +20,7 @@
 #[cfg(all(feature = "provider-ollama", feature = "acp"))]
 mod acp;
 mod cli;
+mod headless_shapes;
 #[cfg(feature = "mesh")]
 mod mesh_quic;
 mod recorded_provider;

@@ -143,23 +143,43 @@ pub struct ClaudeFlags {
     #[arg(long, hide = true)]
     pub replay_user_messages: bool,
 
-    /// Accepted and reported as unsupported: names a Claude Code feature with
-    /// no Wizard counterpart. See docs/claude-code-parity.md.
-    #[arg(long, hide = true, value_name = "ID")]
+    /// Use this session id (letters, digits, `-`, `_`, `.`) for a new session.
+    /// With `--resume` or `--continue` it needs `--fork-session`.
+    #[arg(long, value_name = "ID")]
     pub session_id: Option<String>,
-    #[arg(short = 'n', long, hide = true, value_name = "NAME")]
+
+    /// A display name for the session, shown by `/resume` and accepted by
+    /// `--resume <name>`.
+    #[arg(short = 'n', long, value_name = "NAME")]
     pub name: Option<String>,
-    #[arg(long, hide = true)]
+
+    /// With `--resume` or `--continue`: start a new session that holds a copy
+    /// of that conversation instead of continuing the original.
+    #[arg(long)]
     pub fork_session: bool,
-    #[arg(long, hide = true)]
+
+    /// Do not keep the session: the file is removed when a `--print` run ends.
+    #[arg(long)]
     pub no_session_persistence: bool,
-    #[arg(long, hide = true, value_name = "MODELS")]
+
+    /// With `--print`: models to switch to, in order, when the first one keeps
+    /// failing. Comma separated.
+    #[arg(long, value_name = "MODELS")]
     pub fallback_model: Option<String>,
-    #[arg(long, hide = true, value_name = "USD")]
+
+    /// With `--print`: stop the run once its estimated cost passes this many
+    /// dollars.
+    #[arg(long, value_name = "USD")]
     pub max_budget_usd: Option<f64>,
-    #[arg(long, hide = true, value_name = "FILE_OR_JSON")]
+
+    /// Extra settings for this run: a Claude Code `settings.json` path or a
+    /// JSON string. Read after the project's files.
+    #[arg(long, value_name = "FILE_OR_JSON")]
     pub settings: Option<String>,
-    #[arg(long, hide = true, value_name = "NAME")]
+
+    /// Run the session as this agent: its system prompt is added to the
+    /// session's. Names a built-in, `.claude/agents` or `--agents` agent.
+    #[arg(long, value_name = "NAME")]
     pub agent: Option<String>,
 }
 
@@ -174,6 +194,10 @@ pub mod env {
     pub const MCP_CONFIG: &str = "WIZARD_MCP_CONFIG";
     pub const STRICT_MCP: &str = "WIZARD_STRICT_MCP_CONFIG";
     pub const EXTRA_AGENTS: &str = "WIZARD_EXTRA_AGENTS";
+    /// The file `--settings` names, or a private copy of its JSON text.
+    pub const SETTINGS_FILE: &str = "WIZARD_SETTINGS_FILE";
+    /// Set by `--no-session-persistence`.
+    pub const EPHEMERAL_SESSION: &str = "WIZARD_EPHEMERAL_SESSION";
 }
 
 /// Separator between values in the list-valued variables. A control
@@ -187,51 +211,99 @@ impl ClaudeFlags {
         (!text.trim().is_empty()).then_some(text)
     }
 
-    /// Flags that were accepted and cannot be honored, as a stderr line each.
+    /// Flags that were accepted and cannot be honored in this run, as a
+    /// stderr line each. The session flags work everywhere; these three only
+    /// have a meaning for a headless run, so they are reported only when the
+    /// terminal UI is about to open.
     pub fn unsupported(&self) -> Vec<String> {
+        use std::io::IsTerminal;
         let mut out = Vec::new();
-        let mut say =
-            |flag: &str, why: &str| out.push(format!("wizard: {flag} is not supported ({why})"));
-        if self.session_id.is_some() {
-            say("--session-id", "sessions are named by Wizard");
+        if self.print || !std::io::stdout().is_terminal() {
+            return out;
         }
-        if self.name.is_some() {
-            say("--name", "sessions have no display name");
-        }
-        if self.fork_session {
-            say("--fork-session", "resuming does not copy the session");
-        }
+        let mut say = |flag: &str| {
+            out.push(format!(
+                "wizard: {flag} only applies to headless runs (-p with no terminal); ignored"
+            ));
+        };
         if self.no_session_persistence {
-            say("--no-session-persistence", "sessions are always saved");
+            say("--no-session-persistence");
         }
         if self.fallback_model.is_some() {
-            say("--fallback-model", "no model fallback chain");
+            say("--fallback-model");
         }
         if self.max_budget_usd.is_some() {
-            say(
-                "--max-budget-usd",
-                "no spend limit; use --max-turns or --max-hours",
-            );
-        }
-        if self.settings.is_some() {
-            say(
-                "--settings",
-                "Wizard reads config.toml, not Claude settings JSON",
-            );
-        }
-        if self.agent.is_some() {
-            say(
-                "--agent",
-                "a session cannot run as a named subagent; ask for it in the prompt",
-            );
+            say("--max-budget-usd");
         }
         out
     }
 
-    /// Text added to the system prompt for this run: `--append-system-prompt`
-    /// (file text first), the schema request, and `--add-dir`.
+    /// The models `--fallback-model` names, in the order to try them.
+    pub fn fallback_models(&self) -> Vec<String> {
+        use std::io::IsTerminal;
+        let from_settings = std::env::current_dir()
+            .ok()
+            .and_then(|root| {
+                crate::config::claude::load(&root, crate::config::claude::Trust::Refused)
+                    .fallback_model
+            })
+            .filter(|_| self.print || !std::io::stdout().is_terminal());
+        self.fallback_model
+            .clone()
+            .or(from_settings)
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every agent `--agent` can name: the built-ins, `.claude/agents`
+    /// (user, project and plugins) and `--agents`.
+    pub fn known_agents(&self) -> Vec<crate::agent::subagent::SubagentConfig> {
+        let root = std::env::current_dir().unwrap_or_default();
+        let mut agents = crate::agent::subagent::builtin_configs();
+        agents.extend(crate::claude_dir::agents::available(&root));
+        if let Some(json) = &self.agents {
+            agents.extend(crate::claude_dir::agents::from_json(json));
+        }
+        agents
+    }
+
+    /// The system-prompt text `--agent` adds: the agent's own prompt, framed
+    /// as the role this session plays. `None` when no agent was named or none
+    /// matches (the caller reports that, see [`prepare`]).
+    pub fn agent_prompt(&self) -> Option<String> {
+        let name = self.agent.as_deref()?;
+        // The last definition wins, the way a project shadows the user's.
+        // Claude Code's three built-ins all run the one built-in worker here.
+        let name = match name {
+            "general-purpose" | "Explore" | "Plan" => "worker",
+            other => other,
+        };
+        let agent = self
+            .known_agents()
+            .into_iter()
+            .rev()
+            .find(|agent| agent.name == name)?;
+        Some(format!(
+            "You are running as the '{}' agent: {}\n\n{}",
+            agent.name,
+            agent.description.trim(),
+            agent.system_prompt.trim()
+        ))
+    }
+
+    /// Text added to the system prompt for this run: the `--agent` role,
+    /// `--append-system-prompt` (file text first), the schema request, and
+    /// `--add-dir`.
     pub fn appended_prompt(&self) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
+        if let Some(prompt) = self.agent_prompt() {
+            parts.push(prompt);
+        }
         if let Some(path) = &self.append_system_prompt_file {
             match std::fs::read_to_string(path) {
                 Ok(text) => parts.push(text.trim().to_string()),
@@ -281,7 +353,7 @@ impl ClaudeFlags {
         if let Some(path) = &self.system_prompt_file {
             set(env::SYSTEM_PROMPT_FILE, path.clone().into_os_string());
         } else if let Some(text) = &self.system_prompt
-            && let Some(path) = write_private_temp("system-prompt", text)
+            && let Some(path) = write_private_temp("system-prompt", "md", text)
         {
             set(env::SYSTEM_PROMPT_FILE, path.into_os_string());
         }
@@ -311,6 +383,15 @@ impl ClaudeFlags {
         if let Some(json) = &self.agents {
             set(env::EXTRA_AGENTS, json.into());
         }
+        if let Some(settings) = &self.settings
+            && let Some(path) = settings_file(settings)
+        {
+            set(env::SETTINGS_FILE, path.into_os_string());
+        }
+        if self.no_session_persistence {
+            set(env::EPHEMERAL_SESSION, "1".into());
+        }
+        unsafe { crate::config::key_helper::export() };
         if self.verbose || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
@@ -325,18 +406,18 @@ impl ClaudeFlags {
 
     /// Apply the run-scoped overrides to the loaded config.
     pub fn apply_to(&self, config: &mut Config) {
+        let settings = std::env::current_dir()
+            .map(|root| crate::config::claude::load(&root, crate::config::claude::Trust::Refused))
+            .unwrap_or_default();
         if let Some(model) = &self.model {
-            let at = config
-                .active_provider
-                .as_ref()
-                .and_then(|name| config.providers.iter().position(|p| &p.name == name))
-                .unwrap_or(0);
-            if let Some(provider) = config.providers.get_mut(at) {
-                provider.model = model.clone();
-                provider.model_pinned = Some(true);
+            let model = settings.resolve_model(model);
+            match settings.refuse_model(&model) {
+                Some(why) => eprintln!("wizard: --model ignored: {why}"),
+                None => set_model(config, &model),
             }
         }
-        if let Some(effort) = self.effort.as_deref().and_then(parse_effort) {
+        let effort = self.effort.as_deref().or(settings.effort_level.as_deref());
+        if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
         }
         if let Some(turns) = self.max_turns {
@@ -350,6 +431,19 @@ impl ClaudeFlags {
     }
 }
 
+/// Point the active provider at `model` for this run.
+pub fn set_model(config: &mut Config, model: &str) {
+    let at = config
+        .active_provider
+        .as_ref()
+        .and_then(|name| config.providers.iter().position(|p| &p.name == name))
+        .unwrap_or(0);
+    if let Some(provider) = config.providers.get_mut(at) {
+        provider.model = model.to_string();
+        provider.model_pinned = Some(true);
+    }
+}
+
 fn parse_effort(raw: &str) -> Option<ReasoningEffort> {
     match raw.to_ascii_lowercase().as_str() {
         "low" => Some(ReasoningEffort::Low),
@@ -360,9 +454,20 @@ fn parse_effort(raw: &str) -> Option<ReasoningEffort> {
     }
 }
 
-fn write_private_temp(tag: &str, text: &str) -> Option<PathBuf> {
+/// The file `--settings` points at: the path itself, or a private temp file
+/// holding the text when the value is a JSON object.
+fn settings_file(value: &str) -> Option<PathBuf> {
+    if value.trim_start().starts_with('{') {
+        return write_private_temp("settings", "json", value);
+    }
+    let path = PathBuf::from(value);
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+fn write_private_temp(tag: &str, extension: &str, text: &str) -> Option<PathBuf> {
     use std::io::Write;
-    let path = std::env::temp_dir().join(format!("wizard-{tag}-{}.md", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("wizard-{tag}-{}.{extension}", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -648,9 +753,20 @@ pub fn prepare(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
     if cli.claude.continue_session || cli.claude.resume_id.is_some() {
         cli.resume = true;
     }
-    if cli.claude.print && cli.claude.resume_id.is_some() {
-        eprintln!(
-            "wizard: --resume <id> is honored in the terminal only; this run continues the most recent session"
+    if let Some(name) = &cli.claude.agent
+        && cli.claude.agent_prompt().is_none()
+    {
+        let mut known: Vec<String> = cli
+            .claude
+            .known_agents()
+            .into_iter()
+            .map(|agent| agent.name)
+            .collect();
+        known.sort();
+        known.dedup();
+        anyhow::bail!(
+            "--agent '{name}' is not a known agent (known: {})",
+            known.join(", ")
         );
     }
     if cli.prompt.is_none()
@@ -671,20 +787,23 @@ pub fn prepare(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
         cli.prompt = Some(task);
     }
     if cli.claude.print {
-        if !std::io::stdin().is_terminal() {
-            let piped = read_stdin_for(std::time::Duration::from_secs(3));
-            let piped = match cli.claude.input_format {
-                Some(InputFormat::StreamJson) => prompt_from_stream_json(&piped),
-                _ => Some(piped).filter(|text| !text.trim().is_empty()),
-            };
-            cli.prompt = match (piped, cli.prompt.take()) {
-                (Some(piped), Some(prompt)) => Some(format!("{piped}\n\n{prompt}")),
-                (Some(piped), None) => Some(piped),
-                (None, prompt) => prompt,
-            };
-        }
-        if cli.prompt.is_none() {
-            anyhow::bail!("--print needs a prompt: pass it as an argument, with -p, or on stdin");
+        // `--input-format stream-json` is a conversation: the headless runner
+        // reads stdin itself, one turn per user message.
+        if cli.claude.input_format != Some(InputFormat::StreamJson) {
+            if !std::io::stdin().is_terminal() {
+                let piped = read_stdin_for(std::time::Duration::from_secs(3));
+                let piped = Some(piped).filter(|text| !text.trim().is_empty());
+                cli.prompt = match (piped, cli.prompt.take()) {
+                    (Some(piped), Some(prompt)) => Some(format!("{piped}\n\n{prompt}")),
+                    (Some(piped), None) => Some(piped),
+                    (None, prompt) => prompt,
+                };
+            }
+            if cli.prompt.is_none() {
+                anyhow::bail!(
+                    "--print needs a prompt: pass it as an argument, with -p, or on stdin"
+                );
+            }
         }
     }
     if let Some(name) = &cli.claude.worktree {
@@ -694,6 +813,40 @@ pub fn prepare(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
         };
         let path = create_worktree(&root, name.as_deref()).map_err(anyhow::Error::msg)?;
         cli.cwd = Some(path);
+    }
+    choose_session(cli)?;
+    Ok(())
+}
+
+/// Settle `--resume <id or name>`, `--session-id`, `--name` and
+/// `--fork-session` into one concrete session, named by `resume_id` from here
+/// on, so the terminal and the headless runner open it the same way.
+fn choose_session(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
+    use crate::session_flags::{Request, select};
+    let flags = &cli.claude;
+    if flags.fork_session && flags.resume_id.is_none() && !flags.continue_session && !cli.resume {
+        eprintln!("wizard: --fork-session needs --resume or --continue; ignored");
+    }
+    let request = Request {
+        resume: flags.resume_id.as_deref(),
+        latest: flags.continue_session || (cli.resume && flags.resume_id.is_none()),
+        session_id: flags.session_id.as_deref(),
+        name: flags.name.as_deref(),
+        fork: flags.fork_session,
+    };
+    if request.is_empty() {
+        return Ok(());
+    }
+    // Sessions are per project, and the runner has not changed directory yet.
+    let here = std::env::current_dir()?;
+    if let Some(dir) = &cli.cwd {
+        std::env::set_current_dir(dir)?;
+    }
+    let chosen = crate::config::Config::sessions_dir().and_then(|dir| select(&dir, request));
+    std::env::set_current_dir(here)?;
+    if let Some(session) = chosen? {
+        cli.claude.resume_id = Some(session.id);
+        cli.resume = true;
     }
     Ok(())
 }
@@ -1024,15 +1177,20 @@ mod tests {
     }
 
     #[test]
-    fn flags_with_no_wizard_counterpart_are_named() {
+    fn headless_only_flags_are_named_when_the_terminal_ui_would_open() {
         let flags = ClaudeFlags {
             max_budget_usd: Some(1.0),
             no_session_persistence: true,
             ..ClaudeFlags::default()
         };
-        let lines = flags.unsupported();
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().any(|l| l.contains("--max-budget-usd")));
+        // Under `cargo test` stdout is not a terminal, so the headless path
+        // is the one in force and nothing is reported.
+        assert!(flags.unsupported().is_empty());
         assert!(ClaudeFlags::default().unsupported().is_empty());
+        let models = ClaudeFlags {
+            fallback_model: Some("a, b,,c".into()),
+            ..ClaudeFlags::default()
+        };
+        assert_eq!(models.fallback_models(), ["a", "b", "c"]);
     }
 }

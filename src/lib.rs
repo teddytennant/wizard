@@ -11,6 +11,7 @@ pub mod checkpoint;
 pub mod claude_dir;
 pub mod claude_resume;
 pub mod claude_session;
+pub mod claude_stream;
 pub mod cli;
 pub mod cli_claude;
 pub mod commands;
@@ -53,6 +54,7 @@ pub mod progress;
 pub mod registry_client;
 pub mod schedule;
 pub mod server;
+pub mod session_flags;
 pub mod session_registry;
 pub mod skills;
 pub mod skin;
@@ -86,6 +88,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     // Claude Code's flags settle first: the words after the flags become the
     // prompt, `--print` reads stdin, `--worktree` picks the project root.
     cli_claude::prepare(&mut cli)?;
+    prune_old_sessions(cli.claude.resume_id.as_deref());
 
     // Bring the plugin kernel up before anything can dispatch. It is here,
     // above the chain rather than inside a surface, because the seventeen arms
@@ -820,6 +823,21 @@ fn should_onboard_given(cli: &cli::Cli, interactive: bool) -> Result<bool> {
         return Ok(false);
     }
     Ok(!config::Config::path()?.exists())
+}
+
+/// `cleanupPeriodDays` from the Claude-format settings: delete the sessions
+/// older than that. Nothing happens when the key is not set.
+fn prune_old_sessions(keep: Option<&str>) {
+    let Ok(root) = std::env::current_dir() else {
+        return;
+    };
+    let settings = config::claude::load(&root, config::claude::Trust::Refused);
+    if let (Some(days), Ok(dir)) = (settings.cleanup_period_days, config::Config::sessions_dir()) {
+        let removed = session_flags::prune(&dir, days, keep);
+        if removed > 0 {
+            tracing::info!("cleanupPeriodDays: removed {removed} old sessions");
+        }
+    }
 }
 
 #[cfg(test)]

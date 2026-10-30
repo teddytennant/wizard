@@ -2835,7 +2835,7 @@ async fn hook_timeout_does_not_hang_the_turn() {
 }
 
 #[tokio::test]
-async fn stream_json_sink_renders_a_scripted_run_as_jsonl_ending_in_done() {
+async fn stream_json_sink_renders_a_scripted_run_as_jsonl_ending_in_result() {
     use crate::output::{EventSink, StreamJsonSink, tests::SharedBuf};
 
     let tmp = TempDir::new();
@@ -2873,12 +2873,12 @@ async fn stream_json_sink_renders_a_scripted_run_as_jsonl_ending_in_done() {
         .iter()
         .filter_map(|value| value["type"].as_str())
         .collect();
-    assert!(types.contains(&"tool_call"), "got: {types:?}");
-    assert!(types.contains(&"tool_result"), "got: {types:?}");
-    assert!(types.contains(&"text_delta"), "got: {types:?}");
-    assert!(types.contains(&"usage"), "got: {types:?}");
-    let done = values.last().expect("at least the done line");
-    assert_eq!(done["type"], "done");
+    assert_eq!(types.first(), Some(&"system"), "got: {types:?}");
+    assert!(types.contains(&"assistant"), "got: {types:?}");
+    assert!(types.contains(&"user"), "got: {types:?}");
+    let done = values.last().expect("at least the result line");
+    assert_eq!(done["type"], "result");
+    assert_eq!(done["result"], "all wrapped up");
     assert_eq!(done["reason"], "completed");
     assert_eq!(done["usage"]["prompt_tokens"], 42);
     assert_eq!(done["usage"]["completion_tokens"], 7);

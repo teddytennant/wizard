@@ -68,7 +68,11 @@ pub fn load_with_style(project_root: &Path) -> Option<String> {
     let appended = std::env::var(crate::cli_claude::env::APPEND_SYSTEM_PROMPT)
         .ok()
         .filter(|text| !text.trim().is_empty());
-    let parts: Vec<String> = [instructions, style, appended]
+    // `language` and `attribution` from the Claude-format settings files.
+    let from_settings =
+        crate::config::claude::load(project_root, crate::config::claude::Trust::Refused)
+            .prompt_addendum();
+    let parts: Vec<String> = [instructions, style, from_settings, appended]
         .into_iter()
         .flatten()
         .collect();

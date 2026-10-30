@@ -19,12 +19,15 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 
 use crate::agent::{
-    Agent, AgentEvent, DoneReason, LoopControl, build_headless_agent, clear_loop_control, critic,
-    mission, read_loop_control,
+    Agent, AgentEvent, DoneReason, LoopControl, clear_loop_control, critic, mission,
+    read_loop_control,
 };
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::output::OutputFormat;
+
+mod stream_input;
+mod support;
 
 /// How often an inter-cycle wait wakes up to re-read the world.
 ///
@@ -684,8 +687,15 @@ pub(crate) fn rollback_failed_cycle(
 /// stdout instead of the TUI (`--output-format` selects the
 /// [`crate::output::EventSink`]); the returned exit code encodes the
 /// outcome (see [`crate::output::exit_code`]).
-pub async fn run(config: Config, cli: Cli) -> Result<i32> {
+pub async fn run(mut config: Config, cli: Cli) -> Result<i32> {
     let project_root = std::env::current_dir().context("determining project root")?;
+
+    // `--input-format stream-json` is a conversation, not a goal.
+    if cli.claude.print
+        && cli.claude.input_format == Some(crate::cli_claude::InputFormat::StreamJson)
+    {
+        return stream_input::run(config, cli).await;
+    }
 
     // Goal resolution: an explicit `-p` wins; otherwise resume the standing
     // mission (this is the path taken after a self-evolve re-exec, which
@@ -705,10 +715,6 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     let prepared = crate::commands::preprocess(&goal, &custom_commands, &project_root);
     let goal = prepared.text;
     let goal_images = prepared.images;
-
-    let active = config.active();
-    let model = active.model.clone();
-    let endpoint = active.base_url.clone();
 
     // Settle the per-project trust question before the agent is built (which
     // is what loads the project's hooks) and before anything else has taken
@@ -732,7 +738,9 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
         crate::output::eprint_line(&format!("wizard: {why}"));
     }
 
-    let mut agent = build_headless_agent(&config, &project_root, cli.resume).await?;
+    let (mut agent, mut fallbacks) = support::open_agent(&mut config, &project_root, &cli).await?;
+    let model = config.active().model.clone();
+    let endpoint = config.active().base_url.clone();
     // Kept alongside the agent's copy: the agent checks it between steps
     // inside a turn, and the outer loop checks it at the cycle boundary and
     // inside every wait. Before that second copy existed, `cycle_pause_secs`
@@ -858,15 +866,45 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
     // The sink consumes every agent event off the run loop; it is returned
     // so `finish` can emit the run summary once the outcome is known.
+    let run_info = || {
+        crate::claude_stream::info::describe(
+            &config,
+            &project_root,
+            &agent.session().id,
+            &agent.tool_names(),
+            crate::claude_stream::info::StreamFlags::from_flags(&cli.claude),
+        )
+    };
     let mut sink: Box<dyn crate::output::EventSink> = match cli.output_format {
         crate::output::OutputFormat::Text => {
-            Box::new(crate::output::TextSink::new(Arc::clone(&spinner)))
+            let text = Box::new(crate::output::TextSink::new(Arc::clone(&spinner)));
+            match cli.claude.max_budget_usd {
+                Some(limit) => {
+                    let info = run_info();
+                    let mut meter = crate::claude_stream::meter::Meter::new(
+                        &info.model,
+                        info.price,
+                        Some(limit),
+                    );
+                    meter.set_cancel(agent.cancel_handle());
+                    Box::new(crate::output::BudgetSink::new(text, meter))
+                }
+                None => text,
+            }
         }
-        crate::output::OutputFormat::Json => Box::new(crate::output::JsonSink::stdout()),
-        crate::output::OutputFormat::StreamJson => {
-            Box::new(crate::output::StreamJsonSink::stdout())
-        }
+        crate::output::OutputFormat::Json => Box::new(
+            crate::output::JsonSink::stdout().with_info(run_info(), Some(agent.cancel_handle())),
+        ),
+        crate::output::OutputFormat::StreamJson => Box::new(
+            crate::output::StreamJsonSink::stdout()
+                .with_info(run_info(), Some(agent.cancel_handle())),
+        ),
     };
+    let trip = support::Trip::new(agent.cancel_handle());
+    if !fallbacks.is_empty() {
+        sink = Box::new(support::TripSink::new(sink, trip.clone()));
+    }
+    sink.start();
     let printer = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             sink.event(event);
@@ -1084,9 +1122,15 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
         // the next cycle opens with, and how long to wait before starting it.
         let mut recovery: Option<(String, Duration)> = None;
         let turn_began = Instant::now();
-        match agent
-            .run_turn_with_images(&input, turn_images, tx.clone())
-            .await
+        match support::run_with_fallback(
+            &mut agent,
+            &input,
+            turn_images,
+            &tx,
+            &mut fallbacks,
+            &trip,
+        )
+        .await
         {
             Ok(reason) => {
                 final_reason = reason;
@@ -1525,6 +1569,29 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
         }
     }
 
+    // `--json-schema`: the final answer has to match, or go back for a fix.
+    let mut schema_failed = false;
+    let mut structured: Option<serde_json::Value> = None;
+    if let Some(schema_text) = cli.claude.json_schema.as_deref()
+        && run_error.is_none()
+        && final_reason == DoneReason::Completed
+    {
+        match support::enforce_schema(&mut agent, schema_text, &tx).await {
+            Ok(support::SchemaOutcome::Valid(value)) => structured = Some(value),
+            Ok(support::SchemaOutcome::Invalid(problems)) => {
+                schema_failed = true;
+                let line = format!(
+                    "the final answer does not match --json-schema: {}",
+                    problems.join("; ")
+                );
+                let _ = tx.send(AgentEvent::Error(line)).await;
+            }
+            Err(err) => {
+                crate::output::eprint_line(&format!("wizard: {err:#}"));
+            }
+        }
+    }
+
     // session_end hooks fire however the run ended (including just before a
     // self-evolve re-exec replaces the process).
     agent.fire_session_end(Some(&tx)).await;
@@ -1603,8 +1670,31 @@ pub async fn run(config: Config, cli: Cli) -> Result<i32> {
     // The sink emits the run summary (the text trailer line, or the final
     // JSON object / `done` JSONL line) and leaves stdout flushed. Absent only
     // when the printer task died, which was reported above.
+    let mut over_budget = false;
     if let Some(sink) = sink.as_mut() {
+        if let Some(value) = structured {
+            sink.annotate("structured_output", value);
+        }
+        if schema_failed {
+            sink.annotate(
+                "subtype",
+                serde_json::json!("error_max_structured_output_retries"),
+            );
+            sink.annotate("is_error", serde_json::json!(true));
+        }
         sink.finish(final_reason);
+        over_budget = sink.budget_exceeded();
+    }
+    support::discard_session(&agent);
+    if over_budget {
+        crate::output::eprint_line(&format!(
+            "wizard: stopped, the estimated cost passed --max-budget-usd {}",
+            cli.claude.max_budget_usd.unwrap_or_default()
+        ));
+        return Ok(1);
+    }
+    if schema_failed {
+        return Ok(1);
     }
     // Gates outrank the loop's own reason for stopping: a caller scripting
     // `wizard … && deploy` is asking whether the work is verified, not why the

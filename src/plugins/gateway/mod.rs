@@ -1681,7 +1681,8 @@ mod tests {
                 continue;
             }
             let runs = spec.execution(Surface::Gateway) != Execution::Unavailable;
-            let listed = offered.contains(spec.name);
+            // The chat's own `/stop` shadows the terminal's row of that name.
+            let listed = offered.contains(spec.name) && spec.name != STOP;
             assert_eq!(
                 runs, listed,
                 "/{} runs={runs} but listed={listed} — the menu and the table disagree",
@@ -2582,9 +2583,14 @@ mod tests {
     #[test]
     fn stop_is_offered_and_routed_as_a_command() {
         assert!(advertised_commands().iter().any(|c| c.name == STOP));
+        // The table has a `/stop` (it stops background sessions in the
+        // terminal); the chat's is the interrupt, so the row must not run here.
         assert!(
-            crate::commands::spec(STOP).is_none(),
-            "/stop is this surface's own control, not a table row"
+            crate::commands::spec(STOP).is_none_or(|spec| {
+                spec.execution(crate::commands::surface::Surface::Gateway)
+                    == crate::commands::Execution::Unavailable
+            }),
+            "/stop is this surface's own control, not a row the gateway runs"
         );
 
         for (text, expected) in [

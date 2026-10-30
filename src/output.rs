@@ -6,10 +6,11 @@
 //!
 //! - `text` (default) — the human-readable stream: deltas as they arrive,
 //!   tool one-liners, a spinner on terminals.
-//! - `json` — silent until the run ends, then one JSON object summarizing
-//!   the result, steps, usage, and tool calls.
-//! - `stream-json` — one JSON object per line as events arrive, terminated
-//!   by a `{"type":"done", ...}` line.
+//! - `json` — silent until the run ends, then one JSON object: Claude Code's
+//!   `result` keys plus Wizard's steps, usage, and tool calls.
+//! - `stream-json` — one JSON object per line as events arrive, in Claude
+//!   Code's message shapes, closed by the `result` object. See
+//!   [`crate::claude_stream`].
 //!
 //! The run outcome also becomes the process exit code (see [`exit_code`]),
 //! so scripts can branch on *why* a run ended without parsing output.
@@ -109,7 +110,11 @@ fn image_lines(source: &ImageSource, images: &[ImageRef]) -> Vec<String> {
 
 /// The `stream-json` frame for announced images. `run` is set when they came
 /// from inside a subagent run.
-fn image_json(run: Option<u64>, source: &ImageSource, images: &[ImageRef]) -> serde_json::Value {
+pub(super) fn image_json(
+    run: Option<u64>,
+    source: &ImageSource,
+    images: &[ImageRef],
+) -> serde_json::Value {
     json!({
         "type": "images",
         "run": run,
@@ -148,8 +153,60 @@ pub fn reason_str(reason: DoneReason) -> &'static str {
 /// the final outcome. Implementations own their output destination and must
 /// leave stdout flushed when `finish` returns.
 pub trait EventSink: Send {
+    /// Called once before the first event, so a stream can open with its
+    /// init line even if the run produces no events before it fails.
+    fn start(&mut self) {}
     fn event(&mut self, event: AgentEvent);
     fn finish(&mut self, reason: DoneReason);
+    /// Add a field to the closing `result` object (the structured sinks;
+    /// the text sink has nowhere to put it).
+    fn annotate(&mut self, _key: &str, _value: serde_json::Value) {}
+    /// Whether `--max-budget-usd` stopped the run.
+    fn budget_exceeded(&self) -> bool {
+        false
+    }
+}
+
+/// Wraps a sink that does not count cost itself (the text sink) so
+/// `--max-budget-usd` still stops the run.
+pub struct BudgetSink {
+    inner: Box<dyn EventSink>,
+    meter: crate::claude_stream::meter::Meter,
+}
+
+impl BudgetSink {
+    pub fn new(inner: Box<dyn EventSink>, meter: crate::claude_stream::meter::Meter) -> Self {
+        Self { inner, meter }
+    }
+}
+
+impl EventSink for BudgetSink {
+    fn start(&mut self) {
+        self.inner.start();
+    }
+
+    fn event(&mut self, event: AgentEvent) {
+        if let AgentEvent::Usage {
+            prompt_tokens,
+            completion_tokens,
+        } = &event
+        {
+            self.meter.add(*prompt_tokens, *completion_tokens);
+        }
+        self.inner.event(event);
+    }
+
+    fn finish(&mut self, reason: DoneReason) {
+        self.inner.finish(reason);
+    }
+
+    fn annotate(&mut self, key: &str, value: serde_json::Value) {
+        self.inner.annotate(key, value);
+    }
+
+    fn budget_exceeded(&self) -> bool {
+        self.meter.exceeded()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,457 +439,8 @@ impl EventSink for TextSink {
     }
 }
 
-// ---------------------------------------------------------------------------
-// json
-// ---------------------------------------------------------------------------
-
-/// Per-tool aggregation for the final `json` summary.
-#[derive(Debug)]
-struct ToolCallsEntry {
-    name: String,
-    calls: u64,
-    errors: u64,
-}
-
-/// Buffers the whole run and emits one final JSON object:
-/// `{result, reason, turns, steps, usage, tool_calls, errors}`.
-pub struct JsonSink<W: Write + Send> {
-    out: W,
-    result: String,
-    /// Length of `result` at the last completed step — the truncation point
-    /// when a mid-stream retry discards the current attempt's partial text.
-    committed: usize,
-    turns: u64,
-    steps: u64,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    tool_calls: Vec<ToolCallsEntry>,
-    errors: Vec<String>,
-    /// Images the run produced, in order — where they were written, so a script
-    /// consuming the summary can pick them up.
-    images: Vec<ImageRef>,
-    /// Run id -> subagent name, so a subagent's tool calls aggregate under
-    /// `<name> ▸ <tool>` in the summary, as they did when they were emitted on
-    /// the parent's tool events.
-    subagents: HashMap<u64, String>,
-}
-
-impl JsonSink<std::io::Stdout> {
-    pub fn stdout() -> Self {
-        Self::new(std::io::stdout())
-    }
-}
-
-impl<W: Write + Send> JsonSink<W> {
-    pub fn new(out: W) -> Self {
-        Self {
-            out,
-            result: String::new(),
-            committed: 0,
-            turns: 0,
-            steps: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            tool_calls: Vec::new(),
-            errors: Vec::new(),
-            images: Vec::new(),
-            subagents: HashMap::new(),
-        }
-    }
-
-    /// `<subagent> ▸ <tool>` for a subagent's tool call, matching the label
-    /// these calls carried when they rode the parent's tool events.
-    fn subagent_label(&self, run: u64, tool: &str) -> String {
-        let who = self
-            .subagents
-            .get(&run)
-            .map(String::as_str)
-            .unwrap_or("subagent");
-        format!("{who} ▸ {tool}")
-    }
-}
-
-impl<W: Write + Send> EventSink for JsonSink<W> {
-    fn event(&mut self, event: AgentEvent) {
-        match event {
-            AgentEvent::TextDelta(delta) => self.result.push_str(&delta),
-            AgentEvent::ToolStarted { name, .. } => {
-                match self.tool_calls.iter_mut().find(|entry| entry.name == name) {
-                    Some(entry) => entry.calls += 1,
-                    None => self.tool_calls.push(ToolCallsEntry {
-                        name,
-                        calls: 1,
-                        errors: 0,
-                    }),
-                }
-            }
-            AgentEvent::ToolFinished { name, output } => {
-                if output.is_error
-                    && let Some(entry) = self.tool_calls.iter_mut().find(|entry| entry.name == name)
-                {
-                    entry.errors += 1;
-                }
-            }
-            AgentEvent::SubagentRunStarted { run, name, .. } => {
-                self.subagents.insert(run, name);
-            }
-            AgentEvent::SubagentRunToolStarted { run, name, .. } => {
-                let label = self.subagent_label(run, &name);
-                match self.tool_calls.iter_mut().find(|entry| entry.name == label) {
-                    Some(entry) => entry.calls += 1,
-                    None => self.tool_calls.push(ToolCallsEntry {
-                        name: label,
-                        calls: 1,
-                        errors: 0,
-                    }),
-                }
-            }
-            AgentEvent::SubagentRunToolFinished { run, name, output } => {
-                if output.is_error {
-                    let label = self.subagent_label(run, &name);
-                    if let Some(entry) =
-                        self.tool_calls.iter_mut().find(|entry| entry.name == label)
-                    {
-                        entry.errors += 1;
-                    }
-                }
-            }
-            AgentEvent::SubagentRunDone { run, .. } => {
-                self.subagents.remove(&run);
-            }
-            AgentEvent::SubagentRunText { .. } | AgentEvent::SubagentRunStep { .. } => {}
-            AgentEvent::StepCompleted { .. } => {
-                self.steps += 1;
-                self.committed = self.result.len();
-            }
-            AgentEvent::Error(message) => self.errors.push(message),
-            AgentEvent::StreamRetrying => {
-                // The attempt's partial text never entered history; the retry
-                // re-streams it, so keeping it would double the text.
-                self.result.truncate(self.committed);
-            }
-            AgentEvent::PlanReady { gate, .. } => {
-                // No human in the loop: approve so the turn executes.
-                gate.answer(PlanVerdict::approve());
-            }
-            AgentEvent::Interview { gate, .. } => {
-                // No interactive user: decline so the model uses its judgment.
-                gate.decline();
-            }
-            AgentEvent::Usage {
-                prompt_tokens,
-                completion_tokens,
-            } => {
-                self.prompt_tokens += prompt_tokens;
-                self.completion_tokens += completion_tokens;
-            }
-            AgentEvent::Done { .. } => self.turns += 1,
-            AgentEvent::Images { images, .. } | AgentEvent::SubagentRunImages { images, .. } => {
-                self.images.extend(images);
-            }
-            // The json summary is the turn's result and what it cost; ultra's
-            // drafts are neither (the tokens they spent arrive as `Usage`).
-            AgentEvent::UltraGuidance { .. } => {}
-            AgentEvent::ThinkingDelta(_)
-            | AgentEvent::Notice(_)
-            | AgentEvent::HookFired { .. }
-            | AgentEvent::OmakaseProceeding { .. }
-            | AgentEvent::ContextSize { .. }
-            | AgentEvent::TodoUpdated(_)
-            | AgentEvent::TaskStarted { .. }
-            | AgentEvent::TaskFinished { .. }
-            | AgentEvent::SubagentStarted { .. }
-            | AgentEvent::SubagentFinished { .. }
-            | AgentEvent::CommandRequested(_)
-            // A command's console: never opened in a headless run (see the
-            // text sink above), and a live byte stream is not a thing a
-            // one-object summary has a field for anyway. The final tool result
-            // carries the same output.
-            | AgentEvent::ConsoleOpened { .. }
-            | AgentEvent::ConsoleWaiting { .. }
-            | AgentEvent::ConsoleOutput { .. }
-            | AgentEvent::ConsoleClosed { .. } => {}
-        }
-    }
-
-    fn finish(&mut self, reason: DoneReason) {
-        let completed = reason_str(reason) == "completed";
-        let summary = json!({
-            // Claude Code's result keys, so a consumer written for `claude -p
-            // --output-format json` finds `result`, `is_error` and `num_turns`.
-            "type": "result",
-            "subtype": match reason_str(reason) {
-                "completed" => "success",
-                "max_steps" => "error_max_turns",
-                _ => "error_during_execution",
-            },
-            "is_error": !completed,
-            "num_turns": self.turns,
-            "result": self.result,
-            "reason": reason_str(reason),
-            "turns": self.turns,
-            "steps": self.steps,
-            "usage": {
-                "prompt_tokens": self.prompt_tokens,
-                "completion_tokens": self.completion_tokens,
-                "input_tokens": self.prompt_tokens,
-                "output_tokens": self.completion_tokens,
-            },
-            "tool_calls": self.tool_calls.iter().map(|entry| json!({
-                "name": entry.name,
-                "calls": entry.calls,
-                "errors": entry.errors,
-            })).collect::<Vec<_>>(),
-            "errors": self.errors,
-            "images": self.images,
-        });
-        let _ = writeln!(self.out, "{summary}");
-        let _ = self.out.flush();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// stream-json
-// ---------------------------------------------------------------------------
-
-/// Emits one JSON object per line as events arrive, ending with a
-/// `{"type":"done"}` line carrying the outcome and usage totals.
-pub struct StreamJsonSink<W: Write + Send> {
-    out: W,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    /// Run id -> subagent name; see [`JsonSink::subagents`].
-    subagents: HashMap<u64, String>,
-}
-
-impl StreamJsonSink<std::io::Stdout> {
-    pub fn stdout() -> Self {
-        Self::new(std::io::stdout())
-    }
-}
-
-impl<W: Write + Send> StreamJsonSink<W> {
-    pub fn new(out: W) -> Self {
-        Self {
-            out,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            subagents: HashMap::new(),
-        }
-    }
-
-    /// See [`JsonSink::subagent_label`].
-    fn subagent_label(&self, run: u64, tool: &str) -> String {
-        let who = self
-            .subagents
-            .get(&run)
-            .map(String::as_str)
-            .unwrap_or("subagent");
-        format!("{who} ▸ {tool}")
-    }
-
-    fn emit(&mut self, value: serde_json::Value) {
-        let _ = writeln!(self.out, "{value}");
-        let _ = self.out.flush();
-    }
-}
-
-impl<W: Write + Send> EventSink for StreamJsonSink<W> {
-    fn event(&mut self, event: AgentEvent) {
-        match event {
-            AgentEvent::TextDelta(text) => {
-                self.emit(json!({"type": "text_delta", "text": text}));
-            }
-            AgentEvent::ThinkingDelta(text) => {
-                self.emit(json!({"type": "thinking_delta", "text": text}));
-            }
-            AgentEvent::ToolStarted { name, args } => {
-                self.emit(json!({"type": "tool_call", "name": name, "args": args}));
-            }
-            AgentEvent::SubagentRunStarted { run, name, .. } => {
-                self.subagents.insert(run, name);
-            }
-            AgentEvent::SubagentRunToolStarted { run, name, args } => {
-                let label = self.subagent_label(run, &name);
-                self.emit(json!({"type": "tool_call", "name": label, "args": args}));
-            }
-            AgentEvent::SubagentRunToolFinished { run, name, output } => {
-                let label = self.subagent_label(run, &name);
-                self.emit(json!({
-                    "type": "tool_result",
-                    "name": label,
-                    "is_error": output.is_error,
-                    "output": output.content,
-                }));
-            }
-            AgentEvent::SubagentRunDone { run, .. } => {
-                self.subagents.remove(&run);
-            }
-            AgentEvent::SubagentRunText { .. } | AgentEvent::SubagentRunStep { .. } => {}
-            AgentEvent::ToolFinished { name, output } => {
-                self.emit(json!({
-                    "type": "tool_result",
-                    "name": name,
-                    "is_error": output.is_error,
-                    "output": output.content,
-                }));
-            }
-            AgentEvent::Images { source, images } => {
-                self.emit(image_json(None, &source, &images));
-            }
-            AgentEvent::SubagentRunImages {
-                run,
-                source,
-                images,
-            } => {
-                self.emit(image_json(Some(run), &source, &images));
-            }
-            AgentEvent::StepCompleted { step } => {
-                self.emit(json!({"type": "step", "step": step}));
-            }
-            AgentEvent::Error(message) => {
-                self.emit(json!({"type": "error", "message": message}));
-            }
-            AgentEvent::Notice(message) => {
-                self.emit(json!({"type": "notice", "message": message}));
-            }
-            AgentEvent::StreamRetrying => {
-                self.emit(json!({"type": "stream_retrying"}));
-            }
-            AgentEvent::HookFired {
-                event,
-                command,
-                outcome,
-            } => {
-                self.emit(json!({
-                    "type": "hook",
-                    "event": event,
-                    "command": command,
-                    "outcome": outcome.to_string(),
-                }));
-            }
-            AgentEvent::PlanReady { plan, gate } => {
-                // No human in the loop: report the plan and approve it.
-                self.emit(json!({"type": "plan", "plan": plan, "approved": true}));
-                gate.answer(PlanVerdict::approve());
-            }
-            AgentEvent::Interview { questions, gate } => {
-                // No interactive user: report the questions, then decline so
-                // the model proceeds with its best judgment.
-                let asked: Vec<&str> = questions.iter().map(|q| q.question.as_str()).collect();
-                self.emit(json!({"type": "interview", "questions": asked, "answered": false}));
-                gate.decline();
-            }
-            AgentEvent::OmakaseProceeding { plan } => {
-                self.emit(json!({"type": "plan", "plan": plan, "omakase": true, "approved": true}));
-            }
-            AgentEvent::Usage {
-                prompt_tokens,
-                completion_tokens,
-            } => {
-                self.prompt_tokens += prompt_tokens;
-                self.completion_tokens += completion_tokens;
-                self.emit(json!({
-                    "type": "usage",
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                }));
-            }
-            // Context-meter update (TUI only); stream-json has no live meter.
-            AgentEvent::ContextSize { .. } => {}
-            AgentEvent::TodoUpdated(items) => {
-                self.emit(json!({
-                    "type": "todo",
-                    "items": serde_json::to_value(&items).unwrap_or_default(),
-                }));
-            }
-            AgentEvent::TaskStarted { id, command } => {
-                self.emit(json!({
-                    "type": "task_started",
-                    "id": id,
-                    "command": command,
-                }));
-            }
-            AgentEvent::TaskFinished {
-                id,
-                command,
-                status,
-            } => {
-                self.emit(json!({
-                    "type": "task_finished",
-                    "id": id,
-                    "command": command,
-                    "status": status.describe(),
-                }));
-            }
-            AgentEvent::SubagentStarted { id, name, task } => {
-                self.emit(json!({
-                    "type": "subagent_started",
-                    "id": id,
-                    "name": name,
-                    "task": task,
-                }));
-            }
-            AgentEvent::SubagentFinished {
-                id,
-                name,
-                task,
-                completed,
-                output,
-            } => {
-                self.emit(json!({
-                    "type": "subagent_finished",
-                    "id": id,
-                    "name": name,
-                    "task": task,
-                    "completed": completed,
-                    "output": output,
-                }));
-            }
-            AgentEvent::CommandRequested(line) => {
-                self.emit(json!({"type": "command_requested", "command": line}));
-            }
-            AgentEvent::UltraGuidance { label, guidance } => {
-                self.emit(json!({
-                    "type": "ultra_guidance",
-                    "roster": label,
-                    "guidance": guidance,
-                }));
-            }
-            // This sink's contract is one frame per event, so a console gets
-            // frames like everything else — even though a headless run never
-            // opens one today. The gate rides as its bare ticket number, which
-            // is all it can honestly be off-process: a reader of this stream
-            // cannot claim it, and is not meant to.
-            AgentEvent::ConsoleOpened { command, gate } => {
-                self.emit(json!({"type": "console_opened", "command": command, "gate": gate}));
-            }
-            AgentEvent::ConsoleWaiting { gate } => {
-                self.emit(json!({"type": "console_waiting", "gate": gate}));
-            }
-            AgentEvent::ConsoleOutput { gate, chunk } => {
-                self.emit(json!({"type": "console_output", "gate": gate, "chunk": chunk}));
-            }
-            AgentEvent::ConsoleClosed { gate } => {
-                self.emit(json!({"type": "console_closed", "gate": gate}));
-            }
-            AgentEvent::Done { reason } => {
-                self.emit(json!({"type": "turn_done", "reason": reason_str(reason)}));
-            }
-        }
-    }
-
-    fn finish(&mut self, reason: DoneReason) {
-        self.emit(json!({
-            "type": "done",
-            "reason": reason_str(reason),
-            "usage": {
-                "prompt_tokens": self.prompt_tokens,
-                "completion_tokens": self.completion_tokens,
-            },
-        }));
-    }
-}
+mod structured;
+pub use structured::{JsonSink, StreamJsonSink};
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -997,7 +605,8 @@ pub(crate) mod tests {
         sink.finish(DoneReason::Completed);
         let value: serde_json::Value =
             serde_json::from_str(buf.contents().trim()).expect("valid JSON");
-        assert_eq!(value["result"], "looked around. the answer is 42");
+        assert_eq!(value["result"], "the answer is 42");
+        assert_eq!(value["text"], "looked around. the answer is 42");
     }
 
     #[test]
@@ -1035,29 +644,28 @@ pub(crate) mod tests {
         assert_eq!(
             types,
             [
-                "tool_call",
-                "tool_result",
-                "step",
-                "tool_call",
-                "tool_result",
-                "step",
-                "text_delta",
-                "text_delta",
-                "usage",
+                "system",
+                "assistant",
+                "user",
+                "assistant",
+                "user",
+                "assistant",
                 "todo",
                 "task_finished",
-                "turn_done",
-                "done",
+                "result",
             ]
         );
-        assert_eq!(values[0]["name"], "execute");
-        assert_eq!(values[1]["is_error"], false);
-        assert_eq!(values[4]["is_error"], true);
-        assert_eq!(values[6]["text"], "all ");
-        assert_eq!(values[9]["items"][0]["content"], "ship it");
-        let done = values.last().unwrap();
-        assert_eq!(done["reason"], "completed");
-        assert_eq!(done["usage"]["prompt_tokens"], 100);
+        assert_eq!(values[0]["subtype"], "init");
+        assert_eq!(values[1]["message"]["content"][0]["name"], "Bash");
+        assert_eq!(values[2]["message"]["content"][0]["is_error"], false);
+        assert_eq!(values[4]["message"]["content"][0]["is_error"], true);
+        assert_eq!(values[5]["message"]["content"][0]["text"], "all done");
+        assert_eq!(values[6]["items"][0]["content"], "ship it");
+        let result = values.last().unwrap();
+        assert_eq!(result["reason"], "completed");
+        assert_eq!(result["subtype"], "success");
+        assert_eq!(result["result"], "all done");
+        assert_eq!(result["usage"]["prompt_tokens"], 100);
     }
 
     #[test]
@@ -1071,8 +679,9 @@ pub(crate) mod tests {
         });
         let verdict = verdict.try_recv().expect("verdict sent synchronously");
         assert!(verdict.approved);
+        let out = buf.contents();
         let value: serde_json::Value =
-            serde_json::from_str(buf.contents().trim()).expect("valid JSON");
+            serde_json::from_str(out.lines().last().expect("a line")).expect("valid JSON");
         assert_eq!(value["type"], "plan");
         assert_eq!(value["approved"], true);
     }
