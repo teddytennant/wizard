@@ -16,6 +16,9 @@
 //! same file (`#[path]`), so both run the command, build its payload and read its colours alike.
 //! It is written without `let` chains for the looks workspace, which is edition 2021.
 
+// Shared with the looks workspace, which is edition 2021 and has no `let` chains to collapse into.
+#![allow(clippy::collapsible_if)]
+
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -108,8 +111,24 @@ impl State {
         }
     }
 
-    /// Call on every tick: take a finished run's rows, start the run a trigger asked for.
-    /// `payload` builds the JSON only when a run starts. True when the rows changed.
+    /// A run is due this tick: a trigger has waited out the debounce, or the timer is up.
+    pub fn run_due(&mut self) -> bool {
+        let Some(cfg) = &self.cfg else {
+            return false;
+        };
+        if self.wanted_at.is_none() {
+            if let (Some(every), Some(last)) = (cfg.refresh, self.last_run) {
+                if last.elapsed() >= every {
+                    self.wanted_at = Some(Instant::now() - DEBOUNCE);
+                }
+            }
+        }
+        self.wanted_at.is_some_and(|at| at.elapsed() >= DEBOUNCE)
+    }
+
+    /// Call on every tick: take a finished run's rows, then start the run a trigger asked for
+    /// if `run_due` says so. `payload` builds the JSON only when a run starts. True when the
+    /// rows changed.
     pub fn tick(
         &mut self,
         payload: impl FnOnce() -> String,
@@ -124,17 +143,10 @@ impl State {
                 self.rx = None;
             }
         }
-        let Some(cfg) = self.cfg.clone() else {
-            return changed;
-        };
-        if self.wanted_at.is_none() {
-            if let (Some(every), Some(last)) = (cfg.refresh, self.last_run) {
-                if last.elapsed() >= every {
-                    self.wanted_at = Some(Instant::now() - DEBOUNCE);
-                }
-            }
-        }
-        if self.wanted_at.is_some_and(|at| at.elapsed() >= DEBOUNCE) {
+        if self.run_due() {
+            let Some(cfg) = self.cfg.clone() else {
+                return changed;
+            };
             self.wanted_at = None;
             self.last_run = Some(Instant::now());
             let payload = payload();

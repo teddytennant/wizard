@@ -73,7 +73,11 @@ impl App {
             rows,
             session_id: self.session_id.clone(),
         };
-        let payload = self.statusline_payload().to_string();
+        let payload = if self.status_line.run_due() {
+            self.statusline_payload().to_string()
+        } else {
+            String::new()
+        };
         self.status_line.tick(|| payload, &run_in, MAX_ROWS)
     }
 
