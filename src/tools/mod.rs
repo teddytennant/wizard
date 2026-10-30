@@ -202,6 +202,9 @@ pub struct ToolContext {
     pub parent_inbox: Option<Arc<subagent_tasks::Inbox>>,
     /// The worktree `EnterWorktree` moved this session into, if any.
     pub worktree: Arc<Mutex<Option<compat::worktree::WorktreeSession>>>,
+    /// The report a subagent gave through `SubagentHandback`; the subagent
+    /// loop returns it in place of the last message.
+    pub handback: Arc<Mutex<Option<String>>>,
 }
 
 impl ToolContext {
@@ -226,6 +229,7 @@ impl ToolContext {
             inbox: Arc::default(),
             parent_inbox: None,
             worktree: Arc::default(),
+            handback: Arc::default(),
         }
     }
 
