@@ -7,6 +7,8 @@
 pub mod code;
 pub mod command;
 pub mod compact;
+/// Claude Code's tool names and input schemas, deferred behind `tool_search`.
+pub mod compat;
 pub mod computer;
 pub mod evolve;
 pub mod file;
@@ -191,6 +193,15 @@ pub struct ToolContext {
     /// fan-out (`spawn_subagent`, every `/ultra` candidate and judge) instead
     /// of reporting the main loop alone. `None` outside an agent.
     pub usage: Option<Arc<crate::usage::UsageTracker>>,
+    /// The `TaskCreate` board (see [`compat::board`]).
+    pub board: Arc<Mutex<compat::board::TaskBoard>>,
+    /// Messages other agents have sent this one (`SendMessage`).
+    pub inbox: Arc<subagent_tasks::Inbox>,
+    /// The inbox of the agent that started this run, so a subagent can
+    /// `SendMessage` to `main`. `None` on the main agent.
+    pub parent_inbox: Option<Arc<subagent_tasks::Inbox>>,
+    /// The worktree `EnterWorktree` moved this session into, if any.
+    pub worktree: Arc<Mutex<Option<compat::worktree::WorktreeSession>>>,
 }
 
 impl ToolContext {
@@ -211,6 +222,28 @@ impl ToolContext {
             command_dispatch: CommandDispatch::None,
             vision: true,
             usage: None,
+            board: Arc::default(),
+            inbox: Arc::default(),
+            parent_inbox: None,
+            worktree: Arc::default(),
+        }
+    }
+
+    /// This context, working in the session's worktree if `EnterWorktree`
+    /// moved it into one. The dispatcher calls it once per tool call, so every
+    /// tool resolves paths and runs commands there with no change of its own.
+    pub fn in_session_worktree(&self) -> Self {
+        let active = self
+            .worktree
+            .lock()
+            .ok()
+            .and_then(|session| session.as_ref().map(|s| s.path.clone()));
+        match active {
+            Some(path) => Self {
+                cwd: path,
+                ..self.clone()
+            },
+            None => self.clone(),
         }
     }
 
@@ -663,6 +696,14 @@ pub trait Tool: Send + Sync {
     /// Origin of this tool.
     fn kind(&self) -> ToolKind {
         ToolKind::Native
+    }
+
+    /// Whether the default `safe` profile advertises this tool by name only
+    /// until `tool_search` loads it, the way it already treats MCP tools.
+    /// For tools the model rarely needs and that would otherwise cost a full
+    /// schema on every request (the Claude Code names in [`compat`]).
+    fn deferred_by_default(&self) -> bool {
+        false
     }
 
     /// Wire-format spec sent to the active provider in the request `tools` array.

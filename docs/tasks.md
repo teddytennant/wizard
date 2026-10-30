@@ -59,6 +59,18 @@ The agent keeps working while the task runs.
 
 The spawn still flows through the regular tool dispatch pipeline, so `pre_tool_use`/`post_tool_use` hooks apply to it like any other `execute` call.
 
+## Monitor
+
+`Monitor {description, command, timeout_ms}` (a Claude Code tool name, loaded
+with `tool_search`) starts a background task whose stdout lines reach the
+model as they arrive. They are put into the conversation as
+`[monitor #N 'description'] line...` at the top of each step, with up to 100
+lines per batch; a monitor that writes 5000 lines is stopped. `timeout_ms`
+defaults to 5 minutes and is capped at 30. Stderr is kept for `task_output` but
+is not an event. It is the same task as one started with `run_in_background`,
+so `task_output`, `task_kill` and `TaskStop` manage it. Events are delivered
+between steps and do not wake an idle session.
+
 ## Managing tasks
 
 Two companion tools:

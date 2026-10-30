@@ -29,6 +29,7 @@
 //! four surfaces hold. Nothing in this file is named outside it.
 
 pub mod plugin;
+mod resources;
 pub mod serve;
 
 use std::collections::{HashMap, HashSet};
@@ -147,6 +148,8 @@ const RESERVED_TOOL_NAMES: &[&str] = &[
     "json_query",
     "spawn_subagent",
     crate::tools::code::RUN_CODE_TOOL_NAME,
+    resources::LIST_NAME,
+    resources::READ_NAME,
 ];
 
 /// A tool as advertised by an MCP server's `tools/list`.
@@ -296,6 +299,42 @@ impl McpConnection {
             "tools/list pagination exceeded {MAX_LIST_PAGES} pages; truncating"
         );
         Ok(tools)
+    }
+
+    /// `resources/list` — the server's resources (follows pagination). A server
+    /// without resources answers method-not-found, which is an empty list.
+    pub async fn list_resources(&self) -> Result<Vec<Value>> {
+        let mut resources = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let params = match &cursor {
+                Some(c) => json!({ "cursor": c }),
+                None => json!({}),
+            };
+            let result = match timeout(LIST_TIMEOUT, self.request("resources/list", params)).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(err)) if is_method_not_found(&err) => return Ok(resources),
+                Ok(Err(err)) => return Err(err),
+                Err(_) => bail!(
+                    "resources/list on MCP server '{}' timed out after {}s",
+                    self.config.name,
+                    LIST_TIMEOUT.as_secs()
+                ),
+            };
+            if let Some(page) = result.get("resources").and_then(Value::as_array) {
+                resources.extend(page.iter().cloned());
+            }
+            match result.get("nextCursor").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => return Ok(resources),
+            }
+        }
+        Ok(resources)
+    }
+
+    /// `resources/read` — the contents of one resource, as the server sent them.
+    pub async fn read_resource(&self, uri: &str) -> Result<Value> {
+        self.request("resources/read", json!({ "uri": uri })).await
     }
 
     /// `tools/call` — invoke a tool; returns the decoded content (text, plus
@@ -855,6 +894,12 @@ fn id_matches(id: Option<&Value>, expected: u64) -> bool {
     }
 }
 
+/// Whether `err` is the JSON-RPC "method not found" a server without the
+/// resources capability answers `resources/list` and `resources/read` with.
+pub(crate) fn is_method_not_found(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains("JSON-RPC error -32601")
+}
+
 /// Pull `result` out of a JSON-RPC response, converting `error` into a
 /// readable failure.
 fn extract_result(mut msg: Value, server: &str) -> Result<Value> {
@@ -1172,6 +1217,9 @@ impl Connections {
                 }));
             }
         }
+        if !self.connections.is_empty() {
+            tools.extend(resources::tools(&self.connections));
+        }
         Ok(tools)
     }
 }
@@ -1341,7 +1389,10 @@ mod tests {
         // the extras have to be exactly the tools of the plugins this build
         // does not have, and nothing else.
         let extra: BTreeSet<&str> = reserved.difference(&compiled).copied().collect();
-        let mut absent: BTreeSet<&str> = BTreeSet::new();
+        // The two resource tools are this plugin's own: they come from
+        // `Connections::tools`, never from the native registry.
+        let mut absent: BTreeSet<&str> =
+            BTreeSet::from([resources::LIST_NAME, resources::READ_NAME]);
         if !cfg!(feature = "tool-web") {
             absent.extend(["web_fetch", "web_search", "x_search"]);
         }
@@ -1602,6 +1653,76 @@ done"#
         }
     }
 
+    /// A fake server that has resources: `resources/list` offers one and
+    /// `resources/read` returns its text. `tools/list` is empty. Answers
+    /// carry the id the request did.
+    fn fake_resource_server(name: &str) -> McpServerConfig {
+        let script = r##"while read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"resources":{}},"serverInfo":{"name":"fake","version":"0"}}}\n' "$id" ;;
+    *'"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id" ;;
+    *'"resources/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"resources":[{"uri":"file:///notes.md","name":"notes","mimeType":"text/markdown"}]}}\n' "$id" ;;
+    *'"resources/read"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"file:///notes.md","mimeType":"text/markdown","text":"# notes"}]}}\n' "$id" ;;
+  esac
+done"##;
+        McpServerConfig {
+            name: name.into(),
+            transport: McpTransport::Stdio,
+            command: Some("sh".into()),
+            args: vec!["-c".into(), script.into()],
+            url: None,
+            env: HashMap::new(),
+            headers: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn resources_are_listed_and_read_through_the_two_tools() {
+        let config = McpConfig {
+            servers: vec![fake_resource_server("docs")],
+        };
+        let manager = Connections::connect_all(&config).await.expect("connects");
+        let tools = manager.tools().await.expect("tools");
+        let find = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t.name() == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        let ctx = ToolContext::new(std::env::temp_dir());
+
+        let listed = find("ListMcpResourcesTool")
+            .execute(json!({}), &ctx)
+            .await
+            .expect("list");
+        assert!(!listed.is_error, "{}", listed.content);
+        let rows: Vec<Value> = serde_json::from_str(&listed.content).expect("json rows");
+        assert_eq!(rows[0]["uri"], "file:///notes.md");
+        assert_eq!(rows[0]["server"], "docs", "each row names its server");
+
+        let read = find("ReadMcpResourceTool")
+            .execute(json!({ "server": "docs", "uri": "file:///notes.md" }), &ctx)
+            .await
+            .expect("read");
+        assert!(read.content.contains("# notes"), "{}", read.content);
+
+        let missing = find("ReadMcpResourceTool")
+            .execute(json!({ "server": "nope", "uri": "x" }), &ctx)
+            .await
+            .expect("read");
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.content,
+            "Server \"nope\" not found. Available servers: docs"
+        );
+        let wrong = find("ListMcpResourcesTool")
+            .execute(json!({ "server": "nope" }), &ctx)
+            .await
+            .expect("list");
+        assert!(wrong.is_error);
+    }
+
     /// The same fake server, answering `tools/call` with a line of text.
     fn fake_server_config(name: &str, tool: &str) -> McpServerConfig {
         let content = format!(r#"[{{"type":"text","text":"called {tool}"}}]"#);
@@ -1623,10 +1744,17 @@ done"#
         let tools = manager.tools().await.expect("tools/list should succeed");
         let mut names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
         names.sort_unstable();
-        // `weather` collides across servers; `read_file` shadows a native.
+        // `weather` collides across servers; `read_file` shadows a native. The
+        // two resource tools ride along whenever a server is up.
         assert_eq!(
             names,
-            vec!["alpha__weather", "beta__weather", "gamma__read_file"]
+            vec![
+                "ListMcpResourcesTool",
+                "ReadMcpResourceTool",
+                "alpha__weather",
+                "beta__weather",
+                "gamma__read_file"
+            ]
         );
 
         let ctx = ToolContext::new(std::env::temp_dir());
@@ -1702,8 +1830,11 @@ done"#
             .await
             .expect("bad servers are skipped, not fatal");
         let tools = manager.tools().await.expect("tools should list");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name(), "weather");
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(
+            names,
+            vec!["weather", "ListMcpResourcesTool", "ReadMcpResourceTool"]
+        );
     }
 
     #[test]

@@ -32,6 +32,14 @@ spawn and complete `initialize`, 30 s for one `tools/list` page, 120 s for one
 `tools/call`. None of this is a sandbox — an MCP server runs with your
 privileges, exactly like a shell command.
 
+## Resources
+
+When at least one server is connected, two more tools join the MCP tools:
+`ListMcpResourcesTool {server?}` runs `resources/list` on every server (or the
+one named), and `ReadMcpResourceTool {server, uri}` runs `resources/read`. A
+server that does not implement resources lists as empty and reads as
+"does not support resources".
+
 ## `wizard mcp-serve`
 
 ```bash

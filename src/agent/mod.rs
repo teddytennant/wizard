@@ -760,6 +760,26 @@ fn task_note(task: &crate::tools::tasks::FinishedTask) -> String {
     note
 }
 
+/// History/system note carrying the lines a `Monitor` printed since the last
+/// step.
+fn monitor_note(batch: &crate::tools::tasks::MonitorBatch) -> String {
+    let mut note = format!("[monitor #{} '{}']", batch.id, batch.description);
+    for line in &batch.lines {
+        note.push('\n');
+        note.push_str(line);
+    }
+    if batch.dropped > 0 {
+        note.push_str(&format!(
+            "\n[{} more line(s) dropped; the filter is too loose]",
+            batch.dropped
+        ));
+    }
+    if batch.flooded {
+        note.push_str("\n[monitor stopped: too many events. Re-arm it with a tighter filter]");
+    }
+    note
+}
+
 /// History/system note announcing a finished background subagent.
 fn subagent_note(task: &crate::tools::subagent_tasks::SubagentTaskResult) -> String {
     let status = match &task.error {
@@ -1060,6 +1080,7 @@ impl Agent {
         registry.register(Arc::new(crate::tools::interview::InterviewTool::new(
             Arc::clone(&omakase),
         )));
+        crate::tools::compat::install(&mut registry, Arc::clone(&plan_mode));
         apply_tool_deferral(&mut registry, None);
 
         // The agent's token counters, shared into the tool context so a
@@ -1484,6 +1505,7 @@ impl Agent {
         registry.register(Arc::new(crate::tools::interview::InterviewTool::new(
             Arc::clone(&self.omakase),
         )));
+        crate::tools::compat::install(&mut registry, Arc::clone(&self.plan_mode));
         apply_tool_deferral(
             &mut registry,
             self.dispatcher.registry().deferral().cloned(),
@@ -2212,6 +2234,15 @@ impl Agent {
     /// finished (two mutex-guarded scans, no I/O).
     pub fn drain_finished_notifications(&mut self) -> Vec<FinishedNotification> {
         let mut notifications = Vec::new();
+        for message in self.ctx.inbox.take() {
+            self.push(ChatMessage::system(format!(
+                "[message from {}] {}",
+                message.from, message.text
+            )));
+        }
+        for batch in self.ctx.tasks.drain_monitor_events() {
+            self.push(ChatMessage::system(monitor_note(&batch)));
+        }
         for task in self.ctx.tasks.drain_completed() {
             self.push(ChatMessage::system(task_note(&task)));
             notifications.push(FinishedNotification::Task(task));
@@ -2480,7 +2511,7 @@ fn apply_tool_deferral(
     if !profile.lean() {
         // `safe` defers MCP tools only, and only when a server brought some:
         // one server can cost more than every native tool together.
-        if !registry.has_mcp_tools() {
+        if !registry.has_mcp_tools() && !registry.has_default_deferred() {
             return;
         }
     }

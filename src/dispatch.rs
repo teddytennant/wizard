@@ -295,6 +295,7 @@ impl Dispatcher {
         ctx: &ToolContext,
         sink: &Sink,
     ) -> DispatchOutcome {
+        let ctx = &ctx.in_session_worktree();
         let name = call.function.name.clone();
         let mut args = normalize_args(&call.function.arguments);
         if let Some(tool) = self.registry.get(&name) {

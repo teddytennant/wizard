@@ -18,6 +18,8 @@ cwd = "/home/user/proj"         # required: where the run executes
 mode = "sovereign"              # optional, default "sovereign"; or "continuous"
 max_hours = 2.0                 # optional wall-clock cap for the spawned run
 enabled = true                  # optional, default true
+once = false                    # optional: fire once, then remove the entry
+expires_at = "2026-11-06T00:00:00Z"  # optional: remove the entry after this instant
 ```
 
 Cron expressions are strict 5-field (`minute hour day month weekday`),
@@ -43,6 +45,28 @@ output path the prompt asked for that is still not on disk. So a nightly entry w
 `max_hours = 2.0` winds itself down before the daemon's kill at `max_hours + grace` ever
 comes up, and a scheduled run that gets cut off is much more likely to leave the file it
 was asked for behind. See [The clock](modes.md#the-clock).
+
+`once` and `expires_at` are what the agent's `CronCreate` and `ScheduleWakeup`
+tools write. A `once` entry is removed on the pass that fires it. An entry past
+its `expires_at` is removed after firing if it was due, and on the first pass
+after it otherwise.
+
+## Scheduling from a session
+
+The agent can queue work itself with the Claude Code tool names (load them with
+`tool_search`):
+
+- `CronCreate {cron, prompt, recurring?}` writes an entry named `cron-<id>` for
+  the session's directory: `recurring: false` makes it `once`, and a recurring
+  job expires after 7 days. Each run is capped at an hour. `durable` is accepted
+  and changes nothing, because every entry is in `schedule.toml`.
+- `CronList` and `CronDelete {id}` show and remove only those `cron-` entries.
+- `ScheduleWakeup {delaySeconds, reason, prompt}` writes a one-shot `wakeup-<id>`
+  entry 60 to 3600 seconds out, rounded up to a whole minute, replacing the last
+  one for the directory. `stop: true` cancels it.
+
+These run as a headless session when `wizard scheduler` is running, not inside
+the live session, and the tool result says so when no daemon holds the lock.
 
 ## CLI
 

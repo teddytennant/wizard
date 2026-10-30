@@ -22,6 +22,38 @@ use super::{Tool, ToolAccess, ToolContext, ToolError, ToolOutput, parse_args};
 /// Cap on the output included in `subagent_status` responses.
 const STATUS_OUTPUT_CHARS: usize = 20_000;
 
+/// One message from another agent in the session, waiting to be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxMessage {
+    /// Who sent it: `main`, or `agent:<id> <name>`.
+    pub from: String,
+    pub text: String,
+}
+
+/// Messages addressed to one agent (`SendMessage`), read by its loop at the
+/// top of the next step, the way a finished background task is.
+#[derive(Debug, Default)]
+pub struct Inbox {
+    messages: Mutex<Vec<InboxMessage>>,
+}
+
+impl Inbox {
+    pub fn push(&self, from: impl Into<String>, text: impl Into<String>) {
+        self.messages
+            .lock()
+            .expect("inbox lock poisoned")
+            .push(InboxMessage {
+                from: from.into(),
+                text: text.into(),
+            });
+    }
+
+    /// Everything waiting, oldest first; each message is returned once.
+    pub fn take(&self) -> Vec<InboxMessage> {
+        std::mem::take(&mut *self.messages.lock().expect("inbox lock poisoned"))
+    }
+}
+
 /// Terminal outcome of one background subagent run.
 #[derive(Debug, Clone)]
 pub struct SubagentRunResult {
@@ -105,6 +137,8 @@ struct Entry {
     reported: bool,
     /// Detached driver task; aborted by [`SubagentTaskRegistry::kill`].
     handle: Option<tokio::task::JoinHandle<()>>,
+    /// Where `SendMessage` leaves mail for the run.
+    inbox: Arc<Inbox>,
 }
 
 impl Entry {
@@ -168,9 +202,15 @@ impl SubagentTaskRegistry {
                 result: None,
                 reported: false,
                 handle: None,
+                inbox: Arc::new(Inbox::default()),
             },
         );
         id
+    }
+
+    /// The inbox of run `id`, if it is registered.
+    pub fn inbox_of(&self, id: u32) -> Option<Arc<Inbox>> {
+        self.lock().get(&id).map(|entry| Arc::clone(&entry.inbox))
     }
 
     /// Detach `fut` as the driver for a run already reserved under `id`.

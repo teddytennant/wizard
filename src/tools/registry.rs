@@ -258,6 +258,11 @@ impl ToolRegistry {
         self.deferral.as_ref()
     }
 
+    /// Whether any registered tool asks to be deferred even under `safe`.
+    pub fn has_default_deferred(&self) -> bool {
+        self.tools.values().any(|tool| tool.deferred_by_default())
+    }
+
     /// Whether any registered tool is served by an MCP server.
     pub fn has_mcp_tools(&self) -> bool {
         self.tools
@@ -268,10 +273,9 @@ impl ToolRegistry {
     /// Whether `name` goes out with its full schema on every request.
     fn is_core_tool(&self, deferral: &Deferral, name: &str) -> bool {
         if deferral.mcp_only {
-            return self
-                .tools
-                .get(name)
-                .is_none_or(|tool| tool.kind() != super::ToolKind::Mcp);
+            return self.tools.get(name).is_none_or(|tool| {
+                tool.kind() != super::ToolKind::Mcp && !tool.deferred_by_default()
+            });
         }
         deferral.is_core(name)
     }
@@ -536,6 +540,10 @@ impl Tool for DescriptionOverride {
 
     fn kind(&self) -> ToolKind {
         self.inner.kind()
+    }
+
+    fn deferred_by_default(&self) -> bool {
+        self.inner.deferred_by_default()
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
