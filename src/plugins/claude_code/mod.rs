@@ -84,8 +84,9 @@ impl Cli {
         Self::find_in(std::env::var_os("PATH").as_deref(), dirs::home_dir())
     }
 
-    /// `claude` in one of `path`'s directories, or in `~/.local/bin`, which is
-    /// where the installer puts it and which a running shell may not have on
+    /// `claude` in one of `path`'s directories, then in `~/.local/bin`, where
+    /// the installer puts it, then in `~/.claude/local`, where the older
+    /// `claude migrate-installer` flow did. A running shell may have neither on
     /// its `PATH` yet.
     fn find_in(path: Option<&OsStr>, home: Option<PathBuf>) -> Option<Self> {
         let name = if cfg!(windows) {
@@ -93,9 +94,15 @@ impl Cli {
         } else {
             "claude"
         };
+        let home_dirs = home.into_iter().flat_map(|home| {
+            [
+                home.join(".local").join("bin"),
+                home.join(".claude").join("local"),
+            ]
+        });
         path.into_iter()
             .flat_map(std::env::split_paths)
-            .chain(home.map(|home| home.join(".local").join("bin")))
+            .chain(home_dirs)
             .map(|dir| dir.join(name))
             .find(|candidate| crate::platform::host::is_executable(candidate))
             .map(|program| Self { program })
@@ -140,13 +147,56 @@ impl Cli {
     }
 }
 
+/// The oldest Claude Code Wizard drives. Older ones lack flags the child is
+/// started with and fail with a usage error that says nothing about why.
+const MIN_VERSION: (u32, u32, u32) = (2, 1, 0);
+
+/// `(major, minor, patch)` from the start of `claude --version`, which prints
+/// `2.1.314 (Claude Code)`.
+fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = text.split_whitespace().next()?.split('.');
+    let mut next = || parts.next()?.parse().ok();
+    Some((next()?, next()?, next()?))
+}
+
+/// An error naming `claude update` when `version` is older than
+/// [`MIN_VERSION`]. A version this cannot read passes: a newer release that
+/// changes the format is not an old one.
+fn check_version(version: &str) -> Result<()> {
+    match parse_version(version) {
+        Some(found) if found < MIN_VERSION => bail!(
+            "Claude Code {version} is too old; Wizard needs {}.{}.{} or newer. Run: claude update",
+            MIN_VERSION.0,
+            MIN_VERSION.1,
+            MIN_VERSION.2
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// What a run that cannot ask is told: one line naming the command to run.
 fn ready(cli: Option<&Cli>) -> Result<()> {
     let cli = cli.ok_or_else(not_installed)?;
+    check_version(&cli.version()?)?;
     if !cli.signed_in()? {
         bail!("Claude Code is not signed in. Run: {LOGIN_COMMAND}");
     }
     Ok(())
+}
+
+/// The row `wizard doctor` shows for Claude Code: where it is, its version,
+/// and that it is signed in, or the one line that says what to run.
+pub fn doctor() -> Result<String> {
+    let cli = Cli::find().ok_or_else(not_installed)?;
+    let version = cli.version()?;
+    check_version(&version)?;
+    if !cli.signed_in()? {
+        bail!("Claude Code is not signed in. Run: {LOGIN_COMMAND}");
+    }
+    Ok(format!(
+        "{version} at {}, signed in",
+        cli.program.display()
+    ))
 }
 
 fn not_installed() -> anyhow::Error {
@@ -715,6 +765,16 @@ mod tests {
             .expect("stream starts");
         let err = stream.next().await.expect("an item").expect_err("fails");
         assert!(err.to_string().contains("exited before"), "{err}");
+    }
+
+    #[test]
+    fn versions_are_read_from_the_start_of_the_version_line() {
+        assert_eq!(parse_version("2.1.314 (Claude Code)"), Some((2, 1, 314)));
+        assert_eq!(parse_version("garbage"), None);
+        assert!(check_version("2.0.9 (Claude Code)").is_err());
+        assert!(check_version("2.1.0 (Claude Code)").is_ok());
+        assert!(check_version("3.0.0 (Claude Code)").is_ok());
+        assert!(check_version("not a version").is_ok());
     }
 
     #[tokio::test]

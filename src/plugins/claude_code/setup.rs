@@ -2,20 +2,29 @@
 //! Code, offer to install it, and get it signed in. It runs on the plain
 //! terminal with the TUI suspended, because both the installer and
 //! `claude auth login` need the terminal to themselves.
+//!
+//! The install is a remote script, so it only runs after a yes: typed at a
+//! one-line question on a terminal, or given up front with `--yes`. Without a
+//! terminal and without `--yes` it stops and prints the command.
 
 use std::ffi::OsString;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Cli, INSTALL_COMMAND, LOGIN_COMMAND};
+use super::{Cli, INSTALL_COMMAND, LOGIN_COMMAND, check_version};
 use crate::config::Config;
 
 pub struct Setup<'a> {
     pub path: Option<OsString>,
     pub home: Option<PathBuf>,
     pub install_command: &'a str,
+    /// `--yes`: run the installer without asking.
+    pub assume_yes: bool,
+    /// Whether a person is there to answer. When not, a missing `claude` is an
+    /// error naming the command instead of a question nobody reads.
+    pub interactive: bool,
     pub input: &'a mut dyn BufRead,
     pub output: &'a mut dyn Write,
 }
@@ -28,17 +37,27 @@ impl Setup<'_> {
             Some(cli) => cli,
             None => {
                 let command = self.install_command;
-                writeln!(
-                    self.output,
-                    "Claude Code is not installed. Wizard can install it with Anthropic's \
-                     installer:\n\n    {command}\n"
-                )?;
-                if !self.confirm("Run it now? [y/N] ")? {
+                if self.assume_yes {
                     writeln!(
                         self.output,
-                        "Nothing installed. To install it yourself, run:\n\n    {command}"
+                        "Claude Code is not installed. Running Anthropic's installer: {command}"
                     )?;
-                    return Ok(false);
+                } else if self.interactive {
+                    let question = format!(
+                        "Claude Code is not installed. Run Anthropic's installer ({command})? [y/N] "
+                    );
+                    if !self.confirm(&question)? {
+                        writeln!(
+                            self.output,
+                            "Nothing installed. To install it yourself, run:\n\n    {command}"
+                        )?;
+                        return Ok(false);
+                    }
+                } else {
+                    bail!(
+                        "Claude Code is not installed. Install it with: {command} \
+                         (or pass --yes to let Wizard run it)"
+                    );
                 }
                 if !shell(command)
                     .status()
@@ -48,12 +67,17 @@ impl Setup<'_> {
                     bail!("the Claude Code installer failed");
                 }
                 self.find()
-                    .context("the installer finished but `claude` is not on PATH")?
+                    .context("the installer finished but `claude` was not found on PATH, in ~/.local/bin or in ~/.claude/local")?
             }
         };
-        writeln!(self.output, "Found claude {}.", cli.version()?)?;
+        let version = cli.version()?;
+        writeln!(self.output, "Found claude {version}.")?;
+        check_version(&version)?;
 
         if !cli.signed_in()? {
+            if !self.interactive {
+                bail!("Claude Code is not signed in. Run: {LOGIN_COMMAND}");
+            }
             writeln!(
                 self.output,
                 "Claude Code is not signed in. Starting `{LOGIN_COMMAND}`."
@@ -96,14 +120,42 @@ fn shell(command: &str) -> std::process::Command {
 /// Install and sign in Claude Code on this process's terminal. `Ok(false)`
 /// when the user declined the install.
 pub fn ensure_ready() -> Result<bool> {
+    ensure_ready_with(false)
+}
+
+/// [`ensure_ready`], with `assume_yes` standing for `--yes`.
+pub fn ensure_ready_with(assume_yes: bool) -> Result<bool> {
+    let mut input = std::io::stdin().lock();
     Setup {
         path: std::env::var_os("PATH"),
         home: dirs::home_dir(),
         install_command: INSTALL_COMMAND,
-        input: &mut std::io::stdin().lock(),
+        assume_yes,
+        interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+        input: &mut input,
         output: &mut std::io::stdout(),
     }
     .run()
+}
+
+/// `--provider claude`: make sure Claude Code is installed and signed in, then
+/// make it this run's provider. Nothing is written to `config.toml`; `/provider`
+/// is what saves a choice.
+pub fn select_for_run(config: &mut Config, assume_yes: bool) -> Result<()> {
+    if !ensure_ready_with(assume_yes)? {
+        bail!("Claude Code is not installed");
+    }
+    let provider = super::provider_config();
+    config.active_provider = Some(provider.name.clone());
+    match config
+        .providers
+        .iter_mut()
+        .find(|other| other.name == provider.name)
+    {
+        Some(existing) => *existing = provider,
+        None => config.providers.push(provider),
+    }
+    Ok(())
 }
 
 /// Run the setup on this process's terminal, then store the provider and make
@@ -131,16 +183,93 @@ mod tests {
     /// Runs the setup against `fake` with `answer` typed at any prompt, and
     /// returns what it decided and what it printed.
     fn run(fake: &FakeClaude, install_command: &str, answer: &str) -> (Result<bool>, String) {
+        run_as(fake, install_command, answer, false, true)
+    }
+
+    fn run_as(
+        fake: &FakeClaude,
+        install_command: &str,
+        answer: &str,
+        assume_yes: bool,
+        interactive: bool,
+    ) -> (Result<bool>, String) {
         let mut output = Vec::new();
         let outcome = Setup {
             path: Some(fake.path()),
             home: None,
             install_command,
+            assume_yes,
+            interactive,
             input: &mut answer.as_bytes(),
             output: &mut output,
         }
         .run();
         (outcome, String::from_utf8(output).expect("utf-8"))
+    }
+
+    #[test]
+    fn yes_installs_without_asking() {
+        let fake = FakeClaude::new(false);
+        fake.write("signed-in", "");
+        let installer = fake.installer();
+
+        let (outcome, printed) = run_as(&fake, &installer, "", true, false);
+
+        assert!(outcome.expect("installed and signed in"));
+        assert!(fake.file("claude").exists());
+        assert!(!printed.contains("[y/N]"), "{printed}");
+        assert!(printed.contains(&installer), "{printed}");
+    }
+
+    #[test]
+    fn nobody_to_ask_and_no_yes_installs_nothing_and_names_the_command() {
+        let fake = FakeClaude::new(false);
+        let installer = fake.installer();
+
+        let (outcome, _) = run_as(&fake, &installer, "y\n", false, false);
+
+        let err = outcome.expect_err("a script is not asked");
+        assert!(err.to_string().contains(&installer), "{err}");
+        assert!(err.to_string().contains("--yes"), "{err}");
+        assert!(!fake.file("claude").exists());
+    }
+
+    #[test]
+    fn nobody_to_sign_in_is_told_the_login_command() {
+        let fake = FakeClaude::new(true);
+
+        let (outcome, _) = run_as(&fake, "false", "", false, false);
+
+        let err = outcome.expect_err("no browser to open");
+        assert!(err.to_string().ends_with("Run: claude auth login"), "{err}");
+        assert!(!fake.file("signed-in").exists());
+    }
+
+    #[test]
+    fn a_claude_older_than_the_floor_is_told_to_update() {
+        let fake = FakeClaude::signed_in();
+        fake.write("version", "1.0.88 (Claude Code)");
+
+        let (outcome, _) = run(&fake, "false", "");
+
+        let err = outcome.expect_err("too old");
+        assert!(err.to_string().ends_with("Run: claude update"), "{err}");
+    }
+
+    #[test]
+    fn the_older_install_directory_is_searched_after_local_bin() {
+        let home = tempfile::tempdir().expect("home");
+        let local = home.path().join(".claude").join("local");
+        std::fs::create_dir_all(&local).expect("dir");
+        std::os::unix::fs::symlink(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake-claude"),
+            local.join("claude"),
+        )
+        .expect("link");
+
+        let found = Cli::find_in(Some(std::ffi::OsStr::new("")), Some(home.path().to_path_buf()));
+
+        assert!(found.is_some());
     }
 
     #[test]
@@ -151,9 +280,8 @@ mod tests {
         let (outcome, printed) = run(&fake, &installer, "y\n");
 
         assert!(outcome.expect("installed and signed in"));
-        let shown = printed.find(&installer).expect("the command is shown");
-        let asked = printed.find("Run it now?").expect("the question is asked");
-        assert!(shown < asked, "{printed}");
+        assert_eq!(printed.matches("[y/N]").count(), 1, "{printed}");
+        assert!(printed.contains(&installer), "the command is in the question: {printed}");
         assert!(printed.contains("Found claude 9.9.9"), "{printed}");
     }
 
