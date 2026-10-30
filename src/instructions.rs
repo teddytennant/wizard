@@ -36,7 +36,9 @@ const TOTAL_CAP: usize = 40_000;
 /// concatenated outermost-first. `None` when nothing exists.
 pub fn load(project_root: &Path) -> Option<String> {
     let mut globals: Vec<PathBuf> = Vec::new();
-    if let Some(user) = crate::claude_dir::user_dir() {
+    if let Some(user) = crate::claude_dir::user_dir()
+        && !crate::claude_dir::claude_mds_disabled()
+    {
         globals.push(user.join("CLAUDE.md"));
         globals.extend(
             crate::claude_dir::unconditional_rules(&user.join("rules"))
@@ -108,17 +110,19 @@ fn load_with(project_root: &Path, globals: &[PathBuf]) -> Option<String> {
     chain.retain(|path| !files.iter().any(|(have, _)| have == path));
     // Beside the project's own file: Claude Code's personal `CLAUDE.local.md`
     // and the rules folder.
-    let local = project_root.join("CLAUDE.local.md");
-    if local.is_file() {
-        chain.push(local);
+    if !crate::claude_dir::claude_mds_disabled() {
+        let local = project_root.join("CLAUDE.local.md");
+        if local.is_file() {
+            chain.push(local);
+        }
+        chain.extend(
+            crate::claude_dir::unconditional_rules(
+                &crate::claude_dir::project_dir(project_root).join("rules"),
+            )
+            .into_iter()
+            .map(|(path, _)| path),
+        );
     }
-    chain.extend(
-        crate::claude_dir::unconditional_rules(
-            &crate::claude_dir::project_dir(project_root).join("rules"),
-        )
-        .into_iter()
-        .map(|(path, _)| path),
-    );
     files.extend(chain.into_iter().map(|path| (path, Includes::Confined)));
 
     for (path, _) in &files {
@@ -196,10 +200,16 @@ fn header_for(path: &Path) -> String {
 
 /// The highest-priority instruction file present in `dir`, if any.
 fn first_instruction_file(dir: &Path) -> Option<PathBuf> {
+    let skip_claude = crate::claude_dir::claude_mds_disabled();
     FILE_NAMES
         .iter()
+        .filter(|name| !(skip_claude && **name == "CLAUDE.md"))
         .map(|name| dir.join(name))
-        .chain(std::iter::once(dir.join(".claude").join("CLAUDE.md")))
+        .chain(
+            (!skip_claude)
+                .then(|| dir.join(".claude").join("CLAUDE.md"))
+                .into_iter(),
+        )
         .find(|path| path.is_file())
 }
 

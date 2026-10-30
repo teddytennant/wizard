@@ -29,6 +29,13 @@ pub fn bare() -> bool {
     env_on(crate::cli_claude::env::BARE) || env_on("CLAUDE_CODE_SIMPLE")
 }
 
+/// `CLAUDE_CODE_DISABLE_CLAUDE_MDS`: ignore every `CLAUDE.md` (and
+/// `CLAUDE.local.md`, and Claude's rules folders). `WIZARD.md` and
+/// `AGENTS.md` still load.
+pub fn claude_mds_disabled() -> bool {
+    env_on("CLAUDE_CODE_DISABLE_CLAUDE_MDS")
+}
+
 /// `--disable-slash-commands`: no custom commands, no skills.
 pub fn slash_commands_disabled() -> bool {
     env_on(crate::cli_claude::env::NO_SLASH_COMMANDS)

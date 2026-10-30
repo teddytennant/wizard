@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 pub mod claude;
+pub mod claude_env;
 pub mod key_helper;
 
 use crate::cli::Cli;

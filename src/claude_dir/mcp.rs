@@ -202,7 +202,11 @@ impl Approvals {
     fn from_documents(documents: impl Iterator<Item = Value>) -> Self {
         let mut out = Self::default();
         for doc in documents {
-            if doc.get("enableAllProjectMcpServers").and_then(Value::as_bool) == Some(true) {
+            if doc
+                .get("enableAllProjectMcpServers")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
                 out.all = true;
             }
             for (key, list) in [

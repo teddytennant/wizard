@@ -391,6 +391,13 @@ impl ClaudeFlags {
             set(env::EPHEMERAL_SESSION, "1".into());
         }
         unsafe { crate::config::key_helper::export() };
+        for (name, value) in
+            crate::config::claude_env::publish(&|name: &str| std::env::var(name).ok())
+        {
+            if std::env::var_os(name).is_none() {
+                set(name, value.into());
+            }
+        }
         if self.verbose || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
@@ -405,9 +412,14 @@ impl ClaudeFlags {
 
     /// Apply the run-scoped overrides to the loaded config.
     pub fn apply_to(&self, config: &mut Config) {
-        let settings = std::env::current_dir()
+        let get = |name: &str| std::env::var(name).ok();
+        crate::config::claude_env::apply(config, &get);
+        let mut settings = std::env::current_dir()
             .map(|root| crate::config::claude::load(&root, crate::config::claude::Trust::Refused))
             .unwrap_or_default();
+        for (alias, model) in crate::config::claude_env::model_aliases(&get) {
+            settings.model_overrides.entry(alias).or_insert(model);
+        }
         if let Some(model) = &self.model {
             let model = settings.resolve_model(model);
             match settings.refuse_model(&model) {
@@ -415,11 +427,19 @@ impl ClaudeFlags {
                 None => set_model(config, &model),
             }
         }
-        let effort = self.effort.as_deref().or(settings.effort_level.as_deref());
+        let from_env = crate::config::claude_env::effort(&get);
+        let effort = self
+            .effort
+            .as_deref()
+            .or(from_env.as_deref())
+            .or(settings.effort_level.as_deref());
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
         }
-        if let Some(turns) = self.max_turns {
+        if let Some(turns) = self
+            .max_turns
+            .or_else(|| crate::config::claude_env::max_turns(&get))
+        {
             config.max_steps = StepBudget::new(turns);
         }
     }
