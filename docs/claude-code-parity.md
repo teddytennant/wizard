@@ -168,7 +168,7 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 
 | Claude Code | Status | Wizard | Notes |
 | :- | :- | :- | :- |
-| `agents` | present | `wizard agents` | Opens the dashboard. `--json`, `--all` and `--cwd <path>` print the running sessions as a JSON array. The dispatch defaults (`--model`, `--effort`, `--permission-mode`, `--add-dir`, `--mcp-config`, `--plugin-dir`, `--settings`, `--strict-mcp-config`, `--agent`, `--restricted`, `--setting-sources`, the two skip-permissions flags) are the top-level flags, which `agents` accepts. |
+| `agents` | present | `wizard agents` | Opens the dashboard. `--json`, `--all` and `--cwd <path>` print the running sessions as a JSON array. The dispatch defaults (`--model`, `--effort`, `--permission-mode`, `--add-dir`, `--mcp-config`, `--plugin-dir`, `--settings`, `--strict-mcp-config`, `--agent`, `--restricted`, `--setting-sources`, the two skip-permissions flags) are Wizard's top-level flags, which `agents` honors when they come before it: `wizard --model m agents`, not `wizard agents --model m`. |
 | `attach` | accepted-with-warning | `wizard attach <id>` | Parses and says to use `wizard agents` or `wizard --resume <id>`. A detached Wizard run has no terminal to hand over. |
 | `auth login` | aliased | `wizard auth login [provider]` | Is `wizard --login <provider>`; no provider means `xai`, `--claudeai` means `claude`. `--console` is refused with the API-key instructions; `--email` and `--sso` are ignored with a warning. |
 | `auth logout` | aliased | `wizard auth logout [provider]` | The `/logout` command; with no name it signs out of the one account that is signed in. |

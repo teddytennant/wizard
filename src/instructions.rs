@@ -205,11 +205,7 @@ fn first_instruction_file(dir: &Path) -> Option<PathBuf> {
         .iter()
         .filter(|name| !(skip_claude && **name == "CLAUDE.md"))
         .map(|name| dir.join(name))
-        .chain(
-            (!skip_claude)
-                .then(|| dir.join(".claude").join("CLAUDE.md"))
-                .into_iter(),
-        )
+        .chain((!skip_claude).then(|| dir.join(".claude").join("CLAUDE.md")))
         .find(|path| path.is_file())
 }
 

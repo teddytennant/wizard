@@ -179,14 +179,15 @@ mod tests {
     }
 
     fn anthropic() -> Config {
-        let mut config = Config::default();
-        config.providers = vec![ProviderConfig {
-            name: "claude".into(),
-            kind: crate::config::ProviderKind::ANTHROPIC,
-            ..ProviderConfig::default()
-        }];
-        config.active_provider = Some("claude".into());
-        config
+        Config {
+            providers: vec![ProviderConfig {
+                name: "claude".into(),
+                kind: crate::config::ProviderKind::ANTHROPIC,
+                ..ProviderConfig::default()
+            }],
+            active_provider: Some("claude".into()),
+            ..Config::default()
+        }
     }
 
     #[test]
@@ -227,8 +228,10 @@ mod tests {
 
     #[test]
     fn the_autocompact_percentage_moves_the_80_percent_point() {
-        let mut config = Config::default();
-        config.max_context_tokens = 160_000;
+        let mut config = Config {
+            max_context_tokens: 160_000,
+            ..Config::default()
+        };
         apply(
             &mut config,
             &env(&[("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "40")]),
