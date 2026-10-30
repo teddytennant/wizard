@@ -46,7 +46,7 @@ fn cli_servers() -> (Vec<McpServerConfig>, Vec<String>) {
     (servers, unsupported)
 }
 
-fn project_trusted(project_root: &Path) -> bool {
+pub(crate) fn project_trusted(project_root: &Path) -> bool {
     crate::trust::status(project_root) == crate::trust::Status::Trusted
         || std::env::var_os(crate::trust::TRUST_ENV).is_some_and(|v| !v.is_empty())
 }
@@ -55,9 +55,74 @@ fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
-/// Everything `.mcp.json` and active plugins contribute for `project_root`.
+/// Everything `.mcp.json`, active plugins and the user's own Claude Code and
+/// `wizard mcp add` entries contribute for `project_root`.
 pub fn discover(project_root: &Path) -> Found {
-    discover_with(project_root, project_trusted(project_root))
+    let mut found = discover_with(project_root, project_trusted(project_root));
+    if !found.strict && !super::bare() {
+        let (servers, unsupported) = user_owned(project_root);
+        found.servers.extend(servers);
+        found.unsupported.extend(unsupported);
+    }
+    let mut seen = std::collections::HashSet::new();
+    found
+        .servers
+        .retain(|server| seen.insert(server.name.clone()));
+    found
+}
+
+/// `~/.wizard/local-mcp.json`: servers added with `wizard mcp add` at the
+/// default `local` scope, kept per project. Same shape as the `projects` map
+/// in `~/.claude.json`.
+pub fn local_store_path() -> Option<std::path::PathBuf> {
+    crate::config::Config::wizard_dir()
+        .ok()
+        .map(|dir| dir.join("local-mcp.json"))
+}
+
+/// The key a project goes under in a `projects` map.
+pub fn project_key(project_root: &Path) -> String {
+    project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// Servers a Claude-style JSON document holds for `project_root`: its
+/// top-level `mcpServers` (user scope) and `projects.<root>.mcpServers`
+/// (local scope), and no other project's.
+pub fn servers_for_project(
+    json: &Value,
+    project_root: &Path,
+) -> (Vec<McpServerConfig>, Vec<String>) {
+    let key = project_key(project_root);
+    let mut scoped = serde_json::Map::new();
+    if let Some(top) = json.get("mcpServers") {
+        scoped.insert("mcpServers".into(), top.clone());
+    }
+    if let Some(project) = json.get("projects").and_then(|p| p.get(&key)) {
+        scoped.insert("projects".into(), serde_json::json!({ key: project }));
+    }
+    crate::import_claude::parse_mcp_servers(&Value::Object(scoped))
+}
+
+/// Servers the user put there themselves: Claude Code's `~/.claude.json`
+/// (user and local scopes, read in place) and Wizard's own local store. Both
+/// are the user's files, not something that arrived with a clone, so neither
+/// waits for project trust.
+fn user_owned(project_root: &Path) -> (Vec<McpServerConfig>, Vec<String>) {
+    let mut servers = Vec::new();
+    let mut unsupported = Vec::new();
+    let sources = [local_store_path(), crate::import_claude::claude_json_path()];
+    for path in sources.into_iter().flatten() {
+        if let Some(json) = read_json(&path) {
+            let (found, skipped) = servers_for_project(&json, project_root);
+            servers.extend(found);
+            unsupported.extend(skipped);
+        }
+    }
+    (servers, unsupported)
 }
 
 fn discover_with(project_root: &Path, trusted: bool) -> Found {
@@ -123,6 +188,24 @@ mod tests {
         assert_eq!(trusted.servers.len(), 1);
         assert_eq!(trusted.servers[0].name, "fs");
         assert!(trusted.pending.is_empty());
+    }
+
+    #[test]
+    fn claude_json_gives_user_and_this_projects_servers_only() {
+        let tmp = Tmp::new("mcp3");
+        let key = project_key(tmp.path());
+        let json = serde_json::json!({
+            "mcpServers": {"user": {"command": "u"}},
+            "projects": {
+                key: {"mcpServers": {"here": {"command": "h"}}},
+                "/elsewhere": {"mcpServers": {"there": {"command": "t"}}},
+            }
+        });
+        let (servers, unsupported) = servers_for_project(&json, tmp.path());
+        let mut names: Vec<_> = servers.iter().map(|s| s.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["here", "user"]);
+        assert!(unsupported.is_empty());
     }
 
     #[test]

@@ -347,6 +347,30 @@ fn record_at(store: &Path, project_root: &Path, decision: Decision) -> Result<()
     record_in(store, project_root, decision, &fingerprint)
 }
 
+/// Drop whatever decision is on record for `project_root`, so the next
+/// interactive run asks again. `true` when there was one.
+pub fn forget(project_root: &Path) -> Result<bool> {
+    let store = store_path()?;
+    let _guard = STORE.lock().unwrap_or_else(PoisonError::into_inner);
+    let root = canonical_root(project_root)
+        .ok_or_else(|| anyhow!("{} does not resolve", project_root.display()))?;
+    let Some(dir) = store.parent() else {
+        return Ok(false);
+    };
+    if !store.exists() {
+        return Ok(false);
+    }
+    let _lock = lock_store(dir);
+    let mut entries = load_entries(&store);
+    let before = entries.len();
+    entries.retain(|entry| Path::new(&entry.root) != root);
+    if entries.len() == before {
+        return Ok(false);
+    }
+    write_entries(&store, &entries)?;
+    Ok(true)
+}
+
 /// [`record_at`] without taking [`STORE`]; the caller must already hold it.
 ///
 /// `fingerprint` is passed in rather than computed here so that what gets

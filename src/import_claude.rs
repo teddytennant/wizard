@@ -100,14 +100,18 @@ impl ImportOutcome {
 
 /// `~/.claude` if it exists — the marker that Claude Code is installed.
 pub fn claude_home() -> Option<PathBuf> {
-    let dir = dirs::home_dir()?.join(".claude");
+    let dir = crate::claude_dir::user_dir()?;
     dir.is_dir().then_some(dir)
 }
 
 /// `~/.claude.json` if it exists (Claude Code's primary config, holds
-/// `mcpServers`).
+/// `mcpServers`). Under `$CLAUDE_CONFIG_DIR` Claude Code keeps it inside that
+/// directory instead.
 pub fn claude_json_path() -> Option<PathBuf> {
-    let path = dirs::home_dir()?.join(".claude.json");
+    let path = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir).join(".claude.json"),
+        None => dirs::home_dir()?.join(".claude.json"),
+    };
     path.is_file().then_some(path)
 }
 
