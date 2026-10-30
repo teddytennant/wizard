@@ -853,6 +853,13 @@ fn choose_session(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
         name: flags.name.as_deref(),
         fork: flags.fork_session,
     };
+    if request.latest && request.resume.is_none() {
+        let root = match &cli.cwd {
+            Some(dir) => dir.clone(),
+            None => std::env::current_dir()?,
+        };
+        tell_about_claude_sessions(&root);
+    }
     if request.is_empty() {
         return Ok(());
     }
@@ -868,6 +875,38 @@ fn choose_session(cli: &mut crate::cli::Cli) -> anyhow::Result<()> {
         cli.resume = true;
     }
     Ok(())
+}
+
+/// `--resume` with nothing of Wizard's to reopen here: say what Claude Code
+/// recorded for this directory, since that is the history a switcher means.
+fn tell_about_claude_sessions(root: &std::path::Path) {
+    let here = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let has_wizard_session = crate::config::Config::sessions_dir().is_ok_and(|dir| {
+        crate::agent::session::summaries(&dir)
+            .iter()
+            .any(|session| {
+                session.cwd.as_deref().is_some_and(|cwd| {
+                    std::path::Path::new(cwd)
+                        .canonicalize()
+                        .is_ok_and(|cwd| cwd == here)
+                })
+            })
+    });
+    if has_wizard_session {
+        return;
+    }
+    let rows = crate::session_registry::claude_chats(&root.display().to_string());
+    if rows.is_empty() {
+        return;
+    }
+    eprintln!(
+        "wizard: no Wizard session here to resume; Claude Code recorded {} for this directory:",
+        rows.len()
+    );
+    for row in rows.iter().take(5) {
+        eprintln!("  {}  {}", row.id, row.title);
+    }
+    eprintln!("`wizard resume --claude` continues one (`--list` shows them all).");
 }
 
 /// Everything on stdin until it closes, or whatever arrived within `wait` if

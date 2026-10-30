@@ -391,7 +391,12 @@ fn mcp_report(root: &Path) -> String {
     }
     for server in &found.servers {
         if !configured.iter().any(|have| have.name == server.name) {
-            out.push_str(&line(server, ".mcp.json"));
+            let source = found
+                .origins
+                .get(&server.name)
+                .copied()
+                .unwrap_or("--mcp-config");
+            out.push_str(&line(server, source));
         }
     }
     for name in &found.pending {

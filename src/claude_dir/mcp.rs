@@ -22,6 +22,8 @@ pub struct Found {
     pub unsupported: Vec<String>,
     /// `--strict-mcp-config`: connect only `servers`, not `mcp.toml`'s.
     pub strict: bool,
+    /// Where each of `servers` came from, by name, for `/mcp`.
+    pub origins: std::collections::HashMap<String, &'static str>,
 }
 
 /// Servers from `--mcp-config`: each value is a JSON file or a JSON string.
@@ -64,9 +66,20 @@ pub fn discover(project_root: &Path) -> Found {
         &Approvals::read(project_root),
     );
     if !found.strict && !super::bare() {
-        let (servers, unsupported) = user_owned(project_root);
-        found.servers.extend(servers);
-        found.unsupported.extend(unsupported);
+        for (label, path) in [
+            ("local", local_store_path()),
+            ("claude.json", crate::import_claude::claude_json_path()),
+        ] {
+            let Some(json) = path.and_then(|path| read_json(&path)) else {
+                continue;
+            };
+            let (servers, unsupported) = servers_for_project(&json, project_root);
+            for server in &servers {
+                found.origins.entry(server.name.clone()).or_insert(label);
+            }
+            found.servers.extend(servers);
+            found.unsupported.extend(unsupported);
+        }
     }
     let mut seen = std::collections::HashSet::new();
     found
@@ -154,23 +167,9 @@ pub fn servers_for_project(
     crate::import_claude::parse_mcp_servers(&Value::Object(scoped))
 }
 
-/// Servers the user put there themselves: Claude Code's `~/.claude.json`
-/// (user and local scopes, read in place) and Wizard's own local store. Both
-/// are the user's files, not something that arrived with a clone, so neither
-/// waits for project trust.
-fn user_owned(project_root: &Path) -> (Vec<McpServerConfig>, Vec<String>) {
-    let mut servers = Vec::new();
-    let mut unsupported = Vec::new();
-    let sources = [local_store_path(), crate::import_claude::claude_json_path()];
-    for path in sources.into_iter().flatten() {
-        if let Some(json) = read_json(&path) {
-            let (found, skipped) = servers_for_project(&json, project_root);
-            servers.extend(found);
-            unsupported.extend(skipped);
-        }
-    }
-    (servers, unsupported)
-}
+// The user's own servers (Claude Code's `~/.claude.json`, user and local
+// scopes, read in place, and Wizard's `local-mcp.json`) are the user's files,
+// not something that arrived with a clone, so neither waits for project trust.
 
 /// What the user's own settings say about `.mcp.json` servers. Claude Code
 /// records these when you approve a server in its dialog, and Wizard honors
@@ -197,6 +196,13 @@ impl Approvals {
         }
         files.push(project_root.join(".claude/settings.local.json"));
         Self::from_documents(files.iter().filter_map(|path| read_json(path)))
+    }
+
+    /// Whether a `.mcp.json` server named `name` may connect, given whether
+    /// the whole project is trusted.
+    pub fn connects(&self, name: &str, project_trusted: bool) -> bool {
+        !self.disabled.iter().any(|n| n == name)
+            && (project_trusted || self.all || self.enabled.iter().any(|n| n == name))
     }
 
     fn from_documents(documents: impl Iterator<Item = Value>) -> Self {
@@ -233,6 +239,9 @@ fn discover_with(project_root: &Path, trusted: bool, approvals: &Approvals) -> F
     }
     for json in super::plugins::mcp_json(project_root) {
         let (servers, unsupported) = crate::import_claude::parse_mcp_servers(&json);
+        for server in &servers {
+            found.origins.insert(server.name.clone(), "plugin");
+        }
         found.servers.extend(servers);
         found.unsupported.extend(unsupported);
     }
@@ -246,7 +255,8 @@ fn discover_with(project_root: &Path, trusted: bool, approvals: &Approvals) -> F
             if approvals.disabled.contains(&server.name) {
                 continue;
             }
-            if trusted || approvals.all || approvals.enabled.contains(&server.name) {
+            if approvals.connects(&server.name, trusted) {
+                found.origins.insert(server.name.clone(), ".mcp.json");
                 found.servers.push(server);
             } else {
                 found.pending.push(server.name);

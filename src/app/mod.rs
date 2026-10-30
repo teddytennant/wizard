@@ -66,6 +66,9 @@ use prompts::{
 };
 use transcript::PANE_LINGER;
 
+/// Prefix on a `/resume` picker row that comes from Claude Code's history.
+const CLAUDE_ROW: &str = "claude:";
+
 /// How many user prompts may sit behind a running turn. Beyond this the next
 /// Enter is refused with a notice rather than growing without bound.
 const MESSAGE_QUEUE_CAP: usize = 32;
@@ -1132,7 +1135,9 @@ impl App {
 
     /// Open the `/resume` picker: every past session on disk, newest first,
     /// each row labeled with its first prompt. The current session is marked
-    /// and selecting it is a no-op.
+    /// and selecting it is a no-op. The conversations Claude Code recorded for
+    /// this directory follow, marked `claude`; choosing one imports a copy, as
+    /// `/resume-claude` does.
     pub fn open_resume_picker(&mut self) {
         let dir = match crate::config::Config::sessions_dir() {
             Ok(dir) => dir,
@@ -1142,11 +1147,13 @@ impl App {
             }
         };
         let summaries = crate::agent::session::summaries(&dir);
-        if summaries.is_empty() {
+        let claude = session_registry::claude_chats(&self.project_root.display().to_string());
+        if summaries.is_empty() && claude.is_empty() {
             self.notice("no past sessions to resume");
             return;
         }
-        let items: Vec<PickerItem> = summaries
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let mut items: Vec<PickerItem> = summaries
             .into_iter()
             .map(|session| {
                 let plural = if session.messages == 1 { "" } else { "s" };
@@ -1157,6 +1164,15 @@ impl App {
                 }
             })
             .collect();
+        items.extend(claude.into_iter().map(|row| PickerItem {
+            detail: format!(
+                "claude · {} · {}",
+                row.title,
+                session_registry::relative_age(row.updated_unix, now)
+            ),
+            current: false,
+            value: format!("{CLAUDE_ROW}{}", row.id),
+        }));
         self.picker = Some(Picker {
             kind: PickerKind::Resume,
             title: " resume session · ↑↓ move · enter select · esc close ".to_string(),
@@ -3163,10 +3179,16 @@ impl App {
                             };
                             AppAction::Command(SlashCommand::Rewind(Some(turn)))
                         }
-                        PickerKind::Resume => {
+                        PickerKind::Resume => match item.value.strip_prefix(CLAUDE_ROW) {
+                            // A row from Claude Code's history: import a copy.
+                            Some(id) => {
+                                AppAction::Command(SlashCommand::ResumeClaude(Some(id.to_string())))
+                            }
                             // Item values are session ids.
-                            AppAction::Command(SlashCommand::Resume(Some(item.value.clone())))
-                        }
+                            None => {
+                                AppAction::Command(SlashCommand::Resume(Some(item.value.clone())))
+                            }
+                        },
                         PickerKind::ResumeClaude => {
                             // Item values are Claude Code session ids, which
                             // the command handler resolves back to a

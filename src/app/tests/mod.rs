@@ -1098,6 +1098,26 @@ fn resume_picker_selection_becomes_a_resume_command() {
 }
 
 #[test]
+fn a_claude_row_in_the_resume_picker_becomes_a_resume_claude_command() {
+    let mut app = app();
+    app.picker = Some(Picker {
+        kind: PickerKind::Resume,
+        title: " resume session ".to_string(),
+        items: vec![PickerItem {
+            value: "claude:abc-123".to_string(),
+            detail: "claude · fix the build · 2h".to_string(),
+            current: false,
+        }],
+        selected: 0,
+    });
+    let action = press(&mut app, KeyCode::Enter);
+    assert!(matches!(
+        action,
+        Some(AppAction::Command(SlashCommand::ResumeClaude(Some(id)))) if id == "abc-123"
+    ));
+}
+
+#[test]
 fn resume_claude_parses_with_and_without_an_id() {
     assert_eq!(
         SlashCommand::parse("/resume-claude"),

@@ -20,6 +20,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use super::{McpCmd, Scope, Transport};
+use crate::claude_dir::mcp::Approvals;
 use crate::mcp::{McpConfig, McpServerConfig, McpTransport};
 
 /// `KEY=value` pairs from `-e`.
@@ -466,12 +467,17 @@ impl Health {
     }
 }
 
-async fn health(entry: &Entry, project_trusted: bool) -> Health {
+async fn health(entry: &Entry, approvals: &Approvals, project_trusted: bool) -> Health {
     let Some(server) = &entry.server else {
         return Health::Unsupported(entry.kind.clone());
     };
-    if entry.origin == Origin::Scope(Scope::Project) && !project_trusted {
-        return Health::Pending;
+    if entry.origin == Origin::Scope(Scope::Project) {
+        if approvals.disabled.contains(&entry.name) {
+            return Health::Failed("disabled in disabledMcpjsonServers".into());
+        }
+        if !approvals.connects(&entry.name, project_trusted) {
+            return Health::Pending;
+        }
     }
     let probe = crate::mcp::probe(server);
     match tokio::time::timeout(Duration::from_secs(20), probe).await {
@@ -489,12 +495,14 @@ async fn list(store: &Store) -> Result<i32> {
     }
     println!("Checking MCP server health\u{2026}\n");
     let trusted = crate::claude_dir::mcp::project_trusted(&store.project);
+    let approvals = std::sync::Arc::new(Approvals::read(&store.project));
     let mut tasks = tokio::task::JoinSet::new();
     let entries: Vec<std::sync::Arc<Entry>> =
         entries.into_iter().map(std::sync::Arc::new).collect();
     for (at, entry) in entries.iter().enumerate() {
         let entry = entry.clone();
-        tasks.spawn(async move { (at, health(&entry, trusted).await) });
+        let approvals = approvals.clone();
+        tasks.spawn(async move { (at, health(&entry, &approvals, trusted).await) });
     }
     let mut results: Vec<Option<Health>> = (0..entries.len()).map(|_| None).collect();
     while let Some(done) = tasks.join_next().await {
@@ -523,8 +531,10 @@ async fn get(store: &Store, name: &str) -> Result<i32> {
         );
         return Ok(1);
     };
+    let approvals = Approvals::read(&store.project);
     let state = health(
         entry,
+        &approvals,
         crate::claude_dir::mcp::project_trusted(&store.project),
     )
     .await;
