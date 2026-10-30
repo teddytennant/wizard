@@ -256,6 +256,55 @@ pub fn is_read_only(cmd: &str) -> bool {
     }
 }
 
+/// Programs `acceptEdits` runs without asking, because all they do is
+/// create, move, copy or rewrite files inside the project.
+const FILE_COMMANDS: [&str; 7] = ["mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed"];
+
+/// True when one subcommand is a [`FILE_COMMANDS`] program whose every
+/// operand stays inside `cwd`. Operands that cannot be resolved by reading
+/// them (`~`, `$VAR`, globs that climb out) are not inside.
+pub fn is_file_command(cmd: &str, cwd: &std::path::Path) -> bool {
+    if cmd.contains(['>', '`', '$', '~']) || cmd.contains("$(") {
+        return false;
+    }
+    let stripped = strip_prefixes(cmd);
+    let mut words = stripped.split_whitespace();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    if !FILE_COMMANDS.contains(&first) {
+        return false;
+    }
+    words
+        .filter(|word| !word.starts_with('-'))
+        .all(|word| inside(cwd, word.trim_matches(['\'', '"'])))
+}
+
+/// `path`, resolved against `cwd` with `..` folded away, is under `cwd`.
+pub fn inside(cwd: &std::path::Path, path: &str) -> bool {
+    use std::path::Component;
+    let joined = cwd.join(path);
+    let mut folded = std::path::PathBuf::new();
+    for part in joined.components() {
+        match part {
+            Component::ParentDir => {
+                folded.pop();
+            }
+            Component::CurDir => {}
+            other => folded.push(other.as_os_str()),
+        }
+    }
+    folded.starts_with(cwd)
+}
+
+/// True when the command line has a `cd` next to something that is not read
+/// only: Claude Code will not guess which directory the rest runs in.
+pub fn changes_directory(commands: &[String]) -> bool {
+    commands
+        .iter()
+        .any(|cmd| strip_prefixes(cmd).split_whitespace().next() == Some("cd"))
+}
+
 fn is_assignment(word: &str) -> bool {
     match word.split_once('=') {
         Some((name, _)) => {

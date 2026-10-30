@@ -71,12 +71,18 @@ pub fn wizard_name(claude: &str) -> Option<&'static str> {
     })
 }
 
-/// The class of a Wizard tool.
+/// The tool under Wizard's own name when it was called by a Claude alias
+/// (`Bash` runs `execute`), so rules see one spelling.
+fn canonical(tool: &str) -> &str {
+    wizard_name(tool).unwrap_or(tool)
+}
+
+/// The class of a tool, called by either spelling.
 pub fn class(tool: &str) -> ToolClass {
-    match tool {
-        "execute" => ToolClass::Shell,
+    match canonical(tool) {
+        "execute" | "PowerShell" => ToolClass::Shell,
         "read_file" | "list_files" | "search_files" => ToolClass::Read,
-        "write_file" | "edit_file" | "apply_patch" => ToolClass::Edit,
+        "write_file" | "edit_file" | "apply_patch" | "NotebookEdit" => ToolClass::Edit,
         "web_fetch" | "web_search" | "x_search" => ToolClass::Web,
         _ if tool.contains("__") => ToolClass::Mcp,
         _ => ToolClass::Other,
@@ -113,7 +119,11 @@ fn rename_keys(tool: &str, value: &Value, from: &str, to: &str) -> Value {
 /// The file paths a call names, as written. `apply_patch` carries its paths
 /// inside the patch text.
 pub fn paths(tool: &str, args: &Value) -> Vec<String> {
-    match tool {
+    match canonical(tool) {
+        "NotebookEdit" => match args.get("notebook_path") {
+            Some(Value::String(path)) => vec![path.clone()],
+            _ => Vec::new(),
+        },
         "apply_patch" => {
             let text = ["patch", "input", "diff"]
                 .iter()
