@@ -204,6 +204,9 @@ pub async fn run_tui(
     app.omakase |= handed_omakase;
     app.handed_over = handed_over;
     app.project_root = project_root.clone();
+    if let Some(home) = std::env::var_os("HOME") {
+        app.load_claude_input(std::path::Path::new(&home), &project_root);
+    }
     app.announce_interrupted_goal();
     if let Ok(dir) = crate::config::Config::sessions_dir() {
         app.recent_sessions = crate::agent::session::recent_summaries(&dir, 3, &session_id)

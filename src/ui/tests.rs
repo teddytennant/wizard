@@ -3313,3 +3313,41 @@ fn a_subagent_card_keeps_its_instructions_behind_the_fold() {
     assert!(screen.contains(&format!("╰ {brief}")), "{screen}");
     assert!(screen.contains("parse and parse_file"), "{screen}");
 }
+
+#[test]
+fn a_status_line_sits_on_its_own_rows_above_the_status_bar() {
+    let _pins = pin_house();
+    let mut app = App::new(crate::config::Config::default());
+    let plain = screen_at(&app, 100, 24).0;
+    app.status_line.cfg = Some(crate::app::statusline::Cfg {
+        command: "echo".into(),
+        padding: 1,
+        refresh: None,
+    });
+    // nothing printed yet: the frame is the one without a status line
+    assert_eq!(screen_at(&app, 100, 24).0, plain);
+    app.status_line.lines = vec!["\x1b[32mmain\x1b[0m +2 -1".into(), "second row".into()];
+    let rows = screen_at(&app, 100, 24).0;
+    let n = rows.len();
+    assert_eq!(rows[n - 3], "  main +2 -1", "{rows:?}");
+    assert_eq!(rows[n - 2], "  second row");
+    assert_eq!(rows[n - 1], plain[n - 1], "the status bar keeps its row");
+}
+
+#[test]
+fn the_shortcuts_panel_is_three_columns_and_shows_a_rebound_key() {
+    let mut app = App::new(crate::config::Config::default());
+    let lines = flats(&overlay::keys_lines(&app, 120));
+    assert_eq!(lines.len(), 5);
+    assert!(lines[0].starts_with("  / for commands"), "{lines:?}");
+    // three columns: two more entries start further right on the same row
+    let col = |row: &str| row.match_indices("  ").count();
+    assert!(lines.iter().all(|l| col(l) >= 2), "{lines:?}");
+    assert!(lines[4].contains("ctrl + p to switch model"));
+    app.keymap.add_json(
+        r#"{"bindings":[{"context":"Chat","bindings":{"alt+m":"chat:modelPicker"}}]}"#,
+        "test",
+    );
+    let lines = flats(&overlay::keys_lines(&app, 120));
+    assert!(lines[4].contains("alt + m to switch model"), "{lines:?}");
+}

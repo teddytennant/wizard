@@ -19,7 +19,15 @@ pub(super) fn draw(frame: &mut Frame, app: &App, body: Rect) {
         return;
     }
     if app.keys_help {
-        draw_text(frame, body, keys_lines());
+        // a compact panel at the foot of the body, three columns, the transcript still above it
+        let lines = keys_lines(app, body.width as usize);
+        let rows = (lines.len() as u16).min(body.height);
+        let area = Rect {
+            y: body.y + body.height - rows,
+            height: rows,
+            ..body
+        };
+        draw_text(frame, area, lines);
     } else if app.task_view {
         draw_text(frame, body, task_lines(app));
     } else if let Some(query) = &app.history_search {
@@ -43,10 +51,55 @@ fn draw_text(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn keys_lines() -> Vec<Line<'static>> {
-    crate::mux::rewrite(crate::app::help_keys())
-        .lines()
-        .map(|line| Line::from(Span::styled(line.to_string(), dim())))
+/// The shortcuts panel: what `?` opens, in three columns. A key the user has rebound in
+/// `keybindings.json` shows as rebound.
+pub(super) fn keys_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let hint = |action: &str, default: &str, what: &str| -> String {
+        let key = app
+            .keymap
+            .user_shortcut(&["Global", "Chat"], action)
+            .unwrap_or_else(|| default.to_string());
+        format!("{} {what}", key.replace('+', " + "))
+    };
+    let columns: [Vec<String>; 3] = [
+        vec![
+            "/ for commands".into(),
+            "@ for file paths".into(),
+            hint("chat:cycleMode", "shift+tab", "to cycle modes"),
+            "tab to accept a completion".into(),
+            hint("chat:modelPicker", "ctrl+p", "to switch model"),
+        ],
+        vec![
+            hint("chat:cancel", "esc", "to close or interrupt"),
+            "ctrl + c to interrupt, twice to quit".into(),
+            hint("app:toggleTranscript", "ctrl+o", "for compact or full view"),
+            hint("app:toggleTodos", "ctrl+t", "to open every turn"),
+            "ctrl + y to copy the last reply".into(),
+        ],
+        vec![
+            hint("history:search", "ctrl+r", "to search history"),
+            "ctrl + f to search the transcript".into(),
+            "ctrl + b for background output".into(),
+            hint("chat:externalEditor", "ctrl+g", "to edit in $EDITOR"),
+            "pgup / pgdn to scroll".into(),
+        ],
+    ];
+    let col_w = (width.saturating_sub(2) / 3).max(12);
+    let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
+    (0..rows)
+        .map(|r| {
+            let mut spans = vec![Span::raw("  ")];
+            for col in &columns {
+                let mut text = col.get(r).cloned().unwrap_or_default();
+                if text.chars().count() >= col_w {
+                    text = text.chars().take(col_w - 1).collect();
+                }
+                let pad = col_w.saturating_sub(text.chars().count());
+                spans.push(Span::styled(text, dim()));
+                spans.push(Span::raw(" ".repeat(pad)));
+            }
+            Line::from(spans)
+        })
         .collect()
 }
 

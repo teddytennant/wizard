@@ -10,6 +10,7 @@ mod prompts;
 mod recover;
 mod runtime;
 mod session;
+pub mod statusline;
 pub mod tee;
 mod term;
 #[cfg(test)]
@@ -18,7 +19,6 @@ mod transcript;
 
 #[cfg(feature = "acp")]
 pub(crate) use command::git_diff_text;
-pub(crate) use command::help_keys;
 pub use picker::{Picker, PickerItem, PickerKind, Selection, StatusLine, Suggestion};
 pub use prompts::{Console, Interview, PlanReview, ProviderPrompt};
 pub use runtime::{TuiExit, run_tui};
@@ -48,10 +48,11 @@ use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::event::Event;
 use crate::image_view::ImageCache;
 use crate::import_claude::{self, ImportSelection};
+use crate::keybindings::{Keymap, Resolved, Stroke};
 use crate::session_registry::{self, SessionRecord, SessionState};
 use crate::theme;
 use crate::tools::todo::TodoItem;
-use crate::vim::{self, Pending, VimMode, VimOp, VimState};
+use crate::vim::{Out as VimOut, VimKey, VimMode, VimState};
 
 use crate::transcript::{ToolItemOutput, TranscriptItem};
 use paste::{
@@ -221,6 +222,10 @@ pub struct App {
     /// Modal (vim-style) editing state for the composer. Inert (always
     /// insert-like) unless `vim.enabled`.
     pub vim: VimState,
+    /// The bindings from `keybindings.json` (empty until `load_claude_input`).
+    pub keymap: Keymap,
+    /// Claude's `statusLine`: a user command whose output is drawn under the composer.
+    pub status_line: statusline::State,
     /// The conversation, its uncommitted streaming tail, this screen's fold
     /// flags and its scroll position. One [`crate::transcript::TranscriptModel`]
     /// and no copy of it: see [`transcript`].
@@ -604,10 +609,8 @@ impl App {
         let spinner_verb = config.ui.spinner_verb(0).to_string();
         // Vim mode starts in Insert so typing works immediately; `Esc` drops
         // to Normal.
-        let vim = VimState {
-            enabled: config.ui.vim,
-            ..VimState::default()
-        };
+        let mut vim = VimState::default();
+        vim.set_enabled(config.ui.vim);
         let status = StatusLine {
             model: config.active().model,
             mode,
@@ -626,6 +629,8 @@ impl App {
             cursor: 0,
             input_mode: InputMode::default(),
             vim,
+            keymap: Keymap::new(),
+            status_line: statusline::State::default(),
             transcript: TranscriptView::new(),
             status,
             welcome_dismissed: false,
@@ -970,11 +975,7 @@ impl App {
                 let on = !self.config.ui.vim;
                 self.config.ui.vim = on;
                 // Keep the live composer state in step with the persisted flag.
-                self.vim = VimState {
-                    enabled: on,
-                    mode: VimMode::Insert,
-                    ..VimState::default()
-                };
+                self.vim.set_enabled(on);
             }
             "plan_first" => self.config.plan_first = !self.config.plan_first,
             "continuous" => self.config.continuous = !self.config.continuous,
@@ -2112,6 +2113,10 @@ impl App {
             .unwrap_or(self.input.len())
     }
 
+    fn clamp_normal_cursor(&mut self) {
+        self.vim.clamp(&self.input, &mut self.cursor);
+    }
+
     fn set_input(&mut self, text: String) {
         self.cursor = text.chars().count();
         self.input = text;
@@ -2265,11 +2270,7 @@ impl App {
     /// reset to Insert so typing works immediately when enabling.
     pub fn toggle_vim(&mut self) {
         let on = !self.vim.enabled;
-        self.vim = VimState {
-            enabled: on,
-            mode: VimMode::Insert,
-            ..VimState::default()
-        };
+        self.vim.set_enabled(on);
         self.config.ui.vim = on;
         if let Err(err) = self.save_config() {
             self.notice(format!("could not save config: {err:#}"));
@@ -2300,455 +2301,180 @@ impl App {
         });
     }
 
-    /// Enter Insert mode (text entry resumes).
-    fn enter_insert(&mut self) {
-        self.vim.mode = VimMode::Insert;
-        self.vim.clear_pending();
-    }
-
-    /// Leave Insert for Normal mode. Vim nudges the cursor one cell left so it
-    /// sits on the last typed character rather than past it.
-    fn enter_normal_mode(&mut self) {
-        self.vim.mode = VimMode::Normal;
-        self.vim.clear_pending();
-        self.cursor = self.cursor.saturating_sub(1);
-        self.clamp_normal_cursor();
-    }
-
-    /// In Normal mode the cursor sits *on* a character, never past the last
-    /// one (an empty line keeps it at 0).
-    fn clamp_normal_cursor(&mut self) {
-        if self.vim.mode != VimMode::Normal {
-            return;
+    /// Read `keybindings.json` (user, then project) and Claude's `editorMode`. Called once at
+    /// startup; a `[ui] vim` already on in wizard's config stays on.
+    pub fn load_claude_input(&mut self, home: &std::path::Path, project: &std::path::Path) {
+        self.keymap = Keymap::load(home, project);
+        self.load_status_line(home, project);
+        if !self.vim.enabled {
+            let vim = [
+                home.join(".claude/settings.json"),
+                project.join(".claude/settings.json"),
+                project.join(".claude/settings.local.json"),
+            ]
+            .iter()
+            .filter_map(|f| std::fs::read_to_string(f).ok())
+            .filter_map(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .filter_map(|d| d.get("editorMode")?.as_str().map(|m| m == "vim"))
+            .last()
+            .unwrap_or(false);
+            self.vim.set_enabled(vim);
         }
-        let len = self.input.chars().count();
-        self.cursor = if len == 0 {
-            0
+    }
+
+    /// The contexts a key is looked up in, from what is on screen.
+    fn keymap_contexts(&self) -> Vec<&'static str> {
+        let mut c = vec!["Global"];
+        if self.picker.is_some() || self.overlay_active() {
+            c.push("Select");
         } else {
-            self.cursor.min(len - 1)
+            c.push("Chat");
+            if !self.suggestions.is_empty() {
+                c.push("Autocomplete");
+            }
+        }
+        c
+    }
+
+    /// `keybindings.json`: `Some` when a rule from the file took the key.
+    fn keymap_key(&mut self, key: KeyEvent) -> Option<Option<AppAction>> {
+        self.keymap.reload();
+        if !self.keymap.has_user_rules() {
+            return None;
+        }
+        let contexts = self.keymap_contexts();
+        let stroke = Stroke::from(key);
+        match self
+            .keymap
+            .resolve(&contexts, stroke.clone(), std::time::Instant::now())
+        {
+            Resolved::Action(a) => Some(self.run_key_action(&a)),
+            Resolved::Unbound => self
+                .keymap
+                .default_bound(&contexts, &stroke)
+                .then_some(None),
+            Resolved::Pending | Resolved::Cancelled => Some(None),
+            Resolved::Default => None,
+        }
+    }
+
+    /// What an action from the file does here. Actions wizard has no use for do nothing.
+    fn run_key_action(&mut self, action: &str) -> Option<AppAction> {
+        if let Some(name) = action.strip_prefix("command:") {
+            self.set_input(format!("/{name}"));
+            return self.submit();
+        }
+        match action {
+            "app:exit" => self.should_quit = true,
+            "app:toggleTodos" => self.show_todos = !self.show_todos,
+            "app:toggleTranscript" => self.set_compact_view(None),
+            "history:search" => self.open_overlay(OverlayKind::History),
+            "history:previous" => self.history_prev(),
+            "history:next" => self.history_next(),
+            "chat:cancel" if self.status.busy => return Some(AppAction::Interrupt),
+            "chat:clearInput" => self.clear_input(),
+            "chat:cycleMode" if self.mode() == crate::config::Mode::Genie => {
+                return Some(AppAction::CycleMode);
+            }
+            "chat:externalEditor" => self.pending_edit_prompt = true,
+            "chat:modelPicker" if !self.status.busy => {
+                return Some(AppAction::Command(SlashCommand::Model(None)));
+            }
+            "chat:newline" => self.insert_newline(),
+            "chat:submit" => return self.submit(),
+            _ => {}
+        }
+        self.sync_input_mode();
+        None
+    }
+
+    /// Modal editing for the composer: the keys go to the engine in `crate::vim`. `Some` is the
+    /// answer when the engine took the key; `None` lets ordinary editing have it.
+    fn vim_key(&mut self, key: KeyEvent) -> Option<Option<AppAction>> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let vk = match key.code {
+            KeyCode::Esc => VimKey::Esc,
+            KeyCode::Char('[') if ctrl => VimKey::Esc,
+            _ if ctrl || alt => return None,
+            KeyCode::Char(c) => VimKey::Char(c),
+            KeyCode::Backspace => VimKey::Backspace,
+            KeyCode::Delete => VimKey::Delete,
+            KeyCode::Left => VimKey::Left,
+            KeyCode::Right => VimKey::Right,
+            KeyCode::Up => VimKey::Up,
+            KeyCode::Down => VimKey::Down,
+            KeyCode::Home => VimKey::Home,
+            KeyCode::End => VimKey::End,
+            _ => VimKey::Other,
         };
-    }
-
-    /// Snapshot the line for `u` before a Normal-mode edit.
-    fn vim_snapshot(&mut self) {
-        let cursor = self.cursor;
-        self.vim.push_undo(&self.input, cursor);
-    }
-
-    /// Drop the most recent undo snapshot back into the line (`u`).
-    fn vim_undo(&mut self) {
-        if let Some((input, cursor)) = self.vim.undo.pop() {
-            self.input = input;
-            self.cursor = cursor;
-            self.clamp_normal_cursor();
+        let insert = self.vim.mode == VimMode::Insert;
+        if insert && !matches!(vk, VimKey::Esc | VimKey::Char(_) | VimKey::Backspace) {
+            return None;
         }
-    }
-
-    /// Remove characters `[start, end)` and return them; leaves the cursor at
-    /// `start`. Used by `x`/`D` and the `d`/`c` operators.
-    fn vim_delete_range(&mut self, start: usize, end: usize) -> String {
-        let len = self.input.chars().count();
-        let start = start.min(len);
-        let end = end.min(len);
-        if start >= end {
-            return String::new();
+        let pending = self.vim.is_pending();
+        let was_visual = self.vim.is_visual();
+        let mode = self.vim.mode;
+        let out = self.vim.key(&mut self.input, &mut self.cursor, vk);
+        if self.vim.mode != mode {
+            self.statusline_trigger();
         }
-        let bstart = self.char_byte(start);
-        let bend = self.char_byte(end);
-        let removed = self.input[bstart..bend].to_string();
-        self.input.replace_range(bstart..bend, "");
-        self.cursor = start;
-        removed
-    }
-
-    /// Replace the character under the cursor with `c` (`r`).
-    fn vim_replace_char(&mut self, c: char) {
-        let len = self.input.chars().count();
-        if self.cursor >= len {
-            return;
-        }
-        self.vim_snapshot();
-        let idx = self.byte_index();
-        self.input.remove(idx);
-        self.input.insert(idx, c);
-    }
-
-    /// Apply an operator over the character range `[start, end)` (`dw`, `c$`,
-    /// `ye`, …). Delete/Change stash the text in the register; Change then
-    /// enters Insert. Yank only copies.
-    fn vim_apply_op(&mut self, op: VimOp, start: usize, end: usize) {
-        let (start, end) = (start.min(end), start.max(end));
-        if start >= end {
-            return;
-        }
-        match op {
-            VimOp::Yank => {
-                let bstart = self.char_byte(start);
-                let bend = self.char_byte(end);
-                self.vim.register = self.input[bstart..bend].to_string();
-            }
-            VimOp::Delete => {
-                self.vim_snapshot();
-                self.vim.register = self.vim_delete_range(start, end);
-                self.clamp_normal_cursor();
-            }
-            VimOp::Change => {
-                self.vim_snapshot();
-                self.vim.register = self.vim_delete_range(start, end);
-                self.enter_insert();
-            }
-        }
-    }
-
-    /// Linewise operator (`dd`/`cc`/`yy`): the whole single-line buffer.
-    fn vim_apply_linewise(&mut self, op: VimOp) {
-        match op {
-            VimOp::Yank => self.vim.register = self.input.clone(),
-            VimOp::Delete => {
-                self.vim_snapshot();
-                self.vim.register = std::mem::take(&mut self.input);
-                self.cursor = 0;
-            }
-            VimOp::Change => {
-                self.vim_snapshot();
-                self.vim.register = std::mem::take(&mut self.input);
-                self.cursor = 0;
-                self.enter_insert();
-            }
-        }
-    }
-
-    /// Paste the register `n` times, after the cursor (`p`) or before it
-    /// (`P`); the cursor lands on the last pasted character.
-    fn vim_paste(&mut self, after: bool, n: usize) {
-        if self.vim.register.is_empty() {
-            return;
-        }
-        self.vim_snapshot();
-        let text = self.vim.register.repeat(n.max(1));
-        let len = self.input.chars().count();
-        let at = if after && len > 0 {
-            (self.cursor + 1).min(len)
-        } else {
-            self.cursor
-        };
-        let byte = self.char_byte(at);
-        self.input.insert_str(byte, &text);
-        self.cursor = at + text.chars().count().saturating_sub(1);
-        self.clamp_normal_cursor();
-    }
-
-    /// Handle one key in Normal mode. Returns an [`AppAction`] only for keys
-    /// that submit (Enter); everything else mutates composer state in place.
-    fn handle_vim_normal(&mut self, key: KeyEvent) -> Result<Option<AppAction>> {
-        let mut action = None;
-        let printable = !key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-        'dispatch: {
-            // `r` armed: the next printable key replaces the char under cursor.
-            if self.vim.pending == Some(Pending::Replace) {
-                self.vim.pending = None;
-                if let (KeyCode::Char(c), true) = (key.code, printable) {
-                    self.vim_replace_char(c);
+        match out {
+            VimOut::HistoryUp => self.history_prev(),
+            VimOut::HistoryDown => {
+                if self.history_browse.is_some() {
+                    self.history_next();
+                } else {
+                    self.focus_rail();
                 }
-                break 'dispatch;
             }
-
-            // Count prefix: digits accumulate (a leading `0` is the motion, not
-            // a count).
-            if let KeyCode::Char(c @ '0'..='9') = key.code
-                && printable
-                && !(c == '0' && self.vim.count.is_none())
-            {
-                let digit = c as usize - '0' as usize;
-                let next = self.vim.count.unwrap_or(0).saturating_mul(10) + digit;
-                self.vim.count = Some(next.min(100_000));
-                break 'dispatch;
-            }
-
-            // An operator is pending: read this key as its motion, or as the
-            // linewise form when the operator key repeats (`dd`/`cc`/`yy`).
-            if let Some(Pending::Operator(op)) = self.vim.pending {
-                self.vim.pending = None;
-                // Vim multiplies the operator's count by the motion's.
-                let n = self.vim.operator_count.take().unwrap_or(1)
-                    * self.vim.count.take().unwrap_or(1);
-                let repeated = matches!(
-                    (op, key.code),
-                    (VimOp::Delete, KeyCode::Char('d'))
-                        | (VimOp::Change, KeyCode::Char('c'))
-                        | (VimOp::Yank, KeyCode::Char('y'))
-                );
-                if repeated {
-                    self.vim_apply_linewise(op);
-                } else if let KeyCode::Char(motion) = key.code {
-                    let chars: Vec<char> = self.input.chars().collect();
-                    if let Some(m) = vim::resolve_motion(motion, n, &chars, self.cursor) {
-                        // `cw` is `ce`, not `dw`. Vim's own special case: a
-                        // change stops at the end of the word and leaves the
-                        // whitespace after it, because you are about to type a
-                        // replacement word and would otherwise have to retype
-                        // the space. `dw` takes the space and is already right.
-                        //
-                        // Both were handed the identical `w` range, so `cw` on
-                        // "foo bar baz" gave "bar baz" where vim gives
-                        // " bar baz". `/vim`'s own notice advertises `cw`.
-                        let end = match (op, motion) {
-                            (VimOp::Change, 'w' | 'W') => {
-                                let mut end = m.end;
-                                while end > m.start
-                                    && chars.get(end - 1).is_some_and(|c| c.is_whitespace())
-                                {
-                                    end -= 1;
-                                }
-                                end
-                            }
-                            _ => m.end,
-                        };
-                        self.vim_apply_op(op, m.start, end);
+            VimOut::Pass => {
+                // typing in INSERT goes on to ordinary editing; so do Enter, Tab and the page
+                // keys in NORMAL. A letter the engine has no command for is swallowed.
+                if insert || matches!(vk, VimKey::Other) {
+                    if matches!(vk, VimKey::Other)
+                        && key.code == KeyCode::Tab
+                        && !self.suggestions.is_empty()
+                    {
+                        self.accept_suggestion();
+                        self.vim.insert_mode();
+                        self.sync_input_mode();
+                        return Some(None);
                     }
+                    return None;
                 }
-                break 'dispatch;
+                return Some(None);
             }
-
-            let len = self.input.chars().count();
-            match key.code {
-                // --- motions ---
-                KeyCode::Char('h') | KeyCode::Left => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.cursor = self.cursor.saturating_sub(n);
+            VimOut::Handled => {
+                if vk == VimKey::Esc && !pending && !was_visual && !insert {
+                    let action = self.vim_escape();
+                    self.sync_input_mode();
+                    return Some(action);
                 }
-                KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(' ') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.cursor = (self.cursor + n).min(len);
-                    self.clamp_normal_cursor();
-                }
-                // The bare motions duplicate what `vim::resolve_motion` does
-                // for the operator forms, so they have to agree with it: these
-                // three are line-scoped there and were buffer-scoped here,
-                // which is how `0` on line two reached the start of line one.
-                KeyCode::Char('0') => {
-                    self.vim.count = None;
-                    self.cursor = self.line_bounds().0;
-                }
-                KeyCode::Char('^') => {
-                    self.vim.count = None;
-                    let chars: Vec<char> = self.input.chars().collect();
-                    let (start, end) = self.line_bounds();
-                    self.cursor = start + vim::first_non_blank(&chars[start..end]);
-                }
-                KeyCode::Char('$') => {
-                    self.vim.count = None;
-                    // *On* the last character of the line, which is where vim
-                    // leaves you — not on the newline after it.
-                    // `clamp_normal_cursor` only knows about the buffer's end,
-                    // so it cannot do this for an inner line.
-                    let (start, end) = self.line_bounds();
-                    self.cursor = if end > start { end - 1 } else { start };
-                    self.clamp_normal_cursor();
-                }
-                KeyCode::Char('w') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    let chars: Vec<char> = self.input.chars().collect();
-                    for _ in 0..n {
-                        self.cursor = vim::word_forward(&chars, self.cursor);
-                    }
-                    self.clamp_normal_cursor();
-                }
-                KeyCode::Char('b') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    let chars: Vec<char> = self.input.chars().collect();
-                    for _ in 0..n {
-                        self.cursor = vim::word_back(&chars, self.cursor);
-                    }
-                }
-                KeyCode::Char('e') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    let chars: Vec<char> = self.input.chars().collect();
-                    for _ in 0..n {
-                        self.cursor = vim::word_end(&chars, self.cursor);
-                    }
-                    self.clamp_normal_cursor();
-                }
-                // Single-line analog of j/k: walk the input history.
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.vim.count = None;
-                    self.history_prev();
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.vim.count = None;
-                    if self.history_browse.is_some() {
-                        self.history_next();
-                    } else {
-                        // Not browsing history: like plain ↓, drop into the
-                        // subagent rail when there is one.
-                        self.focus_rail();
-                    }
-                }
-
-                // --- insert transitions ---
-                KeyCode::Char('i') => self.enter_insert(),
-                KeyCode::Char('I') => {
-                    let chars: Vec<char> = self.input.chars().collect();
-                    self.cursor = vim::first_non_blank(&chars);
-                    self.enter_insert();
-                }
-                KeyCode::Char('a') => {
-                    self.cursor = (self.cursor + 1).min(len);
-                    self.enter_insert();
-                }
-                KeyCode::Char('A') => {
-                    self.cursor = len;
-                    self.enter_insert();
-                }
-                // Single-line: `o`/`O` have no new line to open, so they map to
-                // append-at-end / insert-at-start.
-                KeyCode::Char('o') => {
-                    self.cursor = len;
-                    self.enter_insert();
-                }
-                KeyCode::Char('O') => {
-                    self.cursor = 0;
-                    self.enter_insert();
-                }
-
-                // --- edits ---
-                KeyCode::Char('x') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.vim_snapshot();
-                    self.vim.register = self.vim_delete_range(self.cursor, self.cursor + n);
-                    self.clamp_normal_cursor();
-                }
-                KeyCode::Char('X') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    let start = self.cursor.saturating_sub(n);
-                    self.vim_snapshot();
-                    self.vim.register = self.vim_delete_range(start, self.cursor);
-                }
-                // To the end of the *line*, not the end of the draft — both of
-                // them deleted every line below the caret on a multi-line
-                // composer. See the module header in `vim.rs` for which
-                // commands are line-aware and which are not.
-                KeyCode::Char('D') => {
-                    self.vim.count = None;
-                    self.vim_snapshot();
-                    let end = self.line_bounds().1;
-                    self.vim.register = self.vim_delete_range(self.cursor, end);
-                    self.clamp_normal_cursor();
-                }
-                KeyCode::Char('C') => {
-                    self.vim.count = None;
-                    self.vim_snapshot();
-                    let end = self.line_bounds().1;
-                    self.vim.register = self.vim_delete_range(self.cursor, end);
-                    self.enter_insert();
-                }
-                KeyCode::Char('s') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.vim_snapshot();
-                    self.vim.register = self.vim_delete_range(self.cursor, self.cursor + n);
-                    self.enter_insert();
-                }
-                KeyCode::Char('S') => {
-                    self.vim.count = None;
-                    self.vim_apply_linewise(VimOp::Change);
-                }
-                KeyCode::Char('r') => self.vim.pending = Some(Pending::Replace),
-
-                // --- operators (await a motion) ---
-                //
-                // The count typed *before* the operator is set aside here, so
-                // the digits of the motion's own count start from nothing.
-                // Sharing one field made them concatenate: `2d3w` read as 23
-                // words rather than 2 x 3.
-                KeyCode::Char('d') => {
-                    self.vim.operator_count = self.vim.count.take();
-                    self.vim.pending = Some(Pending::Operator(VimOp::Delete));
-                }
-                KeyCode::Char('c') => {
-                    self.vim.operator_count = self.vim.count.take();
-                    self.vim.pending = Some(Pending::Operator(VimOp::Change));
-                }
-                KeyCode::Char('y') => {
-                    self.vim.operator_count = self.vim.count.take();
-                    self.vim.pending = Some(Pending::Operator(VimOp::Yank));
-                }
-
-                // --- paste / undo ---
-                KeyCode::Char('p') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.vim_paste(true, n);
-                }
-                KeyCode::Char('P') => {
-                    let n = self.vim.count.take().unwrap_or(1);
-                    self.vim_paste(false, n);
-                }
-                KeyCode::Char('u') => {
-                    self.vim.count = None;
-                    self.vim_undo();
-                }
-
-                // --- still-useful editing keys in Normal mode ---
-                KeyCode::Enter
-                    if key
-                        .modifiers
-                        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
-                {
-                    self.vim.count = None;
-                    self.insert_newline();
-                }
-                KeyCode::Enter => {
-                    self.vim.count = None;
-                    action = self.submit();
-                }
-                KeyCode::Backspace => {
-                    self.vim.count = None;
-                    self.cursor = self.cursor.saturating_sub(1);
-                }
-                // Esc keeps wizard's escape hatches (close diff, dismiss
-                // todos, reset scroll) since Normal-mode Esc would otherwise
-                // be a no-op.
-                KeyCode::Esc => {
-                    self.vim.clear_pending();
-                    if self.diff.take().is_some() {
-                    } else if !self.suggestions.is_empty() {
-                        // The same arm Insert mode has. Without it the popup
-                        // was unreachable from Normal mode: Escape did not
-                        // close it, Tab fell through to the catch-all below,
-                        // and Up/Down are bound to history here — so the only
-                        // way out was to edit the text, while the status bar
-                        // read "↑↓ select · Tab complete · Enter run".
-                        self.dismissed_suggestions_for = Some(self.input.clone());
-                        self.suggestions.clear();
-                        self.suggestion_index = 0;
-                    } else if self.show_todos {
-                        // Then the todo band (it auto-opens on the first
-                        // todo update, so it needs a way out that isn't
-                        // `/todos`).
-                        self.show_todos = false;
-                    } else if self.transcript.focused_group().is_some() {
-                        self.transcript.clear_group_focus();
-                    } else if !self.transcript.follow {
-                        self.scroll_to_bottom();
-                    } else if self.status.busy && self.input.is_empty() {
-                        action = Some(AppAction::Interrupt);
-                    }
-                }
-                // Completing is not a motion, and Normal mode is still where
-                // somebody who typed `/st` and hit Escape is standing. Without
-                // this Tab fell into the catch-all and cleared the count.
-                KeyCode::Tab if !self.suggestions.is_empty() => {
-                    self.accept_suggestion();
-                    self.enter_insert();
-                }
-                KeyCode::PageUp => self.scroll_transcript(10),
-                KeyCode::PageDown => self.scroll_transcript(-10),
-                _ => self.vim.count = None,
             }
         }
         self.sync_input_mode();
-        Ok(action)
+        Some(None)
+    }
+
+    /// Esc in NORMAL with nothing half typed keeps wizard's escape hatches (close the diff,
+    /// dismiss the todos, scroll to the end, interrupt), since it would otherwise do nothing.
+    fn vim_escape(&mut self) -> Option<AppAction> {
+        if self.diff.take().is_some() {
+        } else if !self.suggestions.is_empty() {
+            self.dismissed_suggestions_for = Some(self.input.clone());
+            self.suggestions.clear();
+            self.suggestion_index = 0;
+        } else if self.show_todos {
+            self.show_todos = false;
+        } else if self.transcript.focused_group().is_some() {
+            self.transcript.clear_group_focus();
+        } else if !self.transcript.follow {
+            self.scroll_to_bottom();
+        } else if self.status.busy && self.input.is_empty() {
+            return Some(AppAction::Interrupt);
+        }
+        None
     }
 
     // --- input history (↑/↓ recall, shell-style) ---
@@ -2976,6 +2702,7 @@ impl App {
             }
             Event::Tick => {
                 self.tick = self.tick.wrapping_add(1);
+                self.statusline_tick();
                 if self
                     .copied
                     .is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR)
@@ -3044,6 +2771,13 @@ impl App {
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         if !is_ctrl_c {
             self.ctrl_c_armed = false;
+        }
+
+        // Rules from keybindings.json come before the built-in keys.
+        if self.prompt.is_none() {
+            if let Some(action) = self.keymap_key(key) {
+                return Ok(action);
+            }
         }
 
         // Global chords, regardless of input mode.
@@ -3737,18 +3471,8 @@ impl App {
         // text; in Insert mode the only extra binding is Esc → Normal, and
         // everything else falls through to ordinary line editing below.
         if self.vim.enabled {
-            match self.vim.mode {
-                VimMode::Normal => return self.handle_vim_normal(key),
-                VimMode::Insert => {
-                    if key.code == KeyCode::Esc
-                        && !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                    {
-                        self.enter_normal_mode();
-                        return Ok(None);
-                    }
-                }
+            if let Some(action) = self.vim_key(key) {
+                return Ok(action);
             }
         }
 
@@ -4202,6 +3926,17 @@ impl App {
 
         let input = self.input.trim().to_string();
         if input.is_empty() {
+            return None;
+        }
+        if let Some(arg) = input
+            .strip_prefix("/statusline")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let arg = arg.to_string();
+            self.welcome_dismissed = true;
+            self.push_history(&input);
+            self.clear_input();
+            self.statusline_command(&arg);
             return None;
         }
         match SlashCommand::parse(&input) {
@@ -4956,6 +4691,7 @@ impl App {
                 }
             }
             AgentEvent::Done { reason } => {
+                self.statusline_trigger();
                 self.status.busy = false;
                 self.turn_took = self
                     .turn_started

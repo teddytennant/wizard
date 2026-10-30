@@ -241,10 +241,6 @@ fn save_skin(app: &mut App, skin: skin::Skin) -> Result<()> {
 /// answer is derived from [`crate::commands::COMMANDS`] on every surface:
 /// there used to be a hand-written list in this file, and it had already lost
 /// `/exit`. Keys are the terminal's own, and have no table to come from.
-pub(crate) fn help_keys() -> &'static str {
-    HELP_KEYS
-}
-
 const HELP_KEYS: &str = "keys:\n  \
 Tab / \u{2192}                     accept command completion\n  \
 Shift+Tab                   cycle genie, plan, omakase\n  \

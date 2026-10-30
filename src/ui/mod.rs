@@ -243,6 +243,20 @@ fn draw_house(frame: &mut Frame, app: &App) {
     if status_top.height > 0 {
         draw_status_above(frame, app, status_top);
     }
+    let mut status_area = status_area;
+    if status_area.height > 1 {
+        let rows = status_area.height - 1;
+        let custom = Rect {
+            height: rows,
+            ..status_area
+        };
+        frame.render_widget(Paragraph::new(app.statusline_spans()), custom);
+        status_area = Rect {
+            y: status_area.y + rows,
+            height: 1,
+            ..status_area
+        };
+    }
     draw_status_bar(
         frame,
         app,
@@ -360,13 +374,19 @@ pub fn regions(app: &App, area: Rect) -> Regions {
     } else {
         todo_height(app, main.height, input_rows + status_rows, rail_rows)
     };
+    // The user's status line takes rows of its own above the status bar, in the house look.
+    let custom_rows = if matches!(skin::active(), skin::Skin::Wizard) {
+        app.statusline_rows()
+    } else {
+        0
+    };
     let [body, todo, status_top, composer, rail, footer] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(todo_rows),
         Constraint::Length(status_rows),
         Constraint::Length(input_rows),
         Constraint::Length(rail_rows),
-        Constraint::Length(1),
+        Constraint::Length(1 + custom_rows),
     ])
     .areas(main);
     Regions {
