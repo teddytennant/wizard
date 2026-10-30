@@ -15,11 +15,16 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tuikit::editor::{Editor, KeyOutcome};
 use tuikit::term::{Event as TermEvent, EventPump, TermGuard};
 
+use crate::keybindings::Keymap;
 use crate::theme::Theme;
+use crate::vim::VimState;
+
+mod modal;
+pub use modal::editor_mode_is_vim;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The Claude Code release this look reproduces.
-pub const CLAUDE_VERSION: &str = "2.1.300";
+pub const CLAUDE_VERSION: &str = "2.1.314";
 pub const LOOK: &str = "claude";
 
 pub const SPINNER_FRAMES: [&str; 6] = ["·", "✢", "*", "✶", "✻", "✽"];
@@ -147,7 +152,13 @@ pub enum Block {
         text: String,
         time: (u32, u32),
     },
-    Thought(String),
+    /// Thinking: its text, when it began and how many seconds it took (0 when not known, as in
+    /// a session read back from disk).
+    Thought {
+        text: String,
+        began: Duration,
+        secs: u64,
+    },
     Tool(ToolCall),
     Todos(Vec<Todo>),
     TurnEnd {
@@ -376,6 +387,13 @@ pub struct App {
     pub submitted: bool,
     /// `/plan` toggles sent for shift+tab whose turn and answer stay out of the transcript.
     silent: usize,
+    /// When the session opened, on the clock: `← for agents` is in the footer for ten seconds
+    /// after it.
+    pub opened_at: Duration,
+    /// Vim mode for the prompt (`editorMode: "vim"`).
+    pub vim: VimState,
+    /// The bindings from `keybindings.json`.
+    pub keymap: Keymap,
 }
 
 impl App {
@@ -453,6 +471,9 @@ impl App {
             rewind_answer: None,
             rewinding: None,
             silent: 0,
+            opened_at: Duration::ZERO,
+            vim: VimState::default(),
+            keymap: Keymap::new(),
             mode_steps: Default::default(),
             mode_waiting: None,
             mode_target: None,
@@ -756,6 +777,7 @@ impl App {
         self.export.apply(&ev);
         match ev {
             Event::Ready { session_id, config } => {
+                self.opened_at = self.clock.elapsed();
                 // wizard opens every session, new, loaded or rewound, on its config's defaults:
                 // what the user chose (flags at first, then picks and presses) goes back on it
                 let first = !self.ready;
@@ -857,7 +879,11 @@ impl App {
                         HistoryItem::Assistant(text) => {
                             self.blocks.push(Block::Assistant { text, time })
                         }
-                        HistoryItem::Thought(t) => self.blocks.push(Block::Thought(t)),
+                        HistoryItem::Thought(t) => self.blocks.push(Block::Thought {
+                            text: t,
+                            began: Duration::ZERO,
+                            secs: 0,
+                        }),
                         HistoryItem::Tool(t) => {
                             let t = self.placed(t);
                             self.blocks.push(Block::Tool(t))
@@ -895,9 +921,17 @@ impl App {
                     b.chars += t.len();
                     b.thinking = true;
                 }
+                let now = self.clock.elapsed();
                 match self.blocks.last_mut() {
-                    Some(Block::Thought(text)) => text.push_str(&t),
-                    _ => self.blocks.push(Block::Thought(t)),
+                    Some(Block::Thought { text, began, secs }) => {
+                        text.push_str(&t);
+                        *secs = thought_secs(now.saturating_sub(*began));
+                    }
+                    _ => self.blocks.push(Block::Thought {
+                        text: t,
+                        began: now,
+                        secs: 1,
+                    }),
                 }
             }
             Event::Tool(call) => {
@@ -1346,6 +1380,10 @@ impl App {
                 self.pick_mode_named(arg);
                 return;
             }
+            "vim" if arg.is_empty() => {
+                self.toggle_vim(text);
+                return;
+            }
             "clear" => {
                 self.notice = None;
                 self.from_queue.clear();
@@ -1583,6 +1621,9 @@ impl App {
             self.hint = None;
         }
 
+        if !(ctrl && key.code == KeyCode::Char('c')) && self.keymap_key(key) {
+            return;
+        }
         if ctrl && key.code == KeyCode::Char('c') {
             self.ctrl_c(prev_hint);
             if self.dialog.is_none() {
@@ -1599,6 +1640,9 @@ impl App {
             if self.dialog.is_none() {
                 self.flush_queue();
             }
+            return;
+        }
+        if self.vim.enabled && !self.bash_mode && self.vim_key(key) {
             return;
         }
         match key.code {
@@ -1659,6 +1703,10 @@ impl App {
             KeyCode::Char('!') if self.editor.is_empty() && !self.bash_mode => {
                 self.bash_mode = true;
                 self.shortcuts = false;
+            }
+            // the left arrow on an empty prompt opens the agents view, as the footer says
+            KeyCode::Left if self.editor.is_empty() && !self.bash_mode && !self.shortcuts => {
+                self.submit("/agents".into())
             }
             KeyCode::Backspace if self.editor.is_empty() && (self.bash_mode || self.shortcuts) => {
                 self.bash_mode = false;
@@ -2185,7 +2233,7 @@ impl App {
             match key.code {
                 KeyCode::Esc => self.amend = None,
                 KeyCode::Enter => {
-                    let choice = permission_options(req)[*sel].1;
+                    let choice = permission_options(req, self.auto_offered())[*sel].1;
                     self.decide(req.clone(), choice);
                 }
                 KeyCode::Backspace => {
@@ -2313,7 +2361,7 @@ impl App {
                 self.dialog = Some(Dialog::Resume { sel, query });
             }
             Dialog::Permission { req, sel } => {
-                let options = permission_options(&req);
+                let options = permission_options(&req, self.auto_offered());
                 let n = options.len();
                 match key.code {
                     KeyCode::Down => {
@@ -2328,7 +2376,7 @@ impl App {
                             sel: (sel + n - 1) % n,
                         })
                     }
-                    KeyCode::Char(c @ '1'..='3') if (c as usize - '1' as usize) < n => {
+                    KeyCode::Char(c @ '1'..='4') if (c as usize - '1' as usize) < n => {
                         self.decide(req, options[c as usize - '1' as usize].1)
                     }
                     KeyCode::Enter => self.decide(req, options[sel].1),
@@ -2566,6 +2614,21 @@ impl App {
         }
     }
 
+    /// Wizard's mode that approves for itself (Claude's auto mode), when it is not the one on.
+    fn auto_mode(&self) -> Option<String> {
+        let now = self.shown_mode().0;
+        self.cfg
+            .modes
+            .iter()
+            .find(|m| matches!(m.as_str(), "sovereign" | "auto") && **m != now)
+            .cloned()
+    }
+
+    /// Whether a permission prompt offers "switch to auto mode".
+    pub fn auto_offered(&self) -> bool {
+        self.auto_mode().is_some()
+    }
+
     fn decide(&mut self, req: PermissionRequest, choice: Choice) {
         self.dialog = None;
         // an approved plan ends plan mode in wizard
@@ -2573,6 +2636,12 @@ impl App {
             self.plan = false;
         }
         let note = self.amend.take().unwrap_or_default();
+        if choice == Choice::Auto {
+            if let Some(auto) = self.auto_mode() {
+                let plan = self.shown_mode().1;
+                self.go_to((auto, plan));
+            }
+        }
         self.send(Request::Decide {
             id: req.id,
             allow: choice != Choice::No,
@@ -2729,6 +2798,12 @@ impl App {
                 .map_or(self.now_unix, |d| d.as_secs() as i64);
         }
         let now = self.clock.elapsed();
+        // the footer's `← for agents` goes away ten seconds in
+        if now.saturating_sub(self.opened_at) >= AGENTS_HINT_FOR
+            && now.saturating_sub(self.opened_at) < AGENTS_HINT_FOR + Duration::from_secs(1)
+        {
+            self.dirty = true;
+        }
         if self.notice_until.is_some_and(|until| now >= until) {
             self.notice = None;
             self.notice_until = None;
@@ -2795,6 +2870,8 @@ impl App {
 pub enum Choice {
     Yes,
     Always,
+    /// Allow this once and move wizard to its self-approving mode, Claude's "auto mode".
+    Auto,
     No,
 }
 
@@ -2804,7 +2881,15 @@ pub fn is_plan(req: &PermissionRequest) -> bool {
     req.input.get("plan").is_some_and(|p| p.is_string())
 }
 
-pub fn permission_options(req: &PermissionRequest) -> Vec<(String, Choice)> {
+/// How long after a session opens the footer says `← for agents` (2.1.314 hides it then).
+pub const AGENTS_HINT_FOR: Duration = Duration::from_secs(10);
+
+/// "Thought for 3s": whole seconds, and never less than one.
+fn thought_secs(took: Duration) -> u64 {
+    ((took.as_millis() as u64 + 500) / 1000).max(1)
+}
+
+pub fn permission_options(req: &PermissionRequest, auto: bool) -> Vec<(String, Choice)> {
     if is_plan(req) {
         return vec![
             ("Yes, proceed".to_string(), Choice::Yes),
@@ -2814,10 +2899,17 @@ pub fn permission_options(req: &PermissionRequest) -> Vec<(String, Choice)> {
     let mut v = vec![("Yes".to_string(), Choice::Yes)];
     if !req.rule.is_empty() {
         let what = match req.kind {
-            ToolKind::Edit => "Yes, allow all edits during this session".to_string(),
+            ToolKind::Edit => "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)".to_string(),
             _ => format!("Yes, and don\u{2019}t ask again for: {}", req.rule),
         };
         v.push((what, Choice::Always));
+    }
+    if auto && req.diff.is_none() {
+        v.push((
+            "Yes, and switch to auto mode \u{b7} auto mode handles these prompts for you"
+                .to_string(),
+            Choice::Auto,
+        ));
     }
     v.push(("No".to_string(), Choice::No));
     v
@@ -3145,9 +3237,7 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App) -> Result<()> {
             if app.truecolor {
                 crate::truecolor::paint(f.buffer_mut(), app.opts.light);
             }
-            if let Some(c) = app.cursor {
-                f.set_cursor_position(c);
-            }
+            // no terminal cursor is set: ui::draw paints the inverse cell Claude Code uses
         })?;
         Ok(())
     };

@@ -1,0 +1,510 @@
+# text<TAB>keys. \n in text is a newline. Cursor starts on the first character (gg0 is sent first).
+# Captured against Claude Code 2.1.314 by looks/crates/claudew/tools/vimdiff.py into vim-claude.tsv.
+hello world	x
+hello world	3x
+hello world	$x
+hello world	$5x
+ab\ncd	l5x
+hello world	$X
+hello world	3l2X
+foo bar baz	w
+foo bar baz	2w
+foo bar baz	wD
+foo bar baz	e
+foo bar baz	ee
+foo bar baz	$b
+foo bar baz	$2b
+foo.bar baz	w
+foo.bar baz	W
+foo.bar baz	E
+foo.bar baz	$B
+foo bar	$
+  foo	$0
+  foo	$^
+foo\n\nbar	w
+foo\n\nbar	2w
+foo\n\nbar	3w
+foo\n\nbar	G
+foo\n\nbar	Gb
+foo\n\nbar	Gbb
+foo bar baz	wdw
+foo bar baz	2dw
+foo bar baz	d2w
+foo bar baz	2d2w
+foo bar baz	dw.
+foo bar baz	dw2.
+foo bar\nbaz	wdw
+foo\n  bar	dw
+foo bar baz	de
+foo bar baz	wdb
+foo bar baz	$db
+foo bar baz	dW
+foo.bar baz	dW
+foo.bar baz	dE
+foo.bar baz	dw
+foo bar baz	cwxy<Esc>
+foo bar baz	lcwxy<Esc>
+foo  bar	3lcwx<Esc>
+foo bar baz	2cwx<Esc>
+foo bar baz	cWx<Esc>
+foo bar baz	cex<Esc>
+foo.bar	cwx<Esc>
+foo.bar	cWx<Esc>
+foo bar baz	cbx<Esc>
+one\ntwo\nthree	jdd
+one\ntwo\nthree	Gdd
+one\ntwo\nthree	dd
+one\ntwo\nthree	2dd
+one\ntwo\nthree	3dd
+one\ntwo\nthree	5dd
+one\ntwo\nthree	jccxx<Esc>
+one\ntwo\nthree	2ccxx<Esc>
+one\ntwo\nthree	yyjp
+one\ntwo\nthree	yyP
+one\ntwo\nthree	2yyGp
+one\ntwo\nthree	jYP
+hello world	w D
+hello world	wD
+hello world	wd$
+hello world	wCthere<Esc>
+hello world	wc$there<Esc>
+ab\ncd	D
+hello world	wd0
+  hello	$d^
+  hello	$c0x<Esc>
+a,b,c	f,
+a,b,c	2f,
+a,b,c	3f,
+a,b,c	t,
+a,b,c	f,;;
+a,b,c	$F,
+a,b,c	$F,,
+a,b,c	$T,
+a,b,c	$2F,
+a,b,c	2t,
+a,b,c	t,;
+a,b,c	t,;;
+a,b,c	f,$,
+a,b,c	df,
+a,b,c	dt,
+a,b,c	d2f,
+a,b,c	$dF,
+a,b,c	$dT,
+a,b,c	ct,x<Esc>
+a,b,c	f,d;
+a,b,c	f,d,
+a,b,c	f,lyt,P
+say "hi there" now	f"ci"x<Esc>
+foo bar baz	wdiw
+foo bar baz	wdaw
+foo bar baz	$daw
+foo bar baz	dawx
+foo   bar	4ldiw
+foo   bar	4ldaw
+foo.bar baz	diw
+foo.bar baz	diW
+foo.bar baz	daW
+foo bar baz	ciwx<Esc>
+foo bar baz	caw
+say "hi there" now	fhdi"
+say "hi there" now	fhda"
+say "hi there" now	di"
+say "hi there" now	fhci"x<Esc>
+it's a 'test' here	fedi'
+a "b" c "d" e	fcdi"
+a "b" c "d" e	f"dd
+f(a, (b), c)	fadi(
+f(a, (b), c)	fbdi(
+f(a, (b), c)	fbda(
+f(a, (b), c)	fbdib
+f(a, (b), c)	fbdab
+f(a, (b), c)	fbdi)
+f(a, (b), c)	di(
+f(a, (b), c)	f(di(
+f(a, (b), c)	f)di(
+{ x }	ldi{
+{ x }	ldiB
+{ x }	lda{
+[1, 2]	lci[9<Esc>
+[1, 2]	lda]
+<a b>	ldi<lt>
+<a b>	lda>
+(a [b] c)	%
+(a [b] c)	$%
+(a [b] c)	l%
+(a [b] c)	f[%
+x (a)	%
+x (a) y	%
+(a b) c	d%
+(a b) c	c%x<Esc>
+(a b) c	y%$p
+a (b) c	d%
+hello	rx
+hello	3rx
+hello	$3rx
+hello	$rx
+hello	2lrx
+hello	~
+hello	3~
+hello	$~
+hello	$3~
+hello	~~~
+hello	rx.
+hello	rxl.
+hello	3rxl.
+a\nb\nc	J
+a\n   b	J
+a\nb\nc	3J
+a\nb\nc	2J
+a\nb\nc	jJ
+a	J
+a \nb	J
+a\nb	ox<Esc>
+a\nb	Ox<Esc>
+a\nb	jOx<Esc>
+a\nb	jox<Esc>
+abc	lix<Esc>
+abc	lax<Esc>
+abc	lAx<Esc>
+abc	$ax<Esc>
+abc	$ix<Esc>
+  abc	$Ix<Esc>
+abc	lsx<Esc>
+abc	l2sx<Esc>
+abc\ndef	jSx<Esc>
+abc	Cx<Esc>
+abc	lix<Esc>.
+abc	lAx<Esc>.
+abc	ax<Esc>..
+abc	ix<BS><BS>y<Esc>
+abc	Aab<Esc>0.
+abc	xu
+abc	xxu
+abc	xxuu
+abc	xxuuu
+abc	lixy<Esc>u
+abc	lixy<Esc>uu
+one two	dwu
+one two	dwdwu
+one two	cwx<Esc>u
+a\nb\nc	ddu
+a\nb\nc	ddddu
+abc	xp
+abc	xP
+abc	yl3p
+abc	ylp
+one two	dwP
+one two	dw$p
+one two	wdwP
+one two	yiwwviwp
+one two	yiwwviwpP
+one two	ywwP
+one two	ywwp
+a\nb	yyjp
+a\nb	yyjP
+a\nb	ddp
+a\nb	ddP
+a\nb	jddp
+a\nb\nc	ddjp
+a b c d	dw.
+a b c d	dw..
+a b c d	d2w.
+a b c d	dwx.
+a\nb\nc	dd.
+a\nb\nc	ddj.
+one two	cwx<Esc>w.
+a b c	cwx<Esc>w.w.
+ab cd	cwx<Esc>w.
+a b	Ax<Esc>.
+abcdef	x2.
+abcdef	2x.
+abcdef	3x2.
+abcdef	>>.
+abcdef	~.
+abcdef	ox<Esc>.
+abc\ndef	Ox<Esc>j.
+a\nb\nc	gg
+a\nb\nc	G
+a\nb\nc	2G
+a\nb\nc	3G
+a\nb\nc	9G
+a\nb\nc	Ggg
+a\nb\nc	G2gg
+a\nb\nc	dG
+a\nb\nc	jdG
+a\nb\nc	Gdgg
+a\nb\nc	dgg
+a\nb\nc	jdgg
+a\nb\nc	dj
+a\nb\nc	Gdk
+a\nb\nc	2dj
+a\nb\nc	jdj
+a\nb\nc	jdk
+a\nb\nc	d2j
+a\nb\nc	cjx<Esc>
+a\nb\nc	yjGp
+a\nb\nc	jyk$p
+a\nb\nc	yGP
+a\nb\nc	d2G
+a\nb\nc	d3G
+a\nb\nc	jd1G
+abcd\nx\nabcd	3lj
+abcd\nx\nabcd	3ljj
+abcd\nx\nabcd	3ljjk
+abcd\nx\nabcd	$jj
+abcd\nx\nabcd	3ljx
+abcd\nx\nabcd	3ljjx
+abcd\nx\nabcd	3ljkx
+abcd\nxy\nab	$jj
+abcd\nxy\nab	$jjk
+abcd\nxy\nab	$jk
+ab\n\ncd	jx
+ab\n\ncd	jl
+ab\n\ncd	$j
+ab\n\ncd	jdd
+ab\n\ncd	jD
+ab\n\ncd	jiX<Esc>
+ab\n\ncd	jox<Esc>
+ab\n\ncd	jccx<Esc>
+ab\n\ncd	jdw
+ab\n\ncd	jcwx<Esc>
+ab\n\ncd	jyyjp
+ab\n\ncd	jw
+ab\n\ncd	jb
+ab\n\ncd	je
+ab\n\ncd	Gb
+ab\n\ncd	Gbb
+a\nb	$jx
+a\nb	jx
+a\nb	jhx
+a\nb	jhhx
+a\nb	jlx
+a\nb	lx
+a\nb	llx
+a b	llx
+abc	v
+abc	vd
+abc	vx
+abc	vld
+abc	vlld
+abc	vllld
+abc	vly
+abc	vlyP
+abc	vlyp
+abc	vlyP$p
+abc	vlc
+abc	vlcx<Esc>
+abc	vlsx<Esc>
+hello world	vex
+hello world	vey$p
+hello world	veyP
+hello world	vwd
+hello world	vbd
+hello world	$vbd
+hello world	vedp
+hello world	wvbd
+hello world	v$d
+hello world	v$y$p
+hello world	v0d
+hello world	wv0d
+hello world	vfod
+hello world	vtod
+hello world	vFd
+hello world	$vFhd
+hello world	vtwd
+hello world	v2ld
+hello world	vlod
+hello world	vlohd
+hello world	wvlohd
+hello world	vlU
+hello world	vl~
+hello world	veu
+hello world	vlUu
+hello world	vlrx
+hello world	vlrxx
+hello world	v$rx
+hello world	vlv
+hello world	vlvx
+hello world	vV
+hello world	vVd
+hello world	vVv
+foo bar	wviwd
+foo bar	wvawd
+foo bar	viwd
+foo bar	vawd
+foo bar	viwiwd
+foo bar	viwawd
+a (b c) d	fbvi(d
+a (b c) d	fbva(d
+a (b c) d	fbvi(i(d
+a "b c" d	fbvi"d
+a "b c" d	fbva"d
+foo bar	yiwwvp
+foo bar	yiwwvpP
+foo bar	yiwwvePp
+foo bar	yiwwvepp
+foo bar	yiwwvepx
+one two	yiwwviwpwp
+a\nb\nc	Vd
+a\nb\nc	jVd
+a\nb\nc	GVd
+a\nb\nc	Vjd
+a\nb\nc	Vjjd
+a\nb\nc	Vjy
+a\nb\nc	Vjyjjp
+a\nb\nc	VjyGp
+a\nb\nc	Vjyp
+a\nb\nc	VjyP
+a\nb\nc	jVyP
+a\nb\nc	jVyp
+a\nb\nc	yyjVp
+a\nb\nc	yyjVpP
+a\nb\nc	yyjVpp
+a\nb\nc	Vc
+a\nb\nc	Vcx<Esc>
+a\nb\nc	Vjcx<Esc>
+a\nb\nc	Vjx
+a\nb\nc	VjD
+a\nb\nc	VjX
+a\nb\nc	Vjs
+a\nb\nc	Vjsx<Esc>
+a\nb\nc	VjC
+a\nb\nc	VjY
+a\nb\nc	vjd
+a\nb\nc	vjy
+a\nb\nc	vjyGp
+a\nb\nc	vjjd
+a\nb\nc	jvkd
+a\nb\nc	jvjd
+a\nb\nc	Vj>
+a\nb\nc	Vj<lt>
+a\nb\nc	Vj>.
+a\nb\nc	VjJ
+a\nb\nc	VjjJ
+a\nb\nc	Vj~
+a\nb\nc	Vjr-
+a\nb\nc	vjr-
+a\nb\nc	Vjo
+a\nb\nc	Vjod
+a\nb\nc	Vjojd
+a\nb\nc	Vojd
+a\nb\nc	VGd
+a\nb\nc	jVggd
+a\nb\nc	vGd
+a\nb\nc	vggd
+a\nb\nc	jvggd
+a\nb\nc	jVgg
+a\nb\nc	Vgg
+a\nb\nc	Vj<Esc>x
+a\nb\nc	vj<Esc>x
+a\nb\nc	v<Esc>x
+a\nb\nc	V<Esc>x
+abc	>>
+abc	l>>
+a\nb	2>>
+a\nb	>>j>>
+a\nb	>>.
+a\nb	>>>>
+a\nb	>j
+    a	$<lt><lt>
+    a	$<lt><lt><lt><lt>
+  a	$<lt><lt>
+ a	$<lt><lt>
+a	<lt><lt>
+\ta	$<lt><lt>
+\t a	$<lt><lt>
+  a\n  b	2<lt><lt>
+  a\n  b	<lt><lt>j<lt><lt>
+abc	2dl
+abc	dl
+abc	dh
+abc	ldh
+abc	$dh
+abc	$dl
+abc	dhx
+abc	lcl
+abc	lclx<Esc>
+abc	clx<Esc>
+abc	$clx<Esc>
+abc	3dl
+abc	9dl
+abc	l9dh
+abc	ld0
+abc	$d0
+abc	l d$
+abc	ld$
+abc	d$
+abc	$d$
+abc	yl$p
+abc	yh$p
+abc	lyh$p
+abc	y$P
+abc	ly$P
+abc	ly0$p
+abc	$y0P
+abc\ndef	jy0kP
+abc\ndef	jd0
+abc\ndef	jld0
+abc\ndef	jd$
+abc\ndef	jld$
+abc\ndef	d$
+abc\ndef	$d$
+abc\ndef	d$j
+abc\ndef	jD
+abc\ndef	jlD
+abc\ndef	jDk
+abc\ndef	D.
+abc\ndef	Dj.
+abc\ndef	jDk.
+abc\ndef	2D
+abc\ndef	jyyp
+abc\ndef	jyyjp
+abc\ndef	yyp
+abc\ndef	yyjp
+abc\ndef	yyjP
+abc\ndef	yy2p
+abc\ndef	yy$p
+abc\ndef	lyyp
+abc\ndef	lyyjp
+abc\ndef	lyyP
+abc\ndef	ddp
+abc\ndef	jddP
+abc\ndef	jddp
+abc\ndef	ddpp
+abc\ndef	ddPP
+abc\ndef	dd2p
+abc\ndef	dd2P
+abc\ndef	ddu
+abc\ndef	jddu
+abc\ndef	ddui
+abc\ndef	ddux
+abc\ndef	ccxyz<Esc>
+abc\ndef	jccxyz<Esc>
+abc\ndef	ccxyz<Esc>u
+abc\ndef	ccxyz<Esc>j.
+abc\ndef	ccxyz<Esc>uu
+abc\ndef	ccxyz<Esc>.
+abc\ndef	cc<Esc>
+abc\ndef	cc<Esc>u
+abc\ndef	2cc<Esc>
+abc\ndef	Sx<Esc>
+abc\ndef	jSx<Esc>
+abc\ndef	2Sx<Esc>
+abc\ndef	Cx<Esc>
+abc\ndef	jCx<Esc>
+abc\ndef	lCx<Esc>
+abc\ndef	2Cx<Esc>
+abc\ndef	sx<Esc>
+abc\ndef	$sx<Esc>
+abc\ndef	jssx<Esc>
+abc\ndef	3sx<Esc>
+abc\ndef	4sx<Esc>
+abc\ndef	Ax<Esc>
+abc\ndef	jAx<Esc>
+abc\ndef	Ix<Esc>
+abc\ndef	jIx<Esc>
+abc\ndef	$ix<Esc>
+abc\ndef	$ax<Esc>
+abc\ndef	jax<Esc>
+abc\ndef	j$ax<Esc>
+abc\ndef	j$ix<Esc>

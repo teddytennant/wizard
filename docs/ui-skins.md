@@ -59,7 +59,7 @@ or takes input:
 | `grok` | `/theme`, `/timestamps`, `/compact-mode`, `/scroll-keys` (vim keys in the scrollback), `/multiline`, `/copy` |
 | `pi` | `/scoped-models`, `/copy` |
 | `jcode` | `/cls` (clear the view, keep the conversation) |
-| `claude` | none |
+| `claude` | `/vim` (editor mode, kept in `~/.claude/settings.json`) |
 
 `/copy` copies the last response in every look that has it. A test in
 `src/commands/mod.rs` fails when a look's text names a `/name` that is none of
@@ -157,6 +157,13 @@ is built from its observable screen alone: `looks/crates/claudew` drives the
 real program and the look through the same keys in a private tmux server and
 diffs the two cell by cell (`crates/claudew/tools/compare.sh`). Nothing from
 that program's install is read, copied or redistributed.
+
+The look reads `editorMode` and `keybindings.json` the way Claude Code does, and its permission prompt
+offers "switch to auto mode" (wizard's `sovereign`) with the tip above it, as 2.1.314 does; see
+[claude-code-parity.md](claude-code-parity.md#keys-and-the-prompt). `looks/crates/claudew/tools/pix.py`
+takes a real pixel screenshot of a tmux session (a headless Hyprland output, foot, grim), and `drive.py`
+takes one of every scene named in `PIX_SCENES` into `PIX_DIR`, so the look and `claude` can be compared as a
+person sees them. `vimdiff.py` is the vim-mode counterpart of `compare.sh`.
 
 The look draws Claude Code's mascot (three rows of block characters, nine columns)
 next to the name Wizard; the header text is Wizard's own.

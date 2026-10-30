@@ -73,12 +73,12 @@ x-ctrlr	norm	(?<=^  [❯↑↓ ] )\d+[smhd] ago@@N ago	ages: the two runs are se
 x-resume-opened	drop-up	+^✻ \S+ for Ns · done H:MM XM\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	done lines: wizard's session record keeps no turn times, so a resumed transcript has none
 x-resume-opened	drop-up	^  ⎿\s\sEnabled plan mode\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
 x-resume-opened	drop-up	+^❯ /plan\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
-x-rewind-confirm	both	^   The conversation will be (forked|truncated here)\.\s*$	rewind: wizard's /rewind cuts the conversation back; it does not fork it
+x-rewind-confirm	both	^   (The conversation will be forked\.|This message and everything after it will be removed\.)\s*$	rewind: wizard's /rewind cuts the conversation back; it does not fork it
 x-rewind-confirm	both	^   The code will be (unchanged|restored.*)\.\s*$	plan file: the reference wrote its plan to a file after this prompt and counts it as a change; wizard keeps the plan in .wizard/plan.md without an edit event
 x-rewind-confirm	norm	(?<=^   [❯ ] 1\. )(Restore code and conversation|Restore conversation)@@Restore	plan file: the reference has code to restore after this prompt, the look does not, so option 1 names only the conversation
 x-rewind-confirm	drop	^@@^   [ ↓] [345]\. (Restore code|Summarize from here|Summarize up to here)\s*$	restore code only and summarize: wizard's /rewind always restores both, and its /compact summarizes everything, not from or up to a point
 x-rewind-confirm	drop	^@@^     2\. Restore conversation\s*$	restore conversation alone: wizard's /rewind always puts the files back too
-x-rewind-confirm	drop	^@@+^   ⚠ Rewinding does not affect files edited manually or via bash\.\s*$	plan file: the reference has code to restore after this prompt, and the warning comes with it
+x-rewind-confirm	drop	^@@+^   ⚠ (Rewinding does not affect files edited manually or via bash\.|Restored files go back whole.*)\s*$	plan file: the reference has code to restore after this prompt, and the warning comes with it
 x-rewind-confirm	look	^     2\. Never mind\s*$	never mind: the reference lists it sixth, below its window, after the options wizard does not have
 x-resume	both	(?<=^   ❯ )\S.*$	session title: the reference's model names its sessions, wizard titles one by its first prompt
 x-resume	both	(?<=Resume session) \(\d+ of \d+\)	sessions: the reference's count is of every session made here
@@ -90,3 +90,4 @@ x-rewind-confirm	norm	(?<=^   │ \()\d+[smhd] ago@@N ago	ages: the two runs are
 wz-slash*-[18]*	shape-ref	^\s*$	command rows: Claude Code's two-row descriptions push its five-row window down a row, so the row above it is empty where Wizard's starts
 wz-slash*-[18]*	shape	^  ❯ /\S+\s	command rows: with its window a row lower, the reference's selected command sits a row lower than Wizard's
 queue-esc*	drop	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner comes up at a moment of its own; the look's had not yet when it was captured
+*	look	Try "prompt"\s*$	example prompt: 2.1.314 fills it from a cache a signed-in account refreshes; the fake-key capture has none, the subscription capture in tests/fixtures/ref has it

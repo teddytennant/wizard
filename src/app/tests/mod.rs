@@ -5105,6 +5105,7 @@ fn the_vim_line_motions_respect_hard_newlines() {
     assert_eq!(flat.cursor, 0);
 }
 
+mod claude_input;
 mod skins;
 
 /// A look hands over provider B in sovereign mode; changing effort here saves

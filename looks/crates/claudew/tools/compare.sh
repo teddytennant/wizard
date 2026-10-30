@@ -53,7 +53,11 @@ bin="${CARGO_TARGET_DIR:-$root/target}/debug/claudew"
 # endpoint that is fake_anthropic.py, so nothing reaches an account or ~/.claude.
 refrun() { "$@"; }
 # group NAME: whether to capture it; REF_GROUPS="turn3 shared" captures only those
-group() { [ -z "${REF_GROUPS:-}" ] || case " $REF_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
+group() {
+    [ -z "${REF_GROUPS:-}" ] && return 0
+    case " $REF_GROUPS " in *" $1 "*) return 0 ;; esac
+    return 1
+}
 if [ "${REF:-}" = fake ]; then
     port=${FAKE_PORT:-18997}
     fakehome="$work/claude-ref-home"
@@ -63,7 +67,7 @@ if [ "${REF:-}" = fake ]; then
     fakepid=$!
     trap 'kill $fakepid' EXIT
     cat > "$fakehome/.claude.json" <<EOF
-{"hasCompletedOnboarding": true, "theme": "dark", "customApiKeyResponses": {"approved": ["$(printf %s "$key" | tail -c 20)"], "rejected": []},
+{"hasCompletedOnboarding": true, "lspRecommendationDisabled": true, "theme": "dark", "customApiKeyResponses": {"approved": ["$(printf %s "$key" | tail -c 20)"], "rejected": []},
  "projects": {"$cwd": {"hasTrustDialogAccepted": true}, "$xcwd": {"hasTrustDialogAccepted": true}}}
 EOF
     fakeenv="ANTHROPIC_BASE_URL=http://127.0.0.1:$port ANTHROPIC_API_KEY=$key DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
@@ -82,6 +86,7 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
         --before "rm -rf w.txt .git"
     group turn3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
+    group think && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group think --sizes 80x24,120x40
     # the scenes live wizard is compared with cell by cell, and a session resuming them
     group shared && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
@@ -103,7 +108,8 @@ PY
         python3 "$here/mkreplay.py" "$ref" "$cwd" "$crate/tests/fixtures/replay"
     fi
 else
-    ref="$crate/tests/fixtures/ref"
+    # REFDIR=captures keeps an earlier capture as the reference (no new one is taken)
+    ref="${REFDIR:-$crate/tests/fixtures/ref}"
 fi
 
 python3 "$here/mkreplay.py" "$ref" "$cwd" "$work/replay"
@@ -116,12 +122,13 @@ while IFS="$(printf '\t')" read -r id bytes; do
     head -c "$bytes" /dev/zero | tr '\0' ' ' > "$work/claude-home/.wizard/sessions/$id.jsonl"
 done < "$work/replay/session-files.tsv"
 for size in $(echo "$sizes" | tr , ' '); do
-    for group in static turn light turn2 turn3 wizard; do
+    for group in static turn light turn2 turn3 think wizard; do
         script="$work/replay/$group-$size.jsonl" theme=dark home="$work/claude-home"
         [ "$group" = wizard ] && home="$work/wizard-home"
         [ "$group" = light ] && script="$work/replay/static-$size.jsonl" theme=light
         [ -f "$ref/md-$size.ansi" ] || [ "$group" != turn2 ] || continue
         [ -f "$ref/plan-$size.ansi" ] || [ "$group" != turn3 ] || continue
+        [ -f "$ref/think-done-$size.ansi" ] || [ "$group" != think ] || continue
         reset
         rm -rf "$cwd/w.txt" "$cwd/.git"
         python3 "$here/drive.py" --target look --cwd "$cwd" --out "$work/look" --group "$group" --sizes "$size" \
@@ -138,8 +145,11 @@ crate_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1
 # the installed claude when capturing live, the fixtures' otherwise
 if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     claude_version=$("${CLAUDE_BIN:-claude}" --version | sed -n 's/^\([0-9][0-9.]*\).*/\1/p')
-else
+elif [ -n "${REFDIR:-}" ]; then
     claude_version=$(sed 's/\x1b\[[0-9;]*m//g' "$ref/home-80x24.ansi" | sed -n 's/.*Claude Code v\([0-9.]*\).*/\1/p' | head -1)
+else
+    # tests/fixtures/ref is an older capture (2.1.300); the look follows 2.1.314
+    claude_version=$(sed -n 's/.*CLAUDE_VERSION: &str = "\(.*\)";.*/\1/p' "$crate/src/app.rs")
 fi
 want="wizard-ui-claude $crate_version (claude look $claude_version)"
 got=$("$bin" --version)

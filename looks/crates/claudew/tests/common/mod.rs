@@ -309,10 +309,11 @@ pub fn mismatches(look: &Buffer, reference: &Buffer, masks: &[&str]) -> Vec<Stri
 pub const COMMON: &[&str] = &[
     r"^[ ▐▛█▜▝▀▌▘▟▙]{9}",
     r"(?:Claude Code|Wizard) v[0-9.]+",
-    r"^.{11}\S.* · (?:Claude Max|Fastest for quick answers)\s*$",
+    r"^.{11}\S.* · (?:Claude Max|Fastest for quick answers|API Usage Billing)\s*$",
+    r"\d\d:\d\d [AP]M claude-\S+\s*$",
     r"[○◐●◉] \w+ · /effort",
     r"Try .*$",
-    r" · ← \d+ agents?",
+    r" · ← (?:\d+ agents?|for agents)",
     r"You've used \d+% of your weekly limit.*$",
     r"^✻ \S+ for \d+s · done \d+:\d\d [AP]M",
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -328,7 +329,16 @@ pub fn replay_version() -> String {
 
 pub fn assert_matches(hn: &mut Harness, name: &str, extra: &[&str]) {
     let reference = reference(name);
-    let t = hn.render();
+    let mut t = hn.render();
+    // Claude Code 2.1.300 showed the terminal's cursor; 2.1.314 hides it and paints an inverse
+    // cell. A capture of the older one has no such cell, so the look's is taken off for it.
+    let meta = std::fs::read_to_string(fixtures().join("ref").join(format!("{name}.meta")))
+        .unwrap_or_default();
+    if meta.contains("visible=1") {
+        if let Some((x, y)) = hn.app.cursor {
+            t.buffer_mut()[(x, y)].modifier.remove(Modifier::REVERSED);
+        }
+    }
     let header = t.row(1);
     if header.contains("Wizard v") {
         let want = format!("Wizard v{}", replay_version());

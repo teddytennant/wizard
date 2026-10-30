@@ -157,3 +157,20 @@ fn a_turn_with_a_tool_call_an_edit_and_a_permission_prompt() {
         assert_matches(&mut hn, &format!("edit-detail-{s}"), &[r"\d\d:\d\d [AP]M"]);
     });
 }
+
+const P_THINK: &str = "Think it over: add two and two";
+
+/// A reply with a thinking block: the usual view says how long it took, ctrl+o shows it.
+#[test]
+fn thinking_is_one_line_until_the_transcript_is_opened() {
+    for (w, h) in [(80, 24), (120, 40), (200, 50)] {
+        let s = format!("{w}x{h}");
+        let mut hn = Harness::new(&format!("think-{s}.jsonl"), w, h);
+        hn.type_str(P_THINK);
+        hn.press(KeyCode::Enter);
+        hn.play();
+        assert_matches(&mut hn, &format!("think-done-{s}"), &[]);
+        hn.ctrl('o');
+        assert_matches(&mut hn, &format!("think-detail-{s}"), &[]);
+    }
+}

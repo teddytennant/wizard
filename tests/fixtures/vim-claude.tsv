@@ -1,0 +1,508 @@
+hello world	x	ello world	0
+hello world	3x	lo world	0
+hello world	$x	hello worl	9
+hello world	$5x	hello worl	9
+ab\ncd	l5x	a\ncd	0
+hello world	$X	hello world	10
+hello world	3l2X	hello world	3
+foo bar baz	w	foo bar baz	4
+foo bar baz	2w	foo bar baz	8
+foo bar baz	wD	foo	3
+foo bar baz	e	foo bar baz	2
+foo bar baz	ee	foo bar baz	6
+foo bar baz	$b	foo bar baz	8
+foo bar baz	$2b	foo bar baz	4
+foo.bar baz	w	foo.bar baz	3
+foo.bar baz	W	foo.bar baz	8
+foo.bar baz	E	foo.bar baz	6
+foo.bar baz	$B	foo.bar baz	8
+foo bar	$	foo bar	6
+  foo	$0	  foo	0
+  foo	$^	  foo	2
+foo\n\nbar	w	foo\n\nbar	4
+foo\n\nbar	2w	foo\n\nbar	5
+foo\n\nbar	3w	foo\n\nbar	8
+foo\n\nbar	G	foo\n\nbar	5
+foo\n\nbar	Gb	foo\n\nbar	0
+foo\n\nbar	Gbb	foo\n\nbar	0
+foo bar baz	wdw	foo baz	4
+foo bar baz	2dw	baz	0
+foo bar baz	d2w	baz	0
+foo bar baz	2d2w		0
+foo bar baz	dw.	baz	0
+foo bar baz	dw2.		0
+foo bar\nbaz	wdw	foo\nbaz	3
+foo\n  bar	dw	\n  bar	0
+foo bar baz	de	 bar baz	0
+foo bar baz	wdb	bar baz	0
+foo bar baz	$db	foo bar z	8
+foo bar baz	dW	bar baz	0
+foo.bar baz	dW	baz	0
+foo.bar baz	dE	 baz	0
+foo.bar baz	dw	.bar baz	0
+foo bar baz	cwxy<Esc>	xy bar baz	1
+foo bar baz	lcwxy<Esc>	fxy bar baz	2
+foo  bar	3lcwx<Esc>	fooxbar	3
+foo bar baz	2cwx<Esc>	x baz	0
+foo bar baz	cWx<Esc>	x bar baz	0
+foo bar baz	cex<Esc>	x bar baz	0
+foo.bar	cwx<Esc>	x.bar	0
+foo.bar	cWx<Esc>	x	0
+foo bar baz	cbx<Esc>	oo bar baz	0
+one\ntwo\nthree	jdd	one\nthree	4
+one\ntwo\nthree	Gdd	one\ntwo	4
+one\ntwo\nthree	dd	two\nthree	0
+one\ntwo\nthree	2dd	three	0
+one\ntwo\nthree	5dd		0
+one\ntwo\nthree	jccxx<Esc>	one\nxx\nthree	5
+one\ntwo\nthree	2ccxx<Esc>	xx\nthree	1
+one\ntwo\nthree	yyjp	one\ntwo\none\nthree	8
+one\ntwo\nthree	yyP	one\none\ntwo\nthree	0
+one\ntwo\nthree	2yyGp	one\ntwo\nthree\none\ntwo	14
+one\ntwo\nthree	jYP	one\ntwo\ntwo\nthree	4
+hello world	w D	hello w	6
+hello world	wD	hello	5
+hello world	wd$	hello	5
+hello world	wCthere<Esc>	hello there	10
+hello world	wc$there<Esc>	hello there	10
+ab\ncd	D	\ncd	0
+hello world	wd0	world	0
+  hello	$d^	  o	2
+  hello	$c0x<Esc>	xo	0
+a,b,c	f,	a,b,c	1
+a,b,c	2f,	a,b,c	3
+a,b,c	3f,	a,b,c	0
+a,b,c	t,	a,b,c	0
+a,b,c	$F,	a,b,c	3
+a,b,c	$F,,	a,b,c	3
+a,b,c	$T,	a,b,c	4
+a,b,c	$2F,	a,b,c	1
+a,b,c	2t,	a,b,c	2
+a,b,c	f,$,	a,b,c	3
+a,b,c	df,	b,c	0
+a,b,c	dt,	,b,c	0
+a,b,c	d2f,	c	0
+a,b,c	$dF,	a,b	2
+a,b,c	$dT,	a,b,	3
+a,b,c	ct,x<Esc>	x,b,c	0
+a,b,c	f,d,	a,b,c	1
+a,b,c	f,lyt,P	a,bb,c	2
+say "hi there" now	f"ci"x<Esc>	say "x" now	5
+foo bar baz	wdiw	foo  baz	4
+foo bar baz	wdaw	foo baz	4
+foo bar baz	$daw	foo bar	6
+foo bar baz	dawx	ar baz	0
+foo   bar	4ldiw	foobar	3
+foo   bar	4ldaw	foobar	3
+foo.bar baz	diw	.bar baz	0
+foo.bar baz	diW	 baz	0
+foo.bar baz	daW	baz	0
+foo bar baz	ciwx<Esc>	x bar baz	0
+foo bar baz	caw	bar baz	0
+say "hi there" now	fhdi"	say "" now	5
+say "hi there" now	fhda"	say  now	4
+say "hi there" now	di"	say "hi there" now	0
+say "hi there" now	fhci"x<Esc>	say "x" now	5
+it's a 'test' here	fedi'	it's a 'test' here	9
+a "b" c "d" e	fcdi"	a "b" c "d" e	6
+a "b" c "d" e	f"dd		0
+f(a, (b), c)	fadi(	f()	2
+f(a, (b), c)	fbdi(	f(a, (), c)	6
+f(a, (b), c)	fbda(	f(a, , c)	5
+f(a, (b), c)	fbdib	f(a, (), c)	6
+f(a, (b), c)	fbdab	f(a, , c)	5
+f(a, (b), c)	fbdi)	f(a, (), c)	6
+f(a, (b), c)	di(	f(a, (b), c)	0
+f(a, (b), c)	f(di(	f()	2
+f(a, (b), c)	f)di(	f(a, (), c)	6
+{ x }	ldi{	{}	1
+{ x }	ldiB	{}	1
+{ x }	lda{		0
+[1, 2]	lci[9<Esc>	[9]	1
+[1, 2]	lda]		0
+<a b>	ldi<lt>	<>	1
+<a b>	lda>		0
+(a [b] c)	%	(a [b] c)	8
+(a [b] c)	$%	(a [b] c)	0
+(a [b] c)	l%	(a [b] c)	5
+(a [b] c)	f[%	(a [b] c)	5
+x (a)	%	x (a)	4
+x (a) y	%	x (a) y	4
+(a b) c	d%	 c	0
+(a b) c	c%x<Esc>	x c	0
+(a b) c	y%$p	(a b) c(a b)	11
+a (b) c	d%	 c	0
+hello	rx	xello	0
+hello	3rx	xxxlo	2
+hello	$3rx	hello	4
+hello	$rx	hellx	4
+hello	2lrx	hexlo	2
+hello	~	Hello	1
+hello	3~	HELlo	3
+hello	$~	hellO	4
+hello	$3~	hellO	4
+hello	~~~	HELlo	3
+hello	3rxl.	xxxlo	3
+a\nb\nc	J	a b\nc	1
+a\n   b	J	a b	1
+a\nb\nc	3J	a b c	3
+a\nb\nc	2J	a b\nc	1
+a\nb\nc	jJ	a\nb c	3
+a	J	a	0
+a \nb	J	a b	2
+a\nb	ox<Esc>	a\nx\nb	2
+a\nb	Ox<Esc>	x\na\nb	0
+a\nb	jOx<Esc>	a\nx\nb	2
+a\nb	jox<Esc>	a\nb\nx	4
+abc	lix<Esc>	axbc	1
+abc	lax<Esc>	abxc	2
+abc	$ax<Esc>	abcx	3
+abc	$ix<Esc>	abxc	2
+  abc	$Ix<Esc>	  xabc	2
+abc	lsx<Esc>	axc	1
+abc	l2sx<Esc>	ax	1
+abc\ndef	jSx<Esc>	abc\nx	4
+abc	Cx<Esc>	x	0
+abc	lix<Esc>.	axxbc	1
+abc	lAx<Esc>.	abcxx	4
+abc	ax<Esc>..	axxxbc	3
+abc	ix<BS><BS>y<Esc>	yabc	0
+abc	Aab<Esc>0.	abcabab	6
+abc	xu	abc	0
+abc	xxu	bc	0
+abc	xxuu	abc	0
+abc	xxuuu		0
+abc	lixy<Esc>u	abc	1
+abc	lixy<Esc>uu		0
+one two	dwu	one two	0
+one two	dwdwu	two	0
+one two	cwx<Esc>u	 two	0
+a\nb\nc	ddu	a\nb\nc	0
+a\nb\nc	ddddu	b\nc	0
+abc	xp	bac	1
+abc	xP	abc	0
+abc	yl3p	aaaabc	3
+abc	ylp	aabc	1
+one two	dwP	one two	3
+one two	dw$p	twoone	6
+one two	wdwP	onetwo	5
+one two	yiwwviwp	one one	6
+one two	yiwwviwpP	one ontwoe	8
+one two	ywwP	one one two	7
+one two	ywwp	one tone wo	8
+a\nb	yyjp	a\nb\na	4
+a\nb	yyjP	a\na\nb	2
+a\nb	ddP	a\nb	0
+a\nb	jddp	a\nb	2
+a\nb\nc	ddjp	b\nc\na	4
+a b c d	dw.	c d	0
+a b c d	dw..	d	0
+a b c d	d2w.		0
+a b c d	dwx.	c d	0
+a\nb\nc	dd.	c	0
+a\nb\nc	ddj.	b	0
+one two	cwx<Esc>w.	x x	2
+abcdef	x2.	def	0
+abcdef	2x.	ef	0
+abcdef	3x2.	f	0
+abcdef	>>.	    abcdef	4
+abcdef	~.	ABcdef	2
+abcdef	ox<Esc>.	abcdef\nx\nx	9
+abc\ndef	Ox<Esc>j.	x\nx\nabc\ndef	2
+a\nb\nc	gg	a\nb\nc	0
+a\nb\nc	G	a\nb\nc	4
+a\nb\nc	2G	a\nb\nc	2
+a\nb\nc	3G	a\nb\nc	4
+a\nb\nc	9G	a\nb\nc	4
+a\nb\nc	Ggg	a\nb\nc	0
+a\nb\nc	G2gg	a\nb\nc	2
+a\nb\nc	dG		0
+a\nb\nc	jdG	a	0
+a\nb\nc	Gdgg		0
+a\nb\nc	dgg	b\nc	0
+a\nb\nc	jdgg	c	0
+a\nb\nc	dj	c	0
+a\nb\nc	Gdk	a	0
+a\nb\nc	2dj		0
+a\nb\nc	jdj	a	0
+a\nb\nc	jdk	c	0
+a\nb\nc	d2j		0
+a\nb\nc	cjx<Esc>	x\nc	0
+a\nb\nc	yjGp	a\nb\nc\na\nb	6
+a\nb\nc	jyk$p	a\na\nb\nb\nc	2
+a\nb\nc	yGP	a\nb\nc\na\nb\nc	0
+a\nb\nc	d2G	c	0
+a\nb\nc	d3G		0
+a\nb\nc	jd1G	c	0
+abcd\nx\nabcd	3lj	abcd\nx\nabcd	5
+abcd\nx\nabcd	3ljj	abcd\nx\nabcd	10
+abcd\nx\nabcd	3ljjk	abcd\nx\nabcd	5
+abcd\nx\nabcd	$jj	abcd\nx\nabcd	10
+abcd\nx\nabcd	3ljx	abcd\n\nabcd	5
+abcd\nx\nabcd	3ljjx	abcd\nx\nabc	9
+abcd\nx\nabcd	3ljkx	abc\nx\nabcd	2
+abcd\nxy\nab	$jj	abcd\nxy\nab	9
+abcd\nxy\nab	$jjk	abcd\nxy\nab	6
+ab\n\ncd	jx	ab\n\ncd	3
+ab\n\ncd	jl	ab\n\ncd	3
+ab\n\ncd	$j	ab\n\ncd	3
+ab\n\ncd	jdd	ab\ncd	3
+ab\n\ncd	jD	ab\n\ncd	3
+ab\n\ncd	jiX<Esc>	ab\nX\ncd	3
+ab\n\ncd	jox<Esc>	ab\n\nx\ncd	4
+ab\n\ncd	jccx<Esc>	ab\nx\ncd	3
+ab\n\ncd	jdw	ab\ncd	3
+ab\n\ncd	jcwx<Esc>	ab\nx\ncd	3
+ab\n\ncd	jyyjp	ab\n\ncd\n	7
+ab\n\ncd	jw	ab\n\ncd	4
+ab\n\ncd	jb	ab\n\ncd	0
+ab\n\ncd	je	ab\n\ncd	5
+ab\n\ncd	Gb	ab\n\ncd	0
+ab\n\ncd	Gbb	ab\n\ncd	0
+a\nb	$jx	a\n	2
+a\nb	jx	a\n	2
+a\nb	jhx	a\n	2
+a\nb	jhhx	a\n	2
+a\nb	jlx	a\n	2
+a\nb	lx	\nb	0
+a\nb	llx	\nb	0
+a b	llx	a	1
+abc	v	abc	0
+abc	vd	bc	0
+abc	vx	bc	0
+abc	vld	c	0
+abc	vlld		0
+abc	vllld		0
+abc	vly	abc	0
+abc	vlyP	ababc	1
+abc	vlyp	aabbc	2
+abc	vlyP$p	ababcab	6
+abc	vlc	c	0
+abc	vlcx<Esc>	xc	0
+abc	vlsx<Esc>	xc	0
+hello world	vex	 world	0
+hello world	vey$p	hello worldhello	15
+hello world	veyP	hellohello world	4
+hello world	vwd	orld	0
+hello world	vbd	ello world	0
+hello world	$vbd	hello	5
+hello world	vedp	 helloworld	5
+hello world	wvbd	orld	0
+hello world	v$d		0
+hello world	v0d	ello world	0
+hello world	wv0d	orld	0
+hello world	vfod	 world	0
+hello world	vtod	o world	0
+hello world	vFd	hello world	0
+hello world	$vFhd		0
+hello world	vtwd	world	0
+hello world	v2ld	lo world	0
+hello world	vlod	llo world	0
+hello world	vlohd	llo world	0
+hello world	wvlohd	hellorld	5
+hello world	vlU	HEllo world	0
+hello world	vl~	HEllo world	0
+hello world	veu	hello world	0
+hello world	vlUu	hello world	1
+hello world	vlrx	xxllo world	0
+hello world	vlrxx	xllo world	0
+hello world	v$rx	xxxxxxxxxxx	0
+hello world	vlv	hello world	1
+hello world	vlvx	hllo world	1
+hello world	vV	hello world	0
+hello world	vVd		0
+hello world	vVv	hello world	0
+foo bar	wviwd	foo	3
+foo bar	wvawd	foo	2
+foo bar	viwd	 bar	0
+foo bar	vawd	bar	0
+foo bar	viwiwd	 bar	0
+foo bar	viwawd	bar	0
+a (b c) d	fbvi(d	a () d	3
+a (b c) d	fbva(d	a  d	2
+a (b c) d	fbvi(i(d	a () d	3
+a "b c" d	fbvi"d	a "" d	3
+a "b c" d	fbva"d	a  d	2
+foo bar	yiwwvp	foo fooar	6
+foo bar	yiwwvpP	foo foboar	6
+foo bar	yiwwvePp	foo foobar	9
+foo bar	yiwwvepp	foo foobar	9
+foo bar	yiwwvepx	foo fo	5
+one two	yiwwviwpwp	one onetwo	9
+a\nb\nc	Vd	b\nc	0
+a\nb\nc	jVd	a\nc	2
+a\nb\nc	GVd	a\nb	2
+a\nb\nc	Vjd	c	0
+a\nb\nc	Vjjd		0
+a\nb\nc	Vjy	a\nb\nc	0
+a\nb\nc	Vjyjjp	a\nb\nc\na\nb	6
+a\nb\nc	VjyGp	a\nb\nc\na\nb	6
+a\nb\nc	Vjyp	a\na\nb\nb\nc	2
+a\nb\nc	VjyP	a\nb\na\nb\nc	0
+a\nb\nc	jVyP	a\nb\nb\nc	2
+a\nb\nc	jVyp	a\nb\nb\nc	4
+a\nb\nc	yyjVp	a\na\nc	2
+a\nb\nc	yyjVpP	a\nb\na\nc	2
+a\nb\nc	yyjVpp	a\na\nb\nc	4
+a\nb\nc	Vc	\nb\nc	0
+a\nb\nc	Vcx<Esc>	x\nb\nc	0
+a\nb\nc	Vjcx<Esc>	x\nc	0
+a\nb\nc	Vjx	c	0
+a\nb\nc	VjD	c	0
+a\nb\nc	VjX	c	0
+a\nb\nc	Vjs	\nc	0
+a\nb\nc	Vjsx<Esc>	x\nc	0
+a\nb\nc	VjC	\nc	0
+a\nb\nc	VjY	a\nb\nc	0
+a\nb\nc	vjd	\nc	0
+a\nb\nc	vjy	a\nb\nc	0
+a\nb\nc	vjyGp	a\nb\nca\nb	5
+a\nb\nc	vjjd		0
+a\nb\nc	jvjd	a\n	2
+a\nb\nc	Vj>	  a\n  b\nc	2
+a\nb\nc	Vj<lt>	a\nb\nc	0
+a\nb\nc	Vj>.	    a\n    b\nc	4
+a\nb\nc	VjJ	a b\nc	1
+a\nb\nc	VjjJ	a b c	3
+a\nb\nc	Vj~	A\nB\nc	0
+a\nb\nc	Vjr-	-\n-\nc	0
+a\nb\nc	vjr-	-\n-\nc	0
+a\nb\nc	Vjo	a\nb\nc	0
+a\nb\nc	Vjod	c	0
+a\nb\nc	Vjojd	a\nc	2
+a\nb\nc	VGd		0
+a\nb\nc	jVggd	c	0
+a\nb\nc	vGd		0
+a\nb\nc	vggd	\nb\nc	0
+a\nb\nc	jvggd	\nc	0
+a\nb\nc	jVgg	a\nb\nc	0
+a\nb\nc	Vgg	a\nb\nc	0
+a\nb\nc	Vj<Esc>x	a\n\nc	2
+a\nb\nc	vj<Esc>x	a\n\nc	2
+a\nb\nc	v<Esc>x	\nb\nc	0
+a\nb\nc	V<Esc>x	\nb\nc	0
+abc	>>	  abc	2
+abc	l>>	  abc	2
+a\nb	2>>	  a\n  b	2
+a\nb	>>j>>	  a\n  b	6
+a\nb	>>.	    a\nb	4
+a\nb	>>>>	    a\nb	4
+a\nb	>j	a\nb	0
+    a	$<lt><lt>	  a	2
+    a	$<lt><lt><lt><lt>	a	0
+  a	$<lt><lt>	a	0
+ a	$<lt><lt>	a	0
+a	<lt><lt>	a	0
+\ta	$<lt><lt>	a	0
+\t a	$<lt><lt>	a	0
+  a\n  b	2<lt><lt>	a\nb	0
+  a\n  b	<lt><lt>j<lt><lt>	a\nb	2
+abc	2dl	c	0
+abc	dl	bc	0
+abc	dh	abc	0
+abc	ldh	bc	0
+abc	$dh	ac	1
+abc	$dl	ab	1
+abc	dhx	bc	0
+abc	lcl	ac	1
+abc	lclx<Esc>	axc	1
+abc	clx<Esc>	xbc	0
+abc	$clx<Esc>	abx	2
+abc	3dl		0
+abc	9dl		0
+abc	l9dh	bc	0
+abc	ld0	bc	0
+abc	$d0	c	0
+abc	l d$	ab	1
+abc	ld$	a	0
+abc	d$		0
+abc	$d$	ab	1
+abc	yl$p	abca	3
+abc	yh$p	abc	2
+abc	lyh$p	abca	3
+abc	y$P	abcabc	2
+abc	ly$P	abcbc	2
+abc	ly0$p	abca	3
+abc	$y0P	ababc	1
+abc\ndef	jy0kP	abc\ndef	0
+abc\ndef	jd0	abc\ndef	4
+abc\ndef	jld0	abc\nef	4
+abc\ndef	jd$	abc\n	4
+abc\ndef	jld$	abc\nd	4
+abc\ndef	d$	\ndef	0
+abc\ndef	$d$	ab\ndef	1
+abc\ndef	d$j	\ndef	1
+abc\ndef	jD	abc\n	4
+abc\ndef	jlD	abc\nd	4
+abc\ndef	jDk	abc\n	0
+abc\ndef	D.	\ndef	0
+abc\ndef	Dj.	\n	1
+abc\ndef	jDk.	\n	0
+abc\ndef	2D	\ndef	0
+abc\ndef	jyyp	abc\ndef\ndef	8
+abc\ndef	jyyjp	abc\ndef\ndef	8
+abc\ndef	yyp	abc\nabc\ndef	4
+abc\ndef	yyjp	abc\ndef\nabc	8
+abc\ndef	yyjP	abc\nabc\ndef	4
+abc\ndef	yy2p	abc\nabc\nabc\ndef	4
+abc\ndef	yy$p	abc\nabc\ndef	4
+abc\ndef	lyyp	abc\nabc\ndef	4
+abc\ndef	lyyjp	abc\ndef\nabc	8
+abc\ndef	lyyP	abc\nabc\ndef	0
+abc\ndef	ddp	def\nabc	4
+abc\ndef	jddP	def\nabc	0
+abc\ndef	jddp	abc\ndef	4
+abc\ndef	ddpp	def\nabc\nabc	8
+abc\ndef	ddPP	abc\nabc\ndef	0
+abc\ndef	dd2p	def\nabc\nabc	4
+abc\ndef	dd2P	abc\nabc\ndef	0
+abc\ndef	ddu	abc\ndef	0
+abc\ndef	jddu	abc\ndef	4
+abc\ndef	ddui	abc\ndef	0
+abc\ndef	ddux	bc\ndef	0
+abc\ndef	ccxyz<Esc>	xyz\ndef	2
+abc\ndef	jccxyz<Esc>	abc\nxyz	6
+abc\ndef	ccxyz<Esc>u	\ndef	0
+abc\ndef	ccxyz<Esc>j.	xyz\nxyz	6
+abc\ndef	ccxyz<Esc>uu	abc\ndef	0
+abc\ndef	ccxyz<Esc>.	xyz\ndef	2
+abc\ndef	cc<Esc>	\ndef	0
+abc\ndef	cc<Esc>u	abc\ndef	0
+abc\ndef	2cc<Esc>		0
+abc\ndef	Sx<Esc>	x\ndef	0
+abc\ndef	jSx<Esc>	abc\nx	4
+abc\ndef	2Sx<Esc>	x	0
+abc\ndef	Cx<Esc>	x\ndef	0
+abc\ndef	jCx<Esc>	abc\nx	4
+abc\ndef	lCx<Esc>	ax\ndef	1
+abc\ndef	2Cx<Esc>	x\ndef	0
+abc\ndef	sx<Esc>	xbc\ndef	0
+abc\ndef	$sx<Esc>	abx\ndef	2
+abc\ndef	jssx<Esc>	abc\nsxef	5
+abc\ndef	3sx<Esc>	x\ndef	0
+abc\ndef	4sx<Esc>	x\ndef	0
+abc\ndef	Ax<Esc>	abcx\ndef	3
+abc\ndef	jAx<Esc>	abc\ndefx	7
+abc\ndef	Ix<Esc>	xabc\ndef	0
+abc\ndef	jIx<Esc>	abc\nxdef	4
+abc\ndef	$ix<Esc>	abxc\ndef	2
+abc\ndef	$ax<Esc>	abcx\ndef	3
+abc\ndef	jax<Esc>	abc\ndxef	5
+abc\ndef	j$ax<Esc>	abc\ndefx	7
+abc\ndef	j$ix<Esc>	abc\ndexf	6
+one\ntwo\nthree	3dd	one\ntwo\nthree	0
+a,b,c	f,;;	a,b,c	3
+a,b,c	t,;	a,b,c	0
+a,b,c	t,;;	a,b,c	0
+a,b,c	f,d;	a,b,c	1
+hello	rx.	xello	0
+hello	rxl.	xxllo	1
+abc	lAx<Esc>	abcx	3
+a\nb	ddp	b\na	2
+a b c	cwx<Esc>w.w.	x x x	4
+ab cd	cwx<Esc>w.	x x	2
+a b	Ax<Esc>.	a bxx	4
+abcd\nxy\nab	$jk	abcd\nxy\nab	3
+hello world	v$y$p	hello worldhello world	21
+a\nb\nc	jvkd	\nc	0
+a\nb\nc	Vojd	c	0

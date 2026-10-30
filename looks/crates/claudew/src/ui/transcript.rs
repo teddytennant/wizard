@@ -76,14 +76,31 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                 }
                 out.extend(assistant(app, text, w));
             }
-            Block::Thought(text) => {
-                if detail && !text.trim().is_empty() {
+            Block::Thought { text, secs, .. } => {
+                if text.trim().is_empty() {
+                } else if detail {
+                    // the transcript view: the thinking itself, after a mark
                     out.push(Row::new());
-                    let st = th.dim().add_modifier(Modifier::ITALIC);
-                    out.push(Row::of("✻ Thinking…", st));
-                    for r in wrap_str(text.trim(), st, w.saturating_sub(4)) {
-                        out.push(Row::of("  ", Style::new()).with(r.text(), st));
+                    let body = th.dim().remove_modifier(Modifier::BOLD);
+                    for (n, r) in wrap_str(text.trim(), body, w.saturating_sub(2))
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let lead = if n == 0 { "\u{2234} " } else { "  " };
+                        let mark = th.dim().add_modifier(Modifier::ITALIC);
+                        out.push(
+                            Row::of(lead, mark)
+                                .with(r.text(), Style::new().add_modifier(Modifier::DIM)),
+                        );
                     }
+                } else if *secs > 0 {
+                    // the usual view says only that it happened, and for how long
+                    out.push(Row::new());
+                    out.push(
+                        Row::of("  Thought for ", th.dim())
+                            .with(format!("{secs}s"), th.dim().add_modifier(Modifier::BOLD))
+                            .with(" ", th.dim()),
+                    );
                 }
             }
             Block::Tool(_) => {

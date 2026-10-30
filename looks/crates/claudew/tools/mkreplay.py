@@ -138,7 +138,7 @@ def ev(e):
     return json.dumps({'event': e}, ensure_ascii=False)
 
 
-def head(ref, cwd, size):
+def head(ref, cwd, size, auto=False):
     seen, cmds = set(), []
     # the two entries after /dataviz are never on screen, but their two-row height decides
     # whether anything is drawn under it
@@ -159,7 +159,7 @@ def head(ref, cwd, size):
     opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(3)]
     config = {
         'model': slug(current), 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
-        'mode': 'manual', 'modes': ['manual', 'accept edits'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
+        'mode': 'manual', 'modes': ['manual', 'accept edits'] + (['auto'] if auto else []), 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
     }
     return [
         ev({'Ready': {'session_id': '0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44', 'config': config}}),
@@ -195,11 +195,11 @@ def find_command(ref, cwd, size):
                 j += 1
             cmd = text[:-1] if text.endswith(')') else text
             return cmd, '\n'.join(output) + '\n' if output else cwd + '/main.rs\n'
-    return default, cwd + '/main.rs\n'
+    return None
 
 
 def turn(cwd, found):
-    find, find_out = found
+    find, find_out = found or (None, None)
     path = cwd + '/main.rs'
     old = 'fn main() {\n    println!("hello");\n}\n'
     new = 'fn main() {\n    println!("hi");\n}\n'
@@ -213,7 +213,8 @@ def turn(cwd, found):
         tool('t1', 'execute', 'Printing hi', {'command': 'echo hi'}, 'completed', 'hi\n'),
         ev({'TextDelta': 'done'}), end,
         wait('prompt'), ev('TurnStart'), sleep(300),
-        tool('t2', 'execute', 'Finding main.rs', {'command': find}, 'completed', find_out),
+    ] + ([] if find is None else [
+        tool('t2', 'execute', 'Finding main.rs', {'command': find}, 'completed', find_out)]) + [
         tool('t3', 'read', 'main.rs', {'path': path}, 'completed', old),
         tool('t4', 'edit', 'main.rs', {'path': path}, 'pending', None, diff),
         ev({'Permission': {'id': 'p1', 'tool': 'Edit', 'kind': 'edit', 'title': path, 'input': {},
@@ -279,6 +280,17 @@ def turn2(ref, cwd, size):
         wait('decide'), sleep(200),
         tool('w1', 'edit', 'w.txt', {'path': path}, 'completed', None, diff),
         ev({'TextDelta': 'done'}), end,
+    ]
+
+
+def think(head):
+    """A reply with a thinking block and then its answer, for the `think` scenes."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    return head + [
+        wait('prompt'), ev('TurnStart'), sleep(400),
+        ev({'ThoughtDelta': 'Two plus two is four, so the answer is 4.'}), sleep(1200),
+        ev({'TextDelta': 'The answer is 4.'}), ev({'TurnEnd': 'end_turn'}),
     ]
 
 
@@ -424,8 +436,11 @@ def main():
         h = head(ref, cwd, size)
         open(os.path.join(out, 'static-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h) + '\n')
         script = h + turn(cwd, find_command(ref, cwd, size))
-        open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + turn2(ref, cwd, size)) + '\n')
+        # the permission prompts offer "switch to auto mode" when the backend has a mode to go to
+        ha = head(ref, cwd, size, auto=True)
+        open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + turn3(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'think-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(think(h)) + '\n')
         open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')
 
