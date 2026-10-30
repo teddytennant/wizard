@@ -26,13 +26,10 @@ pub use spec::{Handler, HookSpec, Origin};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use serde_json::Value;
 
-use crate::agent::AgentEvent;
 use crate::config::claude::{self, ClaudeSettings};
 use crate::config::{Config, Mode};
 
@@ -338,7 +335,7 @@ fn parse_bytes(path: &Path, raw: &[u8]) -> Vec<HookDef> {
     }
 }
 
-/// What one hook execution did, surfaced via [`AgentEvent::HookFired`].
+/// What one hook execution did, surfaced via `AgentEvent::HookFired`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookOutcome {
@@ -401,16 +398,6 @@ fn parse_updated_args(stdout: &str) -> Option<Value> {
     updated.is_object().then(|| updated.clone())
 }
 
-/// Reason for a block: trimmed stderr, with a fallback for silent hooks.
-fn block_reason(stderr: &str) -> String {
-    let trimmed = stderr.trim();
-    if trimmed.is_empty() {
-        "hook gave no reason".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// Warning text for an unexpected exit code.
 fn exit_warning(code: i32, stderr: &str) -> String {
     let trimmed = stderr.trim();
@@ -426,7 +413,13 @@ mod engine_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tokio::sync::mpsc;
+
     use super::*;
+    use crate::agent::AgentEvent;
 
     fn def(event: HookEvent, matcher: Option<&str>, command: &str) -> HookDef {
         HookDef {
@@ -583,12 +576,6 @@ mod tests {
         assert!(parse_updated_args("all clear").is_none());
         assert!(parse_updated_args(r#"{"other": 1}"#).is_none());
         assert!(parse_updated_args(r#"{"updated_args": "nope"}"#).is_none());
-    }
-
-    #[test]
-    fn block_reason_falls_back_when_stderr_is_empty() {
-        assert_eq!(block_reason("  denied \n"), "denied");
-        assert_eq!(block_reason(""), "hook gave no reason");
     }
 
     #[test]

@@ -378,7 +378,7 @@ impl HookEngine {
                 }
                 _ => {}
             }
-            if previous.get(content).is_none() && status == "completed" {
+            if !previous.contains_key(content) && status == "completed" {
                 let _ = self.task_completed(&id, content, mode, events).await;
             }
         }
@@ -695,10 +695,10 @@ impl HookEngine {
                 .tool
                 .map(|(name, args)| (name, args_now.as_ref().unwrap_or(args)));
             match (&hook.condition, hook.spec.condition.is_some(), tool_now) {
-                (Some(rule), _, Some((name, args))) => {
-                    if !rule.matches_call(name, args, &self.cwd, true) {
-                        continue;
-                    }
+                (Some(rule), _, Some((name, args)))
+                    if !rule.matches_call(name, args, &self.cwd, true) =>
+                {
+                    continue;
                 }
                 (None, true, _) | (Some(_), _, None) => continue,
                 _ => {}
