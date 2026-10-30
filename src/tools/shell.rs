@@ -1051,6 +1051,11 @@ pub struct ExecuteArgs {
     /// id; the agent is notified when the command finishes.
     #[serde(default)]
     pub run_in_background: bool,
+    /// Kill the command at `timeout_secs` instead of moving it to a
+    /// background task. Claude Code's `timeout` means this; the `Bash` alias
+    /// sets it when a timeout is named.
+    #[serde(default)]
+    pub kill_on_timeout: bool,
 }
 
 /// `execute` — run a shell command, capturing stdout, stderr, and exit code.
@@ -1160,9 +1165,13 @@ Tips:
         // Every foreground `execute` runs under the handover policy: the
         // command is the model's, so there is somebody to hand a task id to,
         // and the alternative — killing it — throws the work away.
-        let on_timeout = OnTimeout::Detach {
-            tasks: &ctx.tasks,
-            label: &args.command,
+        let on_timeout = if args.kill_on_timeout {
+            OnTimeout::Kill
+        } else {
+            OnTimeout::Detach {
+                tasks: &ctx.tasks,
+                label: &args.command,
+            }
         };
         let mut result = match (ctx.console, &ctx.events) {
             (ConsoleAccess::Interactive, Some(events)) => {
