@@ -149,6 +149,501 @@ Not compared:
 Wizard's own side was checked with unit tests and the parser; no model is configured in the
 test environment either.
 
+## Audit 2.1.314
+
+A closing pass over everything Claude Code 2.1.314 exposes, taken from the real binary and not from the
+docs: `claude --help` and every subcommand's `--help`, the slash menu scrolled out of an interactive session
+(`tmux -L`, driven with `fake_anthropic.py` and a fake `CLAUDE_CODE_OAUTH_TOKEN`, so no account), the `system`
+init line of `claude -p ... --output-format stream-json --verbose`, strings in the binary for settings keys
+and environment variables, and real `claude mcp`, `plugin`, `auth` and `agents --json` runs for the output
+shapes. Wizard's side is the built binary and its tests.
+
+Every item has one of four statuses. **present** is the same thing under the same name. **aliased** is the same
+job under a Wizard spelling or with a stated difference. **accepted-with-warning** parses (or is read) so a
+script or settings file written for Claude Code keeps working, but changes nothing, and says why on stderr or
+in the reply. **missing** is not built, with the reason. The tools were compared earlier ("Tools" above) and are
+not repeated; the flag table here only adds the status of each flag in 2.1.314's `--help`.
+
+### Subcommands
+
+| Claude Code | Status | Wizard | Notes |
+| :- | :- | :- | :- |
+| `agents` | present | `wizard agents` | Opens the dashboard. `--json`, `--all` and `--cwd <path>` print the running sessions as a JSON array. The dispatch defaults (`--model`, `--effort`, `--permission-mode`, `--add-dir`, `--mcp-config`, `--plugin-dir`, `--settings`, `--strict-mcp-config`, `--agent`, `--restricted`, `--setting-sources`, the two skip-permissions flags) are the top-level flags, which `agents` accepts. |
+| `attach` | accepted-with-warning | `wizard attach <id>` | Parses and says to use `wizard agents` or `wizard --resume <id>`. A detached Wizard run has no terminal to hand over. |
+| `auth login` | aliased | `wizard auth login [provider]` | Is `wizard --login <provider>`; no provider means `xai`, `--claudeai` means `claude`. `--console` is refused with the API-key instructions; `--email` and `--sso` are ignored with a warning. |
+| `auth logout` | aliased | `wizard auth logout [provider]` | The `/logout` command; with no name it signs out of the one account that is signed in. |
+| `auth status` | present | `wizard auth status [--json\|--text]` | JSON by default, exit 1 when nothing is signed in, as Claude Code does. Lists the oauth sign-ins and every configured provider. |
+| `auto-mode` | accepted-with-warning | `wizard auto-mode ...` | Parses, says auto mode is Anthropic's permission classifier. `config`, `critique`, `defaults` and `reset` have nothing to act on. |
+| `doctor` | present | `wizard doctor` | Different report, same job. |
+| `gateway` | missing | `wizard gateway` is the messaging gateway | Claude Code's `gateway` runs an enterprise auth and telemetry gateway; the name is taken by a different feature here. |
+| `import` | present | `wizard import [claude] [--dry-run] [--yes]` | Imports MCP servers and custom commands from Claude Code. `codex`, `gemini` and `cursor` are refused by name: there is no importer for them. |
+| `install` | aliased | `wizard install [target]` | Is `wizard update`: `stable` and `latest` mean the newest release, a version means that tag, `--force` reinstalls. |
+| `logs` | accepted-with-warning | `wizard logs <id>` | Parses and points at `wizard agents` and `~/.wizard/sessions`: Wizard keeps no terminal log for a background run. |
+| `mcp` | present | `wizard mcp` | See the table below. |
+| `plugin \| plugins` | present | `wizard plugin` | See the table below. `wizard plugins` stays the Pi package installer, so Claude Code's `plugins` spelling does not reach the Claude-format store. |
+| `purge` | present | `wizard purge [path] [--all] [--dry-run] [-i] [-y]` | Deletes the conversations (and their sidecar files) recorded for a project. Claude Code also clears tasks and file history; Wizard keeps neither per project. |
+| `respawn` | accepted-with-warning | `wizard respawn` | Parses and explains: a Wizard background run is an ordinary process, so a new binary is picked up the next time it starts. |
+| `rm` | aliased | `wizard rm <id>` | Forgets a finished background session's record. Wizard has no worktree for it to delete. |
+| `setup-token` | aliased | `wizard setup-token` | Wizard has no long-lived token of its own. When `claude` is on PATH this runs `claude setup-token`, otherwise it says how to sign in. |
+| `stop \| kill` | aliased | `wizard stop <id>`, `wizard kill <id>` | The `/stop` command: SIGTERM to the session's process group. |
+| `ultrareview` | accepted-with-warning | `wizard ultrareview` | Parses and points at the local `/review`. The cloud review is Anthropic's service. |
+| `update \| upgrade` | present | `wizard update`, `wizard upgrade` | Same job; `upgrade` is an alias. |
+
+`wizard mcp` and `wizard plugin` in detail. Servers added with `wizard mcp add` at the default `local` scope are kept per project in `~/.wizard/local-mcp.json`, in the shape of the `projects` map in `~/.claude.json`.
+
+| Claude Code | Status | Notes |
+| :- | :- | :- |
+| `mcp add` | present | Same flags: `-s local\|user\|project`, `-t stdio\|http`, `-e KEY=v`, `-H "K: v"`. Local is `~/.wizard/local-mcp.json`, user is `~/.wizard/mcp.toml`, project is `.mcp.json` in Claude's own format. `-t sse` is refused: no SSE client. |
+| `mcp add --callback-port, --client-id, --client-secret` | accepted-with-warning | MCP OAuth is not built; ignored with a warning. |
+| `mcp add-json` | present | Validated like a `.mcp.json` entry. |
+| `mcp add-from-claude-desktop` | present | Reads `claude_desktop_config.json` where it exists (macOS, Linux); not limited to Mac and WSL. |
+| `mcp get` | present | Same layout, with a live handshake for the status. |
+| `mcp list` | present | Health-checks every server at once. A `.mcp.json` server that has not been approved shows as pending, as in Claude Code. |
+| `mcp remove` | present | From the scope given, or whichever holds it. |
+| `mcp reset-project-choices` | present | Forgets the project's trust decision. |
+| `mcp serve` | aliased | Is `wizard mcp-serve`. |
+| `mcp login, mcp logout` | accepted-with-warning | Wizard sends the headers you configured and keeps no OAuth credentials, so `login` says so (exit 1) and `logout` has nothing to clear. |
+
+| Claude Code | Status | Notes |
+| :- | :- | :- |
+| `plugin list` | present | `--json` supported; `--available` and `--data-size` are accepted and ignored. |
+| `plugin install \| i` | present | `name@marketplace`, `owner/repo`, a git URL or a directory; `--marketplace <source>` adds it first. `--scope` is treated as user (one store). `--config`, `--registry`, `--accept-command` (npm and command sources) are not read. |
+| `plugin uninstall \| remove` | present | `--keep-data` is accepted; Wizard keeps no plugin data directory. |
+| `plugin enable, plugin disable [--all]` | present |  |
+| `plugin update` | present | Refreshes the marketplaces and installs again from where the plugin came from. |
+| `plugin validate` | present | A plugin directory or a marketplace directory; `--strict` also wants a README. `--profile` is not read. |
+| `plugin details` | present | Component counts, not the projected token cost. |
+| `plugin marketplace add \| list \| remove \| rm \| update` | present | `--sparse` and `--claudeai` are not read. |
+| `plugin init \| new` | present | Scaffolds `./<name>` (Claude Code writes `~/.claude/skills/<name>`). |
+| `plugin tag` | present | `<name>--v<version>` from the manifest; `--dry-run`, `--force`, `--push`. The marketplace-entry agreement check is not made. |
+| `plugin prune \| autoremove` | present | Wizard installs no dependencies, so there is nothing to remove. |
+| `plugin configure` | missing | No `userConfig` store for plugin options. |
+| `plugin eval` | missing | Claude Code's plugin eval harness runs prompts against graders; there is no counterpart. |
+| `plugin test` | missing | Runs a Claude Code mod's tests; mods are not Wizard plugins. |
+
+### CLI flags in `claude --help`
+
+| Flag | Status | Notes |
+| :- | :- | :- |
+| `--print` | present |  |
+| `--add-dir` | present |  |
+| `--agent` | present |  |
+| `--agents` | present |  |
+| `--allow-dangerously-skip-permissions` | accepted-with-warning | Removed with a warning: `--permission-mode bypassPermissions` is always allowed. |
+| `--allowedTools` | present |  |
+| `--allowed-tools` | present |  |
+| `--append-system-prompt` | present |  |
+| `--autocompact` | present | Mapped this session: `auto` leaves the window, `200k`/`1m` set `max_context_tokens`. |
+| `--ax-screen-reader` | accepted-with-warning |  |
+| `--bg` | missing | Claude Code's `--bg` starts the session detached and prints an id. Wizard's `--bg` is an internal flag for runs that `/background` already dispatched, so it does not do that; use `/background` or `wizard agents`. |
+| `--background` | accepted-with-warning | Removed with a warning; see `--bg`. |
+| `--resume` | present |  |
+| `--bare` | present |  |
+| `--settings` | present |  |
+| `--system-prompt` | present |  |
+| `--mcp-config` | present |  |
+| `--plugin-dir` | present |  |
+| `--betas` | accepted-with-warning |  |
+| `--brief` | accepted-with-warning |  |
+| `--chrome` | accepted-with-warning |  |
+| `--cloud` | accepted-with-warning |  |
+| `--continue` | present |  |
+| `--dangerously-skip-permissions` | present |  |
+| `--debug` | present |  |
+| `--debug-file` | accepted-with-warning |  |
+| `--desktop` | accepted-with-warning |  |
+| `--disable-slash-commands` | present |  |
+| `--disallowedTools` | present |  |
+| `--disallowed-tools` | present |  |
+| `--effort` | present |  |
+| `--environment` | accepted-with-warning |  |
+| `--exclude-dynamic-system-prompt-sections` | accepted-with-warning |  |
+| `--fallback-model` | present |  |
+| `--file` | accepted-with-warning |  |
+| `--fork-session` | present |  |
+| `--forward-subagent-text` | accepted-with-warning |  |
+| `--output-format` | present |  |
+| `--from-pr` | accepted-with-warning |  |
+| `--help` | present |  |
+| `--ide` | accepted-with-warning |  |
+| `--include-hook-events` | accepted-with-warning | Accepted, no effect: `stream-json` already carries hook events. |
+| `--include-partial-messages` | accepted-with-warning | Accepted, no effect. |
+| `--input-format` | present |  |
+| `--json-schema` | present |  |
+| `--max-budget-usd` | present |  |
+| `--model` | present |  |
+| `--name` | present |  |
+| `--no-chrome` | accepted-with-warning |  |
+| `--no-session-persistence` | present |  |
+| `--permission-mode` | present |  |
+| `--permission-prompts` | accepted-with-warning | Removed with a warning: a headless Wizard run never waits for a prompt. |
+| `--permission-prompt-tool` | accepted-with-warning | Removed with a warning. |
+| `--plugin-url` | accepted-with-warning |  |
+| `--prompt-suggestions` | accepted-with-warning |  |
+| `--remote-control` | accepted-with-warning |  |
+| `--remote-control-session-name-prefix` | accepted-with-warning |  |
+| `--replay-user-messages` | accepted-with-warning | Accepted, no effect. |
+| `--restricted` | accepted-with-warning |  |
+| `--tools` | accepted-with-warning | Removed with a warning: the tool set is fixed, `--allowedTools` and `--disallowedTools` narrow what runs. |
+| `--strict-mcp-config` | present |  |
+| `--safe-mode` | present |  |
+| `--session-id` | present |  |
+| `--setting-sources` | accepted-with-warning |  |
+| `--system-prompt-snapshot` | accepted-with-warning |  |
+| `--teleport` | accepted-with-warning |  |
+| `--tmux` | accepted-with-warning |  |
+| `--worktree` | present |  |
+| `--verbose` | present |  |
+| `--version` | present | `-v` is rewritten to `--version` (Wizard's own short form is `-V`). |
+
+The mapped flags are described under "CLI flags" above; the removed-with-a-warning ones are listed there too.
+
+### Slash menu
+
+The 98 names below are the menu of an interactive 2.1.314 session plus the commands its `system` init line lists. `/help` is generated from the same table, so it adds nothing.
+
+| Claude Code | Status | Wizard | Notes |
+| :- | :- | :- | :- |
+| `/add-dir` | present | `/add-dir` | Wizard's own prompt. |
+| `/autocompact` | present | `/autocompact` |  |
+| `/autofix-pr` | accepted-with-warning | `/autofix-pr` | Answers with one sentence saying why there is no counterpart. |
+| `/background` | present | `/background` |  |
+| `/branch` | present | `/branch` |  |
+| `/btw` | present | `/btw` |  |
+| `/bug` | aliased | `/feedback` |  |
+| `/cd` | present | `/cd` |  |
+| `/chrome` | accepted-with-warning | `/chrome` | Answers with one sentence saying why there is no counterpart. |
+| `/clear` | present | `/clear` |  |
+| `/color` | accepted-with-warning | `/color` | Answers with one sentence saying why there is no counterpart. |
+| `/compact` | present | `/compact` |  |
+| `/config` | aliased | `/settings` |  |
+| `/context` | present | `/context` |  |
+| `/copy` | present | `/copy` |  |
+| `/design-login` | accepted-with-warning | `/design-login` | Answers with one sentence saying why there is no counterpart. |
+| `/diff` | present | `/diff` |  |
+| `/effort` | present | `/effort` |  |
+| `/exit` | present | `/exit` |  |
+| `/export` | present | `/export` |  |
+| `/fast` | accepted-with-warning | `/fast` | Answers with one sentence saying why there is no counterpart. |
+| `/feedback` | present | `/feedback` |  |
+| `/focus` | aliased | `/view` |  |
+| `/fork` | present | `/fork` |  |
+| `/goal` | present | `/goal` |  |
+| `/help` | present | `/help` |  |
+| `/hooks` | present | `/hooks` |  |
+| `/ide` | present | `/ide` |  |
+| `/install-github-app` | accepted-with-warning | `/install-github-app` | Answers with one sentence saying why there is no counterpart. |
+| `/install-slack-app` | accepted-with-warning | `/install-slack-app` | Answers with one sentence saying why there is no counterpart. |
+| `/keybindings` | present | `/keybindings` |  |
+| `/list-agents` | aliased | `/agents` |  |
+| `/login` | present | `/login` |  |
+| `/logout` | present | `/logout` |  |
+| `/mcp` | present | `/mcp` |  |
+| `/memory` | present | `/memory` |  |
+| `/mobile` | accepted-with-warning | `/mobile` | Answers with one sentence saying why there is no counterpart. |
+| `/model` | present | `/model` |  |
+| `/output-style` | present | `/output-style` |  |
+| `/permissions` | present | `/permissions` |  |
+| `/plan` | present | `/plan` |  |
+| `/plugin` | present | `/plugin` |  |
+| `/powerup` | accepted-with-warning | `/powerup` | Answers with one sentence saying why there is no counterpart. |
+| `/radio` | accepted-with-warning | `/radio` | Answers with one sentence saying why there is no counterpart. |
+| `/rate-limit-options` | accepted-with-warning | `/rate-limit-options` | Answers with one sentence saying why there is no counterpart. |
+| `/recap` | present | `/recap` | Wizard's own prompt. |
+| `/release-notes` | present | `/release-notes` |  |
+| `/reload-plugins` | aliased | `/reload` |  |
+| `/reload-skills` | aliased | `/reload` |  |
+| `/remote-env` | accepted-with-warning | `/remote-env` | Answers with one sentence saying why there is no counterpart. |
+| `/rename` | present | `/rename` |  |
+| `/resume` | present | `/resume` |  |
+| `/rewind` | present | `/rewind` |  |
+| `/sandbox` | accepted-with-warning | `/sandbox` | Answers with one sentence saying why there is no counterpart. |
+| `/skills` | present | `/skills` |  |
+| `/status` | present | `/status` |  |
+| `/stickers` | accepted-with-warning | `/stickers` | Answers with one sentence saying why there is no counterpart. |
+| `/subtask` | aliased | `/fork` |  |
+| `/tasks` | aliased | `/bashes` |  |
+| `/teleport` | accepted-with-warning | `/teleport` | Answers with one sentence saying why there is no counterpart. |
+| `/terminal-setup` | present | `/terminal-setup` |  |
+| `/theme` | aliased | `/ui` |  |
+| `/tui` | accepted-with-warning | `/tui` | Answers with one sentence saying why there is no counterpart. |
+| `/upgrade` | accepted-with-warning | `/upgrade` | Answers with one sentence saying why there is no counterpart. |
+| `/usage` | present | `/usage` |  |
+| `/voice` | accepted-with-warning | `/voice` | Answers with one sentence saying why there is no counterpart. |
+| `/web-setup` | accepted-with-warning | `/web-setup` | Answers with one sentence saying why there is no counterpart. |
+| `/workflows` | accepted-with-warning | `/workflows` | Answers with one sentence saying why there is no counterpart. |
+| `/batch` | accepted-with-warning | `/batch` | Answers with one sentence saying why there is no counterpart. |
+| `/claude-api` | accepted-with-warning | `/claude-api` | Answers with one sentence saying why there is no counterpart. |
+| `/code-review` | present | `/code-review` | Wizard's own prompt. |
+| `/dataviz` | accepted-with-warning | `/dataviz` | Answers with one sentence saying why there is no counterpart. |
+| `/debug` | present | `/debug` | Wizard's own prompt. |
+| `/deep-research` | accepted-with-warning | `/deep-research` | Answers with one sentence saying why there is no counterpart. |
+| `/design` | accepted-with-warning | `/design` | Answers with one sentence saying why there is no counterpart. |
+| `/design-sync` | accepted-with-warning | `/design-sync` | Answers with one sentence saying why there is no counterpart. |
+| `/doctor` | present | `/doctor` |  |
+| `/fewer-permission-prompts` | present | `/fewer-permission-prompts` | Wizard's own prompt. |
+| `/init` | present | `/init` | Wizard's own prompt. |
+| `/insights` | accepted-with-warning | `/insights` | Answers with one sentence saying why there is no counterpart. |
+| `/loop` | present | `/loop` |  |
+| `/plugin-authoring` | accepted-with-warning | `/plugin-authoring` | Answers with one sentence saying why there is no counterpart. |
+| `/run` | present | `/run` | Wizard's own prompt. |
+| `/run-skill-generator` | present | `/run-skill-generator` | Wizard's own prompt. |
+| `/schedule` | present | `/schedule` |  |
+| `/security-review` | present | `/security-review` | Wizard's own prompt. |
+| `/simplify` | present | `/simplify` | Wizard's own prompt. |
+| `/statusline` | present | `/statusline` |  |
+| `/team-onboarding` | present | `/team-onboarding` | Wizard's own prompt. |
+| `/update-config` | present | `/update-config` | Wizard's own prompt. |
+| `/verify` | present | `/verify` | Wizard's own prompt. |
+| `/workflow-authoring` | accepted-with-warning | `/workflow-authoring` | Answers with one sentence saying why there is no counterpart. |
+| `/auto-mode-setup` | accepted-with-warning | `/auto-mode-setup` | Answers with one sentence saying why there is no counterpart. |
+| `/__remote-workflow` | missing |  | internal plumbing of the Workflow runtime |
+| `/workflow-launch-exec` | missing |  | internal plumbing of the Workflow runtime |
+| `/design-consent` | accepted-with-warning | `/design-consent` | Answers with one sentence saying why there is no counterpart. |
+| `/design-revoke` | accepted-with-warning | `/design-revoke` | Answers with one sentence saying why there is no counterpart. |
+| `/agents` | present | `/agents` |  |
+
+### Settings keys
+
+Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys marked present; "accepted" means a file that has the key still loads, and Wizard does nothing with it.
+
+| Key | Status | Notes |
+| :- | :- | :- |
+| `permissions` | present | Read and applied |
+| `additionalDirectories` | present | Permissions work: parsed there. |
+| `allow` | present | Read and applied |
+| `deny` | present | Read and applied |
+| `defaultMode` | present | Read and applied |
+| `hooks` | present | Read and applied |
+| `disableAllHooks` | present | Read and applied |
+| `env` | present | Read and applied |
+| `model` | present | Read and applied |
+| `availableModels` | present | Read and applied |
+| `modelOverrides` | present | Read and applied |
+| `effortLevel` | present | Read and applied |
+| `outputStyle` | present | Read and applied |
+| `language` | present | Read and applied |
+| `statusLine` | present | Read and applied |
+| `apiKeyHelper` | present | Read and applied |
+| `cleanupPeriodDays` | present | Read and applied |
+| `attribution` | present | Read and applied |
+| `fallbackModel` | present | Read and applied |
+| `editorMode` | present | Read and applied |
+| `enabledPlugins` | present | Read and applied |
+| `enableAllProjectMcpServers` | present | Read and applied |
+| `enabledMcpjsonServers` | present | Read and applied |
+| `disabledMcpjsonServers` | present | Read and applied |
+| `spinnerVerbs` | aliased | `wizard import` / `/import` copy them into `ui.spinner_verbs`. |
+| `includeCoAuthoredBy` | aliased | Wizard adds no attribution by default; `attribution` sets the text. |
+| `autoUpdates` | aliased | `DISABLE_AUTOUPDATER` and `[update]` in `config.toml`. |
+| `forceLoginMethod` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `forceLoginOrgUUID` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowManagedHooksOnly` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowManagedPermissionRulesOnly` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowManagedMcpServersOnly` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowedHttpHookUrls` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `httpHookAllowedEnvVars` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `strictKnownMarketplaces` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `blockedMarketplaces` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `extraKnownMarketplaces` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `pluginSuggestionMarketplaces` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `pluginTrustMessage` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `forceRemoteSettingsRefresh` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `companyAnnouncements` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `requiredMinimumVersion` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `minimumVersion` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `wslInheritsWindowsSettings` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `parentSettingsBehavior` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `policyHelper` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `xaaIdp` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `gatewayInternalNetworks` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `attributionProjectPolicy` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `awsAuthRefresh` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `awsCredentialExport` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `gcpAuthRefresh` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `awsPairs` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `otelHeadersHelper` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowedMcpServers` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `deniedMcpServers` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `channelsEnabled` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `allowedChannelPlugins` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `crossSessionInbound` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `remoteControl` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `autoUploadSessions` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `desktopSessionCleanupPeriodDays` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `disableDeepLinkRegistration` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `disableTelemetry` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `modelPricing` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `feedbackSurveyRate` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `autoUpdatesChannel` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `hasCompletedOnboarding` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `lspRecommendationDisabled` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `skipWebFetchPreflight` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `claudeMd` | accepted-with-warning | Read and ignored, because the feature is Anthropic's account, enterprise or cloud plumbing |
+| `theme` | accepted-with-warning | `/ui` and the skin carry it. |
+| `tui` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `viewMode` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `spinnerTipsEnabled` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `spinnerTipsOverride` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `terminalProgressBarEnabled` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `prefersReducedMotion` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `fileSuggestion` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `respectGitignore` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `showThinkingSummaries` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `showTurnDuration` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `showClearContextOnPlanAccept` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `copyFullResponse` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `copyOnSelect` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `diffTool` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `notifChannel` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `preferredNotifChannel` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `voiceEnabled` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `voice` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `screenReader` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `teammateMode` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `autoConnectIde` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `autoInstallIdeExtension` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `verbose` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `modelPicker` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `subagentStatusLine` | accepted-with-warning | Read and ignored, because the interface belongs to the skin and the terminal UI |
+| `sandbox` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `fastMode` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `fastModePerSessionOptIn` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `advisorModel` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `autoMode` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `useAutoModeDuringPlan` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `disableAutoMode` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `workflows` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `disableWorkflows` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `skillOverrides` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `disableSkillShellExecution` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `worktree` | accepted-with-warning | Worktrees are fixed at `.claude/worktrees` and `.wizard/worktrees`. |
+| `plansDirectory` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `defaultShell` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `agent` | accepted-with-warning | Use `--agent`. Not read from settings. |
+| `claudeMdExcludes` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `autoMemoryDirectory` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `autoMemoryEnabled` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `includeGitInstructions` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `autoCompactEnabled` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `alwaysThinkingEnabled` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `thinkingBudget` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `maxThinkingTokens` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `skipDangerousModePermissionPrompt` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `keybindings` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `skills` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `commands` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `agents` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `mcpServers` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+
+`.mcp.json` servers load when the project is trusted, and also when the user's own settings approve them, which is how Claude Code records the choice: `enableAllProjectMcpServers`, or the name in `enabledMcpjsonServers`, read from `~/.claude/settings.json` and the project's `.claude/settings.local.json` only. The shared `.claude/settings.json` arrives with a clone, so it cannot approve its own servers. A name in `disabledMcpjsonServers` never connects. `${VAR}` and `${VAR:-default}` in a server's command, args, env, url and headers expand from the environment, as in Claude Code.
+
+### Environment variables
+
+The binary reads about 400 names through `process.env` and carries over 800 `CLAUDE_CODE_*` strings; most are Anthropic's own feature gates, test hooks and transport. The ones with a meaning for a user are listed by name; the rest are grouped by family. All 419 names the binary reads through `process.env` were matched against these rows when the table was built, and none was left over; the `CLAUDE_CODE_*` strings that are not read that way fall under the last row.
+
+| Name | Status | Notes |
+| :- | :- | :- |
+| ANTHROPIC_API_KEY | present | The `anthropic` provider's key (existing). |
+| ANTHROPIC_AUTH_TOKEN | present | Existing. |
+| ANTHROPIC_BASE_URL | present | The `anthropic` provider's endpoint, when it is the active provider. |
+| ANTHROPIC_MODEL | present | The model of an active `anthropic` provider; `--model` wins. |
+| ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL | present | What `--model opus` (and so on) stands for, like `modelOverrides`; `modelOverrides` does not beat them. |
+| CLAUDE_CONFIG_DIR | present | The `.claude` directory, and where `.claude.json` lives. |
+| CLAUDE_CODE_SIMPLE | present | Same as `--bare`. |
+| CLAUDE_CODE_SAFE_MODE | present | Same as `--safe-mode`. |
+| CLAUDE_CODE_PLUGIN_DIRS | present | Same as `--plugin-dir`, when the flag is not given. |
+| CLAUDE_CODE_EFFORT_LEVEL | present | The reasoning effort when `--effort` is not given; beats `effortLevel`. |
+| MAX_THINKING_TOKENS | aliased | Wizard has levels, not a token budget: up to 4096 is `low`, 16384 `medium`, 32768 `high`, more `xhigh`. Used only when no effort is set elsewhere. |
+| CLAUDE_CODE_MAX_TURNS | present | The step budget when `--max-turns` is not given. |
+| BASH_DEFAULT_TIMEOUT_MS | aliased | `shell.timeout_secs`: how long `execute` waits in the foreground before the command becomes a background task. |
+| CLAUDE_CODE_SHELL | present | `shell.program`. |
+| CLAUDE_CODE_AUTO_COMPACT_WINDOW | present | `max_context_tokens`. |
+| CLAUDE_AUTOCOMPACT_PCT_OVERRIDE | aliased | Moves the point compaction starts (80% of the window by default) by scaling `max_context_tokens` by `pct / 80`. |
+| DISABLE_AUTOUPDATER, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC | present | Turn off the startup update check and notice (`update.auto`, `update.notify`). |
+| CLAUDE_CODE_DISABLE_CLAUDE_MDS | present | Ignore `CLAUDE.md`, `CLAUDE.local.md` and the rules folders; `WIZARD.md` and `AGENTS.md` still load. |
+| CLAUDE_CODE_TMPDIR, CLAUDE_TMPDIR | aliased | Become `TMPDIR` for the process and the commands it starts, unless `TMPDIR` is set. |
+| DISABLE_LOGIN_COMMAND, DISABLE_LOGOUT_COMMAND, DISABLE_UPGRADE_COMMAND, DISABLE_FEEDBACK_COMMAND, DISABLE_BUG_COMMAND, DISABLE_DOCTOR_COMMAND, DISABLE_EXTRA_USAGE_COMMAND, DISABLE_INSTALL_GITHUB_APP_COMMAND | present | The slash command answers "turned off by NAME" and does nothing. |
+| DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, DISABLE_COST_WARNINGS, DISABLE_GROWTHBOOK, CLAUDE_CODE_ENABLE_TELEMETRY, ENABLE_ENHANCED_TELEMETRY_BETA, OTEL_* | present | Nothing to turn off: Wizard sends no telemetry or error reports. |
+| HTTP_PROXY, HTTPS_PROXY, NO_PROXY | present | The HTTP client reads them. |
+| CLAUDE_PROJECT_DIR, CLAUDE_PLUGIN_ROOT | present | Set for hooks and plugin commands (existing). |
+| CLAUDE_CODE_CHILD_SESSION, MCP_TOOL_TIMEOUT | present | Set for the `claude` provider and the status line (existing). |
+| ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_EXTRA_BODY, CLAUDE_CODE_EXTRA_METADATA | missing | No per-provider extra headers or body. |
+| ANTHROPIC_BEDROCK_*, ANTHROPIC_VERTEX_*, ANTHROPIC_FOUNDRY_*, ANTHROPIC_AWS_*, ANTHROPIC_GOOGLE_*, CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY / MANTLE / GATEWAY / ANTHROPIC_AWS / ANTHROPIC_GOOGLE_CLOUD, CLAUDE_CODE_SKIP_BEDROCK_AUTH / VERTEX_AUTH, AWS_*, AZURE_*, GOOGLE_*, CLOUDSDK_*, CLOUD_ML_REGION, VERTEX_REGION_* | missing | Bedrock, Vertex and Foundry are not providers here; `/provider` adds one that is. |
+| DISABLE_COMPACT, DISABLE_AUTO_COMPACT | missing | Compaction has no off switch; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` moves where it starts. |
+| BASH_MAX_TIMEOUT_MS, BASH_MAX_OUTPUT_LENGTH, MAX_MCP_OUTPUT_TOKENS, MCP_TIMEOUT, MCP_TOOL_TIMEOUT (for MCP calls), CLAUDE_CODE_MAX_OUTPUT_TOKENS, CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS, API_TIMEOUT_MS, CLAUDE_STREAM_IDLE_TIMEOUT_MS, CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS, CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS, CLAUDE_SLOW_FIRST_BYTE_MS, API_FORCE_IDLE_TIMEOUT, CLAUDE_CODE_MAX_RETRIES | accepted-with-warning | Wizard's limits are fixed constants or come from `config.toml`; none reads these names. |
+| CLAUDE_CODE_DISABLE_AUTO_MEMORY, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, CLAUDE_CODE_DISABLE_CRON, CLAUDE_CODE_DISABLE_FAST_MODE, CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY, CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING, CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS, CLAUDE_CODE_DISABLE_TERMINAL_TITLE, CLAUDE_CODE_DISABLE_1M_CONTEXT, CLAUDE_CODE_DISABLE_BUNDLED_SKILLS, CLAUDE_CODE_DISABLE_WORKFLOWS, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS, DISABLE_PROMPT_CACHING*, DISABLE_INTERLEAVED_THINKING, DISABLE_COLORS, ENABLE_PROMPT_CACHING_1H*, ENABLE_TOOL_SEARCH, ENABLE_LSP_TOOL, DISABLE_INSTALLATION_CHECKS, FORCE_CODE_TERMINAL, CLAUDE_AFTER_LAST_COMPACT, ANTHROPIC_DEFAULT_*_MODEL_NAME, ANTHROPIC_DEFAULT_*_MODEL_DESCRIPTION, ANTHROPIC_CUSTOM_MODEL_OPTION*, CLOUD_RUN_JOB, ENABLE_CLAUDEAI_MCP_SERVERS, CLAUDE_CODE_NO_FLICKER, CLAUDE_CODE_USE_POWERSHELL_TOOL, CLAUDE_CODE_GLOB_HIDDEN, CLAUDE_CODE_GLOB_NO_IGNORE, CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, CLAUDE_CODE_RESTRICTED, CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR, CLAUDE_ENV_FILE, SLASH_COMMAND_TOOL_CHAR_BUDGET, USE_BUILTIN_RIPGREP, IS_SANDBOX, FORCE_COLOR, FORCE_HYPERLINK | accepted-with-warning | Read by nothing. The behavior is either not a Wizard feature, already how Wizard works, or set in `config.toml` or by a flag; `--disallowedTools` removes a tool. |
+| CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_REFRESH_TOKEN, CLAUDE_CODE_OAUTH_*, CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR, CLAUDE_CODE_ACCOUNT_UUID, CLAUDE_CODE_ORGANIZATION_UUID, CLAUDE_CODE_SUBSCRIPTION_TYPE, CLAUDE_CODE_RATE_LIMIT_TIER, CLAUDE_CODE_CLIENT_CERT / CLIENT_KEY / CERT_STORE, ANTHROPIC_ORGANIZATION_ID, ANTHROPIC_WORKSPACE_ID, ANTHROPIC_PROFILE, ANTHROPIC_CONFIG_DIR, ANTHROPIC_UNIX_SOCKET, ANTHROPIC_FEDERATION_RULE_ID, MCP_CLIENT_SECRET, MCP_OAUTH_*, CLAUDE_TRUSTED_DEVICE_TOKEN, CLAUDE_SECURESTORAGE_CONFIG_DIR, CLAUDE_LOCAL_OAUTH_*, USE_LOCAL_OAUTH, USE_STAGING_OAUTH, CLAUDE_AI_* | accepted-with-warning | Anthropic account and OAuth plumbing. The `claude` provider runs the real Claude Code, which reads them itself; Wizard passes the environment through. |
+| CLAUDE_REMOTE_*, CLAUDE_CODE_REMOTE*, CLAUDE_CODE_SESSION_*, CLAUDE_CODE_BRIDGE_*, CLAUDE_BRIDGE_*, CLAUDE_BG_*, CLAUDE_PTY_*, CLAUDE_RUNNER_*, CLAUDE_SSH_*, CCR_*, CLAUDE_CODE_CONTAINER_ID, CLAUDE_CODE_ENVIRONMENT_*, CLAUDE_CODE_SPAWN*, CLAUDE_CODE_MESSAGING_*, CLAUDE_CODE_HOST_*, CLAUDE_CODE_WORKER_EPOCH, CLAUDE_CODE_SUPERVISED, CLAUDE_AGENT_SDK_*, CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_ACTION, CLAUDE_AGENTS_SELECT, CLAUDE_JOB_DIR, CLAUDE_SESSION_INGRESS_TOKEN_FILE, CLAUDE_STAGE_FILE_ROOT, CLAUDE_COWORK_*, CLAUDE_CODE_IS_COWORK | missing | Claude Code's cloud sessions, remote control, background-session transport and Agent SDK host handshake. Wizard has no counterpart to hand off to. |
+| CLAUDE_CODE_COORDINATOR_*, CLAUDE_CODE_ENABLE_TASKS, CLAUDE_CODE_TASK_LIST_ID, CLAUDE_CODE_ENABLE_AWAY_SUMMARY, CLAUDE_CODE_RESUME_INTERRUPTED_TURN, CLAUDE_MEMORY_STORES, CLAUDE_CODE_AUTO_MODE_*, CLAUDE_CODE_CLASSIFIER_SUMMARY, CLAUDE_CODE_ENABLE_CFC, CLAUDE_CHROME_*, CLAUDE_IN_CHROME*, CLAUDE_AX_*, CLAUDE_AX_SCREEN_READER | missing | Coordinator mode, task lists shared across sessions, memory stores, auto mode, Chrome integration and the screen-reader mode are Claude Code features Wizard does not have. |
+| CLAUDE_CODE_TEST_*, CLAUDE_TEST_*, CLAUDE_INTERNAL_*, CLAUDE_CODE_CONFIG_PROBE, CLAUDE_CODE_COUNT_GARBAGE_COLLECTIONS, CLAUDE_CODE_SCRIPT_CAPS, CLAUDE_CODE_SDK_READS_STARTUP_MARKS, CLAUDE_FORCE_DISPLAY_SURVEY, CLAUDE_CODE_JIT_POLICY_AFTER_STARTUP, CLAUDE_CODE_STARTUP_FAILURE_RESULTS, ENABLE_STUB_TOOLS, FORCE_VCR, FORCE_REFUSED_SENTENCE and every other `CLAUDE_CODE_*` name not listed above | accepted-with-warning | Test hooks, feature gates and diagnostics inside Claude Code's own build. No behavior to match. |
+
+### Bundled skills, agents and plugins
+
+| Item | Status | Notes |
+| :- | :- | :- |
+| skill `update-config` | present | bundled prompt `/update-config` |
+| skill `verify` | present | bundled prompt `/verify` |
+| skill `debug` | present | bundled prompt `/debug` |
+| skill `code-review` | present | `/review`, `/code-review` |
+| skill `simplify` | present | bundled prompt `/simplify` |
+| skill `doctor` | present | `/doctor` |
+| skill `loop` | present | `/loop` |
+| skill `schedule` | present | `/schedule`, `wizard schedule` |
+| skill `fewer-permission-prompts` | present | bundled prompt, reads `~/.wizard/sessions` |
+| skill `run` | present | bundled prompt |
+| skill `run-skill-generator` | present | bundled prompt, writes `.wizard/skills/run` |
+| skill `batch` | missing | cloud agents that each open a PR; `wizard fleet` is the local version |
+| skill `deep-research` | missing | a Workflow script; `/ultra` fans a question out over lenses |
+| skill `design` | missing | claude.ai Design product |
+| skill `design-sync` | missing | claude.ai Design product |
+| skill `dataviz` | missing | reference text only; a `.wizard/skills` entry of your own loads like any other |
+| skill `claude-api` | missing | reference text only; same |
+| skill `workflow-authoring` | missing | no Workflow runtime |
+| skill `plugin-authoring` | missing | Claude Code mods; Wizard plugins are written per `docs/plugins.md` |
+| agent `general-purpose`, `Explore`, `Plan` | aliased | run the built-in `worker` |
+| agent `claude` | aliased | the main agent |
+| agent `statusline-setup` | missing | `/statusline` sets the setting directly |
+| plugin `cc-plugin-agents-md` | present | Wizard reads `AGENTS.md` natively |
+| plugin `cc-plugin-telemetry` | present | nothing to enable: Wizard sends no telemetry |
+| plugin `cc-plugin-plugin-authoring` | missing | see skill `plugin-authoring` |
+| output styles `default`, `explanatory`, `learning` | present | `/output-style` |
+
+### Counts
+
+| Area | present | aliased | accepted-with-warning | missing | items |
+| :- | :- | :- | :- | :- | :- |
+| subcommands | 8 | 6 | 5 | 1 | 20 |
+| mcp verbs | 7 | 1 | 2 | 0 | 10 |
+| plugin verbs | 11 | 0 | 0 | 3 | 14 |
+| flags | 38 | 0 | 31 | 1 | 70 |
+| slash | 55 | 9 | 32 | 2 | 98 |
+| settings | 24 | 3 | 99 | 0 | 126 |
+| env rows | 20 | 4 | 4 | 5 | 33 |
+| skills | 11 | 0 | 0 | 8 | 19 |
+| agents and plugins | 3 | 2 | 0 | 2 | 7 |
+| **all** | 177 | 25 | 173 | 22 | 397 |
+
+### Switching from `~/.claude`
+
+Checked by running the built `wizard` in an isolated `HOME` that holds a realistic Claude Code setup: a
+`settings.json` with permissions, a hook, `env`, `model`, `outputStyle`, `enableAllProjectMcpServers` and a
+`statusLine`; `CLAUDE.md` and a rules file; `commands/hi.md` and `commands/team/deploy.md`; a skill; an agent;
+a `~/.claude.json` with a user server and a local server for the project; a project `.mcp.json` using
+`${VAR:-default}`; and two transcripts written by the real `claude` against the fake server.
+
+| What | Result |
+| :- | :- |
+| Skills, commands, agents | `/skills` shows `hello`, the command count includes `hi`, `team:deploy` and the project's own, `/agents` offers `rev`. |
+| Permissions, hooks | `/permissions` shows the allow, ask and deny rules and the `acceptEdits` default mode; `/hooks` shows the `PreToolUse` hook, and a headless run fired it. |
+| Instructions | `CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules` and `~/.claude/rules` are in the system prompt (`/context` reports the size). |
+| MCP servers | **Fixed.** Servers in `~/.claude.json` (user scope, and the project's local scope) were not read at all; they load now, labeled `claude.json` in `/mcp`. The project's `.mcp.json` server connects because `enableAllProjectMcpServers` approves it, and `${VAR:-default}` expands. |
+| `wizard resume --claude --list` | Lists both transcripts with their message counts and branch points. It already worked. |
+| `/resume` in the terminal UI | **Fixed.** It listed only Wizard's own sessions, so a Claude Code user saw "no past sessions to resume". Claude's sessions for the directory now follow Wizard's in the same picker, marked `claude`, and choosing one imports a copy as `/resume-claude` does. |
+| `wizard --resume` with no Wizard session here | **Fixed.** It started a fresh session without a word. It now prints the Claude sessions recorded for the directory, and the `wizard resume --claude` command that continues one. |
+| `CLAUDE_CONFIG_DIR` | **Fixed** for `.claude.json` and the importer, which looked in the home directory regardless. |
+| Not picked up | `wizard doctor` still checks only `mcp.toml`'s servers, not the ones from `.mcp.json` or `~/.claude.json`. Hook and permission *project* files behave as before: a project's executable surface waits for trust. |
+
 ## Slash commands
 
 ### Present
@@ -202,7 +697,8 @@ Rewritten before parsing, so the agent's `run_command` gate and every surface se
 | `/statusline [command\|off]` | Shows, sets or removes `statusLine` in `~/.wizard/settings.json`. Settings side only: the terminal UI draws the line. |
 | `/autocompact [tokens\|off]` | Shows or sets `max_context_tokens`, the window compaction counts (it starts at 80%). `200k` and `1m` work; applies from the next session. |
 | `/focus` | Alias of `/view`, which flips the compact transcript. |
-| `/fast`, `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/privacy-settings`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/fast` points at `/effort low`, `/advisor` at `/fusion` and `/ultra`, `/voice` says there is no audio stack). They change nothing. |
+| `/fast`, `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/privacy-settings`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex`, `/autofix-pr`, `/chrome`, `/design`, `/design-sync`, `/design-login`, `/design-consent`, `/design-revoke`, `/install-github-app`, `/install-slack-app`, `/mobile`, `/powerup`, `/radio`, `/remote-env`, `/sandbox`, `/stickers`, `/teleport`, `/tui`, `/web-setup`, `/workflows`, `/workflow-authoring`, `/batch`, `/claude-api`, `/dataviz`, `/deep-research`, `/plugin-authoring`, `/auto-mode-setup` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/fast` points at `/effort low`, `/advisor` at `/fusion` and `/ultra`, `/voice` says there is no audio stack, `/batch` at `wizard fleet`, `/tui` at `/ui`). They change nothing. |
+| `DISABLE_LOGIN_COMMAND` and the other `DISABLE_*_COMMAND` variables | `/login`, `/logout`, `/upgrade`, `/feedback` (and `/bug`), `/doctor`, `/usage-credits` and `/install-github-app` answer "turned off by NAME" when their variable is set. |
 | `/feedback [note]` | Where to report a bug and what to attach. |
 | `/schedule` | Lists `~/.wizard/schedule.toml`; `wizard schedule` manages it. |
 | `/logout <xai\|chatgpt>` | Removes the stored sign-in. The account is named on purpose. |
@@ -223,22 +719,22 @@ Markdown in `src/commands/bundled/`, loaded as custom commands at the lowest pri
 
 `/init` (writes `AGENTS.md`, or improves the instruction file already there), `/security-review`,
 `/review` and `/code-review`, `/pr-comments`, `/simplify`, `/recap`, `/add-dir`, `/debug`, `/verify`,
-`/update-config`.
+`/update-config`, `/run` (launch the app and show the change working), `/run-skill-generator` (write a
+`.wizard/skills/run` skill), `/team-onboarding` (write `docs/onboarding.md`) and `/fewer-permission-prompts`
+(read `~/.wizard/sessions`, add the read-only commands that keep getting approved to
+`.claude/settings.local.json`).
 
 These are Wizard's own prompts, not Claude Code's text. `/add-dir` asks the model to treat the
 directory as part of the task; it does not widen a file-access sandbox, because Wizard has none to widen.
 
 ### Missing
 
-| Claude Code | Why |
-|---|---|
-| `/tui`, `/scroll-speed`, `/stickers`, `/radio`, `/powerup` | Terminal UI work, owned elsewhere. |
-| `/sandbox` | Wizard has no OS sandbox to toggle. |
-| `/chrome`, `/claude-in-chrome` | The `computer` tool covers browser driving differently. |
-| `/desktop`, `/mobile` | `wizard gui` and the Android app are separate products. |
-| `/teleport`, `/remote-control`, `/remote-env`, `/cloud`, `/autofix-pr`, `/ultrareview`, `/web-setup`, `/install-github-app`, `/install-slack-app` | Anthropic cloud and GitHub App features. |
-| `/design*`, `/slides`, `/artifacts`, `/artifact-*`, `/dataviz`, `/deep-research`, `/claude-api`, `/batch`, `/workflows`, `/workflow-authoring`, `/plugin-authoring`, `/run`, `/run-skill-generator`, `/team-onboarding`, `/skill-doctor` | Bundled skills and workflows tied to Anthropic products; skills in `.claude/skills` still load. |
-| `/fewer-permission-prompts` | Not built. Wizard only prompts when a permission mode is named, and "don't ask again" already writes the allow rule to `.claude/settings.local.json`. |
+Of the 98 names in 2.1.314's menu, two have no row to answer them: `/__remote-workflow` and `/workflow-launch-exec`,
+which are plumbing of the Workflow runtime and not typed by anyone. Names an older spec lists that the 2.1.314
+menu no longer shows (`/scroll-speed`, `/claude-in-chrome`, `/desktop`, `/cloud`, `/remote-control`, `/slides`,
+`/artifacts`, `/artifact-*`, `/skill-doctor`, `/ultrareview`) are not implemented; `wizard ultrareview` answers
+as the subcommand. The Workflow runtime, claude.ai-only tools and voice stay out for the reasons in the audit
+table above.
 
 `/theme` is still `/ui`: a skin carries its palette, so Claude's theme names (`dark`, `light-daltonized`, ...) do not map to anything.
 
@@ -279,6 +775,8 @@ starts. Nothing is dropped silently.
 | `--verbose`, `-d` / `--debug[=filter]` | Sets `WIZARD_LOG` for the run (log file, not stderr). |
 | `--dangerously-skip-permissions` | Same as `--permission-mode bypassPermissions`. |
 | `--include-partial-messages`, `--include-hook-events`, `--replay-user-messages` | Accepted, no effect: the structured formats already carry that. |
+| `--autocompact <auto\|tokens>` | `auto` leaves the window alone; `200k` or `1m` sets `max_context_tokens` for the run. |
+| `-v` | Rewritten to `--version`. |
 | `[prompt]` | The words after the flags are the task. |
 
 ### Accepted and reported as unsupported
@@ -291,17 +789,18 @@ above.
 
 `--betas`, `--brief`, `--chrome`, `--no-chrome`, `--ide`, `--cloud`, `--remote`, `--environment`, `--ref`,
 `--remote-control`/`--rc` and its prefix flag, `--teleport`, `--background`, `--desktop`, `--tmux`,
-`--from-pr`, `--file`, `--init`, `--init-only`, `--maintenance`, `--ax-screen-reader`, `--autocompact`,
-`--advisor`, `--prompt-suggestions`, `--teammate-mode`, `--channels` and the development-channels flag,
+`--from-pr`, `--file`, `--init`, `--init-only`, `--maintenance`, `--ax-screen-reader`,
+`--advisor`, `--prompt-suggestions`, `--teammate-mode`, `--tools`, `--permission-prompts`,
+`--permission-prompt-tool`, `--allow-dangerously-skip-permissions`, `--channels` and the development-channels flag,
 `--forward-subagent-text`, `--exclude-dynamic-system-prompt-sections`, `--system-prompt-snapshot`,
 the two `--append-subagent-system-prompt` flags, `--plugin-url`, `--debug-file`, `--setting-sources`,
 `--restricted`.
 
 ### Not mine
 
-`--permission-mode`, `--allowedTools`, `--disallowedTools`, `--tools`, `--permission-prompt-tool`,
-`--permission-prompts` and `--allow-dangerously-skip-permissions` belong to the permissions work and are
-neither added nor stripped here.
+`--permission-mode`, `--allowedTools` and `--disallowedTools` belong to the permissions work and are parsed
+there. `--tools`, `--permission-prompt-tool`, `--permission-prompts` and `--allow-dangerously-skip-permissions`
+are removed with a warning here, since nothing implements them.
 
 ## The `.claude` directory
 
@@ -313,8 +812,8 @@ shadows the user's.
 | Commands | `~/.claude/commands`, `<project>/.claude/commands` | Subfolders namespace: `team/deploy.md` is `/team:deploy`. `$ARGUMENTS`, `$1`..`$9` and `@file` work. `!` shell injection and `allowed-tools` frontmatter are ignored. |
 | Skills | `~/.claude/skills`, `<project>/.claude/skills`, `<project>/.wizard/skills` | Same `SKILL.md` format. |
 | Subagents | `~/.claude/agents`, `<project>/.claude/agents` | Markdown with `name`, `description`, `tools`. `tools` map by purpose (`Read` to `read_file`, `Bash` to `execute`); names with no Wizard tool are dropped. `model` is ignored. |
-| Instructions | `CLAUDE.md` (already read), `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`, `~/.claude/rules` | `WIZARD.md` and `AGENTS.md` still shadow `CLAUDE.md` in the same directory. A rule with `paths:` is skipped, since nothing here injects per file. |
-| MCP servers | `<project>/.mcp.json` | Held back until the project is trusted (below). |
+| Instructions | `CLAUDE.md` (already read; `CLAUDE_CODE_DISABLE_CLAUDE_MDS` skips every Claude file), `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`, `~/.claude/rules` | `WIZARD.md` and `AGENTS.md` still shadow `CLAUDE.md` in the same directory. A rule with `paths:` is skipped, since nothing here injects per file. |
+| MCP servers | `<project>/.mcp.json`; `~/.claude.json` (`mcpServers` and this project's entry under `projects`, read only); `~/.wizard/local-mcp.json` | `.mcp.json` is held back until the project is trusted, or `enableAllProjectMcpServers` / `enabledMcpjsonServers` in your own settings approve it (below). `~/.claude.json` and the local file are your own, so they load at once. `${VAR}` and `${VAR:-default}` expand. |
 | Output styles | `~/.claude/output-styles`, `<project>/.claude/output-styles`, `~/.wizard/output-styles`, `<project>/.wizard/output-styles`; built-ins `default`, `explanatory`, `learning` | Chosen with `/output-style`, stored in `~/.wizard/output-style`; falls back to `outputStyle` in `.claude/settings.json`. Applied when the agent is built, so `/output-style` reloads. |
 | Plugins | `~/.claude/plugins/installed_plugins.json` entries enabled in `enabledPlugins`; `~/.wizard/claude-plugins/installed`; `--plugin-dir` | Commands (`plugin:cmd`), skills, agents, output styles, `.mcp.json` and hooks. A plugin's `hooks/hooks.json` (or the manifest's `hooks`, a path or an inline object) goes through the hooks engine like a Claude-format settings hook, with `${CLAUDE_PLUGIN_ROOT}` filled in; `/hooks` lists them as `plugin <name>` and `disableAllHooks` turns them off. |
 | Marketplaces | `~/.wizard/claude-plugins/marketplaces`, and Claude Code's `known_marketplaces.json` | `owner/repo` and URL sources are cloned with `git`; relative, `github` and `url` plugin sources install, others are named as unsupported. |
@@ -323,8 +822,11 @@ shadows the user's.
 
 `.mcp.json` entries are commands to run, and the file arrives with a `git clone`. They connect only when the
 project has a recorded yes in `~/.wizard/trusted_projects` (the same decision the project's hooks wait on) or
-`WIZARD_TRUST_PROJECT` is set. `/mcp` lists the ones waiting. Servers from plugins and `--mcp-config` load,
-since the user named them.
+`WIZARD_TRUST_PROJECT` is set, or the user's own settings approve them (`enableAllProjectMcpServers`, or the
+name in `enabledMcpjsonServers`, in `~/.claude/settings.json` or the project's `.claude/settings.local.json`;
+`disabledMcpjsonServers` always wins). `/mcp` lists the ones waiting, and where each loaded server came from.
+Servers from plugins, `--mcp-config`, `~/.claude.json` and `wizard mcp add` load, since the user named them.
+`wizard mcp reset-project-choices` forgets the project's decision.
 
 ### Not covered
 
