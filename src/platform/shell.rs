@@ -22,7 +22,24 @@ pub fn command(command_line: &str) -> std::process::Command {
     let (program, flag) = invocation();
     let mut command = std::process::Command::new(program);
     command.arg(flag).arg(command_line);
+    command.envs(session_env().iter().map(|(k, v)| (k, v)));
     command
+}
+
+/// Variables every command line inherits on top of the process environment:
+/// the `env` map from Claude-format `settings.json` files. Set once per
+/// agent build; empty unless a settings file asks for some.
+static SESSION_ENV: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// Replace the session environment (see [`SESSION_ENV`]).
+pub fn set_session_env(vars: Vec<(String, String)>) {
+    if let Ok(mut current) = SESSION_ENV.write() {
+        *current = vars;
+    }
+}
+
+fn session_env() -> Vec<(String, String)> {
+    SESSION_ENV.read().map(|v| v.clone()).unwrap_or_default()
 }
 
 /// [`command`], for the async half of the codebase. Same shell, same flag: the
@@ -31,6 +48,7 @@ pub fn tokio_command(command_line: &str) -> tokio::process::Command {
     let (program, flag) = invocation();
     let mut command = tokio::process::Command::new(program);
     command.arg(flag).arg(command_line);
+    command.envs(session_env().iter().map(|(k, v)| (k, v)));
     command
 }
 
@@ -58,6 +76,7 @@ pub fn tokio_command_pipefail(command_line: &str) -> tokio::process::Command {
                 .arg("pipefail")
                 .arg("-c")
                 .arg(command_line);
+            command.envs(session_env().iter().map(|(k, v)| (k, v)));
             command
         }
         Pipefail::Unsupported => tokio_command(command_line),

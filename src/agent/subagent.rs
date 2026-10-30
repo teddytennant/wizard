@@ -683,6 +683,10 @@ struct SubRun<'a> {
     dispatcher: Dispatcher,
     history: Vec<ChatMessage>,
     model: String,
+    /// The subagent's name and run id, for `SubagentStop` hooks.
+    agent_name: String,
+    run_id: String,
+    hooks: Arc<HookEngine>,
     /// Serialized-history ceiling compaction falls back to when the provider
     /// names no context window, carried from the same config key the parent
     /// reads ([`crate::config::Config::compact_threshold_bytes`]).
@@ -723,6 +727,30 @@ impl Host for SubRun<'_> {
 
     fn note_step(&self, step: u32) {
         self.steps.store(step, Ordering::Relaxed);
+    }
+
+    async fn stop_feedback(
+        &mut self,
+        last_text: &str,
+        stop_hook_active: bool,
+        _sink: &Sink,
+    ) -> Option<String> {
+        if !self
+            .hooks
+            .listens(crate::hooks::event::HookEvent::SubagentStop)
+        {
+            return None;
+        }
+        self.hooks
+            .subagent_stop(
+                &self.agent_name,
+                &self.run_id,
+                last_text,
+                stop_hook_active,
+                crate::config::Mode::default(),
+                None,
+            )
+            .await
     }
 
     fn tool_specs(&self) -> Vec<ToolSpec> {
@@ -880,7 +908,7 @@ async fn run_loop(
         scoped.remove(crate::tools::code::RUN_CODE_TOOL_NAME);
     }
 
-    let history = match &options.inherited_history {
+    let mut history = match &options.inherited_history {
         // `/fork`: seed from the parent's conversation, then append the
         // side-quest brief. The parent's system prompt (and any mid-session
         // notes) stay at the front; we only add the fork instruction + task.
@@ -972,6 +1000,13 @@ async fn run_loop(
         loaded.max_context_tokens,
         loaded.prune_after_tokens,
     );
+    let run_id = format!("agent-{run}");
+    if let Some(extra) = hooks
+        .subagent_start(&config.name, &run_id, crate::config::Mode::default(), None)
+        .await
+    {
+        history.push(ChatMessage::user(format!("[subagent_start hook]\n{extra}")));
+    }
     let mut host = SubRun {
         client,
         dispatcher: Dispatcher::sub_run(scoped, Arc::clone(hooks)),
@@ -979,6 +1014,9 @@ async fn run_loop(
         steps: Arc::clone(&steps),
         history,
         model,
+        agent_name: config.name.clone(),
+        run_id,
+        hooks: Arc::clone(hooks),
         byte_threshold: loaded.compact_threshold_bytes,
         max_context_tokens: loaded.max_context_tokens,
         last_prompt: std::sync::Mutex::new(None),

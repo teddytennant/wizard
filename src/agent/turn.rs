@@ -577,6 +577,28 @@ pub(super) trait Host: Send {
     /// failure breaker counts a tool once per response.
     fn begin_step(&mut self) {}
 
+    /// The model finished and the run is about to end. A `Stop` hook may ask
+    /// for more: `Some(feedback)` becomes the next instruction.
+    async fn stop_feedback(
+        &mut self,
+        _last_text: &str,
+        _stop_hook_active: bool,
+        _sink: &Sink,
+    ) -> Option<String> {
+        None
+    }
+
+    /// Every call of one model response has resolved. `PostToolBatch` hooks
+    /// may add context for the next request or end the turn.
+    async fn batch_resolved(
+        &mut self,
+        _calls: &[ToolCall],
+        _results: &[ToolResultBlock],
+        _sink: &Sink,
+    ) -> Option<crate::hooks::lifecycle::BatchVerdict> {
+        None
+    }
+
     /// A call the owner answers itself instead of dispatching, or `None` to
     /// dispatch it. Exactly one tool needs this: `compact`, which mutates the
     /// history the loop is standing on.
@@ -588,6 +610,35 @@ pub(super) trait Host: Send {
     /// an interrupt can still say how far the run got after the future is
     /// dropped. A turn has no such caller; the default does nothing.
     fn note_step(&self, _step: u32) {}
+}
+
+/// Claude Code's `StopFailure` matcher value for an error message.
+fn stop_failure_kind(detail: &str) -> &'static str {
+    let lower = detail.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
+    if has(&["429", "rate limit", "rate_limit", "too many requests"]) {
+        "rate_limit"
+    } else if has(&["overloaded", "529"]) {
+        "overloaded"
+    } else if has(&[
+        "401",
+        "403",
+        "unauthorized",
+        "authentication",
+        "invalid api key",
+    ]) {
+        "authentication_failed"
+    } else if has(&["billing", "quota", "insufficient", "spending limit", "402"]) {
+        "billing_error"
+    } else if has(&["context length", "context window", "too long", "400"]) {
+        "invalid_request"
+    } else if has(&["404", "model not found", "unknown model"]) {
+        "model_not_found"
+    } else if has(&["500", "502", "503", "504", "server error"]) {
+        "server_error"
+    } else {
+        "unknown"
+    }
 }
 
 /// What [`run`] produced.
@@ -680,6 +731,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
     let mut last_text = String::new();
     let mut promise_nudges = 0;
     let mut continuations = 0;
+    let mut stop_continuations = 0u32;
 
     for step in 1..=policy.max_steps {
         steps_used = step;
@@ -859,8 +911,20 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
                 host.push(ChatMessage::user(PROMISE_NUDGE));
                 continue;
             }
+            // `Stop` hooks: a hook may send the model back to work. Capped, so
+            // a hook that always objects cannot hold the run open forever.
+            if stop_continuations < crate::hooks::lifecycle::STOP_CONTINUATION_CAP
+                && let Some(feedback) = host
+                    .stop_feedback(&content, stop_continuations > 0, sink)
+                    .await
+            {
+                stop_continuations += 1;
+                host.push(ChatMessage::user(format!("Stop hook feedback: {feedback}")));
+                continue;
+            }
             return Ok(Ran::ended(DoneReason::Completed, steps_used, content));
         }
+        stop_continuations = 0;
         if !content.trim().is_empty() {
             last_text = content.clone();
             // What the model said on its way to calling something, for a pane
@@ -940,6 +1004,13 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
             }
         }
 
+        if let Some(verdict) = host.batch_resolved(&tool_calls, &results, sink).await {
+            nudges.extend(verdict.context);
+            if let Some(note) = verdict.halt {
+                nudges.push(format!("a PostToolBatch hook stopped the turn: {note}"));
+                ended.get_or_insert(DoneReason::Stopped);
+            }
+        }
         host.push(tool_feedback(policy.native_tools, results));
 
         // Images a tool returned ride back to the model on a follow-up user
@@ -1770,6 +1841,60 @@ impl Host for TurnHost<'_> {
         self.agent.dispatcher.begin_step();
     }
 
+    async fn stop_feedback(
+        &mut self,
+        last_text: &str,
+        stop_hook_active: bool,
+        sink: &Sink,
+    ) -> Option<String> {
+        let hooks = &self.agent.hooks;
+        if !stop_hook_active && !last_text.trim().is_empty() {
+            hooks
+                .message_display(last_text, self.agent.mode, sink.channel())
+                .await;
+        }
+        if !hooks.listens(crate::hooks::event::HookEvent::Stop) {
+            return None;
+        }
+        hooks
+            .stop(last_text, stop_hook_active, self.agent.mode, sink.channel())
+            .await
+    }
+
+    async fn batch_resolved(
+        &mut self,
+        calls: &[ToolCall],
+        results: &[ToolResultBlock],
+        sink: &Sink,
+    ) -> Option<crate::hooks::lifecycle::BatchVerdict> {
+        let hooks = &self.agent.hooks;
+        if !hooks.listens(crate::hooks::event::HookEvent::PostToolBatch) {
+            return None;
+        }
+        let args: Vec<Value> = calls
+            .iter()
+            .map(|call| crate::agent::normalize_args(&call.function.arguments))
+            .collect();
+        let batch: Vec<crate::hooks::lifecycle::BatchCall<'_>> = calls
+            .iter()
+            .zip(&args)
+            .zip(results)
+            .map(
+                |((call, args), result)| crate::hooks::lifecycle::BatchCall {
+                    tool: &call.function.name,
+                    args,
+                    tool_use_id: &call.id,
+                    output: &result.content,
+                },
+            )
+            .collect();
+        Some(
+            hooks
+                .post_tool_batch(&batch, self.agent.mode, sink.channel())
+                .await,
+        )
+    }
+
     async fn dispatch(&mut self, call: &ToolCall, sink: &Sink) -> DispatchOutcome {
         if !self.agent.dispatcher.offers(&call.function.name) {
             return self
@@ -1848,7 +1973,16 @@ impl Agent {
                 Ok(reason)
             }
             Err(err) => {
-                let _ = emit(&events, AgentEvent::Error(format!("{err:#}"))).await;
+                let detail = format!("{err:#}");
+                self.hooks
+                    .stop_failure(
+                        stop_failure_kind(&detail),
+                        &detail,
+                        self.mode,
+                        Some(&events),
+                    )
+                    .await;
+                let _ = emit(&events, AgentEvent::Error(detail)).await;
                 let _ = emit(
                     &events,
                     AgentEvent::Done {

@@ -11,20 +11,29 @@
 //! spawn failure is a logged warning and the pipeline continues: a broken
 //! hook can never wedge the agent.
 
-use std::collections::HashSet;
+pub mod backend;
+pub mod engine;
+pub mod event;
+pub mod lifecycle;
+pub mod matcher;
+pub mod protocol;
+pub mod spec;
+pub mod toolmap;
+
+pub use engine::{Before, Fire, HookBackend, HookEngine, Outcome};
+pub use spec::{Handler, HookSpec, Origin};
+
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use crate::agent::AgentEvent;
+use crate::config::claude::{self, ClaudeSettings};
 use crate::config::{Config, Mode};
 
 /// Wall-clock budget for one hook when `timeout_secs` is not set.
@@ -46,38 +55,7 @@ fn cap_tool_output(output: &str) -> String {
     format!("{}\n... [tool output truncated]", &output[..cut])
 }
 
-/// Lifecycle points a hook can attach to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HookEvent {
-    /// Before a tool call executes. May rewrite the arguments or block.
-    PreToolUse,
-    /// After a tool call executes. Stdout is appended to the tool result.
-    PostToolUse,
-    /// When a user message starts a turn. Stdout is appended to the message;
-    /// exit 2 ends the turn before the model sees it.
-    UserPromptSubmit,
-    /// Once when a session begins. Stdout becomes system context.
-    SessionStart,
-    /// Once when a session ends. Observational.
-    SessionEnd,
-    /// After every turn finishes. Observational.
-    TurnEnd,
-}
-
-impl HookEvent {
-    /// The snake_case name used in `hooks.toml` and the stdin payload.
-    pub fn name(self) -> &'static str {
-        match self {
-            HookEvent::PreToolUse => "pre_tool_use",
-            HookEvent::PostToolUse => "post_tool_use",
-            HookEvent::UserPromptSubmit => "user_prompt_submit",
-            HookEvent::SessionStart => "session_start",
-            HookEvent::SessionEnd => "session_end",
-            HookEvent::TurnEnd => "turn_end",
-        }
-    }
-}
+pub use event::HookEvent;
 
 /// One `[[hooks]]` entry from a `hooks.toml` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -141,6 +119,121 @@ pub fn load(project_root: &Path) -> Vec<HookDef> {
         &log_refusal,
     ));
     defs
+}
+
+/// Every hook for a project, from every source: `~/.wizard/hooks.toml`,
+/// `<project>/.wizard/hooks.toml`, and the hooks in Claude-format settings
+/// files (`~/.claude/settings.json`, `.claude/settings.json`,
+/// `.claude/settings.local.json` and the `.wizard/settings*.json` twins).
+/// The settings that were read come back with them, for the rules, `env`
+/// and other keys.
+///
+/// This is the funnel production code uses; [`load`] is the same thing for
+/// `hooks.toml` alone. Project-owned files go through the trust gate once,
+/// here, and the bytes it approved are the bytes that are read.
+pub fn load_specs(project_root: &Path) -> (Vec<HookSpec>, ClaudeSettings) {
+    load_specs_with(project_root, crate::trust::env_trust(), &log_refusal)
+}
+
+fn load_specs_with(
+    project_root: &Path,
+    env_trusted: bool,
+    report: Report<'_>,
+) -> (Vec<HookSpec>, ClaudeSettings) {
+    let mut specs = Vec::new();
+    match Config::wizard_dir() {
+        Ok(dir) => {
+            let path = dir.join("hooks.toml");
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                match spec::parse_toml(&raw, &path.display().to_string()) {
+                    Ok(found) => specs.extend(found),
+                    Err(err) => tracing::warn!("skipping invalid {}: {err}", path.display()),
+                }
+            }
+        }
+        Err(err) => tracing::warn!("could not resolve ~/.wizard for hooks: {err}"),
+    }
+    let gate = crate::trust::gate_with_console_env(
+        project_root,
+        crate::trust::Console::Unavailable,
+        env_trusted,
+    );
+    let settings = match &gate {
+        crate::trust::Gate::Allowed(surface) => {
+            if let Some(raw) = surface.contents_of(crate::trust::PROJECT_HOOKS_FILE) {
+                let label = project_root.join(crate::trust::PROJECT_HOOKS_FILE);
+                let label = label.display().to_string();
+                match std::str::from_utf8(raw) {
+                    Ok(text) => match spec::parse_toml(text, &label) {
+                        Ok(found) => specs.extend(found),
+                        Err(err) => tracing::warn!("skipping invalid {label}: {err}"),
+                    },
+                    Err(err) => tracing::warn!("skipping {label}: not valid UTF-8: {err}"),
+                }
+            }
+            claude::load(project_root, claude::Trust::Approved(surface))
+        }
+        crate::trust::Gate::Refused(why) => {
+            report(why);
+            claude::load(project_root, claude::Trust::Refused)
+        }
+    };
+    for warning in &settings.warnings {
+        tracing::warn!("{warning}");
+    }
+    specs.extend(settings.hooks.iter().cloned());
+    (specs, settings)
+}
+
+/// The engine for a session: every hook source, the permission policy, and
+/// the `env` from Claude-format settings handed to spawned commands.
+pub fn engine_for(config: &Config, project_root: &Path, session_id: String) -> HookEngine {
+    let (specs, settings) = load_specs(project_root);
+    crate::platform::shell::set_session_env(
+        settings
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
+    let engine = HookEngine::from_specs(specs, project_root.to_path_buf(), session_id);
+    engine.set_policy(crate::permissions::build(config, &settings, project_root));
+    engine
+}
+
+static AMBIENT: Mutex<Option<std::sync::Weak<HookEngine>>> = Mutex::new(None);
+
+/// Remember the session's engine so code with no handle on it (an
+/// instructions loader, the `todo` tool, the fleet) can still fire events.
+/// The last agent built wins; a gateway serving several projects at once
+/// reports these events to the newest.
+pub fn set_ambient(engine: &std::sync::Arc<HookEngine>) {
+    if let Ok(mut slot) = AMBIENT.lock() {
+        *slot = Some(std::sync::Arc::downgrade(engine));
+    }
+}
+
+/// The engine [`set_ambient`] remembered, if its agent is still alive.
+pub fn ambient() -> Option<std::sync::Arc<HookEngine>> {
+    AMBIENT.lock().ok()?.as_ref()?.upgrade()
+}
+
+/// Fire an observational event on the ambient engine without waiting for it.
+/// Does nothing when no engine is registered, no hook listens for `event`, or
+/// there is no async runtime to run it on.
+pub fn emit_detached(event: HookEvent, subject: Option<String>, extra: Value) {
+    let Some(engine) = ambient() else { return };
+    if !engine.listens(event) {
+        return;
+    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        engine
+            .emit(event, subject.as_deref(), extra, Mode::default(), None)
+            .await;
+    });
 }
 
 /// Where a trust refusal goes from *here*. One seam, one destination: the log.
@@ -299,508 +392,6 @@ pub fn append_context(content: &mut String, extra: &str) {
     content.push_str(extra);
 }
 
-/// A [`HookDef`] with its matcher glob compiled.
-struct CompiledHook {
-    def: HookDef,
-    matcher: Option<GlobMatcher>,
-}
-
-/// How one hook process finished.
-enum RunResult {
-    Exited {
-        code: i32,
-        stdout: String,
-        stderr: String,
-    },
-    /// Spawn failure, wait failure, or timeout.
-    Failed(String),
-}
-
-/// Internal verdict of [`HookEngine::fire`].
-enum FireResult {
-    Continue(Option<String>),
-    Block(String),
-}
-
-/// Runs the configured hooks for lifecycle events. Built once per agent and
-/// shared (via `Arc`) by the dispatcher, the agent loop, and the subagent
-/// spawner, so every tool call in every mode sees the same hooks. With no
-/// hooks configured every fire point reduces to an empty-Vec scan.
-pub struct HookEngine {
-    hooks: Vec<CompiledHook>,
-    /// Project root: hooks run here and it is the payload `cwd`.
-    cwd: PathBuf,
-    /// Current session id for payloads; swapped when `/clear` starts a new
-    /// session.
-    session_id: Mutex<String>,
-    /// Which hooks have already had an [`HookOutcome::AppendedContext`]
-    /// reported, keyed by lifecycle event and command.
-    ///
-    /// A hook that appends context does so every single time it matches —
-    /// that is what a context-injection hook *is* — so reporting each one
-    /// turns a `post_tool_use` hook into a line per tool call. The first
-    /// append is worth surfacing, because text entering the model's context
-    /// from outside the conversation is not otherwise visible anywhere; the
-    /// hundredth is not. Repeats are dropped to the log instead.
-    ///
-    /// Only [`HookOutcome::AppendedContext`] is deduplicated. A warning, a
-    /// block and a rewrite are reported every time: those describe something
-    /// that varies per call, and swallowing the second one would hide the
-    /// event that mattered.
-    appended: Mutex<HashSet<(&'static str, String)>>,
-}
-
-impl HookEngine {
-    /// Compile `defs` into an engine. A hook with an invalid matcher glob is
-    /// dropped with a warning.
-    pub fn new(defs: Vec<HookDef>, cwd: PathBuf, session_id: String) -> Self {
-        let hooks = defs
-            .into_iter()
-            .filter_map(|def| {
-                let matcher = match &def.matcher {
-                    Some(pattern) => match Glob::new(pattern) {
-                        Ok(glob) => Some(glob.compile_matcher()),
-                        Err(err) => {
-                            tracing::warn!(
-                                "dropping hook '{}': invalid matcher '{pattern}': {err}",
-                                def.command
-                            );
-                            return None;
-                        }
-                    },
-                    None => None,
-                };
-                Some(CompiledHook { def, matcher })
-            })
-            .collect();
-        Self {
-            hooks,
-            cwd,
-            session_id: Mutex::new(session_id),
-            appended: Mutex::new(HashSet::new()),
-        }
-    }
-
-    /// True when no hooks are configured (the default).
-    pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
-    }
-
-    /// Swap the payload session id (after `/clear` starts a new session).
-    ///
-    /// The append-notice filter is emptied with it: "once per session" is
-    /// measured in sessions, and `/clear` gives the user a transcript with
-    /// nothing in it, where the note that a hook is feeding the model text is
-    /// worth making again.
-    pub fn set_session_id(&self, id: String) {
-        *self.session_id.lock().unwrap() = id;
-        if let Ok(mut seen) = self.appended.lock() {
-            seen.clear();
-        }
-    }
-
-    /// `pre_tool_use`: run the matching hooks before `tool` executes. Exit 2
-    /// vetoes the call; exit 0 with stdout `{"updated_args": {...}}` rewrites
-    /// the arguments (later hooks in the chain see the rewritten args).
-    pub async fn pre_tool_use(
-        &self,
-        tool: &str,
-        args: &Value,
-        mode: Mode,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> PreToolUse {
-        let mut updated: Option<Value> = None;
-        for hook in self.matching(HookEvent::PreToolUse, Some(tool)) {
-            let effective = updated.as_ref().unwrap_or(args);
-            let run = self
-                .run(
-                    hook,
-                    HookEvent::PreToolUse,
-                    Some((tool, effective)),
-                    None,
-                    mode,
-                )
-                .await;
-            match run {
-                RunResult::Exited {
-                    code: 0, stdout, ..
-                } => {
-                    if let Some(args) = parse_updated_args(&stdout) {
-                        updated = Some(args);
-                        self.report(
-                            events,
-                            HookEvent::PreToolUse,
-                            hook,
-                            HookOutcome::UpdatedArgs,
-                        )
-                        .await;
-                    }
-                }
-                RunResult::Exited {
-                    code: 2, stderr, ..
-                } => {
-                    let reason = block_reason(&stderr);
-                    self.report(
-                        events,
-                        HookEvent::PreToolUse,
-                        hook,
-                        HookOutcome::Blocked(reason.clone()),
-                    )
-                    .await;
-                    return PreToolUse::Block(reason);
-                }
-                RunResult::Exited { code, stderr, .. } => {
-                    self.report(
-                        events,
-                        HookEvent::PreToolUse,
-                        hook,
-                        HookOutcome::Warning(exit_warning(code, &stderr)),
-                    )
-                    .await;
-                }
-                RunResult::Failed(why) => {
-                    self.report(
-                        events,
-                        HookEvent::PreToolUse,
-                        hook,
-                        HookOutcome::Warning(why),
-                    )
-                    .await;
-                }
-            }
-        }
-        PreToolUse::Continue(updated)
-    }
-
-    /// `post_tool_use` with the tool result in the payload: `tool_output`
-    /// (capped to [`TOOL_OUTPUT_CAP_BYTES`]) and `is_error`, so hooks can
-    /// react to what the tool actually did. Returns extra context to append
-    /// to the tool result, if any matching hook printed some.
-    pub async fn post_tool_use_with_output(
-        &self,
-        tool: &str,
-        args: &Value,
-        output: &str,
-        is_error: bool,
-        mode: Mode,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> Option<String> {
-        let extra = json!({
-            "tool_output": cap_tool_output(output),
-            "is_error": is_error,
-        });
-        match self
-            .fire(
-                HookEvent::PostToolUse,
-                Some((tool, args)),
-                Some(extra),
-                mode,
-                false,
-                true,
-                events,
-            )
-            .await
-        {
-            FireResult::Continue(extra) => extra,
-            // Unreachable: post_tool_use is not blockable.
-            FireResult::Block(_) => None,
-        }
-    }
-
-    /// `user_prompt_submit` with the user message in the payload as `prompt`,
-    /// so hooks can block or annotate a turn based on what was asked. May
-    /// veto the turn or add context to the message.
-    pub async fn user_prompt_submit_with_prompt(
-        &self,
-        prompt: &str,
-        mode: Mode,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> PromptSubmit {
-        let extra = json!({ "prompt": prompt });
-        match self
-            .fire(
-                HookEvent::UserPromptSubmit,
-                None,
-                Some(extra),
-                mode,
-                true,
-                true,
-                events,
-            )
-            .await
-        {
-            FireResult::Continue(extra) => PromptSubmit::Continue(extra),
-            FireResult::Block(reason) => PromptSubmit::Block(reason),
-        }
-    }
-
-    /// `session_start`: extra system context for the session, if any matching
-    /// hook printed some.
-    pub async fn session_start(
-        &self,
-        mode: Mode,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> Option<String> {
-        match self
-            .fire(
-                HookEvent::SessionStart,
-                None,
-                None,
-                mode,
-                false,
-                true,
-                events,
-            )
-            .await
-        {
-            FireResult::Continue(extra) => extra,
-            FireResult::Block(_) => None,
-        }
-    }
-
-    /// `session_end`: observational; output is ignored.
-    pub async fn session_end(&self, mode: Mode, events: Option<&mpsc::Sender<AgentEvent>>) {
-        self.fire(
-            HookEvent::SessionEnd,
-            None,
-            None,
-            mode,
-            false,
-            false,
-            events,
-        )
-        .await;
-    }
-
-    /// `turn_end`: observational; output is ignored.
-    pub async fn turn_end(&self, mode: Mode, events: Option<&mpsc::Sender<AgentEvent>>) {
-        self.fire(HookEvent::TurnEnd, None, None, mode, false, false, events)
-            .await;
-    }
-
-    /// Run the matching hooks for `event` sequentially. `payload_extra`
-    /// carries event-specific payload fields; `blockable` honors exit 2;
-    /// `capture` collects non-empty stdout as extra context.
-    #[allow(clippy::too_many_arguments)]
-    async fn fire(
-        &self,
-        event: HookEvent,
-        tool: Option<(&str, &Value)>,
-        payload_extra: Option<Value>,
-        mode: Mode,
-        blockable: bool,
-        capture: bool,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> FireResult {
-        let mut extra: Vec<String> = Vec::new();
-        for hook in self.matching(event, tool.map(|(name, _)| name)) {
-            match self
-                .run(hook, event, tool, payload_extra.as_ref(), mode)
-                .await
-            {
-                RunResult::Exited {
-                    code: 0, stdout, ..
-                } => {
-                    let stdout = stdout.trim();
-                    // The same hook reached through two configs (user and
-                    // project both pointing at one script) prints the same
-                    // text twice; the model needs it once.
-                    let repeat = crate::token_profile::current().safe()
-                        && extra.iter().any(|seen| seen == stdout);
-                    if capture && !stdout.is_empty() && !repeat {
-                        extra.push(stdout.to_string());
-                        self.report(events, event, hook, HookOutcome::AppendedContext)
-                            .await;
-                    }
-                }
-                RunResult::Exited {
-                    code: 2, stderr, ..
-                } if blockable => {
-                    let reason = block_reason(&stderr);
-                    self.report(events, event, hook, HookOutcome::Blocked(reason.clone()))
-                        .await;
-                    return FireResult::Block(reason);
-                }
-                RunResult::Exited { code, stderr, .. } => {
-                    self.report(
-                        events,
-                        event,
-                        hook,
-                        HookOutcome::Warning(exit_warning(code, &stderr)),
-                    )
-                    .await;
-                }
-                RunResult::Failed(why) => {
-                    self.report(events, event, hook, HookOutcome::Warning(why))
-                        .await;
-                }
-            }
-        }
-        FireResult::Continue((!extra.is_empty()).then(|| extra.join("\n")))
-    }
-
-    /// The configured hooks for `event`, filtered by matcher when the event
-    /// carries a tool name.
-    fn matching(
-        &self,
-        event: HookEvent,
-        tool: Option<&str>,
-    ) -> impl Iterator<Item = &CompiledHook> {
-        self.hooks.iter().filter(move |hook| {
-            hook.def.event == event
-                && match (&hook.matcher, tool) {
-                    (Some(matcher), Some(name)) => matcher.is_match(name),
-                    // Matchers are only meaningful for tool events.
-                    _ => true,
-                }
-        })
-    }
-
-    /// Run one hook to completion: payload on stdin, stdout/stderr captured,
-    /// timeout enforced (dropping the wait kills the child via
-    /// `kill_on_drop`). `payload_extra` fields are merged into the payload.
-    async fn run(
-        &self,
-        hook: &CompiledHook,
-        event: HookEvent,
-        tool: Option<(&str, &Value)>,
-        payload_extra: Option<&Value>,
-        mode: Mode,
-    ) -> RunResult {
-        let session_id = self.session_id.lock().unwrap().clone();
-        let mut payload = json!({
-            "event": event.name(),
-            "tool_name": tool.map(|(name, _)| name),
-            "args": tool.map(|(_, args)| args),
-            "cwd": self.cwd,
-            "session_id": session_id,
-            "mode": mode.to_string(),
-        });
-        if let Some(Value::Object(fields)) = payload_extra {
-            payload
-                .as_object_mut()
-                .expect("payload is an object")
-                .extend(fields.clone());
-        }
-
-        // Through the platform shell, not a hand-written `sh -c`: hooks are
-        // command *lines* (`cargo fmt && git add -u`), and which interpreter
-        // reads them is a platform decision that has to match the one
-        // `crate::agent::prompts` tells the model about. A second spelling here
-        // is how a Windows leg ends up running every hook through `sh` while
-        // the rest of the process has moved to `cmd`.
-        let mut child = match crate::platform::shell::tokio_command(&hook.def.command)
-            .current_dir(&self.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => return RunResult::Failed(format!("spawn failed: {err}")),
-        };
-
-        let stdin = child.stdin.take();
-        let bytes = payload.to_string().into_bytes();
-        // The write goes *inside* the timeout, and runs concurrently with the
-        // wait rather than before it. Both matter, and neither used to hold.
-        //
-        // A pipe buffers 64 KiB on Linux; a `pre_tool_use` payload carries the
-        // tool's arguments, so a `write_file` of any real size exceeds that on
-        // the first hook that fires. Past the buffer the write blocks until the
-        // hook reads — and a hook that never reads stdin, which the comment
-        // below correctly calls its prerogative, never does. That is an
-        // unbounded block before `timeout_secs` has started, which is exactly
-        // the wedge this module's contract promises cannot happen.
-        //
-        // Joining the write with the wait closes the other half: a hook that
-        // reads stdin but prints more than a pipe's worth first would otherwise
-        // deadlock against a writer that is not draining its stdout.
-        let run = async {
-            let write = async {
-                if let Some(mut stdin) = stdin {
-                    // A hook that never reads stdin may close the pipe early;
-                    // that is its prerogative, not an error.
-                    let _ = stdin.write_all(&bytes).await;
-                    // Dropped here, so a hook that reads to EOF sees one.
-                }
-            };
-            tokio::join!(write, child.wait_with_output()).1
-        };
-
-        let timeout = Duration::from_secs(hook.def.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
-        match tokio::time::timeout(timeout, run).await {
-            Ok(Ok(output)) => RunResult::Exited {
-                code: output.status.code().unwrap_or(-1),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            },
-            Ok(Err(err)) => RunResult::Failed(format!("wait failed: {err}")),
-            Err(_) => RunResult::Failed(format!("timed out after {}s", timeout.as_secs())),
-        }
-    }
-
-    /// Surface one hook's outcome. Warnings also land in the log; callers
-    /// skip this for plain successes, so default behavior is unchanged.
-    ///
-    /// A repeated [`HookOutcome::AppendedContext`] from the same hook is
-    /// logged rather than surfaced — see [`HookEngine::appended`].
-    async fn report(
-        &self,
-        events: Option<&mpsc::Sender<AgentEvent>>,
-        event: HookEvent,
-        hook: &CompiledHook,
-        outcome: HookOutcome,
-    ) {
-        if let HookOutcome::Warning(why) = &outcome {
-            tracing::warn!("hook {} ({}): {why}", event.name(), hook.def.command);
-        }
-        if outcome == HookOutcome::AppendedContext && !self.first_append(event, hook) {
-            tracing::debug!(
-                "hook {} ({}): appended context (already reported this session)",
-                event.name(),
-                hook.def.command
-            );
-            return;
-        }
-        if let Some(events) = events {
-            let _ = events
-                .send(AgentEvent::HookFired {
-                    event: event.name().to_string(),
-                    command: hook.def.command.clone(),
-                    outcome,
-                })
-                .await;
-        }
-    }
-
-    /// Claim the one reportable append for this hook: `true` the first time
-    /// `event`/`hook` appends context, `false` for every append after it.
-    ///
-    /// Claiming and testing are the same operation on purpose. Two tool calls
-    /// can dispatch concurrently (a subagent's and the main loop's share this
-    /// engine through an `Arc`), and a check followed by a separate insert
-    /// would let both see an empty set and both report.
-    ///
-    /// A poisoned lock is treated as "already reported". The set is a noise
-    /// filter, and a panic somewhere else in the process is not a reason to
-    /// start printing a line this exists to suppress.
-    fn first_append(&self, event: HookEvent, hook: &CompiledHook) -> bool {
-        self.appended
-            .lock()
-            .is_ok_and(|mut seen| seen.insert((event.name(), hook.def.command.clone())))
-    }
-
-    /// Commands of the hooks that would fire for `event`/`tool` (tests).
-    #[cfg(test)]
-    fn matching_commands(&self, event: HookEvent, tool: Option<&str>) -> Vec<&str> {
-        self.matching(event, tool)
-            .map(|hook| hook.def.command.as_str())
-            .collect()
-    }
-}
-
 /// Parse a `pre_tool_use` hook's stdout as `{"updated_args": {...}}`.
 /// Anything else (empty, non-JSON, missing key, non-object value) means
 /// "leave the arguments alone".
@@ -829,6 +420,9 @@ fn exit_warning(code: i32, stderr: &str) -> String {
         format!("exit {code}: {trimmed}")
     }
 }
+
+#[cfg(test)]
+mod engine_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1031,20 +625,13 @@ mod tests {
         let args = json!({ "content": "x".repeat(512 * 1024) });
 
         let started = std::time::Instant::now();
-        let result = engine
-            .run(
-                &engine.hooks[0],
-                HookEvent::PreToolUse,
-                Some(("write_file", &args)),
-                None,
-                Mode::default(),
-            )
-            .await;
+        let payload = json!({ "tool_name": "write_file", "args": args });
+        let result = engine.execute(&engine.hooks[0], &payload).await;
         let elapsed = started.elapsed();
 
         match result {
-            RunResult::Failed(why) => assert!(why.contains("timed out"), "{why}"),
-            RunResult::Exited { code, .. } => panic!("expected a timeout, got exit {code}"),
+            engine::RunResult::Failed(why) => assert!(why.contains("timed out"), "{why}"),
+            engine::RunResult::Exited { code, .. } => panic!("expected a timeout, got exit {code}"),
         }
         assert!(
             elapsed < Duration::from_secs(10),
@@ -1233,8 +820,8 @@ mod tests {
         }
         assert_eq!(
             production.matches("&log_refusal").count(),
-            1,
-            "one reporter, wired at one call site"
+            2,
+            "one reporter, wired at the two entry points (load, load_specs)"
         );
     }
 
@@ -1455,7 +1042,7 @@ mod tests {
         // is the same *decision*: the second one changes with the platform and
         // with what the system prompt claims, and the first one silently does
         // not. This module was the last hand-written `sh -c` in the tree.
-        let source = include_str!("mod.rs");
+        let source = include_str!("engine.rs");
         let (production, _) = source
             .split_once("#[cfg(test)]\nmod tests {")
             .expect("this module ends with its test module");

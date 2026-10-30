@@ -26,7 +26,7 @@ use crate::agent::subagent::SPAWN_SUBAGENT_TOOL_NAME;
 use crate::agent::turn::Sink;
 use crate::agent::{AgentEvent, DoneReason, coerce_scalars, normalize_args};
 use crate::config::Mode;
-use crate::hooks::{HookEngine, PreToolUse};
+use crate::hooks::{Before, HookEngine};
 use crate::llm::ToolCall;
 use crate::tools::plan::EXIT_PLAN_TOOL_NAME;
 use crate::tools::{ToolAccess, ToolContext, ToolOutput, registry::ToolRegistry};
@@ -341,21 +341,36 @@ impl Dispatcher {
             }
         }
 
-        // Pre-tool hooks: may rewrite the arguments or veto the call. A veto
-        // feeds back to the model as an ordinary tool error (not fatal), so
-        // the failure breakers cover repeated blocked calls too.
-        match self
+        // Pre-tool hooks, then the permission policy: hooks may rewrite the
+        // arguments or veto the call, and a deny rule or an unanswered ask
+        // refuses it. A refusal feeds back to the model as an ordinary tool
+        // error (not fatal), so the failure breakers cover repeated blocked
+        // calls too.
+        let access = self
+            .registry
+            .get(&name)
+            .map_or(ToolAccess::Execute, |tool| tool.access());
+        let pre_context = match self
             .hooks
-            .pre_tool_use(&name, &args, self.mode, self.surface(sink))
+            .before_tool(
+                &name,
+                access,
+                &args,
+                &call.id,
+                self.mode,
+                self.surface(sink),
+            )
             .await
         {
-            PreToolUse::Continue(updated) => {
-                if let Some(updated) = updated {
-                    args = updated;
-                }
+            Before::Proceed {
+                args: next,
+                context,
+            } => {
+                args = next;
+                context
             }
-            PreToolUse::Block(reason) => {
-                let output = ToolOutput::error(format!("blocked by pre_tool_use hook: {reason}"));
+            Before::Blocked(message) => {
+                let output = ToolOutput::error(message);
                 if !sink.tool_started(&name, &args).await {
                     return DispatchOutcome::stopped();
                 }
@@ -367,7 +382,7 @@ impl Dispatcher {
                     .bookkeep(&name, &args, output, Grade::Fault, sink)
                     .await;
             }
-        }
+        };
 
         // Checkpoint stage: snapshot the target of an Edit-class tool so the
         // turn can be rewound. Runs after the pre-hooks (which may have
@@ -383,17 +398,27 @@ impl Dispatcher {
         // Post-tool hooks: stdout becomes extra context on the tool result.
         if let Some(extra) = self
             .hooks
-            .post_tool_use_with_output(
+            .after_tool(
                 &name,
                 &args,
                 &output.content,
                 output.is_error,
+                &call.id,
                 self.mode,
                 self.surface(sink),
             )
             .await
         {
             crate::hooks::append_context(&mut output.content, &extra);
+        }
+        if let Some(extra) = pre_context {
+            output.content.push_str(
+                "
+
+[pre_tool_use hook]
+",
+            );
+            output.content.push_str(&extra);
         }
 
         self.bookkeep(&name, &args, output, grade, sink).await

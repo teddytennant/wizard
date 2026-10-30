@@ -57,6 +57,19 @@ fn load_with_global(project_root: &Path, global: Option<&Path>) -> Option<String
     chain.retain(|path| files.first().map(|(first, _)| first) != Some(path));
     files.extend(chain.into_iter().map(|path| (path, Includes::Confined)));
 
+    for (path, _) in &files {
+        let global = global == Some(path.as_path());
+        crate::hooks::emit_detached(
+            crate::hooks::event::HookEvent::InstructionsLoaded,
+            Some("session_start".to_string()),
+            serde_json::json!({
+                "file_path": path,
+                "memory_type": if global { "User" } else { "Project" },
+                "load_reason": "session_start",
+            }),
+        );
+    }
+
     // Read everything first (still outermost-first order), then budget from
     // the INNERMOST file outward: the project root's own instructions have
     // the highest priority, so when TOTAL_CAP hits it is the outer files

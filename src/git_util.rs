@@ -59,6 +59,18 @@ pub async fn head_and_dirty(repo: &Path) -> Option<(String, bool)> {
 
 /// Create a detached worktree of `ref_` at `dest`.
 pub async fn worktree_add(repo: &Path, dest: &Path, ref_: &str) -> Result<()> {
+    let result = worktree_add_inner(repo, dest, ref_).await;
+    if result.is_ok() {
+        crate::hooks::emit_detached(
+            crate::hooks::event::HookEvent::WorktreeCreate,
+            None,
+            serde_json::json!({ "name": dest.file_name().map(|n| n.to_string_lossy().into_owned()), "worktree_path": dest }),
+        );
+    }
+    result
+}
+
+async fn worktree_add_inner(repo: &Path, dest: &Path, ref_: &str) -> Result<()> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -210,6 +222,11 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<()> {
 /// Remove the worktree at `dest`, best-effort: replay cleanup must never
 /// mask the actual case result.
 pub async fn worktree_remove(repo: &Path, dest: &Path) {
+    crate::hooks::emit_detached(
+        crate::hooks::event::HookEvent::WorktreeRemove,
+        None,
+        serde_json::json!({ "worktree_path": dest }),
+    );
     let result = Command::new("git")
         .arg("-C")
         .arg(repo)

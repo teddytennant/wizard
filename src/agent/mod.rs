@@ -1822,6 +1822,24 @@ impl Agent {
     /// (probe with [`OllamaClient::supports_native_tools`]); the system
     /// prompt is recomposed so the JSON tool protocol section matches.
     pub fn set_model(&mut self, model: String, native_tools: bool) {
+        // Hooks hear about the switch but cannot refuse it: this is the one
+        // synchronous seam every surface goes through.
+        let switch = serde_json::json!({
+            "from_model": self.model,
+            "to_model": model,
+            "requested_model": model,
+            "source": "command",
+        });
+        crate::hooks::emit_detached(
+            crate::hooks::event::HookEvent::PreModelSwitch,
+            Some(model.clone()),
+            switch.clone(),
+        );
+        crate::hooks::emit_detached(
+            crate::hooks::event::HookEvent::PostModelSwitch,
+            Some(model.clone()),
+            switch,
+        );
         self.config.model = model.clone();
         if let Some(handle) = &self.subagent_model {
             handle.set_model(model.clone());
@@ -2104,7 +2122,7 @@ impl Agent {
     /// so resume and the model both see that stewardship happened (the full
     /// pre-compact transcript remains earlier in the JSONL).
     pub async fn compact_now(&mut self) -> CompactOutcome {
-        self.compact_reporting(&|_, _| {}).await
+        self.compact_with(&|_, _| {}, "auto").await
     }
 
     /// [`compact_now`] with a chunk counter. `report(done, total)` runs before
@@ -2114,6 +2132,21 @@ impl Agent {
         &mut self,
         report: &(dyn Fn(u32, u32) + Sync),
     ) -> CompactOutcome {
+        self.compact_with(report, "manual").await
+    }
+
+    /// The shared core: `PreCompact` hooks may cancel the pass, and
+    /// `PostCompact` hooks hear about one that cut something. `trigger` is
+    /// Claude Code's `manual` or `auto`.
+    async fn compact_with(
+        &mut self,
+        report: &(dyn Fn(u32, u32) + Sync),
+        trigger: &str,
+    ) -> CompactOutcome {
+        if let Some(reason) = self.hooks.pre_compact(trigger, None, self.mode, None).await {
+            tracing::info!("compaction cancelled by a PreCompact hook: {reason}");
+            return CompactOutcome::Nothing;
+        }
         let budget = context::Budget {
             window: context::effective_window(
                 self.client.context_window(&self.model).await,
@@ -2145,6 +2178,14 @@ impl Agent {
             // cut nothing leaves it alone — the reading is still true, and
             // dropping it would put the status bar back on an estimate.
             self.usage.clear_last_prompt();
+            let summary = compacted
+                .note
+                .as_ref()
+                .map(ChatMessage::text)
+                .unwrap_or_default();
+            self.hooks
+                .post_compact(trigger, &summary, self.mode, None)
+                .await;
         }
         compacted.outcome
     }
@@ -2541,11 +2582,12 @@ async fn build_headless_agent_inner(
 
     // Lifecycle hooks, shared by the agent's dispatcher and the subagent
     // spawner so subagent tool calls fire the same hooks.
-    let hooks = Arc::new(HookEngine::new(
-        crate::hooks::load(project_root),
-        project_root.to_path_buf(),
+    let hooks = Arc::new(crate::hooks::engine_for(
+        config,
+        project_root,
         session.id.clone(),
     ));
+    crate::hooks::set_ambient(&hooks);
 
     // Tools: natives + scripted + MCP, then the subagent spawner on top.
     let connected;
@@ -2557,6 +2599,12 @@ async fn build_headless_agent_inner(
         }
     };
     let (registry, subagent_model) = build_tool_registry(config, &client, &hooks, manager).await?;
+    hooks.set_backend(Arc::new(crate::hooks::backend::SessionBackend::new(
+        Arc::clone(&client),
+        config.active().model.clone(),
+        manager.tools().await.unwrap_or_default(),
+        project_root.to_path_buf(),
+    )));
 
     let skills = load_skills();
 
