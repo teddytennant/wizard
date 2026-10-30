@@ -556,7 +556,18 @@ impl<W: Write + Send> EventSink for JsonSink<W> {
     }
 
     fn finish(&mut self, reason: DoneReason) {
+        let completed = reason_str(reason) == "completed";
         let summary = json!({
+            // Claude Code's result keys, so a consumer written for `claude -p
+            // --output-format json` finds `result`, `is_error` and `num_turns`.
+            "type": "result",
+            "subtype": match reason_str(reason) {
+                "completed" => "success",
+                "max_steps" => "error_max_turns",
+                _ => "error_during_execution",
+            },
+            "is_error": !completed,
+            "num_turns": self.turns,
             "result": self.result,
             "reason": reason_str(reason),
             "turns": self.turns,
@@ -564,6 +575,8 @@ impl<W: Write + Send> EventSink for JsonSink<W> {
             "usage": {
                 "prompt_tokens": self.prompt_tokens,
                 "completion_tokens": self.completion_tokens,
+                "input_tokens": self.prompt_tokens,
+                "output_tokens": self.completion_tokens,
             },
             "tool_calls": self.tool_calls.iter().map(|entry| json!({
                 "name": entry.name,

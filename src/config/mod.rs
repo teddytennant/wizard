@@ -2033,6 +2033,9 @@ impl Config {
             self.plan_first = true;
         }
         self.max_steps = self.max_steps.for_mode(self.mode);
+        // Claude Code's `--model`, `--effort` and `--max-turns`: after the mode
+        // floor, so a deliberately small `--max-turns` stays small.
+        cli.claude.apply_to(self);
     }
 }
 

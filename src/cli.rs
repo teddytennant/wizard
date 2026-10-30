@@ -27,7 +27,7 @@ fn parse_max_hours(raw: &str) -> Result<f64, String> {
 
 /// Wizard, the fastest agent in your terminal.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "wizard", version = crate::update::display_version(), about, long_about = None)]
+#[command(name = "wizard", version = crate::update::display_version(), about, long_about = None, subcommand_precedence_over_arg = true)]
 pub struct Cli {
     /// Personality mode: genie (interactive TUI), sovereign (autonomous), or
     /// chat (conversation with web search, no project tools).
@@ -123,7 +123,7 @@ pub struct Cli {
     pub cwd: Option<PathBuf>,
 
     /// Resume the most recent session instead of starting fresh.
-    #[arg(long)]
+    #[arg(short = 'r', long)]
     pub resume: bool,
 
     /// Re-run the first-run onboarding wizard even if a config already exists.
@@ -155,6 +155,12 @@ pub struct Cli {
     /// docs/token-profiles.md.
     #[arg(long, value_name = "PROFILE")]
     pub token_profile: Option<String>,
+
+    /// Claude Code's flags: `--print`, `--model`, `--append-system-prompt`,
+    /// `--add-dir`, `--worktree`, `--bare` and the rest.
+    /// See docs/claude-code-parity.md.
+    #[command(flatten)]
+    pub claude: crate::cli_claude::ClaudeFlags,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -1120,7 +1126,7 @@ pub fn command() -> clap::Command {
 pub fn parse() -> Cli {
     use clap::CommandFactory;
 
-    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let argv = normalize(std::env::args_os().collect());
     match Cli::command().try_get_matches_from(argv.clone()) {
         Ok(matches) => from_matches(&matches),
         Err(err) if displays_help(&err) => {
@@ -1134,6 +1140,38 @@ pub fn parse() -> Cli {
         }
         Err(err) => err.exit(),
     }
+}
+
+/// Claude Code's spellings that the derive cannot express, rewritten into ones
+/// it can (see [`crate::cli_claude::normalize_args`]).
+pub(crate) fn normalize(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    use clap::CommandFactory;
+    let command = Cli::command();
+    let known_flag = |token: &str| {
+        if let Some(long) = token.strip_prefix("--") {
+            let long = long.split('=').next().unwrap_or(long);
+            return command.get_arguments().any(|arg| {
+                arg.get_long() == Some(long)
+                    || arg.get_all_aliases().is_some_and(|a| a.contains(&long))
+            });
+        }
+        let mut shorts = token.strip_prefix('-').unwrap_or("").chars();
+        match (shorts.next(), shorts.next()) {
+            (Some(short), None) => command
+                .get_arguments()
+                .any(|arg| arg.get_short() == Some(short)),
+            _ => false,
+        }
+    };
+    let subcommands: Vec<String> = command
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+    let (argv, warnings) = crate::cli_claude::strip_unsupported(argv, known_flag);
+    for warning in warnings {
+        eprintln!("{warning}");
+    }
+    crate::cli_claude::normalize_args(argv, known_flag, &subcommands)
 }
 
 /// Whether this `clap` error is "print help and exit 0" rather than "the
