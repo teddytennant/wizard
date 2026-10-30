@@ -14,7 +14,21 @@ use ratatui::style::{Modifier, Style};
 use crate::app::{App, Dialog};
 use crate::text::{blit, put, Row};
 
+/// The screen. Claude Code hides the terminal's cursor and paints an inverse cell where it
+/// would be, so the cell is part of the picture: a screenshot shows it, and so does a test.
 pub fn draw(buf: &mut Buffer, app: &mut App) {
+    draw_screen(buf, app);
+    if let Some((x, y)) = app.cursor {
+        if x < buf.area.width && y < buf.area.height {
+            // the placeholder's first letter under the cursor is not dim
+            let cell = &mut buf[(x, y)];
+            cell.modifier.remove(Modifier::DIM);
+            cell.modifier.insert(Modifier::REVERSED);
+        }
+    }
+}
+
+fn draw_screen(buf: &mut Buffer, app: &mut App) {
     buf.reset();
     app.cursor = None;
     let area = buf.area;

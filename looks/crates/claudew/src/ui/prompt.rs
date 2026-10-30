@@ -145,6 +145,34 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
             }
         }
     }
+    // VISUAL mode: what is selected is drawn inverse, the cursor's cell with it
+    let cursor_chars = text[..app.editor.cursor().min(text.len())].chars().count();
+    if let Some((from, to)) = app.vim.selection(&text, cursor_chars) {
+        let cursor = app.editor.cursor();
+        let cur_row = layout
+            .iter()
+            .position(|r| {
+                cursor >= r.start && cursor <= r.next && (cursor < r.next || r.last_in_line)
+            })
+            .unwrap_or(layout.len() - 1);
+        let first = cur_row.saturating_sub(n - 1).min(layout.len() - n);
+        for (i, r) in layout.iter().enumerate().skip(first).take(n) {
+            let ry = y + (i - first) as u16;
+            let mut x = 2u16;
+            for (at, ch) in text[r.start..r.end].char_indices() {
+                let index = text[..r.start + at].chars().count();
+                let cell_w = width(ch.encode_utf8(&mut [0; 4])).max(1) as u16;
+                if index >= from && index < to {
+                    for dx in 0..cell_w {
+                        if x + dx < w {
+                            buf[(x + dx, ry)].modifier.insert(Modifier::REVERSED);
+                        }
+                    }
+                }
+                x += cell_w;
+            }
+        }
+    }
     if let Some(hint) = arg_hint(app, &text) {
         if let Some((cx, cy)) = app.cursor {
             put(buf, cx + 1, cy, hint, th.dim());

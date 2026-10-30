@@ -152,7 +152,13 @@ pub enum Block {
         text: String,
         time: (u32, u32),
     },
-    Thought(String),
+    /// Thinking: its text, when it began and how many seconds it took (0 when not known, as in
+    /// a session read back from disk).
+    Thought {
+        text: String,
+        began: Duration,
+        secs: u64,
+    },
     Tool(ToolCall),
     Todos(Vec<Todo>),
     TurnEnd {
@@ -868,7 +874,11 @@ impl App {
                         HistoryItem::Assistant(text) => {
                             self.blocks.push(Block::Assistant { text, time })
                         }
-                        HistoryItem::Thought(t) => self.blocks.push(Block::Thought(t)),
+                        HistoryItem::Thought(t) => self.blocks.push(Block::Thought {
+                            text: t,
+                            began: Duration::ZERO,
+                            secs: 0,
+                        }),
                         HistoryItem::Tool(t) => {
                             let t = self.placed(t);
                             self.blocks.push(Block::Tool(t))
@@ -906,9 +916,17 @@ impl App {
                     b.chars += t.len();
                     b.thinking = true;
                 }
+                let now = self.clock.elapsed();
                 match self.blocks.last_mut() {
-                    Some(Block::Thought(text)) => text.push_str(&t),
-                    _ => self.blocks.push(Block::Thought(t)),
+                    Some(Block::Thought { text, began, secs }) => {
+                        text.push_str(&t);
+                        *secs = thought_secs(now.saturating_sub(*began));
+                    }
+                    _ => self.blocks.push(Block::Thought {
+                        text: t,
+                        began: now,
+                        secs: 1,
+                    }),
                 }
             }
             Event::Tool(call) => {
@@ -2852,6 +2870,11 @@ pub fn is_plan(req: &PermissionRequest) -> bool {
     req.input.get("plan").is_some_and(|p| p.is_string())
 }
 
+/// "Thought for 3s": whole seconds, and never less than one.
+fn thought_secs(took: Duration) -> u64 {
+    ((took.as_millis() as u64 + 500) / 1000).max(1)
+}
+
 pub fn permission_options(req: &PermissionRequest, auto: bool) -> Vec<(String, Choice)> {
     if is_plan(req) {
         return vec![
@@ -3200,15 +3223,7 @@ fn draw_frame(terminal: &mut Terminal, app: &mut App) -> Result<()> {
             if app.truecolor {
                 crate::truecolor::paint(f.buffer_mut(), app.opts.light);
             }
-            // Claude Code hides the terminal's cursor and paints an inverse cell
-            if let Some((x, y)) = app.cursor {
-                let area = f.area();
-                if x < area.width && y < area.height {
-                    f.buffer_mut()[(x, y)]
-                        .modifier
-                        .insert(ratatui::style::Modifier::REVERSED);
-                }
-            }
+            // no terminal cursor is set: ui::draw paints the inverse cell Claude Code uses
         })?;
         Ok(())
     };
