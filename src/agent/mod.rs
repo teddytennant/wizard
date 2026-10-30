@@ -1024,7 +1024,7 @@ impl Agent {
         native_tools: bool,
         hooks: Arc<HookEngine>,
     ) -> Result<Self> {
-        let agents_md = crate::instructions::load(&project_root);
+        let agents_md = crate::instructions::load_with_style(&project_root);
         let memory_index = read_memory_index(&project_root);
         let model = config.active().model;
         let mut load_warning = None;
@@ -2430,7 +2430,7 @@ pub async fn build_tool_registry(
     base.apply_harness_overrides();
 
     let subagents_dir = Config::subagents_dir()?;
-    let subagent_configs = subagent::available_configs(&subagents_dir);
+    let subagent_configs = subagent::available_configs_with_claude(&subagents_dir);
     let base = Arc::new(base);
     let mut registry = subagent::scoped_registry(&base, None);
     let spawn_tool = Arc::new(subagent::SpawnSubagentTool::new(
@@ -2545,13 +2545,17 @@ pub fn load_skills() -> Vec<Skill> {
 /// broken config, or a server that will not come up, costs its tools — not the
 /// session.
 pub async fn connect_mcp() -> McpManager {
-    let config = match Config::mcp_config_path().and_then(|path| McpConfig::load(&path)) {
+    let mut config = match Config::mcp_config_path().and_then(|path| McpConfig::load(&path)) {
         Ok(config) => config,
         Err(err) => {
             tracing::warn!("could not load mcp.toml: {err:#}");
             return McpManager::empty();
         }
     };
+    // `.mcp.json` and plugin servers, after the ones the user configured here.
+    if let Ok(project) = std::env::current_dir() {
+        config = crate::claude_dir::mcp::overlay(config, &project);
+    }
     match McpManager::connect_all(&config).await {
         Ok(manager) => manager,
         Err(err) => {

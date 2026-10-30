@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::import_claude::ImportSelection;
 
+pub mod claude;
 pub mod plugin;
 pub mod surface;
 
@@ -207,6 +208,12 @@ pub enum SlashCommand {
     /// packages as Wizard plugins (beta), for Pi, or for both.
     Plugins(PluginsAction),
     Quit,
+    /// A Claude Code command with a Rust body in [`claude::run`]: its name and
+    /// the rest of the line. See [`claude::COMPAT`].
+    Compat {
+        name: String,
+        args: String,
+    },
     /// A command a plugin registered at runtime: the name it registered under
     /// and the rest of the typed line, verbatim.
     ///
@@ -522,6 +529,10 @@ impl SlashCommand {
     /// Parse a `/...` input line. `None` when `input` is not a slash
     /// command; `Some(Err(msg))` for an unknown command or bad arguments.
     pub fn parse(input: &str) -> Option<Result<Self, String>> {
+        // Claude Code's names for commands Wizard has: `/reset` is `/clear`.
+        if let Some(rewritten) = claude::rewrite_alias(input) {
+            return Self::parse(&rewritten);
+        }
         let input = input.trim();
         let rest = input.strip_prefix('/')?;
         let mut parts = rest.split_whitespace();
@@ -657,6 +668,10 @@ impl SlashCommand {
                 }),
                 _ => Err("usage: /login xai [force]".to_string()),
             },
+            name if claude::is_compat(name) => Ok(Self::compat(
+                name,
+                rest.strip_prefix(name).unwrap_or_default().trim(),
+            )),
             "plugins" => parse_plugins(&args),
             "settings" | "setup" => Ok(Self::Settings),
             "vim" => Ok(Self::Vim),
@@ -805,6 +820,11 @@ impl SlashCommand {
             Plugin { name, .. } => Err(format!(
                 "`/{name}` comes from a plugin; ask the plugin's tool instead"
             )),
+
+            // The Claude Code commands that only read state. The rest change
+            // files or settings on the user's behalf.
+            Compat { name, .. } if claude::agent_may_run(name) => Ok(()),
+            Compat { name, .. } => Err(format!("`/{name}` is the user's call")),
         }
     }
 
@@ -860,7 +880,7 @@ impl SlashCommand {
             Ui(_) => "ui",
             View(_) => "view",
             Quit => "quit",
-            Plugin { name, .. } => name,
+            Plugin { name, .. } | Compat { name, .. } => name,
         }
     }
 
@@ -970,6 +990,29 @@ pub struct CommandSpec {
     /// not mistaken for one the agent may never run. Empty when the bare form
     /// already parses into what the agent would ask for.
     pub agent_arg: &'static str,
+}
+
+/// One row of a Claude Code command with a body in `claude::run`.
+macro_rules! compat_row {
+    ($name:literal, $args:literal, $description:literal, $where:ident) => {
+        CommandSpec {
+            name: $name,
+            args: $args,
+            description: $description,
+            takes_args: false,
+            tui: Execution::Agent,
+            gui: Execution::Agent,
+            gateway: compat_row!(@chat $where),
+            acp: compat_row!(@chat $where),
+            agent_arg: "",
+        }
+    };
+    (@chat everywhere) => {
+        Execution::Agent
+    };
+    (@chat local) => {
+        Execution::Unavailable
+    };
 }
 
 /// All slash commands, in display order.
@@ -1386,6 +1429,106 @@ pub const COMMANDS: &[CommandSpec] = &[
         acp: Execution::Unavailable,
         agent_arg: "",
     },
+    // Claude Code commands with a body in `claude::run`. A report runs
+    // everywhere; one that writes the operator's files or reaches the clipboard
+    // is the terminal's and the window's only.
+    compat_row!(
+        "permissions",
+        "",
+        "show the permission posture: mode, plan mode, project trust",
+        everywhere
+    ),
+    compat_row!(
+        "hooks",
+        "",
+        "list the configured lifecycle hooks",
+        everywhere
+    ),
+    compat_row!(
+        "context",
+        "",
+        "what the next request carries: model, tokens, instructions, skills",
+        everywhere
+    ),
+    compat_row!(
+        "mcp",
+        "[reload]",
+        "list MCP servers (mcp.toml, .mcp.json, plugins)",
+        everywhere
+    ),
+    compat_row!(
+        "output-style",
+        "[name]",
+        "list or switch the output style",
+        everywhere
+    ),
+    compat_row!(
+        "release-notes",
+        "",
+        "show the newest release notes",
+        everywhere
+    ),
+    compat_row!(
+        "skills",
+        "",
+        "list skills and what each costs in the prompt",
+        everywhere
+    ),
+    compat_row!(
+        "feedback",
+        "[note]",
+        "where to report a bug (also /bug)",
+        everywhere
+    ),
+    compat_row!(
+        "schedule",
+        "",
+        "list scheduled runs (also /routines)",
+        everywhere
+    ),
+    compat_row!(
+        "terminal-setup",
+        "",
+        "terminal and keyboard notes",
+        everywhere
+    ),
+    compat_row!("ide", "", "how to use Wizard from an editor", everywhere),
+    compat_row!(
+        "keybindings",
+        "[init]",
+        "show or create the keybindings file",
+        local
+    ),
+    compat_row!(
+        "logout",
+        "<xai|chatgpt>",
+        "sign out of a provider account",
+        local
+    ),
+    compat_row!(
+        "import",
+        "[claude]",
+        "import MCP servers, commands and spinner verbs from Claude Code",
+        local
+    ),
+    compat_row!(
+        "export",
+        "[file]",
+        "write the conversation to a file, or the clipboard",
+        local
+    ),
+    compat_row!(
+        "copy",
+        "[N]",
+        "copy the Nth latest reply to the clipboard",
+        local
+    ),
+    compat_row!(
+        "plugin",
+        "[list|install|uninstall|enable|disable|validate|marketplace ...]",
+        "manage Claude-format plugins and marketplaces",
+        local
+    ),
     CommandSpec {
         name: "settings",
         args: "",
@@ -1731,16 +1874,63 @@ impl CustomCommand {
     }
 }
 
-/// Load custom commands from the canonical roots: `~/.wizard/commands/`,
-/// then `<project>/.wizard/commands/` (project shadows global).
+/// Load custom commands, lowest priority first: the bundled prompts
+/// ([`claude::bundled`]), commands from active Claude-format plugins
+/// (`plugin:name`), then `~/.claude/commands`, `~/.wizard/commands`,
+/// `<project>/.claude/commands` and `<project>/.wizard/commands`. A later
+/// source shadows an earlier one, so a project file beats a user file and a
+/// `.wizard` file beats a `.claude` one at the same level.
 pub fn load(project_root: &Path) -> Vec<CustomCommand> {
+    // `--disable-slash-commands`: no custom commands, bundled ones included.
+    if crate::claude_dir::slash_commands_disabled() {
+        return Vec::new();
+    }
+    let mut by_name: std::collections::BTreeMap<String, CustomCommand> = claude::bundled()
+        .into_iter()
+        .map(|command| (command.name.clone(), command))
+        .collect();
+    // `--bare` leaves Claude's directories and plugins out; Wizard's own stay.
+    let claude = !crate::claude_dir::bare();
+    for (name, path) in crate::claude_dir::plugins::commands(project_root) {
+        if let Some(command) = read_command(&name, path) {
+            by_name.insert(name, command);
+        }
+    }
     let mut dirs = Vec::new();
+    if claude && let Some(user) = crate::claude_dir::user_dir() {
+        dirs.push(user.join("commands"));
+    }
     match Config::wizard_dir() {
         Ok(dir) => dirs.push(dir.join("commands")),
         Err(err) => tracing::warn!("could not resolve ~/.wizard for commands: {err}"),
     }
+    if claude {
+        dirs.push(crate::claude_dir::project_dir(project_root).join("commands"));
+    }
     dirs.push(project_root.join(".wizard").join("commands"));
-    load_from_dirs(&dirs)
+    for command in load_from_dirs(&dirs) {
+        by_name.insert(command.name.clone(), command);
+    }
+    by_name.into_values().collect()
+}
+
+/// One command file. `None` (logged) when it cannot be read.
+fn read_command(name: &str, path: PathBuf) -> Option<CustomCommand> {
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            tracing::warn!("could not read {}: {err}", path.display());
+            return None;
+        }
+    };
+    let (meta, body) = crate::skills::split_frontmatter(&raw);
+    Some(CustomCommand {
+        name: name.to_string(),
+        description: meta.description,
+        template: body,
+        path,
+        pi_syntax: meta.syntax.as_deref() == Some("pi"),
+    })
 }
 
 /// Load `*.md` commands from `dirs` in order; later directories shadow
@@ -1749,41 +1939,13 @@ pub fn load(project_root: &Path) -> Vec<CustomCommand> {
 pub fn load_from_dirs(dirs: &[PathBuf]) -> Vec<CustomCommand> {
     let mut by_name: std::collections::BTreeMap<String, CustomCommand> =
         std::collections::BTreeMap::new();
+    // Subdirectories namespace a command (`team/deploy.md` is `/team:deploy`),
+    // as in Claude Code.
     for dir in dirs {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                tracing::warn!("could not read {}: {err}", dir.display());
-                continue;
+        for (name, path) in crate::claude_dir::namespaced_markdown(dir) {
+            if let Some(command) = read_command(&name, path) {
+                by_name.insert(name, command);
             }
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let raw = match std::fs::read_to_string(&path) {
-                Ok(raw) => raw,
-                Err(err) => {
-                    tracing::warn!("could not read {}: {err}", path.display());
-                    continue;
-                }
-            };
-            let (meta, body) = crate::skills::split_frontmatter(&raw);
-            by_name.insert(
-                name.to_string(),
-                CustomCommand {
-                    name: name.to_string(),
-                    description: meta.description,
-                    template: body,
-                    path,
-                    pi_syntax: meta.syntax.as_deref() == Some("pi"),
-                },
-            );
         }
     }
     by_name.into_values().collect()
@@ -2241,6 +2403,10 @@ mod tests {
             SlashCommand::Vim,
             SlashCommand::View(None),
             SlashCommand::Quit,
+            SlashCommand::Compat {
+                name: "hooks".into(),
+                args: String::new(),
+            },
         ];
         for command in &commands {
             assert!(
@@ -2572,6 +2738,55 @@ mod tests {
         assert_eq!(parse("/fork"), Err("usage: /fork <task>".to_string()));
         assert_eq!(parse("/fork   "), Err("usage: /fork <task>".to_string()));
         assert!(SlashCommand::Fork("hi".into()).agent_runnable().is_err());
+    }
+
+    #[test]
+    fn claude_code_names_parse_to_wizards_commands() {
+        let parse = |line: &str| {
+            SlashCommand::parse(line)
+                .expect("a command")
+                .expect("parses")
+        };
+        assert_eq!(parse("/reset"), SlashCommand::Clear);
+        assert_eq!(parse("/new"), SlashCommand::Clear);
+        assert_eq!(parse("/continue"), SlashCommand::Resume(None));
+        assert_eq!(
+            parse("/continue abc"),
+            SlashCommand::Resume(Some("abc".into()))
+        );
+        assert_eq!(parse("/undo"), SlashCommand::Rewind(None));
+        assert_eq!(parse("/stats"), SlashCommand::Usage);
+        assert_eq!(parse("/tasks"), SlashCommand::Bashes);
+        assert_eq!(parse("/checkup"), SlashCommand::Doctor);
+        assert_eq!(parse("/config"), SlashCommand::Settings);
+        assert_eq!(parse("/reload-plugins"), SlashCommand::Reload);
+        assert_eq!(parse("/reload-skills"), SlashCommand::Reload);
+        assert_eq!(parse("/list-agents"), SlashCommand::Agents);
+        assert_eq!(
+            parse("/subtask read  the docs"),
+            SlashCommand::Fork("read  the docs".into()),
+            "the task keeps its spacing"
+        );
+        assert_eq!(
+            parse("/bug it broke"),
+            SlashCommand::Compat {
+                name: "feedback".into(),
+                args: "it broke".into()
+            }
+        );
+        assert_eq!(
+            parse("/marketplace add o/r"),
+            SlashCommand::Compat {
+                name: "plugin".into(),
+                args: "marketplace add o/r".into()
+            }
+        );
+    }
+
+    #[test]
+    fn an_alias_is_not_a_word_a_plugin_may_take() {
+        assert!(plugin::is_builtin("reset"));
+        assert!(plugin::is_builtin("context"));
     }
 
     #[test]
@@ -2938,7 +3153,13 @@ mod tests {
             pi_syntax: false,
         }];
         assert_eq!(unknown("/zzzfoo", &custom), Some("zzzfoo"));
-        assert_eq!(unknown("/context please", &custom), Some("context"));
+        assert_eq!(unknown("/zzcontext please", &custom), Some("zzcontext"));
+        assert_eq!(
+            unknown("/context please", &custom),
+            None,
+            "a Claude Code command is known"
+        );
+        assert_eq!(unknown("/reset", &custom), None, "and so are its aliases");
         assert_eq!(unknown("/deploy prod", &custom), None);
         assert_eq!(
             unknown("/login xai", &custom),

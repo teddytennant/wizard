@@ -314,7 +314,27 @@ pub fn load_dir(dir: &Path) -> Result<Vec<SubagentConfig>> {
 /// by name, so bundle definitions win over user definitions win over
 /// built-ins.
 pub fn available_configs(dir: &Path) -> Vec<SubagentConfig> {
+    available_configs_with(dir, Vec::new())
+}
+
+/// [`available_configs`] plus Claude Code's `.claude/agents` for the current
+/// project (and those of active plugins and `--agents`), read in place.
+/// Wizard's own definitions shadow these by name. What a session's spawn tool
+/// and the `/agents` roster use; [`available_configs`] stays a pure function of
+/// `dir`.
+pub fn available_configs_with_claude(dir: &Path) -> Vec<SubagentConfig> {
+    let claude = std::env::current_dir()
+        .map(|project| crate::claude_dir::agents::available(&project))
+        .unwrap_or_default();
+    available_configs_with(dir, claude)
+}
+
+fn available_configs_with(dir: &Path, claude: Vec<SubagentConfig>) -> Vec<SubagentConfig> {
     let mut configs = builtin_configs();
+    for config in claude {
+        configs.retain(|existing| existing.name != config.name);
+        configs.push(config);
+    }
     let mut merge_from = |dir: &Path| {
         let loaded = load_dir(dir).unwrap_or_else(|err| {
             tracing::warn!("loading subagents from {} failed: {err}", dir.display());

@@ -33,6 +33,11 @@ fn main() {
         unsafe { std::env::set_var(wizard::token_profile::ENV, profile) };
     }
 
+    // Claude Code's flags that other subsystems read (`--append-system-prompt`,
+    // `--bare`, `--plugin-dir`, `--mcp-config`, ...), published the same way.
+    // SAFETY: no other threads have been spawned yet.
+    unsafe { cli.claude.publish() };
+
     // Diagnostics before any surface starts. Every `tracing` event emitted
     // before the subscriber is installed is dropped, and the surfaces below
     // (the TUI, the ACP and MCP stdio servers, the GUI) are exactly the ones

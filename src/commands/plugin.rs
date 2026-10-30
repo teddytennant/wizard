@@ -275,7 +275,9 @@ pub struct NameTaken {
 /// the [`PARSE_ALIASES`]. Plugin commands are deliberately not included: this is
 /// the question "may a plugin take this name", asked by [`install`].
 pub fn is_builtin(name: &str) -> bool {
-    COMMANDS.iter().any(|spec| spec.name == name) || PARSE_ALIASES.contains(&name)
+    COMMANDS.iter().any(|spec| spec.name == name)
+        || PARSE_ALIASES.contains(&name)
+        || super::claude::is_alias(name)
 }
 
 /// Register a command process-wide, or refuse because its name is taken.

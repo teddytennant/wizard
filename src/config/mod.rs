@@ -2093,6 +2093,9 @@ impl Config {
         }
         self.max_steps = self.max_steps.for_mode(self.mode);
         self.apply_permission_flags(cli);
+        // Claude Code's `--model`, `--effort` and `--max-turns`: after the mode
+        // floor, so a deliberately small `--max-turns` stays small.
+        cli.claude.apply_to(self);
     }
 
     /// `--permission-mode`, `--allowedTools` and `--disallowedTools`, and a

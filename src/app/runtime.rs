@@ -73,6 +73,9 @@ pub async fn run_tui(
     let handed_omakase = handoff.as_ref().is_some_and(|handoff| handoff.omakase);
     let resume = match handoff.and_then(|handoff| handoff.session) {
         Some(id) => SessionTarget::Id(id),
+        None if cli.claude.resume_id.is_some() => {
+            SessionTarget::Id(cli.claude.resume_id.clone().unwrap_or_default())
+        }
         None if cli.resume => SessionTarget::Latest,
         None => SessionTarget::Fresh,
     };
@@ -418,6 +421,10 @@ pub async fn run_tui(
                             configured: 0,
                         });
                     }
+                };
+                let mcp_config = match std::env::current_dir() {
+                    Ok(project) => crate::claude_dir::mcp::overlay(mcp_config, &project),
+                    Err(_) => mcp_config,
                 };
                 // A server whose command is not on PATH is not dialed. That
                 // is a quiet line, not the error banner a server that was

@@ -8,9 +8,11 @@
 pub mod agent;
 pub mod app;
 pub mod checkpoint;
+pub mod claude_dir;
 pub mod claude_resume;
 pub mod claude_session;
 pub mod cli;
+pub mod cli_claude;
 pub mod commands;
 pub mod config;
 pub mod credentials;
@@ -81,6 +83,10 @@ use crate::config::{Config, Mode};
 /// limit); every other mode exits 0 on success. Hard errors surface as `Err`
 /// and exit 1 from `main`.
 pub async fn run(mut cli: cli::Cli) -> Result<i32> {
+    // Claude Code's flags settle first: the words after the flags become the
+    // prompt, `--print` reads stdin, `--worktree` picks the project root.
+    cli_claude::prepare(&mut cli)?;
+
     // Bring the plugin kernel up before anything can dispatch. It is here,
     // above the chain rather than inside a surface, because the seventeen arms
     // below are every way into Wizard there is — the TUI, `wizard -p`, the
@@ -568,6 +574,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         update::print_startup_notice(&config.update);
         update::maybe_check_on_startup(&config.update).await;
         return run_interactive(config, cli, first_run).await;
+    }
+
+    // `--print` is the one flag that decides the surface: answer and exit,
+    // whatever mode the config saved.
+    if cli.claude.wants_print() {
+        return headless::run(config, cli).await;
     }
 
     match config.mode {

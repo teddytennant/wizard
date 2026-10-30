@@ -506,6 +506,18 @@ pub trait CommandSurface {
         let message = elsewhere("plugins", self.surface());
         self.error(message);
     }
+
+    /// The conversation as `(role, text)` pairs, oldest first, for `/export`
+    /// and `/copy`. `None` on a surface that does not hold one.
+    fn transcript(&self) -> Option<Vec<(String, String)>> {
+        None
+    }
+
+    /// Put `text` on the user's clipboard. `false` when this surface has none.
+    fn copy_to_clipboard(&mut self, text: &str) -> bool {
+        let _ = text;
+        false
+    }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -734,6 +746,9 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
         SlashCommand::Ui(name) => surface.set_ui(name).await,
         SlashCommand::View(compact) => surface.set_view(compact).await,
         SlashCommand::Quit => surface.quit().await,
+        SlashCommand::Compat { name, args } => {
+            crate::commands::claude::run(&name, &args, surface).await
+        }
 
         // Answered above, before `spec` was taken. The early return is what
         // lets every arm here hold a plain `&'static CommandSpec` instead of an
@@ -1043,7 +1058,7 @@ fn agents_report() -> String {
         Ok(dir) => dir,
         Err(err) => return format!("could not resolve the subagents directory: {err:#}"),
     };
-    let configs = crate::agent::subagent::available_configs(&dir);
+    let configs = crate::agent::subagent::available_configs_with_claude(&dir);
     if configs.is_empty() {
         return format!("no subagents available ({})", dir.display());
     }
