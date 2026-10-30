@@ -193,10 +193,7 @@ pub fn doctor() -> Result<String> {
     if !cli.signed_in()? {
         bail!("Claude Code is not signed in. Run: {LOGIN_COMMAND}");
     }
-    Ok(format!(
-        "{version} at {}, signed in",
-        cli.program.display()
-    ))
+    Ok(format!("{version} at {}, signed in", cli.program.display()))
 }
 
 fn not_installed() -> anyhow::Error {

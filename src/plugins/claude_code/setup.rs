@@ -267,7 +267,10 @@ mod tests {
         )
         .expect("link");
 
-        let found = Cli::find_in(Some(std::ffi::OsStr::new("")), Some(home.path().to_path_buf()));
+        let found = Cli::find_in(
+            Some(std::ffi::OsStr::new("")),
+            Some(home.path().to_path_buf()),
+        );
 
         assert!(found.is_some());
     }
@@ -281,7 +284,10 @@ mod tests {
 
         assert!(outcome.expect("installed and signed in"));
         assert_eq!(printed.matches("[y/N]").count(), 1, "{printed}");
-        assert!(printed.contains(&installer), "the command is in the question: {printed}");
+        assert!(
+            printed.contains(&installer),
+            "the command is in the question: {printed}"
+        );
         assert!(printed.contains("Found claude 9.9.9"), "{printed}");
     }
 

@@ -498,7 +498,7 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         // No config and no wizard: a headless job still runs on the defaults
         // (`WIZARD_LLAMACPP_HOST` and friends are how a cron or fleet child
         // is configured); anything else is told to run `wizard` once.
-        if !config::Config::path()?.exists() && !headless_job(&cli) {
+        if !config::Config::path()?.exists() && !headless_job(&cli) && cli.provider.is_none() {
             anyhow::bail!("no config yet: run `wizard` once to pick a provider");
         }
         config::Config::load()?
@@ -797,6 +797,10 @@ fn should_onboard_given(cli: &cli::Cli, interactive: bool) -> Result<bool> {
     if cli.onboard {
         return Ok(true);
     }
+    // `--provider` already answers the first question.
+    if cli.provider.is_some() {
+        return Ok(false);
+    }
     // A prompt on the command line is a job, not a first visit: it never
     // stops to ask questions, whatever the mode.
     if cli.prompt.is_some() {
@@ -818,6 +822,24 @@ mod tests {
     #[test]
     fn onboard_flag_forces_onboarding_in_an_interactive_terminal() {
         assert!(should_onboard_given(&parse(&["wizard", "--onboard"]), true).unwrap());
+    }
+
+    #[test]
+    fn a_provider_flag_skips_first_run_onboarding() {
+        let cli = parse(&["wizard", "--provider", "claude"]);
+        assert!(!should_onboard_given(&cli, true).unwrap());
+        assert!(
+            should_onboard_given(
+                &parse(&["wizard", "--provider", "claude", "--onboard"]),
+                true
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn yes_needs_a_provider() {
+        assert!(cli::Cli::try_parse_from(["wizard", "--yes"]).is_err());
     }
 
     #[test]
