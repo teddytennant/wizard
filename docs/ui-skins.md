@@ -176,5 +176,14 @@ captures only those scene groups. What it cannot give is the subscription's own 
 (plan name, weekly-limit notice, account-specific commands and models), so its captures are
 for finding differences, not for replacing `tests/fixtures/ref`.
 
+The `claude` look's scene groups are in `tools/drive.py`. Besides the ones for the home screen, turns,
+permissions, pickers and vim, `statusline` and `statusline-pad` run a test `statusLine` command
+(`tools/statusline-a.sh`, `statusline-pad.sh`; `compare.sh` writes the project settings for them), `todo` and
+`todo-many` drive the task list, and `plan2` approves a plan. `compare.sh` compares against
+`tests/fixtures/ref-2.1.314`, a capture of the installed 2.1.314 through the fake server; `REFDIR=tests/fixtures/ref`
+compares against the older 2.1.300 subscription capture instead, which `cargo test` still uses for the scenes both
+have. `REF=fake REF_BASE=tests/fixtures/ref-2.1.314 REF_GROUPS="todo" LOOK_GROUPS="todo"` redoes one group over the
+stored capture, and `COMPARE_CWD` moves the project directory (it must keep the length) when two runs share the box.
+
 Product names and trademarks belong to their owners. The skins are an homage,
 and each one says whose look it wears on its own home screen.
