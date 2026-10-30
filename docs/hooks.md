@@ -170,7 +170,7 @@ Names are snake_case in `hooks.toml` and PascalCase in Claude-format files. The 
 | `post_compact` | PostCompact | After compaction | Observe |
 | `setup` | Setup | Reserved; nothing in Wizard fires it yet | none |
 | `notification` | Notification | A tool call needed approval and no one could give it (`permission_prompt`) | Observe |
-| `permission_request` | PermissionRequest | An `ask` rule matched | Approve or deny |
+| `permission_request` | PermissionRequest | A call needs approval: an `ask` rule matched, or the mode asks (see [permissions.md](permissions.md)). Runs before the dialog, and an answer skips it | Approve or deny |
 | `permission_denied` | PermissionDenied | A rule or mode refused a call | Observe |
 | `elicitation` | Elicitation | The model asked the user questions with `interview` (server name `wizard`) | Observe |
 | `elicitation_result` | ElicitationResult | The user answered | Observe |
@@ -225,7 +225,7 @@ Event-specific fields:
 - `user_prompt_submit`: `prompt`.
 - `post_tool_use`: `tool_output` (truncated to 32 KB), `tool_response` (`{"output": ..., "stdout": ...}`), `is_error`, `tool_use_id`.
 - `post_tool_use_failure`: `error`, `tool_use_id`.
-- `pre_tool_use`, `permission_request`, `permission_denied`: `tool_use_id`; the last two add `reason`.
+- `pre_tool_use`, `permission_request`, `permission_denied`: `tool_use_id`; the last two add `reason`, and `permission_request` adds `permission_suggestions`, the `addRules` entries the dialog's "don't ask again" would save.
 - `session_start`: `source`.
 - `stop`, `subagent_stop`: `stop_hook_active`, `last_assistant_message`; `subagent_*` add `agent_id` and `agent_type`.
 - `pre_compact`, `post_compact`: `trigger`; the second adds `compact_summary`.
