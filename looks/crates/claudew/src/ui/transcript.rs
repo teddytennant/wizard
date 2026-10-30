@@ -11,8 +11,28 @@ use crate::theme::Theme;
 use crate::ui::prompt::fmt_secs;
 use crate::ui::{diff, markdown};
 
-/// The Wizard mark: a hat, in the nine columns Claude Code's mascot takes.
-pub const MARK: [&str; 3] = ["    ▟▙   ", "   ▟██▙  ", " ▝▀▀▀▀▀▀▘"];
+/// The mascot's three rows, as `(text, on black)` runs in the nine columns it takes. The cells
+/// drawn on black are the eyes: their missing quarters show the black behind them.
+const MARK: [&[(&str, bool)]; 3] = [
+    &[(" ▐", false), ("▛███▛█", true)],
+    &[("▝▜", false), ("█████", true), ("█▀", false)],
+    &[(" ▝▝   ▝▝", false)],
+];
+
+fn mark_row(row: usize, brand: Style) -> Row {
+    let mut out = Row::new();
+    let mut width = 0;
+    for &(text, on_black) in MARK[row] {
+        let style = if on_black {
+            brand.bg(ratatui::style::Color::Indexed(16))
+        } else {
+            brand
+        };
+        width += text.chars().count();
+        out = out.with(text, style);
+    }
+    out.with(" ".repeat(9 - width), Style::new())
+}
 
 pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
     app.links.borrow_mut().clear();
@@ -180,7 +200,7 @@ fn header(app: &App, w: usize) -> Vec<Row> {
     let room = w.saturating_sub(11);
     vec![
         Row::new(),
-        Row::of(MARK[0], brand)
+        mark_row(0, brand)
             .with("  ", Style::new())
             .with("Wizard", th.bold())
             .with(" ", Style::new())
@@ -191,10 +211,10 @@ fn header(app: &App, w: usize) -> Vec<Row> {
                 },
                 th.dim(),
             ),
-        Row::of(MARK[1], brand)
+        mark_row(1, brand)
             .with("  ", Style::new())
             .with(crate::text::truncate(&model, room), th.dim()),
-        Row::of(MARK[2], brand)
+        mark_row(2, brand)
             .with("  ", Style::new())
             .with(short_cwd(&app.opts.cwd.to_string_lossy(), w), th.dim()),
         Row::new(),

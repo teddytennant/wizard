@@ -52,6 +52,8 @@ bin="${CARGO_TARGET_DIR:-$root/target}/debug/claudew"
 # refrun runs a reference capture. REF=fake gives it a HOME of its own and an Anthropic
 # endpoint that is fake_anthropic.py, so nothing reaches an account or ~/.claude.
 refrun() { "$@"; }
+# group NAME: whether to capture it; REF_GROUPS="turn3 shared" captures only those
+group() { [ -z "${REF_GROUPS:-}" ] || case " $REF_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 if [ "${REF:-}" = fake ]; then
     port=${FAKE_PORT:-18997}
     fakehome="$work/claude-ref-home"
@@ -72,18 +74,18 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     ref="$work/ref"
     claude=${CLAUDE_BIN:-claude}
     cmd="$claude --setting-sources project --strict-mcp-config --permission-mode default --model haiku"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\",\"theme\":\"light\"}'" --cwd "$cwd" --out "$ref" --group light --sizes "$sizes"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn --sizes "$sizes" \
+    group static && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
+    group light && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\",\"theme\":\"light\"}'" --cwd "$cwd" --out "$ref" --group light --sizes "$sizes"
+    group turn && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn --sizes "$sizes" \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn2 --sizes 80x24,120x40 \
+    group turn2 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn2 --sizes 80x24,120x40 \
         --before "rm -rf w.txt .git"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
+    group turn3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
     # the scenes live wizard is compared with cell by cell, and a session resuming them
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
+    group shared && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared --sizes 120x40 \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
-    refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared-resume --sizes 120x40
+    group shared-resume && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$xcwd" --out "$ref" --group shared-resume --sizes 120x40
     # scrub what is personal: the account's address and organisation, the home directory
     python3 - "$ref" <<'PY'
 import glob, re, sys

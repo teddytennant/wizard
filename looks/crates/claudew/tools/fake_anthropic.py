@@ -22,7 +22,7 @@ SUMMARY = ('<analysis>The user asked for small edits.</analysis>\n<summary>\n1. 
            'edits to main.rs.\n2. Files: main.rs.\n</summary>')
 
 
-def scripts(cwd):
+def scripts(cwd, plan_file):
     f = cwd + '/main.rs'
     return [
         ('echo hi', [('Bash', {'command': 'echo hi', 'description': 'Print hi'})], 'done'),
@@ -33,7 +33,7 @@ def scripts(cwd):
         ('git init -q', [('Bash', {'command': 'git init -q && echo ok', 'description': 'Init a repo'})], 'done'),
         ('Use the Write tool to create w.txt', [
             ('Write', {'file_path': cwd + '/w.txt', 'content': ''.join('%d\n' % i for i in range(1, 31))})], 'done'),
-        ('Plan adding the comment', [('ExitPlanMode', {'plan': PLAN})], 'The plan was not approved.'),
+        ('Plan adding the comment', [('Write', {'file_path': plan_file, 'content': PLAN}), ('ExitPlanMode', {})], 'The plan was not approved.'),
         ('No tools. Output exactly this markdown', [], MD),
         ('Count from 1 to 3000', [], '\n'.join(str(i) for i in range(1, 3001))),
         ('what is 2+2', [], '4'),
@@ -65,10 +65,11 @@ def plan_for(body):
     last = text_of(msgs[-1]['content']) if msgs else ''
     if 'CRITICAL: Respond with TEXT ONLY' in last or 'create a detailed summary' in last.lower():
         return None, SUMMARY
-    for key, calls, final in scripts(cwd):
+    plan_file = (re.search(r'(/[^"\\\s]*/plans/[^"\\\s]*\.md)', json.dumps(body)) or [None, cwd + '/plan.md'])[1]
+    for key, calls, final in scripts(cwd, plan_file):
         if key in prompt:
             offered = {t.get('name') for t in body.get('tools', [])}
-            if tool_uses < len(calls) and calls[tool_uses][0] in offered:
+            if tool_uses < len(calls) and (calls[tool_uses][0] in offered or calls[tool_uses][0] == 'ExitPlanMode'):
                 return calls[tool_uses], None
             return None, final
     return None, 'ok'
@@ -98,7 +99,7 @@ class H(BaseHTTPRequestHandler):
         if not self.path.split('?')[0].endswith('/messages'):
             return self.reply_json({})
         call, text = plan_for(body)
-        LOG.write(json.dumps({'model': body.get('model'), 'tools': len(body.get('tools', [])),
+        LOG.write(json.dumps({'model': body.get('model'), 'tools': [t.get('name') for t in body.get('tools', [])],
                               'call': call and call[0], 'text': text and text[:40]}) + '\n')
         LOG.flush()
         usage = {'input_tokens': 120, 'output_tokens': 20, 'cache_creation_input_tokens': 0,
