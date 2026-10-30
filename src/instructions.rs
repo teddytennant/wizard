@@ -10,6 +10,12 @@
 //! own directory subtree unless it is the user's own global file, see
 //! [`resolve_include`] and [`Includes`]); the assembled block is capped as a
 //! whole so a sprawling hierarchy cannot flood the context window.
+//!
+//! Claude Code's files count too, without an import step: `.claude/CLAUDE.md`
+//! in a directory that has no other instruction file, `CLAUDE.local.md` beside
+//! the project's file, `.claude/rules/*.md` at the project root and in
+//! `~/.claude/`, and the user's `~/.claude/CLAUDE.md`. A rule with a `paths:`
+//! scope is left out, since nothing here injects per file.
 
 use std::path::{Path, PathBuf};
 
@@ -29,20 +35,61 @@ const TOTAL_CAP: usize = 40_000;
 /// `~/.wizard/WIZARD.md` plus one instruction file per ancestor directory,
 /// concatenated outermost-first. `None` when nothing exists.
 pub fn load(project_root: &Path) -> Option<String> {
-    let global = crate::config::Config::wizard_dir()
-        .ok()
-        .map(|dir| dir.join("WIZARD.md"));
-    load_with_global(project_root, global.as_deref())
+    let mut globals: Vec<PathBuf> = Vec::new();
+    if let Some(user) = crate::claude_dir::user_dir() {
+        globals.push(user.join("CLAUDE.md"));
+        globals.extend(
+            crate::claude_dir::unconditional_rules(&user.join("rules"))
+                .into_iter()
+                .map(|(path, _)| path),
+        );
+    }
+    if let Ok(dir) = crate::config::Config::wizard_dir() {
+        globals.push(dir.join("WIZARD.md"));
+    }
+    load_with(project_root, &globals)
 }
 
-/// Testable core of [`load`]: `global` is the path of the global
-/// instruction file (normally `~/.wizard/WIZARD.md`), checked first.
+/// [`load`] plus the section for the output style in force, which is the text
+/// an `/output-style` choice adds to the system prompt.
+pub fn load_with_style(project_root: &Path) -> Option<String> {
+    // `--bare` skips the automatic discovery and keeps only what the command
+    // line named (`--append-system-prompt`, `--add-dir`).
+    let instructions = if crate::claude_dir::bare() {
+        None
+    } else {
+        load(project_root)
+    };
+    let style = if crate::claude_dir::bare() {
+        None
+    } else {
+        crate::claude_dir::styles::active_prompt(project_root)
+    };
+    let appended = std::env::var(crate::cli_claude::env::APPEND_SYSTEM_PROMPT)
+        .ok()
+        .filter(|text| !text.trim().is_empty());
+    let parts: Vec<String> = [instructions, style, appended]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Testable core of [`load`] for one global file (normally
+/// `~/.wizard/WIZARD.md`), checked first.
+#[cfg(test)]
 fn load_with_global(project_root: &Path, global: Option<&Path>) -> Option<String> {
+    let globals: Vec<PathBuf> = global.map(Path::to_path_buf).into_iter().collect();
+    load_with(project_root, &globals)
+}
+
+/// The user's own instruction files, outermost first, then the project's chain.
+fn load_with(project_root: &Path, globals: &[PathBuf]) -> Option<String> {
     let mut files: Vec<(PathBuf, Includes)> = Vec::new();
-    if let Some(global) = global
-        && global.is_file()
-    {
-        files.push((global.to_path_buf(), Includes::Free));
+    for global in globals {
+        if global.is_file() {
+            files.push((global.clone(), Includes::Free));
+        }
     }
 
     // ancestors() walks project root → filesystem root; reverse so the
@@ -54,7 +101,20 @@ fn load_with_global(project_root: &Path, global: Option<&Path>) -> Option<String
     chain.reverse();
     // The global file may also sit on the ancestor chain (project under
     // ~/.wizard); never include it twice.
-    chain.retain(|path| files.first().map(|(first, _)| first) != Some(path));
+    chain.retain(|path| !files.iter().any(|(have, _)| have == path));
+    // Beside the project's own file: Claude Code's personal `CLAUDE.local.md`
+    // and the rules folder.
+    let local = project_root.join("CLAUDE.local.md");
+    if local.is_file() {
+        chain.push(local);
+    }
+    chain.extend(
+        crate::claude_dir::unconditional_rules(
+            &crate::claude_dir::project_dir(project_root).join("rules"),
+        )
+        .into_iter()
+        .map(|(path, _)| path),
+    );
     files.extend(chain.into_iter().map(|path| (path, Includes::Confined)));
 
     // Read everything first (still outermost-first order), then budget from
@@ -122,6 +182,7 @@ fn first_instruction_file(dir: &Path) -> Option<PathBuf> {
     FILE_NAMES
         .iter()
         .map(|name| dir.join(name))
+        .chain(std::iter::once(dir.join(".claude").join("CLAUDE.md")))
         .find(|path| path.is_file())
 }
 
@@ -726,6 +787,48 @@ mod tests {
         let mid = out.find("MIDDLE").expect("middle content present");
         let inner = out.find("project rules win").expect("inner present");
         assert!(mid < inner, "outer content still precedes inner content");
+    }
+
+    #[test]
+    fn claude_layout_files_are_picked_up_without_an_import() {
+        let tmp = TempDir::new();
+        let project = tmp.0.join("proj");
+        write(
+            &project.join(".claude").join("CLAUDE.md"),
+            "dot claude memory",
+        );
+        write(&project.join("CLAUDE.local.md"), "my private notes");
+        write(&project.join(".claude/rules/style.md"), "use tabs");
+        write(
+            &project.join(".claude/rules/rust.md"),
+            "---\npaths: src/**/*.rs\n---\nrust only rule",
+        );
+        let out = load_with_global(&project, None).expect("found");
+        assert!(out.contains("dot claude memory"));
+        assert!(out.contains("my private notes"));
+        assert!(out.contains("use tabs"));
+        assert!(
+            !out.contains("rust only rule"),
+            "a path-scoped rule must not become a global one"
+        );
+        assert!(
+            out.find("dot claude memory") < out.find("my private notes"),
+            "the project file precedes the local one"
+        );
+    }
+
+    #[test]
+    fn a_wizard_file_still_shadows_dot_claude_memory() {
+        let tmp = TempDir::new();
+        let project = tmp.0.join("proj");
+        write(&project.join("AGENTS.md"), "agents wins");
+        write(
+            &project.join(".claude").join("CLAUDE.md"),
+            "dot claude loses",
+        );
+        let out = load_with_global(&project, None).expect("found");
+        assert!(out.contains("agents wins"));
+        assert!(!out.contains("dot claude loses"));
     }
 
     #[test]

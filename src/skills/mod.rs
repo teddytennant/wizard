@@ -92,9 +92,35 @@ pub fn default_roots() -> Vec<PathBuf> {
         }
     }
 
+    // Claude Code's layout, read in place: plugin skills, then `~/.claude/skills`.
+    // Wizard's own directories come after each, so they win a name clash.
+    // `--disable-slash-commands` turns skills off with the commands.
+    if crate::claude_dir::slash_commands_disabled() {
+        return Vec::new();
+    }
+    let project = std::env::current_dir().ok();
+    if let Some(project) = &project {
+        roots.extend(crate::claude_dir::plugins::component_dirs(
+            project, "skills",
+        ));
+    }
+    if !crate::claude_dir::bare()
+        && let Some(user) = crate::claude_dir::user_dir()
+    {
+        roots.push(user.join("skills"));
+    }
+
     // User skills after bundled ones so they shadow them.
     if let Ok(user) = crate::config::Config::skills_dir() {
         roots.push(user);
+    }
+
+    // The project's own skills shadow the user's.
+    if let Some(project) = &project
+        && !crate::claude_dir::bare()
+    {
+        roots.push(crate::claude_dir::project_dir(project).join("skills"));
+        roots.push(project.join(".wizard").join("skills"));
     }
 
     // Harness bundle skills very last: the active bundle shadows everything,
