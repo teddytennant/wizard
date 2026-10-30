@@ -1623,6 +1623,132 @@ pub const COMMANDS: &[CommandSpec] = &[
         everywhere
     ),
     compat_row!(
+        "autofix-pr",
+        "",
+        "PR autofix (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "chrome",
+        "",
+        "Claude in Chrome (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "design",
+        "",
+        "Claude Design (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "design-sync",
+        "",
+        "Claude Design sync (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "design-login",
+        "",
+        "Claude Design sign-in (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "design-consent",
+        "",
+        "Claude Design access (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "design-revoke",
+        "",
+        "Claude Design access (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "install-github-app",
+        "",
+        "GitHub app (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "install-slack-app",
+        "",
+        "Slack app (not available here)",
+        everywhere
+    ),
+    compat_row!("mobile", "", "mobile app (not available here)", everywhere),
+    compat_row!("powerup", "", "lessons (not available here)", everywhere),
+    compat_row!("radio", "", "radio (not available here)", everywhere),
+    compat_row!(
+        "remote-env",
+        "",
+        "cloud environments (not available here)",
+        everywhere
+    ),
+    compat_row!("sandbox", "", "sandbox (not available here)", everywhere),
+    compat_row!("stickers", "", "stickers (not available here)", everywhere),
+    compat_row!(
+        "teleport",
+        "",
+        "cloud sessions (not available here)",
+        everywhere
+    ),
+    compat_row!("tui", "", "renderer (not available here)", everywhere),
+    compat_row!(
+        "web-setup",
+        "",
+        "web setup (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "workflows",
+        "",
+        "workflows (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "workflow-authoring",
+        "",
+        "workflow authoring (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "batch",
+        "",
+        "batch of PR agents (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "claude-api",
+        "",
+        "Claude API reference (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "dataviz",
+        "",
+        "chart guidance (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "deep-research",
+        "",
+        "deep research (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "plugin-authoring",
+        "",
+        "plugin authoring (not available here)",
+        everywhere
+    ),
+    compat_row!(
+        "auto-mode-setup",
+        "",
+        "auto mode (not available here)",
+        everywhere
+    ),
+    compat_row!(
         "keybindings",
         "[init]",
         "show or create the keybindings file",

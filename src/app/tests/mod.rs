@@ -305,7 +305,13 @@ fn slash_filters_suggestions_by_prefix() {
     type_str(&mut app, "/mo");
     let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
     // Prefix matches first, then substring matches ("me*mo*ry").
-    assert_eq!(names, ["model", "mode", "memory"]);
+    assert_eq!(&names[..2], ["model", "mode"]);
+    let first_substring = names
+        .iter()
+        .position(|name| !name.starts_with("mo"))
+        .expect("some name only contains \"mo\"");
+    assert!(names[..first_substring].iter().all(|n| n.starts_with("mo")));
+    assert!(names.contains(&"memory"));
     assert_eq!(app.input_mode, InputMode::Command);
 }
 
@@ -320,15 +326,18 @@ fn suggestions_hide_once_args_are_typed() {
 fn arrow_keys_cycle_suggestions_with_wraparound() {
     let mut app = app();
     type_str(&mut app, "/mo");
+    let last = app.suggestions.len() - 1;
     assert_eq!(app.suggestion_index, 0);
     press(&mut app, KeyCode::Down);
     assert_eq!(app.suggestion_index, 1);
     press(&mut app, KeyCode::Down);
     assert_eq!(app.suggestion_index, 2);
-    press(&mut app, KeyCode::Down);
+    for _ in 2..=last {
+        press(&mut app, KeyCode::Down);
+    }
     assert_eq!(app.suggestion_index, 0);
     press(&mut app, KeyCode::Up);
-    assert_eq!(app.suggestion_index, 2);
+    assert_eq!(app.suggestion_index, last);
 }
 
 #[test]
@@ -405,8 +414,16 @@ fn custom_commands_appear_in_suggestions_after_builtins() {
     )];
     type_str(&mut app, "/mo");
     let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["model", "mode", "models-report", "memory"]);
-    let spec = &app.suggestions[2];
+    assert_eq!(&names[..2], ["model", "mode"]);
+    let at = names
+        .iter()
+        .position(|name| *name == "models-report")
+        .expect("the custom command is suggested");
+    assert!(
+        names[..at].contains(&"mode"),
+        "built-ins come before custom commands: {names:?}"
+    );
+    let spec = &app.suggestions[at];
     assert_eq!(spec.description, "report");
     assert!(spec.takes_args);
 }

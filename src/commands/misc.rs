@@ -65,6 +65,107 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
         "setup-vertex",
         "Vertex is not a provider here. /provider adds one that is.",
     ),
+    (
+        "autofix-pr",
+        "autofix-pr watches a pull request through Anthropic's cloud. /loop 10m over `gh pr checks` is the local version.",
+    ),
+    (
+        "chrome",
+        "Claude in Chrome is a browser extension. The computer tool drives a browser or the desktop: `wizard computer setup`.",
+    ),
+    (
+        "design",
+        "Claude Design is a claude.ai product; there is no counterpart here.",
+    ),
+    (
+        "design-sync",
+        "Claude Design is a claude.ai product; there is no counterpart here.",
+    ),
+    (
+        "design-login",
+        "Claude Design is a claude.ai product; there is no counterpart here.",
+    ),
+    (
+        "design-consent",
+        "Claude Design is a claude.ai product; there is no counterpart here.",
+    ),
+    (
+        "design-revoke",
+        "Claude Design is a claude.ai product; there is no counterpart here.",
+    ),
+    (
+        "install-github-app",
+        "the Claude GitHub App is Anthropic's. For CI, run `wizard -p` in a workflow step; docs/headless.md has the flags.",
+    ),
+    (
+        "install-slack-app",
+        "the Claude Slack app is Anthropic's. `wizard --gateway` runs the same agent behind a Telegram bot.",
+    ),
+    (
+        "mobile",
+        "there is no Claude mobile app link. The Android app is a separate project in android/.",
+    ),
+    (
+        "powerup",
+        "/help lists the commands, and docs/getting-started.md walks through them.",
+    ),
+    (
+        "radio",
+        "Claude FM is a Claude Code extra with no counterpart here.",
+    ),
+    (
+        "remote-env",
+        "cloud agents and their environments are Anthropic's. `wizard fleet` and /background run work in parallel on this machine.",
+    ),
+    (
+        "sandbox",
+        "Wizard has no OS sandbox to toggle. Permission rules decide what runs: /permissions shows them.",
+    ),
+    ("stickers", "stickers are Anthropic merchandise."),
+    (
+        "teleport",
+        "cloud sessions are Anthropic's. /resume continues a local conversation, and `wizard sync` moves config between machines.",
+    ),
+    (
+        "tui",
+        "there is one terminal UI. /ui switches skins and /view flips the compact transcript.",
+    ),
+    (
+        "web-setup",
+        "cloud sessions with a GitHub account are Anthropic's service.",
+    ),
+    (
+        "workflows",
+        "the Workflow runtime is not built. /loop, /fork and `wizard fleet` cover repeated and parallel work.",
+    ),
+    (
+        "workflow-authoring",
+        "there is no Workflow runtime, so nothing to author.",
+    ),
+    (
+        "batch",
+        "no cloud batch of PR agents. `wizard fleet run -n N` splits a mission over parallel worktrees and merges them back.",
+    ),
+    (
+        "claude-api",
+        "the Claude API reference skill is not bundled. A skill of your own under .wizard/skills or .claude/skills loads like any other.",
+    ),
+    (
+        "dataviz",
+        "the chart-design skill is not bundled. A skill of your own under .wizard/skills or .claude/skills loads like any other.",
+    ),
+    (
+        "deep-research",
+        "the deep-research workflow is not built. /ultra fans a question out over lenses and judges the answers.",
+    ),
+    (
+        "plugin-authoring",
+        "Claude Code mods are not Wizard plugins. Wizard plugins are written as docs/plugins.md describes, with wizard-plugin.d.ts for the types.",
+    ),
+    (
+        "auto-mode-setup",
+        "auto mode is Anthropic's permission classifier. --permission-mode and /permissions set what Wizard asks about.",
+    ),
 ];
 
 pub fn not_available(command: &str) -> Option<&'static str> {
