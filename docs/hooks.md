@@ -1,8 +1,10 @@
 # Lifecycle hooks
 
-Hooks are shell commands that Wizard runs at fixed points in the agent's lifecycle: before and after every tool call, when a prompt is submitted, and at session and turn boundaries. They fire in **every mode** (genie TUI, sovereign headless, perpetual `--continuous`, and the gateway) and apply to subagent tool calls too. Use them to enforce policy (block dangerous commands), inject context (project status, time of day), or log activity.
+Hooks are commands (or an HTTP call, a model prompt, an MCP tool) that Wizard runs at fixed points in the agent's lifecycle: before and after every tool call, when a prompt is submitted, when the model stops, around compaction and model switches, and at session boundaries. There are 34 events. They fire in **every mode** (genie TUI, sovereign headless, perpetual `--continuous`, and the gateway) and apply to subagent tool calls too. Use them to enforce policy (block dangerous commands), inject context (project status, time of day), or log activity.
 
-There is no permission prompting for the model's tool calls in Wizard. Hooks are the programmable seam where you put guardrails instead. There *is* one prompt about hooks themselves: a project's own hooks file needs a trust decision before it loads, see [Project trust](#project-trust).
+Wizard has no per-call approval prompt for the model's tool calls. Hooks and [permission rules](permissions.md) are the programmable seam where you put guardrails instead. There *is* one prompt about hooks themselves: a project's own hook files need a trust decision before they load, see [Project trust](#project-trust).
+
+Hooks come from two kinds of file. Wizard's own `hooks.toml` is described first. Claude Code's `settings.json` format works too, see [Claude-format hooks](#claude-format-hooks).
 
 ## Declaring hooks
 
@@ -21,6 +23,39 @@ timeout_secs = 30                # optional; default 60
 
 `matcher` is a glob (`"execute"`, `"git_*"`, `"*file*"`) over the tool name and only applies to tool events; other events ignore it. Omit it to match every tool. Hooks for the same event run sequentially in declaration order, global first, then project.
 
+Optional keys, for handler types beyond a shell command:
+
+```toml
+[[hooks]]
+event = "stop"
+type = "prompt"                    # command (default), http, prompt, agent, mcp_tool
+prompt = "Did the tests run? $ARGUMENTS"
+
+[[hooks]]
+event = "post_tool_use"
+type = "http"
+url = "https://example.com/hook"
+headers = { Authorization = "Bearer $HOOK_TOKEN" }
+allowed_env_vars = ["HOOK_TOKEN"]  # only these names expand in headers
+
+[[hooks]]
+event = "notification"
+type = "mcp_tool"
+server = "chat"
+tool = "post"
+input = { text = "${message}" }    # ${path} reads the payload
+
+[[hooks]]
+event = "pre_tool_use"
+protocol = "json"                  # read stdout as a decision, see below
+if = "Bash(git push:*)"            # permission-rule syntax; tool events only
+async = false                      # true: run without waiting, ignore the result
+on_failure = "block"               # a failed hook blocks instead of warning
+command = "./check.sh"
+```
+
+`args = ["a", "b"]` next to `command` runs the program directly without a shell.
+
 A missing file means no hooks: default behavior is unchanged. An invalid file or matcher is skipped with a logged warning; it never prevents startup.
 
 **Project hooks do not run until you trust the project.** `~/.wizard/hooks.toml` is yours by construction and always loads; `<project>/.wizard/hooks.toml` arrives with a `git clone` and is gated. See [Project trust](#project-trust) below.
@@ -28,6 +63,8 @@ A missing file means no hooks: default behavior is unchanged. An invalid file or
 ## Project trust
 
 A hook is a shell command, and `session_start` fires before the model has said a word, so a repository that ships `.wizard/hooks.toml` is shipping code that would run the moment you launch Wizard in its directory. Cloning is not consent, so there is a gate.
+
+The gate also covers `.claude/settings.json`, `.claude/settings.local.json` and the `.wizard/settings*.json` twins, when they carry `hooks`, `env`, `statusLine` or a helper-command key. A settings file that holds only data (permission rules) is not part of the surface.
 
 A project with no `.wizard/hooks.toml` is never gated and never mentioned: there is nothing executable to decide about, and that case has to stay silent. A project that has one contributes no hooks at all until there is a recorded yes for exactly that file.
 
@@ -112,16 +149,55 @@ Only project-supplied files go through this gate. The global `~/.wizard/hooks.to
 
 ## Events
 
-| Event | When | What the hook can do |
-|-------|------|----------------------|
-| `pre_tool_use` | Before a tool call executes | Rewrite the arguments, or block the call |
-| `post_tool_use` | After a tool call executes | Append context to the tool result |
-| `user_prompt_submit` | When a message starts a turn | Block the turn, or append context to the message |
-| `session_start` | Once when a session begins | Append system context for the whole session |
-| `session_end` | Once when a session ends | Observe only |
-| `turn_end` | After every turn finishes | Observe only |
+Names are snake_case in `hooks.toml` and PascalCase in Claude-format files. The first six are the original Wizard events; their plain-stdout behavior is unchanged.
+
+| Event | Claude name | When | A hook can |
+|-------|-------------|------|------------|
+| `pre_tool_use` | PreToolUse | Before a tool call executes | Rewrite the arguments, block, allow, deny or ask |
+| `post_tool_use` | PostToolUse | After a tool call executes | Append context to the tool result |
+| `user_prompt_submit` | UserPromptSubmit | When a message starts a turn | Block the turn, or append context |
+| `session_start` | SessionStart | Once when a session begins (matcher: `startup`) | Append system context |
+| `session_end` | SessionEnd | Once when a session ends | Observe |
+| `turn_end` | (none) | After every turn finishes | Observe |
+| `post_tool_use_failure` | PostToolUseFailure | A tool reported failure | Append context |
+| `post_tool_batch` | PostToolBatch | All calls of one model response resolved | Append context, stop the turn |
+| `user_prompt_expansion` | UserPromptExpansion | A slash command expands into a prompt (matcher: command name) | Block, append context |
+| `stop` | Stop | The model finished its turn | Send it back to work with feedback |
+| `stop_failure` | StopFailure | The turn ended on a provider error (matcher: `rate_limit`, `overloaded`, `authentication_failed`, `billing_error`, `invalid_request`, `model_not_found`, `server_error`, `unknown`) | Observe |
+| `subagent_start` | SubagentStart | A subagent is about to run (matcher: its name) | Append context for it |
+| `subagent_stop` | SubagentStop | A subagent finished | Send it back to work |
+| `pre_compact` | PreCompact | Before compaction (matcher: `manual`, `auto`) | Cancel it |
+| `post_compact` | PostCompact | After compaction | Observe |
+| `setup` | Setup | Reserved; nothing in Wizard fires it yet | none |
+| `notification` | Notification | A tool call needed approval and no one could give it (`permission_prompt`) | Observe |
+| `permission_request` | PermissionRequest | An `ask` rule matched | Approve or deny |
+| `permission_denied` | PermissionDenied | A rule or mode refused a call | Observe |
+| `elicitation` | Elicitation | The model asked the user questions with `interview` (server name `wizard`) | Observe |
+| `elicitation_result` | ElicitationResult | The user answered | Observe |
+| `config_change` | ConfigChange | Wizard wrote `config.toml` | Observe |
+| `cwd_changed` | CwdChanged | Reserved; Wizard's commands do not change the session directory | none |
+| `file_changed` | FileChanged | A file changed (matcher: basename) | Observe |
+| `instructions_loaded` | InstructionsLoaded | An instructions file (`WIZARD.md`, `CLAUDE.md`, ...) was loaded at session start | Observe |
+| `task_created` | TaskCreated | A `todo` write added an item | Observe |
+| `task_completed` | TaskCompleted | A `todo` write marked an item done | Observe |
+| `teammate_idle` | TeammateIdle | Reserved; the fleet does not fire it yet | none |
+| `worktree_create` | WorktreeCreate | Wizard created a git worktree | Observe |
+| `worktree_remove` | WorktreeRemove | Wizard removed a git worktree | Observe |
+| `directory_added` | DirectoryAdded | Reserved; Wizard has no `/add-dir` | none |
+| `message_display` | MessageDisplay | The final assistant text of a turn was shown | Observe |
+| `pre_model_switch` | PreModelSwitch | Before `/model` or a provider switch | Observe (it cannot refuse the switch yet) |
+| `post_model_switch` | PostModelSwitch | After the model changed | Append context to the next request |
 
 "Session" means: TUI launch to quit, one headless run (including all continuous cycles), or the gateway's whole serve lifetime.
+
+Where each event fires today, and what is thinner than Claude Code's version:
+
+- Events marked "reserved" are accepted in config so a settings file written for Claude Code loads, and have a place in the engine, but no Wizard feature calls them yet.
+- `file_changed` fires after Wizard's own edit tools (`write_file`, `edit_file`, `apply_patch`) succeed. There is no filesystem watcher, so changes made by other programs do not fire it.
+- `stop` and `subagent_stop` can keep the run going up to 8 times in a row; after that the model stops anyway.
+- `elicitation` follows the `interview` tool, Wizard's way of asking the user a question. There is no MCP elicitation, and the hook cannot answer for the user.
+- Events that fire from code with no handle on the session (`worktree_*`, `instructions_loaded`, `config_change`, `*_model_switch`) go to the most recently built agent and run without waiting for it.
+- `session_end` always reports its reason as `other`.
 
 ## Payload
 
@@ -130,37 +206,126 @@ Each hook receives one JSON object on stdin:
 ```json
 {
   "event": "pre_tool_use",
+  "hook_event_name": "PreToolUse",
   "tool_name": "execute",
   "args": {"command": "cargo test"},
+  "tool_input": {"command": "cargo test"},
   "cwd": "/path/to/project",
   "session_id": "2026-06-11T09-30-00",
+  "transcript_path": "/home/you/.wizard/sessions/2026-06-11T09-30-00.jsonl",
+  "permission_mode": "default",
   "mode": "genie"
 }
 ```
 
-`tool_name` and `args` are `null` for the non-tool events. Two events carry extra fields:
+`hooks.toml` hooks get Wizard's own names (`tool_name` is `execute`, `args` holds the arguments) and also the Claude fields (`hook_event_name`, `tool_input`, `permission_mode`, `transcript_path`). Claude-format hooks get Claude's names: `tool_name` is `Bash`, `tool_input` has `file_path` where Wizard's tool has `path`, and `wizard_tool_name` carries the real name. `tool_name` and `args` are `null` for non-tool events in `hooks.toml` hooks.
 
-- `user_prompt_submit`: `prompt`, the text of the user message starting the turn.
-- `post_tool_use`: `tool_output`, the text the tool returned (truncated to 32 KB), and `is_error`, `true` when the tool reported failure.
+Event-specific fields:
+
+- `user_prompt_submit`: `prompt`.
+- `post_tool_use`: `tool_output` (truncated to 32 KB), `tool_response` (`{"output": ..., "stdout": ...}`), `is_error`, `tool_use_id`.
+- `post_tool_use_failure`: `error`, `tool_use_id`.
+- `pre_tool_use`, `permission_request`, `permission_denied`: `tool_use_id`; the last two add `reason`.
+- `session_start`: `source`.
+- `stop`, `subagent_stop`: `stop_hook_active`, `last_assistant_message`; `subagent_*` add `agent_id` and `agent_type`.
+- `pre_compact`, `post_compact`: `trigger`; the second adds `compact_summary`.
+- `pre_model_switch`, `post_model_switch`: `from_model`, `to_model`, `source`.
+- `file_changed`: `file_path`, `event`. `cwd_changed`: `old_cwd`, `new_cwd`. `config_change`: `source`, `file_path`. `instructions_loaded`: `file_path`, `memory_type`, `load_reason`.
+- `task_created`, `task_completed`: `task_id`, `task_subject`. `notification`: `notification_type`, `message`, `title`.
 
 A hook that doesn't care about the payload can just skip reading stdin.
 
-## Exit-code semantics
+## Exit codes and stdout
 
 - **Exit 0: continue.**
-  - `pre_tool_use`: if stdout parses as JSON with `{"updated_args": {...}}`, the tool runs with those arguments instead (later hooks in the chain see the rewritten args). Any other stdout is ignored.
-  - `post_tool_use`: non-empty stdout is appended to the tool result the model sees.
-  - `user_prompt_submit` / `session_start`: non-empty stdout is appended to the user message / the session's system context.
-  - `session_end` / `turn_end`: stdout is ignored.
+  - `hooks.toml` hooks on the original six events: `pre_tool_use` stdout of `{"updated_args": {...}}` rewrites the arguments (later hooks see the rewrite); `post_tool_use`, `user_prompt_submit` and `session_start` append non-empty stdout as context; `session_end` and `turn_end` ignore stdout.
+  - Every other case reads stdout as the [decision protocol](#decision-protocol) when it is a single JSON object. Plain text counts as context only on `user_prompt_submit`, `user_prompt_expansion`, `session_start` and `post_model_switch`; elsewhere it goes to the log.
 - **Exit 2: block.** stderr is the reason.
   - `pre_tool_use`: the tool doesn't run; the model gets `blocked by pre_tool_use hook: <reason>` as an ordinary tool error and can adjust course. Repeated blocked calls count toward the same failure breakers as any other tool failure.
   - `user_prompt_submit`: the turn ends immediately with a notice; the prompt never reaches the model.
+  - `stop`, `subagent_stop`: the model keeps working, with stderr as the next instruction.
+  - `post_tool_use`, `post_tool_use_failure` (Claude-format hooks): stderr goes to the model as feedback next to the result.
+  - `pre_compact`, `pre_model_switch`, `user_prompt_expansion`, `post_tool_batch`, `config_change`, `task_created`, `task_completed`, `teammate_idle`: the action is refused.
   - Other events can't block; exit 2 there is treated like any other failure.
-- **Anything else: ignored.** A different exit code, a timeout (`timeout_secs`, default 60, the process is killed), or a spawn failure surfaces as a warning and the pipeline continues. Hooks must never wedge the agent.
+- **Anything else: ignored.** A different exit code, a timeout (`timeout_secs`, default 60, the process is killed), or a spawn failure surfaces as a warning and the pipeline continues. Hooks must never wedge the agent. Set `on_failure = "block"` (`"onFailure": "block"` in settings files) to make a failed hook on a blockable event block instead.
+
+Hooks for one event run one after another, in declaration order, and a block stops the chain. (Claude Code runs them in parallel.)
 
 Hook activity that changes something (a rewrite, appended context, a block, a warning) shows up as a dim log line in the TUI, or a printed line headless. Silent successes stay silent.
 
-Appended context is reported **once per hook per session**, and every append after that goes to the log (`WIZARD_LOG=debug`) instead. A hook that injects context injects it every time it matches — that is what it is for — so a `post_tool_use` hook reporting each one costs a line per tool call, and a `session_start` one says the same sentence at every launch. The first notice is the useful one: text entering the model's context from outside the conversation is not otherwise visible anywhere. `/clear` starts a new session and resets the filter. Rewrites, blocks and warnings are never deduplicated — each describes something that varies per call, and swallowing the repeat would hide the occurrence that mattered.
+Appended context is reported **once per hook per session**, and every append after that goes to the log (`WIZARD_LOG=debug`) instead. A hook that injects context injects it every time it matches, which is what it is for, so a `post_tool_use` hook reporting each one costs a line per tool call. The first notice is the useful one: text entering the model's context from outside the conversation is not otherwise visible anywhere. `/clear` starts a new session and resets the filter. Rewrites, blocks and warnings are never deduplicated.
+
+### Decision protocol
+
+A hook that prints one JSON object on exit 0 can say more than yes or no. The shape is Claude Code's:
+
+```json
+{
+  "continue": false,
+  "stopReason": "shown to the user",
+  "systemMessage": "a note for the user",
+  "decision": "block",
+  "reason": "why",
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow | deny | ask",
+    "permissionDecisionReason": "why",
+    "updatedInput": {"command": "ls -la"},
+    "additionalContext": "text for the model"
+  }
+}
+```
+
+- `permissionDecision` on `pre_tool_use`: `deny` refuses the call. `ask` makes it need approval even when no rule says so. `allow` does **not** skip deny or ask rules, which still apply afterwards. Deny beats ask beats allow across hooks.
+- `updatedInput` replaces the tool arguments, in Claude's shape (`file_path` for `path`). Wizard-format hooks can use `updated_args` in Wizard's shape.
+- `additionalContext` goes to the model: next to the tool result for tool events, onto the prompt for `user_prompt_submit`, as feedback for `stop`.
+- `decision: "block"` with a `reason` blocks on the events that can be blocked, and is feedback on `post_tool_use`.
+- `continue: false` ends the turn, with `stopReason` as the note.
+- `permission_request` hooks answer with `hookSpecificOutput.decision`: `{"behavior": "allow"}` or `{"behavior": "deny", "message": "..."}`.
+- Deprecated `{"decision": "approve"}` means allow.
+
+Not supported: `updatedToolOutput`, `defer`, `watchPaths`, `terminalSequence`, `asyncRewake`.
+
+### Handler types
+
+| `type` | What happens | Result |
+|--------|--------------|--------|
+| `command` | Runs in the project root, payload on stdin | Exit code and stdout as above |
+| `http` | POSTs the payload as JSON | A 2xx body is read as stdout (exit 0); any other status is a warning; a connection failure is a failure |
+| `prompt` | One model call with your prompt (`$ARGUMENTS` is the payload; it is appended if absent), asked to answer `{"ok": true}` or `{"ok": false, "reason": "..."}` | `ok: false` acts like exit 2 with the reason on stderr |
+| `agent` | Same as `prompt`. Wizard runs it as one model call with no tool access | As `prompt` |
+| `mcp_tool` | Calls a tool on a connected MCP server | Text result is stdout; an error result is a warning |
+
+`prompt`, `agent` and `mcp_tool` hooks need a model or an MCP server attached, so they do nothing in contexts that have neither. Their default timeout is 30 s for `prompt`, 60 s for `agent`.
+
+## Claude-format hooks
+
+Wizard reads the `hooks` key of Claude Code settings files:
+
+- `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`)
+- `<project>/.claude/settings.json`
+- `<project>/.claude/settings.local.json`
+- the same names under `.wizard/` (`~/.wizard/settings.json`, `<project>/.wizard/settings.json`, `<project>/.wizard/settings.local.json`)
+- `/etc/claude-code/managed-settings.json` and `/etc/wizard/managed-settings.json`
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": ".claude/hooks/check.sh", "timeout": 10, "if": "Bash(git *)"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+Matchers follow Claude's rules: empty, missing or `*` matches everything; letters, digits, `_`, `-`, spaces, `,` and `|` make a list of exact names (`Edit|Write`); anything else is an unanchored regular expression (`mcp__github__.*`). Tool matchers are tested against both the Claude name (`Bash`) and Wizard's (`execute`). Identical hooks that appear in several files run once. Unknown event names are skipped so a newer settings file still loads. `"disableAllHooks": true` turns off every hook that came from a settings file, not `hooks.toml`.
+
+Project settings files are executable (hooks, `env`, `statusLine`), so they sit behind the same [project trust](#project-trust) gate as `.wizard/hooks.toml`. A settings file that holds only data, such as permission rules, is not gated.
 
 ## Examples
 
