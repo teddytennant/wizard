@@ -90,3 +90,4 @@ x-rewind-confirm	norm	(?<=^   │ \()\d+[smhd] ago@@N ago	ages: the two runs are
 wz-slash*-[18]*	shape-ref	^\s*$	command rows: Claude Code's two-row descriptions push its five-row window down a row, so the row above it is empty where Wizard's starts
 wz-slash*-[18]*	shape	^  ❯ /\S+\s	command rows: with its window a row lower, the reference's selected command sits a row lower than Wizard's
 queue-esc*	drop	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner comes up at a moment of its own; the look's had not yet when it was captured
+*	look	Try "prompt"\s*$	example prompt: 2.1.314 fills it from a cache a signed-in account refreshes; the fake-key capture has none, the subscription capture in tests/fixtures/ref has it

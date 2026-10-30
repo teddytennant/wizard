@@ -617,7 +617,10 @@ pub fn plan_review(buf: &mut Buffer, app: &App, req: &PermissionRequest, sel: us
         bottom.push(indent(r, 3));
     }
     bottom.push(Row::new());
-    for (i, (label, _)) in permission_options(req).iter().enumerate() {
+    for (i, (label, _)) in permission_options(req, app.auto_offered())
+        .iter()
+        .enumerate()
+    {
         let on = i == sel;
         bottom.push(
             Row::of(if on { "   ❯ " } else { "     " }, accent)
@@ -718,6 +721,12 @@ pub fn permission(app: &App, req: &PermissionRequest, sel: usize, w: usize) -> V
                 _ => req.tool.clone(),
             };
             rows.push(Row::of(" ", Style::new()).with(title, accent.add_modifier(Modifier::BOLD)));
+            if app.auto_offered() {
+                rows.push(Row::of(
+                    " Tip: auto mode handles these prompts for you \u{2014} choose \"switch to auto mode\" below",
+                    th.bold(),
+                ));
+            }
             let command = req
                 .input
                 .get("command")
@@ -748,13 +757,22 @@ pub fn permission(app: &App, req: &PermissionRequest, sel: usize, w: usize) -> V
         }
     };
     rows.extend(wrap(&question, w.saturating_sub(1)));
-    for (i, (label, _)) in permission_options(req).iter().enumerate() {
+    let options = permission_options(req, app.auto_offered());
+    for (i, (label, choice)) in options.iter().enumerate() {
         let on = i == sel;
         let st = if on { accent } else { Style::new() };
-        for (k, r) in wrap_str(label, st, w.saturating_sub(8))
+        // the reason behind "switch to auto mode" is dim, as the reference draws it
+        let (label, reason) = match (choice, label.split_once(" \u{b7} ")) {
+            (crate::app::Choice::Auto, Some((head, tail))) => (head, Some(tail)),
+            _ => (label.as_str(), None),
+        };
+        for (k, mut r) in wrap_str(label, st, w.saturating_sub(8))
             .into_iter()
             .enumerate()
         {
+            if let (Some(tail), 0) = (reason, k) {
+                r.push(format!(" \u{b7} {tail}"), th.dim());
+            }
             let mut row = Row::new();
             if k > 0 {
                 row.push("      ", Style::new());
@@ -774,9 +792,7 @@ pub fn permission(app: &App, req: &PermissionRequest, sel: usize, w: usize) -> V
                 .with("Tell Wizard what to do differently: ", th.dim())
                 .with(note.clone(), Style::new()),
         ),
-        None if permission_options(req)[sel.min(permission_options(req).len() - 1)].1
-            == crate::app::Choice::Always =>
-        {
+        None if options[sel.min(options.len() - 1)].1 == crate::app::Choice::Always => {
             rows.push(Row::of(" Esc to cancel", th.dim()))
         }
         None => rows.push(Row::of(" Esc to cancel · Tab to amend", th.dim())),

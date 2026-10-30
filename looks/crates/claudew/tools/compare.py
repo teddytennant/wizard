@@ -49,16 +49,11 @@ REF_ONLY = [
     (r'\bClaude\b(?! Code| API|/| mobile|\.ai)', 'Wizard'),
 ]
 
-# Reference scenes of a dialog Wizard never raises: it asks before no tool runs (its one
-# question is a finished plan, compared in `plan`). The look still has these prompts for the
-# replay, but a match with them would prove nothing about Wizard. `status` is Claude Code's
-# panel; the look sends /status to Wizard, which answers in text.
+# Reference scenes that are not compared. `status` is Claude Code's panel; the look sends
+# /status to Wizard, which answers in text. The permission prompts are compared now that
+# Wizard asks before commands and edits.
 NOT_COMPARED = [
     ('status', 'Wizard answers /status in text, not in a panel'),
-    ('edit-permission*', 'Wizard never asks before an edit'),
-    ('write-permission', 'Wizard never asks before a write'),
-    ('bash-permission', 'Wizard never asks before a command'),
-    ('bash-esc', 'turning a command down at a prompt Wizard never shows'),
 ]
 
 # (scene glob, which side the pattern is looked for on, row pattern, reason). The matched span

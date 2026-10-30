@@ -312,7 +312,7 @@ pub const COMMON: &[&str] = &[
     r"^.{11}\S.* · (?:Claude Max|Fastest for quick answers)\s*$",
     r"[○◐●◉] \w+ · /effort",
     r"Try .*$",
-    r" · ← \d+ agents?",
+    r" · ← (?:\d+ agents?|for agents)",
     r"You've used \d+% of your weekly limit.*$",
     r"^✻ \S+ for \d+s · done \d+:\d\d [AP]M",
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",

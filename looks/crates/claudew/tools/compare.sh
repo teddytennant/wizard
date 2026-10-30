@@ -53,7 +53,11 @@ bin="${CARGO_TARGET_DIR:-$root/target}/debug/claudew"
 # endpoint that is fake_anthropic.py, so nothing reaches an account or ~/.claude.
 refrun() { "$@"; }
 # group NAME: whether to capture it; REF_GROUPS="turn3 shared" captures only those
-group() { [ -z "${REF_GROUPS:-}" ] || case " $REF_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
+group() {
+    [ -z "${REF_GROUPS:-}" ] && return 0
+    case " $REF_GROUPS " in *" $1 "*) return 0 ;; esac
+    return 1
+}
 if [ "${REF:-}" = fake ]; then
     port=${FAKE_PORT:-18997}
     fakehome="$work/claude-ref-home"
@@ -63,7 +67,7 @@ if [ "${REF:-}" = fake ]; then
     fakepid=$!
     trap 'kill $fakepid' EXIT
     cat > "$fakehome/.claude.json" <<EOF
-{"hasCompletedOnboarding": true, "theme": "dark", "customApiKeyResponses": {"approved": ["$(printf %s "$key" | tail -c 20)"], "rejected": []},
+{"hasCompletedOnboarding": true, "lspRecommendationDisabled": true, "theme": "dark", "customApiKeyResponses": {"approved": ["$(printf %s "$key" | tail -c 20)"], "rejected": []},
  "projects": {"$cwd": {"hasTrustDialogAccepted": true}, "$xcwd": {"hasTrustDialogAccepted": true}}}
 EOF
     fakeenv="ANTHROPIC_BASE_URL=http://127.0.0.1:$port ANTHROPIC_API_KEY=$key DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
@@ -103,7 +107,8 @@ PY
         python3 "$here/mkreplay.py" "$ref" "$cwd" "$crate/tests/fixtures/replay"
     fi
 else
-    ref="$crate/tests/fixtures/ref"
+    # REFDIR=captures keeps an earlier capture as the reference (no new one is taken)
+    ref="${REFDIR:-$crate/tests/fixtures/ref}"
 fi
 
 python3 "$here/mkreplay.py" "$ref" "$cwd" "$work/replay"

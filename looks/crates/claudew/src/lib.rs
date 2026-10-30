@@ -4,9 +4,13 @@
 //! live run of both cell by cell.
 
 pub mod app;
+#[path = "../../../../src/keybindings.rs"]
+pub mod keybindings;
 pub mod replay;
 pub mod term;
 pub mod text;
 pub mod theme;
 pub mod truecolor;
 pub mod ui;
+#[path = "../../../../src/vim.rs"]
+pub mod vim;

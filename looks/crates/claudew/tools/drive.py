@@ -8,7 +8,7 @@ the cursor and the alternate screen are on.
 """
 import argparse, os, re, subprocess, sys, time
 
-SOCKET = 'lookclaude'
+SOCKET = os.environ.get('LOOK_SOCKET', 'lookclaude')
 SIZES = ['80x24', '120x40', '200x50']
 # NAME=value pairs passed through to the UI under test (LOOK_ENV, space separated)
 EXTRA_ENV = os.environ.get('LOOK_ENV', '').split()

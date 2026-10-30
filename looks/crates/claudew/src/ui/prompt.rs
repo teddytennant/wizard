@@ -197,6 +197,10 @@ fn footer_row(app: &App) -> Row {
     if app.bash_mode {
         return row.with("! for shell mode", th.fg(th.bash));
     }
+    // the mode is named for INSERT and the VISUAL modes; NORMAL shows nothing
+    if let Some(label) = app.vim.label().filter(|l| *l != "NORMAL") {
+        row.push(format!("-- {label} -- "), th.dim());
+    }
     let cycle = " (shift+tab to cycle)";
     // no session yet, so no modes to name
     // the mode pressed for, at once as the reference shows it: nothing is sent until wizard
@@ -233,6 +237,7 @@ fn footer_row(app: &App) -> Row {
         row.push(" · esc to interrupt", th.dim());
     } else if first && app.editor.is_empty() && app.menu == Menu::None {
         row.push(" · ? for shortcuts", th.dim());
+        row.push(" · \u{2190} for agents", th.dim());
     }
     row
 }
