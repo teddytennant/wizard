@@ -238,7 +238,7 @@ directory as part of the task; it does not widen a file-access sandbox, because 
 | `/desktop`, `/mobile` | `wizard gui` and the Android app are separate products. |
 | `/teleport`, `/remote-control`, `/remote-env`, `/cloud`, `/autofix-pr`, `/ultrareview`, `/web-setup`, `/install-github-app`, `/install-slack-app` | Anthropic cloud and GitHub App features. |
 | `/design*`, `/slides`, `/artifacts`, `/artifact-*`, `/dataviz`, `/deep-research`, `/claude-api`, `/batch`, `/workflows`, `/workflow-authoring`, `/plugin-authoring`, `/run`, `/run-skill-generator`, `/team-onboarding`, `/skill-doctor` | Bundled skills and workflows tied to Anthropic products; skills in `.claude/skills` still load. |
-| `/fewer-permission-prompts` | Wizard has no prompts to reduce. |
+| `/fewer-permission-prompts` | Not built. Wizard only prompts when a permission mode is named, and "don't ask again" already writes the allow rule to `.claude/settings.local.json`. |
 
 `/theme` is still `/ui`: a skin carries its palette, so Claude's theme names (`dark`, `light-daltonized`, ...) do not map to anything.
 
@@ -277,7 +277,7 @@ starts. Nothing is dropped silently.
 | `--bare`, `--safe-mode` | No discovery of instruction files, `.claude` commands, skills, agents, styles, plugins or `.mcp.json`. Named flags still apply. Hooks are the hooks work's to honor. |
 | `--disable-slash-commands` | No custom commands and no skills. |
 | `--verbose`, `-d` / `--debug[=filter]` | Sets `WIZARD_LOG` for the run (log file, not stderr). |
-| `--dangerously-skip-permissions` | Accepted. Wizard never asks, so there is nothing to skip. |
+| `--dangerously-skip-permissions` | Accepted, same as `--permission-mode bypassPermissions`. |
 | `--include-partial-messages`, `--include-hook-events`, `--replay-user-messages` | Accepted, no effect: the structured formats already carry that. |
 | `[prompt]` | The words after the flags are the task. |
 
