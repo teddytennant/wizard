@@ -413,6 +413,8 @@ Tokens land in `~/.wizard/chatgpt_oauth.json` (mode 0600). On success Wizard add
 
 Every request goes through Claude Code: Wizard starts your `claude` binary, keeps it running for the conversation, and reads its output. It never reads Claude Code's credentials and never calls Anthropic itself. Wizard's own prompt, tools and permission prompts stay in charge. The model calls Wizard's tools natively: Claude Code is given their descriptions over a local connection only it can use, and Wizard runs each call itself. `/model` takes Claude Code's aliases (`sonnet`, `opus`, `haiku`) or a full model id. The provider is stored as `kind = "claudecode"`. Without a terminal to ask on, a missing install or sign-in fails with the command to run.
 
+`wizard --provider claude` does the same setup for one run without touching `config.toml`, so a fresh machine can go straight to it. It looks for `claude` on `PATH`, then in `~/.local/bin` and `~/.claude/local`, and refuses a Claude Code older than 2.1.0 with `claude update` as the fix. Add `--yes` to let Wizard run Anthropic's installer without asking, which is also the only way it runs from a script. `wizard doctor` shows where `claude` was found, its version and whether it is signed in.
+
 ### Cursor subscription
 
 `/provider`, then **Add provider**, then **Cursor (subscription)** runs Wizard on your Cursor plan. It needs [`cursor-agent`](https://cursor.com/cli) installed and signed in; if it is missing Wizard prints Cursor's install command, and if it is signed out Wizard starts `cursor-agent login`. `wizard --login cursor` repeats the sign-in.

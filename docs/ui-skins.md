@@ -158,5 +158,16 @@ real program and the look through the same keys in a private tmux server and
 diffs the two cell by cell (`crates/claudew/tools/compare.sh`). Nothing from
 that program's install is read, copied or redistributed.
 
+The look draws Claude Code's mascot (three rows of block characters, nine columns)
+next to the name Wizard; the header text is Wizard's own.
+
+To capture the reference without an account, run `REF=fake crates/claudew/tools/compare.sh`.
+It starts `tools/fake_anthropic.py`, an Anthropic Messages endpoint that answers the
+scenes' fixed prompts with scripted tool calls, and runs `claude` against it in a `HOME`
+of its own, so nothing reaches a subscription or `~/.claude`. `REF_GROUPS="turn3 shared"`
+captures only those scene groups. What it cannot give is the subscription's own screens
+(plan name, weekly-limit notice, account-specific commands and models), so its captures are
+for finding differences, not for replacing `tests/fixtures/ref`.
+
 Product names and trademarks belong to their owners. The skins are an homage,
 and each one says whose look it wears on its own home screen.
