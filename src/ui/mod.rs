@@ -76,6 +76,7 @@ mod diff;
 mod grok;
 pub(crate) mod motion;
 mod overlay;
+pub(crate) mod permission_prompt;
 mod side;
 mod welcome;
 
@@ -263,6 +264,9 @@ fn draw_house(frame: &mut Frame, app: &App) {
     }
     if app.interview.is_some() {
         draw_interview(frame, app);
+    }
+    if let Some(prompt) = app.permission_prompts.first() {
+        permission_prompt::draw(frame, prompt);
     }
     // The dashboard is modal and full-screen, so it paints last (on top).
     if app.show_dashboard {

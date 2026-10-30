@@ -5194,3 +5194,70 @@ fn the_keys_overlay_gives_way_to_typing() {
     press(&mut app, KeyCode::Esc);
     assert!(!app.keys_help);
 }
+
+fn open_permission(app: &mut App) -> tokio::sync::oneshot::Receiver<crate::agent::PermissionAnswer> {
+    let (gate, rx) = crate::agent::PermissionGate::open();
+    app.handle_agent_event(AgentEvent::PermissionRequest {
+        tool: "execute".to_string(),
+        args: serde_json::json!({"command": "git commit -m x"}),
+        reason: "Bash needs approval.".to_string(),
+        offer: Some(crate::permissions::Offer {
+            label: "Yes, and don't ask again for git commit:* commands".to_string(),
+            rules: vec!["Bash(git commit:*)".to_string()],
+            scope: crate::permissions::Scope::Project,
+        }),
+        gate,
+    });
+    rx
+}
+
+#[test]
+fn a_permission_request_opens_a_prompt_that_takes_the_keys() {
+    let mut app = app();
+    let mut rx = open_permission(&mut app);
+    assert_eq!(app.permission_prompts.len(), 1);
+    assert!(
+        matches!(app.session_state(), crate::session_registry::SessionState::NeedsInput),
+        "the session is waiting on the user"
+    );
+    // typing goes to the dialog, not the composer
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.input.is_empty());
+    assert!(rx.try_recv().is_err(), "nothing answered yet");
+    press(&mut app, KeyCode::Char('2'));
+    assert!(app.permission_prompts.is_empty());
+    assert_eq!(
+        rx.try_recv(),
+        Ok(crate::agent::PermissionAnswer::Allow { remember: true })
+    );
+}
+
+#[test]
+fn escape_refuses_the_prompt_and_two_prompts_queue() {
+    let mut app = app();
+    let mut first = open_permission(&mut app);
+    let mut second = open_permission(&mut app);
+    assert_eq!(app.permission_prompts.len(), 2);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(
+        first.try_recv(),
+        Ok(crate::agent::PermissionAnswer::Deny { feedback: None })
+    );
+    assert_eq!(app.permission_prompts.len(), 1, "the second is on screen now");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        second.try_recv(),
+        Ok(crate::agent::PermissionAnswer::Allow { remember: false })
+    );
+}
+
+#[test]
+fn the_end_of_a_turn_drops_a_prompt_nobody_can_answer() {
+    let mut app = app();
+    let mut rx = open_permission(&mut app);
+    app.handle_agent_event(AgentEvent::Done {
+        reason: DoneReason::Stopped,
+    });
+    assert!(app.permission_prompts.is_empty());
+    assert!(rx.try_recv().is_err(), "dropped, not answered");
+}

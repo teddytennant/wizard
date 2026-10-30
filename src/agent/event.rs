@@ -147,6 +147,23 @@ pub enum AgentEvent {
         questions: Vec<InterviewQuestion>,
         gate: InterviewGate,
     },
+    /// A tool call needs approval and the turn is parked until somebody gives it.
+    ///
+    /// The consumer must [`PermissionGate::claim`] the gate and send exactly
+    /// one [`PermissionAnswer`]: the TUI shows Claude's dialog, ACP forwards a
+    /// permission request to the client, and a surface with nobody to ask
+    /// answers [`PermissionAnswer::Unavailable`]. Dropping the claimed channel
+    /// counts as unavailable. `offer` is the "don't ask again" choice on
+    /// offer, if one makes sense for this call.
+    PermissionRequest {
+        /// Wizard's name for the tool (`execute`, `write_file`).
+        tool: String,
+        args: Value,
+        /// Why it needs approval, e.g. `Bash with command ls needs approval.`
+        reason: String,
+        offer: Option<crate::permissions::Offer>,
+        gate: PermissionGate,
+    },
     /// Omakase (chef's-choice) mode: the model finished planning and, because
     /// there is no human review gate, is proceeding to execute. Informational
     /// only — the plan markdown for the surface to display. The plan is also
@@ -360,6 +377,7 @@ impl AgentEvent {
             | Self::HookFired { .. }
             | Self::PlanReady { .. }
             | Self::Interview { .. }
+            | Self::PermissionRequest { .. }
             | Self::ConsoleOpened { .. }
             | Self::ConsoleWaiting { .. }
             | Self::ConsoleOutput { .. }
@@ -461,6 +479,7 @@ impl<T> GateDesk<oneshot::Sender<T>> {
 
 static PLAN_GATES: GateDesk<oneshot::Sender<PlanVerdict>> = GateDesk::new();
 static INTERVIEW_GATES: GateDesk<oneshot::Sender<Option<Vec<String>>>> = GateDesk::new();
+static PERMISSION_GATES: GateDesk<oneshot::Sender<PermissionAnswer>> = GateDesk::new();
 static CONSOLE_GATES: GateDesk<ConsoleSlot> = GateDesk::new();
 
 /// Ticket for a paused plan review ([`AgentEvent::PlanReady`]).
@@ -527,6 +546,47 @@ impl InterviewGate {
     /// Decline the interview: the model proceeds on its own judgment.
     pub fn decline(self) -> bool {
         self.answer(None)
+    }
+
+    /// Close the gate without answering; see [`PlanGate::cancel`].
+    pub(crate) fn cancel(self) {
+        drop(self.claim());
+    }
+}
+
+/// The answer to a permission prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionAnswer {
+    /// Run the call. `remember` takes the prompt's "don't ask again" offer.
+    Allow { remember: bool },
+    /// Refuse it, with what the person said to do instead.
+    Deny { feedback: Option<String> },
+    /// Nobody is there to ask (headless, a gateway chat, a subagent).
+    Unavailable,
+}
+
+/// Ticket for a paused permission prompt ([`AgentEvent::PermissionRequest`]).
+/// See [`PlanGate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PermissionGate(u64);
+
+impl PermissionGate {
+    /// Open a gate: the ticket for the event and the receiver the hook engine
+    /// parks on.
+    pub(crate) fn open() -> (Self, oneshot::Receiver<PermissionAnswer>) {
+        let (ticket, wait) = PERMISSION_GATES.open();
+        (Self(ticket), wait)
+    }
+
+    /// Take the answer channel, for a surface that answers later.
+    pub fn claim(self) -> Option<oneshot::Sender<PermissionAnswer>> {
+        PERMISSION_GATES.claim(self.0)
+    }
+
+    /// Claim and answer in one step.
+    pub fn answer(self, answer: PermissionAnswer) -> bool {
+        self.claim()
+            .is_some_and(|respond| respond.send(answer).is_ok())
     }
 
     /// Close the gate without answering; see [`PlanGate::cancel`].

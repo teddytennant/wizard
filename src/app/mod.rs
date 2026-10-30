@@ -386,6 +386,8 @@ pub struct App {
     /// Open plan-review modal (the turn is paused inside `exit_plan` until
     /// it resolves), if any.
     pub plan_review: Option<PlanReview>,
+    /// Tool calls waiting for approval; the first is the one on screen.
+    pub permission_prompts: Vec<crate::ui::permission_prompt::PermissionPrompt>,
     /// Open interview modal (the turn is paused inside the `interview` tool
     /// until the user answers or dismisses), if any.
     pub interview: Option<Interview>,
@@ -674,6 +676,7 @@ impl App {
             fusion_active: false,
             ultra: None,
             plan_review: None,
+            permission_prompts: Vec::new(),
             interview: None,
             console: None,
             console_pending: None,
@@ -1523,7 +1526,10 @@ impl App {
     /// Current state for this session's heartbeat: needs-input when paused on a
     /// plan review, working while a turn streams, otherwise idle.
     fn session_state(&self) -> SessionState {
-        if self.plan_review.is_some() || self.interview.is_some() {
+        if self.plan_review.is_some()
+            || self.interview.is_some()
+            || !self.permission_prompts.is_empty()
+        {
             SessionState::NeedsInput
         } else if self.status.busy {
             SessionState::Working
@@ -1539,6 +1545,9 @@ impl App {
         }
         if self.interview.is_some() {
             return "waiting for interview answers".to_string();
+        }
+        if !self.permission_prompts.is_empty() {
+            return "waiting for permission".to_string();
         }
         if !self.status.busy {
             return "idle".to_string();
@@ -1758,6 +1767,7 @@ impl App {
         self.transcript.commit();
         self.fail_running_panes(why);
         self.close_stale_console();
+        self.permission_prompts.clear();
         self.status.busy = false;
         self.status.step = 0;
         self.turn_started = None;
@@ -3333,6 +3343,15 @@ impl App {
             }
         }
 
+        // A permission prompt captures all keys: the turn is parked before the
+        // tool runs until it is answered.
+        if !self.permission_prompts.is_empty() {
+            if self.permission_prompts[0].handle_key(key) {
+                self.permission_prompts.remove(0);
+            }
+            return Ok(None);
+        }
+
         // An open plan review captures all keys: the turn is paused inside
         // exit_plan until a verdict is sent.
         if self.plan_review.is_some() {
@@ -4769,6 +4788,21 @@ impl App {
                     scroll: 0,
                 });
             }
+            AgentEvent::PermissionRequest {
+                tool,
+                args,
+                reason,
+                offer,
+                gate,
+            } => {
+                let Some(respond) = gate.claim() else {
+                    return;
+                };
+                self.permission_prompts
+                    .push(crate::ui::permission_prompt::PermissionPrompt::new(
+                        tool, args, reason, offer, respond,
+                    ));
+            }
             AgentEvent::Interview { questions, gate } => {
                 let Some(respond) = gate.claim() else {
                     return;
@@ -4967,6 +5001,7 @@ impl App {
                 // at a dead child is a composer whose Enter key does nothing —
                 // which is the bug, not the fix.
                 self.close_stale_console();
+                self.permission_prompts.clear();
                 match reason {
                     DoneReason::Completed => {}
                     DoneReason::MaxSteps => self.notice(format!(

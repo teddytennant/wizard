@@ -281,6 +281,10 @@ impl EventSink for TextSink {
                 gate.answer(PlanVerdict::approve());
                 self.spinner.show();
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // Headless: no interactive user — decline so the model
                 // proceeds with its best judgment.
@@ -515,6 +519,10 @@ impl<W: Write + Send> EventSink for JsonSink<W> {
                 // No human in the loop: approve so the turn executes.
                 gate.answer(PlanVerdict::approve());
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // No interactive user: decline so the model uses its judgment.
                 gate.decline();
@@ -715,6 +723,10 @@ impl<W: Write + Send> EventSink for StreamJsonSink<W> {
                 // No human in the loop: report the plan and approve it.
                 self.emit(json!({"type": "plan", "plan": plan, "approved": true}));
                 gate.answer(PlanVerdict::approve());
+            }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
             }
             AgentEvent::Interview { questions, gate } => {
                 // No interactive user: report the questions, then decline so

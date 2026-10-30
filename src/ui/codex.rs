@@ -496,6 +496,9 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     if app.interview.is_some() {
         draw_interview(frame, app, body);
     }
+    if let Some(prompt) = app.permission_prompts.first() {
+        super::permission_prompt::draw(frame, prompt);
+    }
     if app.show_dashboard {
         super::draw_dashboard(frame, app);
     }
