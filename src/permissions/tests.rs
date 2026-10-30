@@ -21,6 +21,7 @@ fn policy(mode: PermissionMode, allow: &[&str], ask: &[&str], deny: &[&str]) -> 
         ask: parse(ask),
         deny: parse(deny),
         cwd: root.to_path_buf(),
+        claude_defaults: false,
     }
 }
 
@@ -166,9 +167,9 @@ fn accept_edits_allows_edits_and_asks_for_the_rest() {
         ),
         Decision::Allow
     );
-    assert!(is_ask(&run(&p, "touch a")));
-    let p = policy(PermissionMode::AcceptEdits, &["Bash(touch:*)"], &[], &[]);
-    assert_eq!(run(&p, "touch a"), Decision::Allow);
+    assert!(is_ask(&run(&p, "git push")));
+    let p = policy(PermissionMode::AcceptEdits, &["Bash(git push:*)"], &[], &[]);
+    assert_eq!(run(&p, "git push"), Decision::Allow);
 }
 
 #[test]
@@ -281,4 +282,253 @@ fn summary_lists_rules_with_their_source() {
     assert!(text.contains("mode: dontAsk"));
     assert!(text.contains("deny:\n  Read(.env)  (test)"));
     assert!(text.contains("allow:\n  Bash(ls:*)  (test)"));
+}
+
+#[test]
+fn accept_edits_runs_file_commands_inside_the_project() {
+    // oracle: acceptEdits ran touch, mkdir, mv, cp, rm and sed -i in the
+    // project; touch /tmp/x, git commit and `cd d && touch q` asked.
+    let p = policy(PermissionMode::AcceptEdits, &[], &[], &[]);
+    for yes in [
+        "touch a",
+        "mkdir -p a/b && echo ok",
+        "mkdir d && mv a d/",
+        "cp a b; rm b",
+        "sed -i s/a/b/ a",
+        "rmdir d",
+    ] {
+        assert_eq!(run(&p, yes), Decision::Allow, "{yes}");
+    }
+    for no in [
+        "touch /tmp/outside",
+        "rm -rf ../elsewhere",
+        "git commit -m x",
+        "cd sub && touch q",
+        "touch a && curl example.com",
+        "touch $HOME/x",
+        "touch a &&",
+    ] {
+        assert!(is_ask(&run(&p, no)), "{no}");
+    }
+}
+
+#[test]
+fn accept_edits_asks_for_edits_outside_the_project() {
+    // oracle: Write /tmp/outside-claude-write.txt asked, sub/new.txt ran
+    let p = policy(PermissionMode::AcceptEdits, &[], &[], &[]);
+    let write = |path: &str| {
+        p.check(
+            "write_file",
+            ToolAccess::Edit,
+            &json!({"path": path, "content": ""}),
+        )
+    };
+    assert_eq!(write("sub/new.txt"), Decision::Allow);
+    assert_eq!(write("/proj/a.txt"), Decision::Allow);
+    assert!(is_ask(&write("/tmp/outside.txt")));
+    assert!(is_ask(&write("../outside.txt")));
+}
+
+fn named_default(allow: &[&str]) -> Policy {
+    Policy {
+        claude_defaults: true,
+        ..policy(PermissionMode::Default, allow, &[], &[])
+    }
+}
+
+#[test]
+fn a_named_default_mode_asks_before_writes_commands_and_the_web() {
+    // oracle: --permission-mode default refused touch, curl, Write, Edit and
+    // WebFetch; ls and Read ran.
+    let p = named_default(&[]);
+    assert!(!p.is_inert());
+    assert!(is_ask(&run(&p, "touch a")));
+    assert!(is_ask(&run(&p, "curl example.com")));
+    assert_eq!(run(&p, "ls -la | wc -l"), Decision::Allow);
+    assert!(is_ask(&p.check(
+        "write_file",
+        ToolAccess::Edit,
+        &json!({"path": "a", "content": ""})
+    )));
+    assert!(is_ask(&p.check(
+        "web_fetch",
+        ToolAccess::Execute,
+        &json!({"url": "https://example.com"})
+    )));
+    assert!(is_ask(&p.check(
+        "github__list_issues",
+        ToolAccess::Execute,
+        &json!({})
+    )));
+    assert_eq!(
+        p.check("read_file", ToolAccess::ReadOnly, &json!({"path": "a"})),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn a_named_default_mode_lets_bookkeeping_tools_through() {
+    let p = named_default(&[]);
+    for tool in [
+        "todo",
+        "interview",
+        "spawn_subagent",
+        "task_kill",
+        "exit_plan",
+    ] {
+        assert_eq!(
+            p.check(tool, ToolAccess::Execute, &json!({})),
+            Decision::Allow,
+            "{tool}"
+        );
+    }
+}
+
+#[test]
+fn a_named_default_mode_honours_allow_rules() {
+    let p = named_default(&[
+        "Bash(git commit:*)",
+        "Edit(src/**)",
+        "WebFetch(domain:example.com)",
+    ]);
+    assert_eq!(run(&p, "git commit -m x"), Decision::Allow);
+    assert!(is_ask(&run(&p, "git push")));
+    assert_eq!(
+        p.check(
+            "write_file",
+            ToolAccess::Edit,
+            &json!({"path": "src/a.rs", "content": ""})
+        ),
+        Decision::Allow
+    );
+    assert_eq!(
+        p.check(
+            "web_fetch",
+            ToolAccess::Execute,
+            &json!({"url": "https://example.com/x"})
+        ),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn the_alias_names_are_checked_like_wizards() {
+    // The model calls `Bash` and `Write`, not `execute` and `write_file`.
+    let p = policy(
+        PermissionMode::DontAsk,
+        &["Bash(ls:*)"],
+        &[],
+        &["Bash(rm:*)"],
+    );
+    let bash = |command: &str| p.check("Bash", ToolAccess::Execute, &json!({ "command": command }));
+    assert_eq!(bash("ls -la"), Decision::Allow);
+    assert!(is_deny(&bash("rm x")));
+    assert!(is_deny(&bash("touch x")));
+    let p = policy(PermissionMode::Default, &[], &[], &["Edit(secrets/**)"]);
+    assert!(is_deny(&p.check(
+        "Write",
+        ToolAccess::Edit,
+        &json!({"file_path": "secrets/a", "content": ""})
+    )));
+}
+
+#[test]
+fn refusals_use_the_reference_words() {
+    // oracle: the tool_result text of each refusal under --permission-mode default
+    let p = named_default(&[]);
+    assert_eq!(
+        p.refusal("write_file", &json!({"path": "main.rs", "content": ""})),
+        "Claude requested permissions to write to /proj/main.rs, but you haven't granted it yet."
+    );
+    assert_eq!(
+        p.refusal("web_fetch", &json!({"url": "https://example.com"})),
+        "Claude requested permissions to use WebFetch, but you haven't granted it yet."
+    );
+    assert_eq!(
+        p.refusal("execute", &json!({"command": "curl example.com"})),
+        "This command requires approval"
+    );
+    assert_eq!(
+        p.refusal("execute", &json!({"command": "mkdir d && mv x d/"})),
+        "This Bash command contains multiple operations. The following parts require approval: mkdir d, mv x d/"
+    );
+    assert_eq!(
+        p.refusal("execute", &json!({"command": "touch x.txt"})),
+        "touch in '/proj/x.txt' needs approval. The path is inside the working directories for this session ('/proj'), and Claude Code asks before a shell command creates, changes or removes files there."
+    );
+}
+
+#[test]
+fn the_offer_names_a_rule_that_covers_what_was_asked() {
+    let cwd = Path::new("/proj");
+    let bash = |command: &str| offer("execute", &json!({ "command": command }), cwd);
+    assert_eq!(
+        bash("git commit -m x").unwrap().rules,
+        ["Bash(git commit:*)"]
+    );
+    assert_eq!(
+        bash("cargo test --lib").unwrap().rules,
+        ["Bash(cargo test:*)"]
+    );
+    assert_eq!(bash("curl -s example.com").unwrap().rules, ["Bash(curl:*)"]);
+    assert_eq!(
+        bash("mkdir d && git add . && ls").unwrap().rules,
+        ["Bash(mkdir:*)", "Bash(git add:*)"]
+    );
+    assert!(bash("echo 'oops").is_none());
+    let fetch = offer("web_fetch", &json!({"url": "https://example.com/a?b"}), cwd).unwrap();
+    assert_eq!(fetch.rules, ["WebFetch(domain:example.com)"]);
+    let edit = offer("edit_file", &json!({"path": "a"}), cwd).unwrap();
+    assert!(edit.rules.is_empty());
+    assert_eq!(edit.scope, Scope::Session);
+    assert_eq!(
+        offer("github__create_issue", &json!({}), cwd)
+            .unwrap()
+            .rules,
+        ["mcp__github__create_issue"]
+    );
+}
+
+#[test]
+fn an_offered_rule_then_allows_the_command() {
+    let mut p = named_default(&[]);
+    assert!(is_ask(&run(&p, "git commit -m x")));
+    let offered = offer("execute", &json!({"command": "git commit -m x"}), &p.cwd).unwrap();
+    for rule in &offered.rules {
+        p.allow_rule(rule, "prompt");
+    }
+    assert_eq!(run(&p, "git commit -m y"), Decision::Allow);
+    assert!(is_ask(&run(&p, "git push")));
+}
+
+#[test]
+fn rejection_wording_matches_the_reference() {
+    assert!(rejection(None).starts_with("The user doesn't want to proceed with this tool use."));
+    assert!(rejection(None).ends_with("wait for the user to tell you how to proceed."));
+    assert!(rejection(Some("use rg")).ends_with("the user said:\nuse rg"));
+}
+
+#[test]
+fn plan_mode_runs_read_only_command_lines() {
+    // oracle: `ls` ran under --permission-mode plan; `touch zz` did not
+    assert!(is_read_only_command("ls -la | wc -l"));
+    assert!(is_read_only_command("pwd && ls"));
+    assert!(!is_read_only_command("touch zz"));
+    assert!(!is_read_only_command("ls > out"));
+    assert!(!is_read_only_command("ls &&"));
+    assert!(!is_read_only_command(""));
+}
+
+#[test]
+fn the_summary_says_when_the_mode_asks() {
+    assert!(
+        named_default(&[])
+            .summary()
+            .contains("asks before file edits")
+    );
+    assert!(
+        !policy(PermissionMode::Default, &[], &[], &[])
+            .summary()
+            .contains("asks before")
+    );
 }

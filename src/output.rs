@@ -338,6 +338,10 @@ impl EventSink for TextSink {
                 gate.answer(PlanVerdict::approve());
                 self.spinner.show();
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // Headless: no interactive user — decline so the model
                 // proceeds with its best judgment.

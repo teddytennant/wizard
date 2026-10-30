@@ -1501,6 +1501,10 @@ impl ReplyCollector {
                 // retry of the step that follows must not swallow it.
                 self.committed = self.reply.len();
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // Nobody is at the other end to answer questions between two
                 // chat messages; declining lets the model plan on its own

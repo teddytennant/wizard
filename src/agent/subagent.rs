@@ -1018,8 +1018,10 @@ async fn run_loop(
         // A child cannot ExitWorktree out from under its parent. Its `cwd` is
         // already the worktree, which is all it needs.
         worktree: Arc::default(),
+        handback: Arc::default(),
         ..ctx.clone()
     };
+    let handback = Arc::clone(&ctx.handback);
 
     let sink = Sink::Run {
         run,
@@ -1100,7 +1102,13 @@ async fn run_loop(
     }
 
     let completed = ran.reason == crate::agent::DoneReason::Completed;
-    let output = if ran.last_text.trim().is_empty() {
+    let handed_back = handback
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    let output = if let Some(report) = handed_back {
+        report
+    } else if ran.last_text.trim().is_empty() {
         NO_FINAL_TEXT.to_string()
     } else {
         ran.last_text

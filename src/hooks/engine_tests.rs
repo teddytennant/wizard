@@ -476,6 +476,7 @@ fn policy_with(mode: PermissionMode, allow: &[&str], ask: &[&str], deny: &[&str]
         ask: parse(ask),
         deny: parse(deny),
         cwd: root.to_path_buf(),
+        claude_defaults: false,
     }
 }
 
@@ -873,4 +874,309 @@ async fn payloads_carry_the_keys_claude_code_sends() {
             "tool_calls[0].{key}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The ask path: a surface answers what no rule or hook did
+// ---------------------------------------------------------------------------
+
+use crate::agent::{AgentEvent, PermissionAnswer};
+
+fn named_default(cwd: &std::path::Path) -> Policy {
+    Policy {
+        claude_defaults: true,
+        cwd: cwd.to_path_buf(),
+        ..Policy::default()
+    }
+}
+
+/// Run `before_tool` with a surface that answers the first permission request
+/// with `answer`. Returns what the engine decided and the request it saw.
+async fn asked(
+    engine: &HookEngine,
+    tool: &str,
+    args: Value,
+    answer: PermissionAnswer,
+) -> (Before, Option<AgentEvent>) {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let surface = tokio::spawn(async move {
+        let mut seen = None;
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::PermissionRequest { gate, .. } = &event {
+                gate.answer(answer.clone());
+                seen = Some(event);
+                break;
+            }
+        }
+        seen
+    });
+    let before = engine
+        .before_tool(
+            tool,
+            ToolAccess::Execute,
+            &args,
+            "toolu_1",
+            Mode::default(),
+            Some(&tx),
+        )
+        .await;
+    drop(tx);
+    (before, surface.await.unwrap())
+}
+
+fn temp_project(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wizard-ask-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[tokio::test]
+async fn a_named_default_mode_puts_a_command_to_the_surface() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, request) = asked(
+        &engine,
+        "execute",
+        json!({"command": "touch x"}),
+        PermissionAnswer::Allow { remember: false },
+    )
+    .await;
+    assert!(matches!(before, Before::Proceed { .. }), "{before:?}");
+    let Some(AgentEvent::PermissionRequest { tool, offer, .. }) = request else {
+        panic!("the surface was never asked");
+    };
+    assert_eq!(tool, "execute");
+    assert_eq!(offer.unwrap().rules, ["Bash(touch:*)"]);
+}
+
+#[tokio::test]
+async fn the_claude_alias_is_asked_about_too() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, request) = asked(
+        &engine,
+        "Bash",
+        json!({"command": "touch x"}),
+        PermissionAnswer::Deny { feedback: None },
+    )
+    .await;
+    assert!(request.is_some(), "Bash must reach the surface");
+    assert!(
+        blocked(&before).starts_with("The user doesn't want to proceed"),
+        "{before:?} {request:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_no_with_words_hands_the_words_to_the_model() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, _) = asked(
+        &engine,
+        "execute",
+        json!({"command": "rm -rf build"}),
+        PermissionAnswer::Deny {
+            feedback: Some("use cargo clean".to_string()),
+        },
+    )
+    .await;
+    assert!(blocked(&before).ends_with("the user said:\nuse cargo clean"));
+}
+
+#[tokio::test]
+async fn dont_ask_again_adds_the_rule_and_writes_it_down() {
+    let dir = temp_project("remember");
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&dir));
+    let (before, _) = asked(
+        &engine,
+        "execute",
+        json!({"command": "git commit -m x"}),
+        PermissionAnswer::Allow { remember: true },
+    )
+    .await;
+    assert!(matches!(before, Before::Proceed { .. }));
+    // the rule now covers the next one without a prompt
+    let again = engine
+        .before_tool(
+            "execute",
+            ToolAccess::Execute,
+            &json!({"command": "git commit -m y"}),
+            "toolu_2",
+            Mode::default(),
+            None,
+        )
+        .await;
+    assert!(matches!(again, Before::Proceed { .. }), "{again:?}");
+    let saved = std::fs::read_to_string(dir.join(".claude/settings.local.json")).unwrap();
+    let saved: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(saved["permissions"]["allow"], json!(["Bash(git commit:*)"]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn allowing_edits_for_the_session_switches_to_accept_edits() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, _) = asked(
+        &engine,
+        "write_file",
+        json!({"path": "a.txt", "content": "x"}),
+        PermissionAnswer::Allow { remember: true },
+    )
+    .await;
+    assert!(matches!(before, Before::Proceed { .. }), "{before:?}");
+    assert_eq!(engine.policy().mode, PermissionMode::AcceptEdits);
+}
+
+#[tokio::test]
+async fn a_permission_request_hook_answers_before_the_surface_is_asked() {
+    let allow = say(
+        r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#,
+    );
+    let engine = engine(vec![claude(HookEvent::PermissionRequest, None, &allow)]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, request) = asked(
+        &engine,
+        "execute",
+        json!({"command": "touch x"}),
+        PermissionAnswer::Deny { feedback: None },
+    )
+    .await;
+    assert!(matches!(before, Before::Proceed { .. }), "{before:?}");
+    assert!(request.is_none(), "the hook decided; nobody was asked");
+}
+
+#[tokio::test]
+async fn a_permission_request_hook_sees_the_tool_and_a_suggestion() {
+    let dir = temp_project("hookpayload");
+    let sink = dir.join("payload.json");
+    let cmd = format!(
+        "cat > {}; printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"PermissionRequest\",\"decision\":{{\"behavior\":\"deny\",\"message\":\"no\"}}}}}}'",
+        sink.display()
+    );
+    let engine = engine(vec![claude(HookEvent::PermissionRequest, None, &cmd)]);
+    engine.set_policy(named_default(&dir));
+    let before = engine
+        .before_tool(
+            "Bash",
+            ToolAccess::Execute,
+            &json!({"command": "git push origin main"}),
+            "toolu_9",
+            Mode::default(),
+            None,
+        )
+        .await;
+    assert_eq!(blocked(&before), "no");
+    let payload: Value = serde_json::from_str(&std::fs::read_to_string(&sink).unwrap()).unwrap();
+    assert_eq!(payload["hook_event_name"], "PermissionRequest");
+    assert_eq!(payload["tool_name"], "Bash");
+    assert_eq!(payload["tool_input"]["command"], "git push origin main");
+    assert_eq!(
+        payload["permission_suggestions"][0]["rules"][0],
+        "Bash(git push:*)"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn with_nobody_to_ask_a_named_mode_refuses_in_claudes_words() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(std::path::Path::new("/p")));
+    let before = pre(
+        &engine,
+        "Write",
+        json!({"file_path": "a.rs", "content": ""}),
+    )
+    .await;
+    assert_eq!(
+        blocked(&before),
+        "Claude requested permissions to write to /p/a.rs, but you haven't granted it yet."
+    );
+}
+
+#[tokio::test]
+async fn an_ask_rule_with_nobody_to_ask_keeps_its_old_refusal() {
+    let engine = engine(vec![]);
+    engine.set_policy(policy_with(PermissionMode::Default, &[], &["Bash"], &[]));
+    let before = pre(&engine, "execute", json!({"command": "ls"})).await;
+    assert!(blocked(&before).contains("No one is available to approve it"));
+}
+
+#[tokio::test]
+async fn a_surface_that_hangs_up_is_unavailable_not_a_hang() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    drop(rx);
+    let before = engine
+        .before_tool(
+            "execute",
+            ToolAccess::Execute,
+            &json!({"command": "touch x"}),
+            "t",
+            Mode::default(),
+            Some(&tx),
+        )
+        .await;
+    assert!(matches!(before, Before::Blocked(_)));
+}
+
+#[tokio::test]
+async fn cancelling_the_turn_lets_go_of_an_open_prompt() {
+    let engine = engine(vec![]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let cancel = crate::agent::CancelHandle::default();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        // claim nothing, answer nothing; just cancel once the request lands
+        if rx.recv().await.is_some() {
+            trigger.cancel();
+        }
+        rx.recv().await
+    });
+    let before = engine
+        .before_tool_cancellable(
+            "execute",
+            ToolAccess::Execute,
+            &json!({"command": "touch x"}),
+            "t",
+            Mode::default(),
+            Some(&tx),
+            Some(&cancel),
+        )
+        .await;
+    assert!(
+        blocked(&before).starts_with("The user doesn't want to proceed"),
+        "{before:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pre_tool_use_allow_answers_a_prompt_the_mode_raised_but_not_an_ask_rule() {
+    let allow = say(r#"{"hookSpecificOutput":{"permissionDecision":"allow"}}"#);
+    let engine = engine(vec![claude(HookEvent::PreToolUse, None, &allow)]);
+    engine.set_policy(named_default(&std::env::temp_dir()));
+    let (before, request) = asked(
+        &engine,
+        "execute",
+        json!({"command": "touch x"}),
+        PermissionAnswer::Deny { feedback: None },
+    )
+    .await;
+    assert!(matches!(before, Before::Proceed { .. }), "{before:?}");
+    assert!(request.is_none(), "the hook answered; nobody was asked");
+
+    let ruled = Policy {
+        ask: vec![Rule::parse("Bash(touch:*)", std::path::Path::new("/p")).unwrap()],
+        ..named_default(&std::env::temp_dir())
+    };
+    engine.set_policy(ruled);
+    let before = pre(&engine, "execute", json!({"command": "touch x"})).await;
+    assert!(
+        blocked(&before).contains("needs approval"),
+        "an ask rule still asks: {before:?}"
+    );
 }

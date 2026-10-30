@@ -90,11 +90,12 @@ pub(super) async fn build_agent(
             None => open_latest_or_fresh()?,
         },
     };
-    let hooks = Arc::new(HookEngine::new(
-        crate::hooks::load(project_root),
-        project_root.to_path_buf(),
+    let hooks = Arc::new(crate::hooks::engine_for(
+        config,
+        project_root,
         session.id.clone(),
     ));
+    crate::hooks::set_ambient(&hooks);
     let (registry, subagent_model) = build_registry(config, manager, client, &hooks).await?;
     let model = config.active().model;
     let native_tools = crate::llm::provider::probe_native_tools(client.as_ref(), &model).await;

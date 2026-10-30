@@ -116,6 +116,10 @@ impl<W: Write + Send> EventSink for JsonSink<W> {
                 // No human in the loop: approve so the turn executes.
                 gate.answer(PlanVerdict::approve());
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // No interactive user: decline so the model uses its judgment.
                 gate.decline();
@@ -251,6 +255,10 @@ impl<W: Write + Send> StreamJsonSink<W> {
                 // No human in the loop: report the plan and approve it.
                 gate.answer(PlanVerdict::approve());
                 json!({"type": "plan", "plan": plan, "approved": true})
+            }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
             }
             AgentEvent::Interview { questions, gate } => {
                 // No interactive user: report the questions, then decline so

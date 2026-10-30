@@ -21,7 +21,7 @@ use super::{
     HookDef, HookOutcome, PreToolUse, PromptSubmit, cap_tool_output, exit_warning,
     parse_updated_args,
 };
-use crate::agent::AgentEvent;
+use crate::agent::{AgentEvent, PermissionAnswer, PermissionGate};
 use crate::config::Mode;
 use crate::permissions::{Decision, Policy, Rule};
 use crate::tools::ToolAccess;
@@ -420,6 +420,23 @@ impl HookEngine {
         mode: Mode,
         events: Option<&mpsc::Sender<AgentEvent>>,
     ) -> Before {
+        self.before_tool_cancellable(tool, access, args, tool_use_id, mode, events, None)
+            .await
+    }
+
+    /// [`Self::before_tool`], where a prompt waiting for an answer gives up
+    /// when `cancel` fires.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn before_tool_cancellable(
+        &self,
+        tool: &str,
+        access: ToolAccess,
+        args: &Value,
+        tool_use_id: &str,
+        mode: Mode,
+        events: Option<&mpsc::Sender<AgentEvent>>,
+        cancel: Option<&crate::agent::CancelHandle>,
+    ) -> Before {
         let fire = Fire::new(HookEvent::PreToolUse, mode, events)
             .tool(tool, args)
             .extra(json!({ "tool_use_id": tool_use_id }));
@@ -442,6 +459,14 @@ impl HookEngine {
                     .unwrap_or_else(|| "a hook asked for approval".to_string()),
             );
         }
+        // A hook's `allow` answers a prompt the mode raised, as it does in
+        // Claude Code, but never one an `ask` rule raised.
+        if matches!(decision, Decision::Ask(_))
+            && out.verdict == Some(Verdict::Allow)
+            && !policy.ask_rule_matches(tool, &args)
+        {
+            decision = Decision::Allow;
+        }
         match decision {
             Decision::Allow => Before::Proceed { args, context },
             Decision::Deny(message) => {
@@ -451,9 +476,25 @@ impl HookEngine {
             Decision::Ask(message) => {
                 self.notification("permission_prompt", None, &message, mode, events)
                     .await;
+                let offer = crate::permissions::offer(tool, &args, &policy.cwd);
                 let fire = Fire::new(HookEvent::PermissionRequest, mode, events)
                     .tool(tool, &args)
-                    .extra(json!({ "tool_use_id": tool_use_id, "reason": message }));
+                    .extra(json!({
+                        "tool_use_id": tool_use_id,
+                        "reason": message,
+                        "permission_suggestions": offer.as_ref().map_or_else(Vec::new, |offer| {
+                            offer
+                                .rules
+                                .iter()
+                                .map(|rule| json!({
+                                    "type": "addRules",
+                                    "rules": [rule],
+                                    "behavior": "allow",
+                                    "destination": "localSettings",
+                                }))
+                                .collect()
+                        }),
+                    }));
                 let answer = self.run_event(fire).await.permission_request;
                 match answer {
                     Some(PermissionRequestDecision {
@@ -472,15 +513,116 @@ impl HookEngine {
                         Before::Blocked(text)
                     }
                     None => {
-                        let text = format!(
-                            "{message} No one is available to approve it. Add an allow rule, \
-                             or answer with a PermissionRequest hook."
-                        );
-                        self.denied(tool, &args, &text, mode, events).await;
-                        Before::Blocked(text)
+                        let reply = self
+                            .ask_surface(tool, &args, &message, offer.clone(), events, cancel)
+                            .await;
+                        match reply {
+                            PermissionAnswer::Allow { remember } => {
+                                if remember && let Some(offer) = offer {
+                                    self.remember(tool, &offer, events).await;
+                                }
+                                Before::Proceed { args, context }
+                            }
+                            PermissionAnswer::Deny { feedback } => {
+                                let text = crate::permissions::rejection(feedback.as_deref());
+                                self.denied(tool, &args, &text, mode, events).await;
+                                Before::Blocked(text)
+                            }
+                            PermissionAnswer::Unavailable => {
+                                let text = if policy.claude_defaults {
+                                    policy.refusal(tool, &args)
+                                } else {
+                                    format!(
+                                        "{message} No one is available to approve it. Add an \
+                                         allow rule, or answer with a PermissionRequest hook."
+                                    )
+                                };
+                                self.denied(tool, &args, &text, mode, events).await;
+                                Before::Blocked(text)
+                            }
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// Put a prompt to the surface and wait for the answer. A surface that is
+    /// gone, a turn that is cancelled, or no surface at all is
+    /// [`PermissionAnswer::Unavailable`].
+    async fn ask_surface(
+        &self,
+        tool: &str,
+        args: &Value,
+        reason: &str,
+        offer: Option<crate::permissions::Offer>,
+        events: Option<&mpsc::Sender<AgentEvent>>,
+        cancel: Option<&crate::agent::CancelHandle>,
+    ) -> PermissionAnswer {
+        let Some(events) = events else {
+            return PermissionAnswer::Unavailable;
+        };
+        let (gate, answer) = PermissionGate::open();
+        let request = AgentEvent::PermissionRequest {
+            tool: tool.to_string(),
+            args: args.clone(),
+            reason: reason.to_string(),
+            offer,
+            gate,
+        };
+        if events.send(request).await.is_err() {
+            gate.cancel();
+            return PermissionAnswer::Unavailable;
+        }
+        tokio::select! {
+            biased;
+            reply = answer => reply.unwrap_or(PermissionAnswer::Unavailable),
+            () = events.closed() => {
+                gate.cancel();
+                PermissionAnswer::Unavailable
+            }
+            () = crate::agent::cancelled(cancel) => {
+                gate.cancel();
+                PermissionAnswer::Deny { feedback: None }
+            }
+        }
+    }
+
+    /// Apply a "don't ask again" answer: edits switch the session to
+    /// `acceptEdits`, anything else becomes an allow rule, written to the
+    /// project's local settings when the offer says so.
+    async fn remember(
+        &self,
+        tool: &str,
+        offer: &crate::permissions::Offer,
+        events: Option<&mpsc::Sender<AgentEvent>>,
+    ) {
+        use crate::permissions::{PermissionMode, Scope};
+        let cwd = {
+            let mut policy = self.policy.write().unwrap();
+            if offer.rules.is_empty() {
+                if policy.mode == PermissionMode::Default {
+                    policy.mode = PermissionMode::AcceptEdits;
+                }
+            } else {
+                for rule in &offer.rules {
+                    policy.allow_rule(rule, "permission prompt");
+                }
+            }
+            policy.cwd.clone()
+        };
+        if offer.scope != Scope::Project || offer.rules.is_empty() {
+            return;
+        }
+        let note = match crate::permissions::persist_allow(&cwd, &offer.rules) {
+            Ok(path) => format!("{} saved to {}", offer.rules.join(", "), path.display()),
+            Err(err) => format!(
+                "allowed {} for this session; could not save it: {err}",
+                toolmap::claude_name(tool)
+            ),
+        };
+        if let Some(events) = events {
+            let _ = events.send(AgentEvent::Notice(note)).await;
         }
     }
 

@@ -59,7 +59,10 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::agent::session::{self, Session};
-use crate::agent::{self, Agent, AgentEvent, CancelHandle, DoneReason, PlanGate, PlanVerdict};
+use crate::agent::{
+    self, Agent, AgentEvent, CancelHandle, DoneReason, PermissionAnswer, PermissionGate, PlanGate,
+    PlanVerdict,
+};
 use crate::config::Config;
 use crate::entrypoint::{self, Entrypoint};
 use crate::kernel::{Capability, Ctx, Plugin, PluginManifest, Service};
@@ -858,6 +861,7 @@ async fn run_prompt(
         next_call_id: Arc::clone(&state.next_call_id),
         open_calls: HashMap::new(),
         ask: true,
+        asked: HashMap::new(),
     };
 
     // Pump session updates out while the turn runs, then respond. Closing the
@@ -888,6 +892,21 @@ async fn run_prompt(
                     });
                     if let Err(err) = spawned {
                         tracing::warn!("acp: plan review request failed: {err}");
+                    }
+                }
+                Outgoing::AskTool(request, gate) => {
+                    let sent = connection.send_request(request);
+                    let cancel = cancel.clone();
+                    let spawned = connection.spawn(async move {
+                        let answer = tokio::select! {
+                            answer = sent.block_task() => tool_answer(answer),
+                            () = cancel.cancelled() => PermissionAnswer::Deny { feedback: None },
+                        };
+                        let _ = gate.answer(answer);
+                        Ok(())
+                    });
+                    if let Err(err) = spawned {
+                        tracing::warn!("acp: permission request failed: {err}");
                     }
                 }
             }
@@ -1077,8 +1096,14 @@ enum Outgoing {
     Update(SessionNotification),
     /// A plan waiting for review, and the gate its verdict goes back through.
     Ask(RequestPermissionRequest, PlanGate),
+    /// A tool call waiting for approval, and the gate its answer goes back
+    /// through.
+    AskTool(RequestPermissionRequest, PermissionGate),
 }
 
+const ALLOW_ONCE: &str = "allow";
+const ALLOW_ALWAYS: &str = "allow-always";
+const REJECT_ONCE: &str = "reject";
 const APPROVE_PLAN: &str = "approve";
 const KEEP_PLANNING: &str = "keep-planning";
 
@@ -1103,6 +1128,24 @@ fn plan_verdict(
     }
 }
 
+/// The client's answer to a tool approval. A client that errors cannot be
+/// asked, so the call is refused the way a headless run refuses it.
+fn tool_answer(
+    answer: Result<agent_client_protocol::schema::v1::RequestPermissionResponse, acp::Error>,
+) -> PermissionAnswer {
+    match answer {
+        Ok(response) => match response.outcome {
+            RequestPermissionOutcome::Selected(picked) => match picked.option_id.0.as_ref() {
+                ALLOW_ONCE => PermissionAnswer::Allow { remember: false },
+                ALLOW_ALWAYS => PermissionAnswer::Allow { remember: true },
+                _ => PermissionAnswer::Deny { feedback: None },
+            },
+            _ => PermissionAnswer::Deny { feedback: None },
+        },
+        Err(_) => PermissionAnswer::Unavailable,
+    }
+}
+
 /// Translates one turn's [`AgentEvent`] stream into ACP `session/update`
 /// notifications, synthesizing stable tool-call ids.
 struct Translator {
@@ -1114,6 +1157,9 @@ struct Translator {
     open_calls: HashMap<String, VecDeque<(String, Value)>>,
     /// A finished plan is put to the client; off, it is approved here.
     ask: bool,
+    /// Ids handed out to approval requests, per tool, for the `ToolStarted`
+    /// that follows to reuse: the client sees one call, not two.
+    asked: HashMap<String, VecDeque<String>>,
 }
 
 impl Translator {
@@ -1160,6 +1206,52 @@ impl Translator {
         }
     }
 
+    /// Put a tool approval to the client as a permission request on the call
+    /// it is about.
+    fn ask_about_tool(
+        &mut self,
+        tool: String,
+        args: Value,
+        offer: Option<crate::permissions::Offer>,
+        gate: PermissionGate,
+    ) {
+        let id = self.alloc_call_id();
+        self.asked
+            .entry(tool.clone())
+            .or_default()
+            .push_back(id.clone());
+        let call = ToolCallUpdate::new(
+            ToolCallId::new(id),
+            ToolCallUpdateFields::new()
+                .title(tool_title(&tool, &args))
+                .kind(tool_kind(&tool))
+                .raw_input(args),
+        );
+        let mut options = vec![PermissionOption::new(
+            ALLOW_ONCE,
+            "Yes",
+            PermissionOptionKind::AllowOnce,
+        )];
+        if let Some(offer) = offer {
+            options.push(PermissionOption::new(
+                ALLOW_ALWAYS,
+                offer.label,
+                PermissionOptionKind::AllowAlways,
+            ));
+        }
+        options.push(PermissionOption::new(
+            REJECT_ONCE,
+            "No",
+            PermissionOptionKind::RejectOnce,
+        ));
+        let request = RequestPermissionRequest::new(self.session_id.clone(), call, options);
+        if let Err(mpsc::error::SendError(Outgoing::AskTool(_, gate))) =
+            self.updates.send(Outgoing::AskTool(request, gate))
+        {
+            let _ = gate.answer(PermissionAnswer::Unavailable);
+        }
+    }
+
     fn alloc_call_id(&self) -> String {
         let id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
         format!("call-{id}")
@@ -1178,7 +1270,10 @@ impl Translator {
                 )));
             }
             AgentEvent::ToolStarted { name, args } => {
-                let id = self.alloc_call_id();
+                let id = match self.asked.get_mut(&name).and_then(VecDeque::pop_front) {
+                    Some(id) => id,
+                    None => self.alloc_call_id(),
+                };
                 self.open_calls
                     .entry(name.clone())
                     .or_default()
@@ -1249,6 +1344,13 @@ impl Translator {
             AgentEvent::Interview { gate, .. } => {
                 gate.decline();
             }
+            AgentEvent::PermissionRequest {
+                tool,
+                args,
+                offer,
+                gate,
+                ..
+            } => self.ask_about_tool(tool, args, offer, gate),
             // v1 does not surface usage, context, images, background tasks, or
             // subagent runs to the editor; the core text/thinking/tool stream is
             // what an ACP client renders. Spelled out rather than caught by a
@@ -1517,6 +1619,7 @@ mod tests {
             next_call_id: Arc::new(AtomicU64::new(1)),
             open_calls: HashMap::new(),
             ask: true,
+            asked: HashMap::new(),
         };
         translator.handle(AgentEvent::StreamRetrying);
         let Ok(Outgoing::Update(notification)) = rx.try_recv() else {
@@ -1543,6 +1646,7 @@ mod tests {
             next_call_id: Arc::new(AtomicU64::new(1)),
             open_calls: HashMap::new(),
             ask: true,
+            asked: HashMap::new(),
         };
         translator.handle(AgentEvent::ToolStarted {
             name: crate::tools::plan::EXIT_PLAN_TOOL_NAME.to_string(),
@@ -1585,6 +1689,7 @@ mod tests {
             next_call_id: Arc::new(AtomicU64::new(1)),
             open_calls: HashMap::new(),
             ask: true,
+            asked: HashMap::new(),
         };
         let mut texts = |output: crate::tools::ToolOutput| {
             translator.handle(AgentEvent::ToolStarted {

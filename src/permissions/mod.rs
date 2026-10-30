@@ -5,11 +5,14 @@
 //! first list with a match decides, whatever the specificity: an allow rule
 //! cannot carve an exception out of a deny.
 //!
-//! Wizard has never prompted for tool calls, so its `default` mode runs
-//! anything no rule objects to. What Claude Code would ask about is refused
-//! unless a `PermissionRequest` hook approves it, because nobody is at a
-//! prompt. See `docs/permissions.md`.
+//! Wizard's own `default` runs anything no rule objects to. Naming a mode
+//! (`--permission-mode default`, `acceptEdits`, `plan`) opts in to Claude
+//! Code's: writes, commands and other side effects are asked about, by a
+//! `PermissionRequest` hook first and then by whoever is at the surface. See
+//! `docs/permissions.md`.
 
+mod persist;
+mod prompt;
 mod rule;
 mod shell;
 
@@ -19,6 +22,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use persist::{persist_allow, settings_local_path};
+pub use prompt::{Offer, Scope, offer, rejection};
 pub use rule::{Rule, absolutize};
 
 use crate::hooks::toolmap::{self, ToolClass};
@@ -114,6 +119,10 @@ pub struct Policy {
     pub deny: Vec<Rule>,
     pub ask: Vec<Rule>,
     pub cwd: PathBuf,
+    /// A mode was named, so `default` means Claude Code's `default`: ask
+    /// before writes, commands and the like. Off, `default` is Wizard's own
+    /// and runs whatever no rule objects to.
+    pub claude_defaults: bool,
 }
 
 impl Policy {
@@ -131,6 +140,7 @@ impl Policy {
         self.allow.is_empty()
             && self.deny.is_empty()
             && self.ask.is_empty()
+            && !self.claude_defaults
             && matches!(self.mode, PermissionMode::Default | PermissionMode::Auto)
     }
 
@@ -152,6 +162,13 @@ impl Policy {
         }
         let read_only = access == ToolAccess::ReadOnly;
         match self.mode {
+            PermissionMode::Default if self.claude_defaults => {
+                if read_only || !prompt::asks_in_claude(tool) || self.allowed(tool, args) {
+                    Decision::Allow
+                } else {
+                    Decision::Ask(format!("{name}{what} needs approval."))
+                }
+            }
             PermissionMode::Default | PermissionMode::Auto | PermissionMode::BypassPermissions => {
                 Decision::Allow
             }
@@ -174,13 +191,54 @@ impl Policy {
                 }
             }
             PermissionMode::AcceptEdits => {
-                if read_only || access == ToolAccess::Edit || self.allowed(tool, args) {
+                if read_only
+                    || !prompt::asks_in_claude(tool)
+                    || self.edits_inside(tool, access, args)
+                    || self.runs_file_commands(tool, args)
+                    || self.allowed(tool, args)
+                {
                     Decision::Allow
                 } else {
                     Decision::Ask(format!("{name}{what} needs approval in acceptEdits mode."))
                 }
             }
         }
+    }
+
+    /// An edit whose every path is inside the working directory, which
+    /// `acceptEdits` runs. A path-less edit (a tool that does not say what it
+    /// touches) counts: the mode has always let those through.
+    fn edits_inside(&self, tool: &str, access: ToolAccess, args: &Value) -> bool {
+        if access != ToolAccess::Edit && toolmap::class(tool) != ToolClass::Edit {
+            return false;
+        }
+        toolmap::paths(tool, args)
+            .iter()
+            .all(|path| shell::inside(&self.cwd, path))
+    }
+
+    /// A shell command made only of read-only pieces and file commands
+    /// (`touch`, `mkdir`, `mv`, `cp`, `rm`, `rmdir`, `sed`) on paths inside the
+    /// working directory, which `acceptEdits` runs. A `cd` anywhere in it
+    /// makes the paths ambiguous, so it asks.
+    fn runs_file_commands(&self, tool: &str, args: &Value) -> bool {
+        if toolmap::class(tool) != ToolClass::Shell {
+            return false;
+        }
+        let Some(command) = args.get("command").and_then(Value::as_str) else {
+            return false;
+        };
+        let parts = shell::split(command);
+        if parts.unparseable
+            || parts.commands.is_empty()
+            || shell::changes_directory(&parts.commands)
+        {
+            return false;
+        }
+        parts
+            .commands
+            .iter()
+            .all(|sub| shell::is_read_only(sub) || shell::is_file_command(sub, &self.cwd))
     }
 
     /// A deny rule applies to the call, directly or through `Read`: a `Read`
@@ -204,6 +262,30 @@ impl Policy {
                     true,
                 )
             })
+    }
+
+    /// An `ask` rule names this call. A prompt the mode raised (Claude's
+    /// `default` asking about a write) can be answered by a hook's `allow`;
+    /// one an `ask` rule raised cannot.
+    pub fn ask_rule_matches(&self, tool: &str, args: &Value) -> bool {
+        self.ask
+            .iter()
+            .any(|rule| rule.matches_call(tool, args, &self.cwd, true))
+    }
+
+    /// An allow rule covers this one shell subcommand.
+    fn covers_command(&self, sub: &str) -> bool {
+        self.allow.iter().any(|rule| {
+            rule.names("execute") && (rule.is_whole_tool() || rule.matches_command(sub, false))
+        })
+    }
+
+    /// Add an allow rule to the ones in force, without writing it anywhere.
+    pub fn allow_rule(&mut self, raw: &str, source: &str) {
+        match Rule::parse(raw, &self.cwd) {
+            Ok(rule) => self.allow.push(rule.from_source(source)),
+            Err(why) => tracing::warn!("{source}: {why}"),
+        }
     }
 
     /// Some allow rule covers the whole call. For a compound shell command
@@ -242,6 +324,9 @@ impl Policy {
     /// Rules grouped for `/permissions`.
     pub fn summary(&self) -> String {
         let mut out = format!("mode: {}\n", self.mode);
+        if self.claude_defaults && self.mode == PermissionMode::Default {
+            out.push_str("asks before file edits, commands, the web and MCP tools\n");
+        }
         for (label, rules) in [
             ("deny", &self.deny),
             ("ask", &self.ask),
@@ -260,6 +345,15 @@ impl Policy {
         }
         out
     }
+}
+
+/// Every piece of the command line is read-only (`ls`, `grep`, `git log`),
+/// with nothing that could not be split. Plan mode lets these through.
+pub fn is_read_only_command(command: &str) -> bool {
+    let parts = shell::split(command);
+    !parts.unparseable
+        && !parts.commands.is_empty()
+        && parts.commands.iter().all(|sub| shell::is_read_only(sub))
 }
 
 /// ` with command <cmd>` or ` on <path>`, for messages.
@@ -309,12 +403,15 @@ pub fn build(
         |p| &mut p.deny,
         "--disallowedTools",
     );
-    let mode = config
+    let named = config
         .run_permissions
         .mode
         .or(config.permissions.mode)
-        .or(settings.default_mode)
-        .unwrap_or_default();
+        .or(settings.default_mode);
+    let mode = named.unwrap_or_default();
+    // Naming a mode is what turns Claude's prompts on. `auto` stays Wizard's
+    // own default: it is Claude's classifier mode and there is no classifier.
+    policy.claude_defaults = matches!(named, Some(PermissionMode::Default | PermissionMode::Plan));
     // Plan mode is the session's own loop (`config.plan_first`, `exit_plan`);
     // a rule-level plan mode would keep refusing writes after the plan is
     // approved.

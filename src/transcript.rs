@@ -617,7 +617,9 @@ impl TranscriptModel {
             // A gate pauses the turn, so whatever was streaming is final until
             // it is answered: commit it, and leave the answering to the
             // surface.
-            AgentEvent::PlanReady { .. } | AgentEvent::Interview { .. } => self.commit_inner(),
+            AgentEvent::PlanReady { .. }
+            | AgentEvent::Interview { .. }
+            | AgentEvent::PermissionRequest { .. } => self.commit_inner(),
             // A running command's output, folded into the `execute` row that is
             // still open. This is the only thing in the model that changes an
             // item *before* it is answered, and the reason is the whole point of

@@ -86,9 +86,10 @@ impl Tool for SendMessageTool {
                     inbox.push("subagent", message);
                     ToolOutput::ok("Message sent to main.")
                 }
-                None => ToolOutput::ok(format!(
-                    "Not sent: you are the main agent, there is no one above you to message.\n{NOT_REACHABLE_HINT}"
-                )),
+                // oracle: the real tool's answer, byte for byte
+                None => ToolOutput::ok(
+                    "{\"success\":false,\"message\":\"You are the main conversation \u{2014} \\\"main\\\" addresses you. Send to a named agent instead.\"}",
+                ),
             });
         }
         let Some(id) = resolve(to, ctx) else {
@@ -258,7 +259,10 @@ mod tests {
             json!({ "to": "main", "message": "x" }),
         )
         .await;
-        assert!(out.content.starts_with("Not sent: you are the main agent"));
+        assert_eq!(
+            out.content,
+            "{\"success\":false,\"message\":\"You are the main conversation \u{2014} \\\"main\\\" addresses you. Send to a named agent instead.\"}"
+        );
     }
 
     #[tokio::test]

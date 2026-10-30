@@ -104,6 +104,33 @@ enum Pipeline {
     SubRun,
 }
 
+/// A shell call whose every piece only reads, which plan mode lets run
+/// (Claude Code's plan mode runs `ls` and `pwd` too).
+fn runs_read_only_command(name: &str, args: &Value) -> bool {
+    crate::hooks::toolmap::class(name) == crate::hooks::toolmap::ToolClass::Shell
+        && args
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(crate::permissions::is_read_only_command)
+}
+
+/// What the model reads when plan mode refuses a call. A file write says what
+/// Claude Code's plan mode says; everything else keeps Wizard's text.
+fn plan_block_message(name: &str, args: &Value, cwd: &std::path::Path) -> String {
+    use crate::hooks::toolmap::{self, ToolClass};
+    if toolmap::class(name) == ToolClass::Edit
+        && let Some(path) = toolmap::paths(name, args).first()
+    {
+        return format!(
+            "Cannot write to {} while in plan mode: only read-only tools are allowed; finish \
+             your plan and call exit_plan",
+            crate::permissions::absolutize(path, cwd).display()
+        );
+    }
+    "blocked by plan mode: only read-only tools are allowed; finish your plan and call exit_plan"
+        .to_string()
+}
+
 /// Runs the tool-call pipeline and owns its per-session state: the tool
 /// registry and the failure counters feeding the circuit breakers.
 pub struct Dispatcher {
@@ -321,11 +348,9 @@ impl Dispatcher {
                 .registry
                 .get(&name)
                 .is_some_and(|tool| tool.access() != ToolAccess::ReadOnly)
+                && !runs_read_only_command(&name, &args)
             {
-                let output = ToolOutput::error(
-                    "blocked by plan mode: only read-only tools are allowed; finish your plan \
-                     and call exit_plan",
-                );
+                let output = ToolOutput::error(plan_block_message(&name, &args, &ctx.cwd));
                 if !sink.tool_started(&name, &args).await
                     || !sink.tool_finished(&name, &output).await
                 {
@@ -353,13 +378,14 @@ impl Dispatcher {
             .map_or(ToolAccess::Execute, |tool| tool.access());
         let pre_context = match self
             .hooks
-            .before_tool(
+            .before_tool_cancellable(
                 &name,
                 access,
                 &args,
                 &call.id,
                 self.mode,
                 self.surface(sink),
+                ctx.cancel.as_ref(),
             )
             .await
         {
@@ -811,6 +837,67 @@ mod tests {
             started_and_finished(&mut rx),
             ["start write_file", "finish write_file"]
         );
+    }
+
+    fn call_with(name: &str, args: Value) -> ToolCall {
+        let mut call = call(name);
+        call.function.arguments = args;
+        call
+    }
+
+    /// oracle: under `--permission-mode plan` the real tool answers a write with
+    /// "Cannot write to <path> while in plan mode." and still runs `ls`.
+    #[tokio::test]
+    async fn plan_mode_words_a_write_refusal_and_runs_read_only_commands() {
+        use crate::agent::turn::Sink;
+
+        let mut registry = ToolRegistry::new();
+        for (name, access) in [
+            ("write_file", ToolAccess::Edit),
+            ("execute", ToolAccess::Execute),
+        ] {
+            registry.register(Arc::new(FakeTool {
+                name,
+                access,
+                fails: false,
+            }));
+        }
+        let hooks = Arc::new(HookEngine::new(
+            Vec::new(),
+            dir_for_hooks(),
+            "test".to_string(),
+        ));
+        let mut dispatcher = Dispatcher::new(
+            registry,
+            Mode::Sovereign,
+            hooks,
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (tx, _rx) = mpsc::channel(64);
+        let ctx = ToolContext::new(std::path::PathBuf::from("/proj"));
+        let mut text = Vec::new();
+        for call in [
+            call_with("write_file", json!({"path": "main.rs", "content": "x"})),
+            call_with("execute", json!({"command": "ls -la"})),
+            call_with("execute", json!({"command": "touch zz"})),
+        ] {
+            let out = dispatcher
+                .dispatch(&call, &ctx, &Sink::Turn(tx.clone()))
+                .await
+                .output
+                .unwrap();
+            text.push((out.is_error, out.content));
+        }
+        assert!(text[0].0);
+        assert!(
+            text[0]
+                .1
+                .starts_with("Cannot write to /proj/main.rs while in plan mode"),
+            "{}",
+            text[0].1
+        );
+        assert!(!text[1].0, "ls runs in plan mode: {}", text[1].1);
+        assert!(text[2].1.contains("blocked by plan mode"));
     }
 
     /// The same for a call a pre_tool_use hook vetoes.

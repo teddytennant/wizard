@@ -1033,6 +1033,10 @@ impl TurnText {
                 // Nobody watches a fleet planning turn; approve so it proceeds.
                 gate.answer(PlanVerdict::approve());
             }
+            AgentEvent::PermissionRequest { gate, .. } => {
+                // Nobody here to ask; the call is refused.
+                gate.answer(crate::agent::PermissionAnswer::Unavailable);
+            }
             AgentEvent::Interview { gate, .. } => {
                 // No interactive user either: decline rather than park the turn
                 // inside the tool until the process is killed.

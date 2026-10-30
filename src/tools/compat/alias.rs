@@ -114,7 +114,7 @@ pub fn aliases(registry: &ToolRegistry) -> Vec<Arc<dyn Tool>> {
             "required": ["command"]
         }),
         map_bash,
-        None,
+        Some(finish_bash),
         None,
     );
     add(
@@ -254,7 +254,7 @@ pub fn aliases(registry: &ToolRegistry) -> Vec<Arc<dyn Tool>> {
             "required": ["questions"]
         }),
         map_ask_user,
-        None,
+        Some(finish_ask_user),
         None,
     );
     add(
@@ -283,11 +283,73 @@ fn map_bash(args: &Value) -> Result<Value, String> {
             return Err("timeout must be positive".to_string());
         }
         mapped["timeout_secs"] = json!(((ms / 1000.0).ceil() as u64).clamp(1, 600));
+        // Claude's `timeout` kills the command; Wizard's own budget hands it
+        // to a background task. Naming one picks Claude's.
+        mapped["kill_on_timeout"] = json!(true);
     }
     if let Some(background) = args.get("run_in_background").and_then(Value::as_bool) {
         mapped["run_in_background"] = json!(background);
     }
     Ok(mapped)
+}
+
+/// Claude's layout for a finished command: the two streams merged under no
+/// label, `Exit code N` on its own first line when the command failed, and a
+/// fixed line for a command that printed nothing. Wizard's `execute` reports
+/// the same facts in the other order (`exit code: N` last, a `stderr:` section).
+fn finish_bash(mut out: ToolOutput, _args: &Value) -> ToolOutput {
+    const EMPTY: &str = "(command succeeded with no output)";
+    if out.content == EMPTY {
+        out.content = "(Bash completed with no output)".to_string();
+        return out;
+    }
+    let (body, last) = match out.content.rsplit_once('\n') {
+        Some((head, last)) => (head, last),
+        None => ("", out.content.as_str()),
+    };
+    let ending = if !out.is_error {
+        None
+    } else if let Some(code) = last.strip_prefix("exit code: ") {
+        Some((code.trim().to_string(), None))
+    } else if let Some(rest) = last.strip_prefix("command timed out after ") {
+        rest.split_once("s and was killed").map(|(secs, _)| {
+            (
+                "143".to_string(),
+                Some(format!("Command timed out after {secs}s")),
+            )
+        })
+    } else {
+        None
+    };
+    let (code, trailer) = match ending {
+        Some(parts) => parts,
+        None if out.is_error || !out.content.contains("stderr:") => return out,
+        None => (String::new(), None),
+    };
+    let merged = if code.is_empty() {
+        out.content.as_str()
+    } else {
+        body
+    };
+    let merged = match merged.strip_prefix("stderr:\n") {
+        Some(rest) => rest.to_string(),
+        None => merged.replacen("\nstderr:\n", "\n", 1),
+    };
+    let mut text = String::new();
+    if !code.is_empty() {
+        text.push_str(&format!("Exit code {code}"));
+    }
+    for part in [Some(merged), trailer].into_iter().flatten() {
+        if part.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&part);
+    }
+    out.content = text;
+    out
 }
 
 fn map_write(args: &Value) -> Result<Value, String> {
@@ -383,6 +445,39 @@ fn map_todo_write(args: &Value) -> Result<Value, String> {
     Ok(json!({ "action": "write", "items": items }))
 }
 
+/// Claude's sentence for answered questions:
+/// `Your questions have been answered: "Q"="A", "Q2"="A2". You can now continue
+/// with these answers in mind.` Wizard's `interview` reports the same answers as
+/// `Q:`/`A:` pairs and tells the model to go on to `exit_plan`, which is a
+/// plan-mode instruction an `AskUserQuestion` caller never asked for.
+fn finish_ask_user(mut out: ToolOutput, _args: &Value) -> ToolOutput {
+    let Some(body) = out
+        .content
+        .strip_prefix("The user answered your questions:\n")
+    else {
+        return out;
+    };
+    let mut pairs = Vec::new();
+    let mut question = None;
+    for line in body.lines() {
+        if let Some(q) = line.strip_prefix("Q: ") {
+            question = Some(q.to_string());
+        } else if let (Some(a), Some(q)) = (line.strip_prefix("A: "), question.take()) {
+            let answer = if a == "(skipped)" {
+                "(no option selected)"
+            } else {
+                a
+            };
+            pairs.push(format!("\"{q}\"=\"{answer}\""));
+        }
+    }
+    out.content = format!(
+        "Your questions have been answered: {}. You can now continue with these answers in mind.",
+        pairs.join(", ")
+    );
+    out
+}
+
 fn map_ask_user(args: &Value) -> Result<Value, String> {
     let questions = args
         .get("questions")
@@ -430,6 +525,77 @@ mod tests {
         let capped = map_bash(&json!({ "command": "ls", "timeout": 9_000_000 })).unwrap();
         assert_eq!(capped["timeout_secs"], 600);
         assert!(map_bash(&json!({})).is_err());
+    }
+
+    fn bash(content: &str, is_error: bool) -> ToolOutput {
+        let out = if is_error {
+            ToolOutput::error(content)
+        } else {
+            ToolOutput::ok(content)
+        };
+        finish_bash(out, &json!({ "command": "x" }))
+    }
+
+    #[test]
+    fn bash_names_a_timeout_it_will_enforce() {
+        let mapped = map_bash(&json!({ "command": "ls", "timeout": 1500 })).unwrap();
+        assert_eq!(mapped["kill_on_timeout"], true);
+        let plain = map_bash(&json!({ "command": "ls" })).unwrap();
+        assert!(plain.get("kill_on_timeout").is_none());
+    }
+
+    #[test]
+    fn bash_failures_lead_with_the_exit_code() {
+        // oracle: `echo out; echo err >&2; exit 3` through claude mcp serve and
+        // through a model turn is "Exit code 3\nout\nerr"
+        let out = bash("out\nstderr:\nerr\nexit code: 3", true);
+        assert_eq!(out.content, "Exit code 3\nout\nerr");
+        assert!(out.is_error);
+        assert_eq!(bash("exit code: 1", true).content, "Exit code 1");
+        assert_eq!(
+            bash("stderr:\nbash: zz: command not found\nexit code: 127", true).content,
+            "Exit code 127\nbash: zz: command not found"
+        );
+    }
+
+    #[test]
+    fn bash_merges_stderr_into_the_output() {
+        // oracle: `echo out; echo err >&2` is "out\nerr", no label
+        assert_eq!(bash("out\nstderr:\nerr", false).content, "out\nerr");
+        assert_eq!(bash("stderr:\nonly", false).content, "only");
+    }
+
+    #[test]
+    fn bash_says_when_there_was_no_output() {
+        // oracle: "(Bash completed with no output)"
+        assert_eq!(
+            bash("(command succeeded with no output)", false).content,
+            "(Bash completed with no output)"
+        );
+    }
+
+    #[test]
+    fn bash_timeouts_read_like_claudes() {
+        // oracle: `sleep 5` with timeout 1000 is "Exit code 143\nCommand timed out after 1s"
+        let out = bash(
+            "command timed out after 1s and was killed (no output produced)",
+            true,
+        );
+        assert_eq!(out.content, "Exit code 143\nCommand timed out after 1s");
+        let partial = bash(
+            "a\ncommand timed out after 2s and was killed; output above is partial",
+            true,
+        );
+        assert_eq!(
+            partial.content,
+            "Exit code 143\na\nCommand timed out after 2s"
+        );
+    }
+
+    #[test]
+    fn bash_leaves_a_background_start_alone() {
+        let text = "Background task #3 started: sleep 9\nYou will be notified when it finishes";
+        assert_eq!(bash(text, false).content, text);
     }
 
     #[test]
@@ -485,6 +651,26 @@ mod tests {
         assert_eq!(mapped["action"], "write");
         assert_eq!(mapped["items"][0]["status"], "in_progress");
         assert!(mapped["items"][0].get("activeForm").is_none());
+    }
+
+    #[test]
+    fn answered_questions_read_like_claudes() {
+        // oracle: AskUserQuestion answered "A" to "Which?" in an interactive turn
+        let out = finish_ask_user(
+            ToolOutput::ok(
+                "The user answered your questions:\n\nQ: Which?\nA: A\n\nQ: Why?\nA: (skipped)\n\nIncorporate these answers into your plan, then call exit_plan.",
+            ),
+            &json!({}),
+        );
+        assert_eq!(
+            out.content,
+            "Your questions have been answered: \"Which?\"=\"A\", \"Why?\"=\"(no option selected)\". You can now continue with these answers in mind."
+        );
+        let declined = finish_ask_user(
+            ToolOutput::ok("The user dismissed the interview"),
+            &json!({}),
+        );
+        assert_eq!(declined.content, "The user dismissed the interview");
     }
 
     #[test]

@@ -33,6 +33,7 @@ mod notebook;
 #[cfg(test)]
 mod probe;
 mod search;
+mod session;
 mod skill;
 pub mod worktree;
 
@@ -84,6 +85,7 @@ pub fn install_all(registry: &mut ToolRegistry, plan_mode: Arc<AtomicBool>) {
     tools.extend(agents::tools());
     tools.extend(worktree::tools());
     tools.extend(lsp::tools(plan_mode));
+    tools.extend(session::tools(registry));
     for tool in tools {
         if registry.get(tool.name()).is_none() {
             registry.register(tool);

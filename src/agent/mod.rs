@@ -47,7 +47,8 @@ pub use context::{
 #[cfg(test)]
 pub(crate) use context::{KEEP_RECENT, PRESSURE_ELEVATED_FRACTION};
 pub use event::{
-    AgentEvent, ConsoleGate, ConsoleHost, ConsoleInput, ConsoleWriter, InterviewGate, PlanGate,
+    AgentEvent, ConsoleGate, ConsoleHost, ConsoleInput, ConsoleWriter, InterviewGate,
+    PermissionAnswer, PermissionGate, PlanGate,
 };
 use session::Session;
 
