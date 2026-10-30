@@ -1675,6 +1675,11 @@ mod tests {
             advertised.iter().map(|c| c.name.as_str()).collect();
 
         for spec in crate::commands::COMMANDS {
+            // Telegram menu names are `[a-z0-9_]`, so a hyphenated command
+            // (`/output-style`) runs when typed but cannot be listed.
+            if spec.name.contains('-') {
+                continue;
+            }
             let runs = spec.execution(Surface::Gateway) != Execution::Unavailable;
             let listed = offered.contains(spec.name);
             assert_eq!(

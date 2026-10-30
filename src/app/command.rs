@@ -492,7 +492,7 @@ impl CommandContext<'_> {
     /// the model, so this isn't a direct command).
     fn open_agents_picker(&mut self) {
         let dir = Config::subagents_dir().unwrap_or_default();
-        let configs = subagent::available_configs(&dir);
+        let configs = subagent::available_configs_with_claude(&dir);
         if configs.is_empty() {
             self.app.notice("no subagents available");
             return;
@@ -942,6 +942,7 @@ impl CommandContext<'_> {
         let mut manager = self.manager.lock().await;
         match McpConfig::load(self.mcp_path) {
             Ok(mcp_config) => {
+                let mcp_config = crate::claude_dir::mcp::overlay(mcp_config, self.project_root);
                 if let Err(err) = manager.reload(&mcp_config).await {
                     self.app.notice(format!("MCP reload warning: {err:#}"));
                 }
@@ -2078,6 +2079,30 @@ impl CommandSurface for CommandContext<'_> {
 
     async fn plugins(&mut self, action: PluginsAction) {
         self.plugins_command(action).await;
+    }
+
+    fn transcript(&self) -> Option<Vec<(String, String)>> {
+        use crate::llm::Role;
+        let agent = self.agent_slot.as_ref()?;
+        Some(
+            agent
+                .history()
+                .iter()
+                .filter_map(|message| {
+                    let who = match message.role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System | Role::Tool => return None,
+                    };
+                    let text = message.text();
+                    (!text.trim().is_empty()).then(|| (who.to_string(), text))
+                })
+                .collect(),
+        )
+    }
+
+    fn copy_to_clipboard(&mut self, text: &str) -> bool {
+        super::term::copy_to_clipboard(text).is_ok()
     }
 }
 

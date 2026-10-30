@@ -48,16 +48,24 @@ when the active provider is an API key. It runs the same on the TUI and over ACP
 GUI, Zed and the Android app get the same plain text. `wizard usage --subscriptions --json`
 is the machine-readable form ([usage.md](usage.md#subscription-limits)).
 
+## Claude Code names
+
+Wizard answers to Claude Code's command names. Some are other names for commands it has (`/reset` is `/clear`, `/continue` is `/resume`, `/stats` is `/usage`, `/config` is `/settings`), some are small commands with a body in `src/commands/claude.rs` (`/permissions`, `/hooks`, `/context`, `/mcp`, `/output-style`, `/skills`, `/plugin`, `/export`, `/copy`, ...), and the rest are bundled prompts. They each have a row in the table where they run, so the agent gate, `/help` and the per-surface refusals cover them like any other command. `docs/claude-code-parity.md` lists every Claude Code command and flag, which of these it is, and what is missing and why.
+
 ## Custom slash commands
 
 Two ways to put reusable text in front of the model: `/commands` you define as markdown files, and `@path` tokens that inline file contents. Both work identically in the TUI and in headless `-p` runs: one shared preprocessing pipeline (`commands::preprocess`) handles them.
 
 A custom command is a markdown file whose body is a prompt template:
 
-- `~/.wizard/commands/*.md`: global, available in every project
-- `<project>/.wizard/commands/*.md`: per project, shadows a global command with the same name
+- `~/.claude/commands/`, then `~/.wizard/commands/`: global, available in every project
+- `<project>/.claude/commands/`, then `<project>/.wizard/commands/`: per project, shadows a global command with the same name
+- the commands of enabled Claude-format plugins, as `/plugin:name`
+- the prompt commands that ship in the binary (`/init`, `/review`, `/security-review`, `/pr-comments`, `/simplify`, `/recap`, `/add-dir`, `/debug`, `/verify`, `/update-config`), which any of the above replaces
 
-The file stem is the command name: `review.md` defines `/review`. An optional frontmatter block (the same `---`-fenced convention as skills) carries a `description` shown in the TUI suggestion popup:
+Claude Code's `.claude/commands` is read in place, so a project set up for Claude Code works with no import. At the same level a `.wizard` file beats a `.claude` one.
+
+The file stem is the command name: `review.md` defines `/review`. A subfolder namespaces it, as in Claude Code: `team/deploy.md` is `/team:deploy`. An optional frontmatter block (the same `---`-fenced convention as skills) carries a `description` shown in the TUI suggestion popup:
 
 ```markdown
 ---

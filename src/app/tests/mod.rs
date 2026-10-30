@@ -334,8 +334,9 @@ fn arrow_keys_cycle_suggestions_with_wraparound() {
 #[test]
 fn tab_completes_the_selected_suggestion() {
     let mut app = app();
-    // "/re" would be ambiguous between /rewind and /reload.
-    type_str(&mut app, "/rel");
+    // "/re" would be ambiguous between /rewind and /reload, and "/rel" with
+    // /release-notes.
+    type_str(&mut app, "/relo");
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.input, "/reload");
     assert_eq!(app.cursor, "/reload".chars().count());
