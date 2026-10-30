@@ -14,6 +14,7 @@ to do.
 | [Token profiles](token-profiles.md) | How much harness each request carries: `safe`, `stock`, `lean`, `min` |
 | [Commands](commands.md) | Every slash command, and what each surface allows |
 | [Modes](modes.md) | Genie, sovereign, `--continuous`, plan mode |
+| [Claude Code parity](claude-code-parity.md) | Which Claude Code feature Wizard has, under what name, and what it skips |
 | [Startup benchmark](../bench/startup/README.md) | Cold and warm start, memory and install size next to six other agents, and `run.sh` |
 
 ## Models and providers

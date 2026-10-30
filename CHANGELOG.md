@@ -6,6 +6,12 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- Claude Code's tool names, with its argument names, for prompts and skills written against it: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `NotebookEdit`, `WebFetch`, `WebSearch`, `Agent`, `Skill`, `TodoWrite`, `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `TaskStop`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `CronCreate`, `CronList`, `CronDelete`, `ScheduleWakeup`, `Monitor`, `SendMessage`, `ListAgents`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `PushNotification`, `SendUserFile`, `ReportFindings` and `LSP` (which reports that Wizard has no language server). They are listed by name and loaded through `tool_search`, so the default prompt does not grow by a schema each. `docs/claude-code-parity.md` says what each does and what it leaves out.
+- A schedule entry can be `once` and can have an `expires_at`; the scheduler removes it after it fires or passes. `CronCreate` and `ScheduleWakeup` write them.
+- `Monitor` puts a background command's stdout lines into the conversation as they arrive.
+
 ### Fixed
 
 - The drag-copy highlight lit the margin, the reply marker, the scrollbar and the blank cells after each line, so it looked like whitespace was selected even though the copy skipped it. The highlight now covers exactly the cells that are copied.
