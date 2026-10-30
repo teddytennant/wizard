@@ -12,9 +12,8 @@
 //! 2. one installed by `/plugin install`, kept under `~/.wizard/claude-plugins/installed/`;
 //! 3. one given for this run with `--plugin-dir`.
 //!
-//! Hooks (`hooks/hooks.json`) are not loaded; hooks belong to the hooks
-//! subsystem and a plugin's hooks run commands, so they need that subsystem's
-//! consent.
+//! A plugin's hooks (`hooks/hooks.json`, or the manifest's `hooks` key) go to
+//! the hooks engine like any other Claude-format hook; see [`hook_specs`].
 
 use std::path::{Path, PathBuf};
 
@@ -59,7 +58,8 @@ pub fn read_plugin(root: &Path, origin: &'static str) -> Option<Plugin> {
     let has_component = ["commands", "skills", "agents", "output-styles"]
         .iter()
         .any(|leaf| root.join(leaf).is_dir())
-        || root.join(".mcp.json").is_file();
+        || root.join(".mcp.json").is_file()
+        || root.join("hooks").join("hooks.json").is_file();
     if manifest.is_none() && !has_component {
         return None;
     }
@@ -233,6 +233,64 @@ pub fn commands(project_root: &Path) -> Vec<(String, PathBuf)> {
         }
     }
     out
+}
+
+/// The hooks one plugin declares: `hooks/hooks.json`, or the manifest's
+/// `hooks` key (a path inside the plugin, or the hooks object itself).
+/// `${CLAUDE_PLUGIN_ROOT}` in a command, its arguments or a URL is the plugin
+/// directory.
+pub fn plugin_hooks(plugin: &Plugin) -> Vec<crate::hooks::HookSpec> {
+    let manifest: Option<Value> = std::fs::read_to_string(manifest_path(&plugin.root))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let declared = manifest.as_ref().and_then(|m| m.get("hooks")).cloned();
+    let document = match declared {
+        Some(Value::String(rel)) => read_json(&plugin.root.join(rel.trim_start_matches("./"))),
+        Some(inline @ Value::Object(_)) => Some(inline),
+        _ => None,
+    }
+    .or_else(|| read_json(&plugin.root.join("hooks").join("hooks.json")));
+    let Some(document) = document else {
+        return Vec::new();
+    };
+    // `hooks.json` wraps the events in a `hooks` key; an inline manifest
+    // object may not.
+    let events = document.get("hooks").unwrap_or(&document);
+    let label = format!("plugin {}", plugin.name);
+    let root = plugin.root.display().to_string();
+    let swap = |text: &str| text.replace("${CLAUDE_PLUGIN_ROOT}", &root);
+    crate::hooks::spec::from_claude_settings(events, &label)
+        .into_iter()
+        .map(|mut spec| {
+            match &mut spec.handler {
+                crate::hooks::Handler::Command { command, args } => {
+                    *command = swap(command);
+                    if let Some(args) = args {
+                        for arg in args.iter_mut() {
+                            *arg = swap(arg);
+                        }
+                    }
+                }
+                crate::hooks::Handler::Http { url, .. } => *url = swap(url),
+                _ => {}
+            }
+            spec
+        })
+        .collect()
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+/// The hooks of every active plugin, in plugin order.
+pub fn hook_specs(project_root: &Path) -> Vec<crate::hooks::HookSpec> {
+    enabled(project_root)
+        .iter()
+        .flat_map(plugin_hooks)
+        .collect()
 }
 
 /// MCP servers declared by active plugins, as the JSON `mcpServers` shape.
@@ -715,6 +773,69 @@ mod tests {
         tmp.write(&format!("{rel}/commands/sub/go.md"), "go");
         tmp.write(&format!("{rel}/agents/a.md"), "---\nname: a\n---\nA.");
         tmp.0.join(rel)
+    }
+
+    #[test]
+    fn a_plugins_hooks_json_becomes_hook_specs_with_the_plugin_root_filled_in() {
+        let tmp = Tmp::new("plh");
+        let root = plugin_tree(&tmp, "p", "guard");
+        tmp.write(
+            "p/hooks/hooks.json",
+            r#"{"description":"x","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[
+                {"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/check.sh","timeout":5},
+                {"type":"http","url":"https://h.test/${CLAUDE_PLUGIN_ROOT}"}]}],
+               "SessionStart":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+        );
+        let plugin = read_plugin(&root, "session").expect("plugin");
+        let specs = plugin_hooks(&plugin);
+        assert_eq!(specs.len(), 3);
+        let pre: Vec<_> = specs
+            .iter()
+            .filter(|s| s.event == crate::hooks::HookEvent::PreToolUse)
+            .collect();
+        assert_eq!(pre.len(), 2);
+        assert_eq!(pre[0].matcher.as_deref(), Some("Bash"));
+        assert_eq!(pre[0].source, "plugin guard");
+        assert_eq!(pre[0].timeout_secs, Some(5));
+        let root_text = root.display().to_string();
+        match &pre[0].handler {
+            crate::hooks::Handler::Command { command, .. } => {
+                assert_eq!(command, &format!("{root_text}/check.sh"));
+            }
+            other => panic!("not a command: {other:?}"),
+        }
+        match &pre[1].handler {
+            crate::hooks::Handler::Http { url, .. } => {
+                assert_eq!(url, &format!("https://h.test/{root_text}"));
+            }
+            other => panic!("not http: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_manifest_can_point_at_its_hooks_file_or_carry_them_inline() {
+        let tmp = Tmp::new("plh2");
+        tmp.write(
+            "a/.claude-plugin/plugin.json",
+            r#"{"name":"a","hooks":"./config/h.json"}"#,
+        );
+        tmp.write(
+            "a/config/h.json",
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"one"}]}]}}"#,
+        );
+        tmp.write(
+            "b/.claude-plugin/plugin.json",
+            r#"{"name":"b","hooks":{"Stop":[{"hooks":[{"type":"command","command":"two"}]}]}}"#,
+        );
+        let a = read_plugin(&tmp.0.join("a"), "session").expect("a");
+        let b = read_plugin(&tmp.0.join("b"), "session").expect("b");
+        assert_eq!(plugin_hooks(&a).len(), 1);
+        assert_eq!(plugin_hooks(&b).len(), 1);
+        assert!(
+            plugin_hooks(&read_plugin(&tmp.0.join("a"), "session").unwrap())
+                .iter()
+                .all(|s| s.source == "plugin a")
+        );
     }
 
     #[test]

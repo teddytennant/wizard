@@ -179,6 +179,12 @@ fn load_specs_with(
         tracing::warn!("{warning}");
     }
     specs.extend(settings.hooks.iter().cloned());
+    // Hooks of enabled Claude-format plugins. The user installed or named
+    // the plugin, so they are theirs the way `~/.claude/settings.json` is;
+    // `disableAllHooks` turns them off with the rest.
+    if !settings.disable_all_hooks {
+        specs.extend(crate::claude_dir::plugins::hook_specs(project_root));
+    }
     (specs, settings)
 }
 
