@@ -17,6 +17,8 @@ fn fixture() -> Value {
 struct Cmd {
     name: String,
     description: String,
+    /// What the menu prints when it is not the description searched.
+    menu: Option<String>,
     aliases: Vec<String>,
 }
 
@@ -28,6 +30,7 @@ fn commands(v: &Value) -> Vec<Cmd> {
         .map(|c| Cmd {
             name: c["name"].as_str().unwrap().into(),
             description: c["description"].as_str().unwrap().into(),
+            menu: c["menu"].as_str().map(String::from),
             aliases: c["aliases"]
                 .as_array()
                 .unwrap()
@@ -159,4 +162,66 @@ fn the_alias_table_is_the_fixtures() {
             c.name
         );
     }
+}
+
+#[allow(dead_code)]
+mod common;
+
+/// The same queries through the look's own screen: the rows the menu shows, in order, are the
+/// first the real program showed (a name cut short keeps the end of it behind a `…`).
+#[test]
+fn the_menu_shows_the_first_five_rows_claude_code_does() {
+    let v = fixture();
+    let cmds = commands(&v);
+    let mut bad = Vec::new();
+    for (query, want) in v["ranks"].as_object().unwrap() {
+        let mut hn = common::Harness::new("static-200x50.jsonl", 300, 50);
+        hn.app.commands = cmds
+            .iter()
+            .map(|c| agent_core::SlashCommand {
+                name: c.name.clone(),
+                description: c.description.clone(),
+                input_hint: String::new(),
+            })
+            .collect();
+        hn.type_str(&format!("/{query}"));
+        let screen = hn.render().plain();
+        let got: Vec<String> = screen
+            .lines()
+            .filter_map(|l| {
+                let rest = l
+                    .strip_prefix("  \u{276f} ")
+                    .or_else(|| l.strip_prefix("    "))?;
+                let name = rest.split("  ").next()?.trim();
+                (name.starts_with('/') || name.starts_with('\u{2026}')).then(|| name.to_string())
+            })
+            .collect();
+        let want: Vec<&str> = want
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .take(5)
+            .collect();
+        // a long description takes a second row and a whole entry must fit, so the window can
+        // hold fewer than five: what it does hold is the start of the real list
+        let same = got.len() >= want.len().min(2)
+            && got.len() <= want.len()
+            && got
+                .iter()
+                .zip(&want)
+                .all(|(g, w)| match g.strip_prefix('\u{2026}') {
+                    Some(tail) => w.ends_with(tail),
+                    None => g == w,
+                });
+        if !same {
+            bad.push(format!("/{query}\n  want {want:?}\n  got  {got:?}"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} queries differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }
