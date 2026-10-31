@@ -70,7 +70,7 @@ const MODE_RETRY: Duration = Duration::from_millis(400);
 const MODE_RETRIES: u32 = 15;
 const HINT_TTL: Duration = Duration::from_millis(800);
 /// How long the effort notice stays after a model is picked.
-const NOTICE_TTL: Duration = Duration::from_secs(30);
+const NOTICE_TTL: Duration = Duration::from_secs(10);
 /// How long the effort notice stays after the session opens (2.1.314 drops it ten seconds in,
 /// shows it again for as long as a turn runs, and does not put it back when the turn ends).
 const START_NOTICE: Duration = Duration::from_secs(10);
@@ -282,6 +282,9 @@ pub struct App {
     pub fixed_hm: Option<(u32, u32)>,
     /// Unix seconds for relative times; tests pin it.
     pub now_unix: i64,
+    /// The time the resume picker counts session ages from: when it opened, since the
+    /// reference does not move them while it is up.
+    pub resume_now: i64,
     pub cfg: Config,
     pub session_id: String,
     pub commands: Vec<SlashCommand>,
@@ -347,6 +350,13 @@ pub struct App {
     rewind_answer: Option<String>,
     /// A note being typed for a permission answer (Tab on the prompt).
     pub amend: Option<String>,
+    /// What is typed on the plan review's "Tell Wizard what to change" line, and the cursor in it.
+    pub feedback: String,
+    pub feedback_cur: usize,
+    /// The plan was edited in the editor from the review (ctrl+g) and saved.
+    pub plan_saved: bool,
+    /// ctrl+g on the plan review: the loop opens the editor on the plan.
+    pub plan_edit_request: bool,
     /// The prompt a `/rewind` is going back to, put back in the input when it lands.
     rewinding: Option<String>,
     /// shift+tab steps not yet sent, the one wizard has not answered, and where they lead.
@@ -357,6 +367,9 @@ pub struct App {
     pub effort_preview: Option<String>,
     /// Prompt history kept across sessions, and where.
     history_file: Option<PathBuf>,
+    /// A newline has been typed with backslash and Enter before, here or in an earlier run: the
+    /// shortcuts table then says `\⏎ for newline` instead of how to do it.
+    pub backslash_used: bool,
     /// The directory each entry of `prompts` was sent from.
     pub prompt_dirs: Vec<String>,
     /// The history search shows this project's prompts only.
@@ -424,6 +437,7 @@ impl App {
             now_unix: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64),
+            resume_now: 0,
             cfg: Config::default(),
             session_id: String::new(),
             commands: agent_core::commands::menu(&[], &claude_extras()),
@@ -473,6 +487,10 @@ impl App {
             agents: Vec::new(),
             prompt_times: Vec::new(),
             amend: None,
+            feedback: String::new(),
+            feedback_cur: 0,
+            plan_saved: false,
+            plan_edit_request: false,
             rewind_answer: None,
             rewinding: None,
             silent: 0,
@@ -486,6 +504,7 @@ impl App {
             mode_target: None,
             effort_preview: None,
             history_file: None,
+            backslash_used: false,
             prompt_dirs: Vec::new(),
             search_here: false,
             chord: false,
@@ -548,10 +567,26 @@ impl App {
         }
     }
 
+    /// Where the look keeps what it remembers between runs: `CLAUDEW_STATE_DIR`, else
+    /// `$XDG_STATE_HOME/claudew` or `~/.local/state/claudew`.
+    fn state_dir() -> Option<PathBuf> {
+        match std::env::var_os("CLAUDEW_STATE_DIR") {
+            Some(d) if !d.is_empty() => Some(PathBuf::from(d)),
+            _ => std::env::var_os("XDG_STATE_HOME")
+                .filter(|s| !s.is_empty())
+                .map(|s| PathBuf::from(s).join("claudew"))
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/claudew"))
+                }),
+        }
+    }
+
     /// Prompts sent from any directory before, oldest first, from `history.jsonl` in the state
     /// directory: `CLAUDEW_STATE_DIR`, else `$XDG_STATE_HOME/claudew` or
     /// `~/.local/state/claudew`. The scripted backends keep none unless the variable is set.
     fn load_history(&mut self) {
+        self.backslash_used =
+            Self::state_dir().is_some_and(|d| d.join("backslash-return").exists());
         let dir = match std::env::var_os("CLAUDEW_STATE_DIR") {
             Some(d) if !d.is_empty() => Some(PathBuf::from(d)),
             _ if self.opts.backend != BackendKind::Wizard => None,
@@ -694,6 +729,24 @@ impl App {
             .unwrap_or_else(|| self.cfg.model.clone())
     }
 
+    /// The model as a notice names it. Claude Code's description starts with the model's full
+    /// name (`Haiku 5.5 · Fastest for quick answers`), and that is what it prints; another
+    /// backend's description is not a name, and the model's own name stands.
+    pub fn model_display(m: &agent_core::ModelOption) -> String {
+        match m.provider.split_once(" \u{b7} ") {
+            Some((head, _)) if head.starts_with(&format!("{} ", m.name)) => head.to_string(),
+            _ => m.name.clone(),
+        }
+    }
+
+    fn current_model_display(&self) -> String {
+        self.cfg
+            .models
+            .iter()
+            .find(|m| m.id == self.cfg.model)
+            .map_or_else(|| self.model_name(), Self::model_display)
+    }
+
     pub fn provider(&self) -> String {
         if self.cfg.model.is_empty() {
             return self.configured("active_provider");
@@ -784,10 +837,13 @@ impl App {
         self.export.apply(&ev);
         match ev {
             Event::Ready { session_id, config } => {
-                self.opened_at = self.clock.elapsed();
                 // wizard opens every session, new, loaded or rewound, on its config's defaults:
                 // what the user chose (flags at first, then picks and presses) goes back on it
                 let first = !self.ready;
+                // the `← for agents` hint counts from the start; /clear does not bring it back
+                if first {
+                    self.opened_at = self.clock.elapsed();
+                }
                 let (mode, plan) = if first {
                     (config.mode.clone(), self.plan)
                 } else {
@@ -871,7 +927,12 @@ impl App {
                     self.pump_modes();
                 }
             }
-            Event::Sessions(s) => self.sessions = s,
+            Event::Sessions(s) => {
+                self.sessions = s;
+                // the ages count from the moment the list arrives
+                self.refresh_now();
+                self.resume_now = self.now_unix;
+            }
             Event::History { session_id, items } => {
                 self.session_id = session_id;
                 self.blocks.clear();
@@ -1125,6 +1186,9 @@ impl App {
                 self.fatal = Some(e);
             }
             Event::Permission(req) => {
+                self.feedback.clear();
+                self.feedback_cur = 0;
+                self.plan_saved = false;
                 self.dialog = Some(Dialog::Permission { req, sel: 0 });
             }
             Event::RewindPreview(_) => {}
@@ -1143,8 +1207,6 @@ impl App {
             chars: 0,
             thinking: false,
         });
-        self.notice = self.effort_notice();
-        self.notice_until = None;
     }
 
     fn end_turn(&mut self, reason: StopReason) {
@@ -1160,8 +1222,6 @@ impl App {
             return;
         }
         let Some(busy) = self.busy.take() else { return };
-        let now = self.clock.elapsed();
-        self.notice_until = Some((self.opened_at + START_NOTICE).max(now));
         let secs = (self.clock.elapsed().saturating_sub(busy.since)).as_secs();
         // a slash line wizard ran as a command; one it handed to the model gets the done line
         let since: Vec<&Block> = self
@@ -1433,6 +1493,7 @@ impl App {
                 return;
             }
             "resume" if arg.is_empty() => {
+                self.resume_now = self.now_unix;
                 self.sessions.clear();
                 self.send(Request::ListSessions);
                 self.dialog = Some(Dialog::Resume {
@@ -1810,6 +1871,17 @@ impl App {
         }
     }
 
+    /// Remember that backslash and Enter made a newline, as Claude Code does in its config.
+    fn note_backslash_return(&mut self) {
+        if std::mem::replace(&mut self.backslash_used, true) {
+            return;
+        }
+        if let Some(dir) = Self::state_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join("backslash-return"), "");
+        }
+    }
+
     fn insert_newline(&mut self) {
         self.editor.insert_newline();
         self.refresh_menu();
@@ -1819,6 +1891,7 @@ impl App {
         if self.editor.text().ends_with('\\') && self.editor.cursor() == self.editor.text().len() {
             self.editor.backspace();
             self.editor.insert_newline();
+            self.note_backslash_return();
             return;
         }
         // what was typed wins when it names a command, or when nothing's name matches it (a
@@ -2177,7 +2250,7 @@ impl App {
                     text: "/model ".into(),
                     bash: false,
                 });
-                let name = self.model_name();
+                let name = self.current_model_display();
                 self.output(format!("Kept model as {name}"), name);
             }
             Some(Dialog::Effort { .. }) => {
@@ -2197,6 +2270,7 @@ impl App {
                 self.output(format!("Kept mode as {mode}"), String::new());
             }
             Some(Dialog::Resume { .. }) => {
+                self.show_effort_notice();
                 self.resume_all = false;
                 self.blocks.push(Block::User {
                     text: "/resume ".into(),
@@ -2204,8 +2278,11 @@ impl App {
                 });
                 self.output("Resume cancelled", "");
             }
+            // the help panel gives the notice back too
+            Some(Dialog::Help { .. }) => self.show_effort_notice(),
             // Esc on a permission prompt turns the call down and stops the turn
             Some(Dialog::Permission { req, .. }) => {
+                self.show_effort_notice();
                 self.amend = None;
                 self.send(Request::Decide {
                     id: req.id,
@@ -2238,6 +2315,11 @@ impl App {
         let Some(dialog) = self.dialog.clone() else {
             return;
         };
+        if let Dialog::Permission { req, sel } = &dialog {
+            if is_plan(req) {
+                return self.plan_key(req.clone(), *sel, key);
+            }
+        }
         if let (Some(mut note), Dialog::Permission { req, sel }) = (self.amend.clone(), &dialog) {
             match key.code {
                 KeyCode::Esc => self.amend = None,
@@ -2638,13 +2720,111 @@ impl App {
         self.auto_mode().is_some()
     }
 
+    /// Keys on the plan review. The third answer is a line of text: while it is picked, what is
+    /// typed goes into it.
+    fn plan_key(&mut self, req: PermissionRequest, sel: usize, key: KeyEvent) {
+        let options = permission_options(&req, self.auto_offered());
+        let n = options.len();
+        let on_text = options[sel.min(n - 1)].1 == Choice::Feedback;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let go = |app: &mut App, sel: usize| {
+            if options[sel].1 == Choice::Feedback {
+                app.feedback_cur = 0;
+            }
+            app.dialog = Some(Dialog::Permission {
+                req: req.clone(),
+                sel,
+            });
+        };
+        let len = self.feedback.chars().count();
+        match key.code {
+            KeyCode::Esc => {
+                self.feedback.clear();
+                self.close_dialog();
+            }
+            KeyCode::Down => go(self, (sel + 1) % n),
+            KeyCode::Up => go(self, (sel + n - 1) % n),
+            KeyCode::Char(c @ '1'..='9') if !on_text => {
+                let i = c as usize - '1' as usize;
+                if i < n {
+                    if options[i].1 == Choice::Feedback {
+                        go(self, i);
+                    } else {
+                        self.decide(req, options[i].1);
+                    }
+                }
+            }
+            KeyCode::Char('g') if ctrl => self.plan_edit_request = true,
+            // approve, and the model hears what is typed
+            KeyCode::BackTab => {
+                let yes = options
+                    .iter()
+                    .find(|o| o.1 == Choice::Yes)
+                    .map_or(Choice::Yes, |o| o.1);
+                self.decide(req, yes);
+            }
+            KeyCode::Enter => self.decide(req, options[sel.min(n - 1)].1),
+            KeyCode::Char(c) if on_text && !ctrl => {
+                let at = self
+                    .feedback
+                    .char_indices()
+                    .nth(self.feedback_cur)
+                    .map_or(self.feedback.len(), |(i, _)| i);
+                self.feedback.insert(at, c);
+                self.feedback_cur += 1;
+            }
+            KeyCode::Backspace if on_text && self.feedback_cur > 0 => {
+                let at = self.feedback.char_indices().nth(self.feedback_cur - 1);
+                if let Some((i, _)) = at {
+                    self.feedback.remove(i);
+                    self.feedback_cur -= 1;
+                }
+            }
+            KeyCode::Delete if on_text && self.feedback_cur < len => {
+                if let Some((i, _)) = self.feedback.char_indices().nth(self.feedback_cur) {
+                    self.feedback.remove(i);
+                }
+            }
+            KeyCode::Left if on_text => self.feedback_cur = self.feedback_cur.saturating_sub(1),
+            KeyCode::Right if on_text => self.feedback_cur = (self.feedback_cur + 1).min(len),
+            KeyCode::Home if on_text => self.feedback_cur = 0,
+            KeyCode::End if on_text => self.feedback_cur = len,
+            KeyCode::Char('a') if on_text && ctrl => self.feedback_cur = 0,
+            KeyCode::Char('e') if on_text && ctrl => self.feedback_cur = len,
+            _ => {}
+        }
+    }
+
+    /// The plan after it was edited, as the dialog shows and the model is told.
+    pub fn set_plan_text(&mut self, text: String) {
+        if let Some(Dialog::Permission { req, sel }) = self.dialog.clone() {
+            let mut req = req;
+            req.input["plan"] = serde_json::Value::String(text);
+            self.plan_saved = true;
+            self.dialog = Some(Dialog::Permission { req, sel });
+        }
+    }
+
     fn decide(&mut self, req: PermissionRequest, choice: Choice) {
         self.dialog = None;
+        self.show_effort_notice();
+        let allow = choice != Choice::No && choice != Choice::Feedback;
         // an approved plan ends plan mode in wizard
-        if is_plan(&req) && choice != Choice::No {
+        if is_plan(&req) && allow {
             self.plan = false;
         }
-        let note = self.amend.take().unwrap_or_default();
+        let mut note = self.amend.take().unwrap_or_default();
+        if is_plan(&req) {
+            note = std::mem::take(&mut self.feedback).trim().to_string();
+            self.feedback_cur = 0;
+            if allow && self.plan_saved {
+                let edited = req.input.get("plan").and_then(|p| p.as_str()).unwrap_or("");
+                note = format!("{note}\nThe user edited the plan before approving it; this is the approved version:\n{edited}")
+                    .trim()
+                    .to_string();
+            }
+            self.plan_saved = false;
+        }
         if choice == Choice::Auto {
             if let Some(auto) = self.auto_mode() {
                 let plan = self.shown_mode().1;
@@ -2653,7 +2833,7 @@ impl App {
         }
         self.send(Request::Decide {
             id: req.id,
-            allow: choice != Choice::No,
+            allow,
             scope: if choice == Choice::Always {
                 DecideScope::Always
             } else {
@@ -2731,8 +2911,9 @@ impl App {
             text: typed,
             bash: false,
         });
+        let name = Self::model_display(&m);
         if m.id == self.cfg.model && effort.is_none() {
-            self.output(format!("Kept model as {}", m.name), m.name);
+            self.output(format!("Kept model as {name}"), name);
             return;
         }
         // queued like a mode change: retried while wizard is busy, and a prompt waits for it
@@ -2740,14 +2921,14 @@ impl App {
             self.mode_steps.push_back(ModeStep::Model(m.id.clone()));
             self.cfg.model = m.id;
         }
-        let mut text = format!("Set model to {} for this session only", m.name);
+        let mut text = format!("Set model to {name} for this session only");
         if let Some(e) = effort {
             self.mode_steps.push_back(ModeStep::Effort(e.clone()));
             self.cfg.effort = e.clone();
             self.show_effort_notice();
             text.push_str(&format!(" with {e} effort"));
         }
-        self.output(text, m.name);
+        self.output(text, name);
         self.pump_modes();
     }
 
@@ -2796,16 +2977,20 @@ impl App {
     }
 
     /// Expire the footer hint and advance the spinner. Returns nothing; sets `dirty`.
-    pub fn on_tick(&mut self) {
-        if self.mode_retry.is_some_and(|at| self.clock.elapsed() >= at) {
-            self.mode_retry = None;
-            self.pump_modes();
-        }
+    fn refresh_now(&mut self) {
         if !self.fixed_now {
             self.now_unix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(self.now_unix, |d| d.as_secs() as i64);
         }
+    }
+
+    pub fn on_tick(&mut self) {
+        if self.mode_retry.is_some_and(|at| self.clock.elapsed() >= at) {
+            self.mode_retry = None;
+            self.pump_modes();
+        }
+        self.refresh_now();
         let now = self.clock.elapsed();
         // the footer's `← for agents` goes away ten seconds in
         if now.saturating_sub(self.opened_at) >= AGENTS_HINT_FOR
@@ -2887,6 +3072,17 @@ pub enum Choice {
     /// Allow this once and move wizard to its self-approving mode, Claude's "auto mode".
     Auto,
     No,
+    /// Turn a plan down with what the user typed: "Tell Wizard what to change".
+    Feedback,
+}
+
+/// Where wizard saved the plan under review, relative to the project.
+pub fn plan_file_of(req: &PermissionRequest) -> String {
+    req.input
+        .get("plan_file")
+        .and_then(|p| p.as_str())
+        .unwrap_or(".wizard/plan.md")
+        .to_string()
 }
 
 /// The numbered answers a permission prompt offers.
@@ -2905,10 +3101,13 @@ fn thought_secs(took: Duration) -> u64 {
 
 pub fn permission_options(req: &PermissionRequest, auto: bool) -> Vec<(String, Choice)> {
     if is_plan(req) {
-        return vec![
-            ("Yes, proceed".to_string(), Choice::Yes),
-            ("No, keep planning".to_string(), Choice::No),
-        ];
+        let mut v = Vec::new();
+        if auto {
+            v.push(("Yes, and use auto mode".to_string(), Choice::Auto));
+        }
+        v.push(("Yes, manually approve edits".to_string(), Choice::Yes));
+        v.push(("Tell Wizard what to change".to_string(), Choice::Feedback));
+        return v;
     }
     let mut v = vec![("Yes".to_string(), Choice::Yes)];
     if !req.rule.is_empty() {
@@ -3362,6 +3561,44 @@ pub async fn run(
                 Some("nano"),
             );
             app.repaint = true;
+        }
+        if std::mem::take(&mut app.plan_edit_request) {
+            let plan = match &app.dialog {
+                Some(Dialog::Permission { req, .. }) => req
+                    .input
+                    .get("plan")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string),
+                _ => None,
+            };
+            let file = match &app.dialog {
+                Some(Dialog::Permission { req, .. }) => plan_file_of(req),
+                _ => String::new(),
+            };
+            if let Some(plan) = plan {
+                let cwd = app.opts.cwd.clone();
+                let out = tuikit::input::external_editor(
+                    guard,
+                    &input_ctl,
+                    &cwd,
+                    "claudew-plan",
+                    &plan,
+                    Some("nano"),
+                );
+                match out {
+                    tuikit::input::EditorOutcome::Edited(t) if t != plan => {
+                        let t = t.trim_end_matches('\n').to_string();
+                        let _ = std::fs::write(app.opts.cwd.join(&file), format!("{t}\n"));
+                        app.set_plan_text(t);
+                    }
+                    tuikit::input::EditorOutcome::Edited(_) => {}
+                    tuikit::input::EditorOutcome::NoEditor => {
+                        app.notice = Some("set $EDITOR to edit the plan in it".into())
+                    }
+                    tuikit::input::EditorOutcome::Failed(e) => app.notice = Some(e),
+                }
+                app.repaint = true;
+            }
         }
         if std::mem::take(&mut app.edit_request) {
             let text = app.editor.text().to_string();

@@ -9,7 +9,6 @@ use crate::app::{effort_glyph, permission_options, App, Dialog};
 use crate::text::{blit, put, truncate, width, wrap, wrap_str, Row, Span};
 use crate::ui::{diff, markdown, prompt};
 
-const MODEL_ROWS: usize = 10;
 /// Rows from which the help panel spaces its parts out, as the reference does at 50 rows and
 /// not at 40.
 const ROOMY_HELP: usize = 48;
@@ -104,6 +103,21 @@ pub fn draw(buf: &mut Buffer, app: &mut App, dialog: &Dialog) -> u16 {
     }
 }
 
+/// `spans` with the first `phrase` in each span drawn in the style `style` makes of its own.
+fn restyle(spans: Vec<Span>, phrase: &str, style: impl Fn(Style) -> Style) -> Vec<Span> {
+    spans
+        .into_iter()
+        .flat_map(|(text, base)| match text.split_once(phrase) {
+            Some((a, b)) => vec![
+                (a.to_string(), base),
+                (phrase.to_string(), style(base)),
+                (b.to_string(), base),
+            ],
+            None => vec![(text, base)],
+        })
+        .collect()
+}
+
 fn indent(row: Row, n: usize) -> Row {
     let mut out = Row::of(" ".repeat(n), Style::new());
     out.extend(row);
@@ -181,10 +195,8 @@ fn help(app: &App, tab: usize, sel: usize, focus: bool, w: usize, h: usize) -> P
         top.push(Row::of("   ", Style::new()).with("Shortcuts", th.bold()));
         top.extend(prompt::shortcut_table(app, w, true, Style::new()));
         top.push(Row::new());
-        let mut bottom = bottom;
         if roomy {
             top.push(Row::new());
-            bottom.insert(1, Row::new());
         }
         return Panel {
             top,
@@ -338,11 +350,9 @@ fn model(app: &App, sel: usize, w: usize, h: usize) -> Panel {
         top.push(indent(r, 3));
     }
     top.push(Row::new());
-    // the panel takes at most half the screen and a row; the list gives way first
-    let effort_rows = if app.cfg.effort.is_empty() { 0 } else { 2 };
-    let fixed = 1 + top.len() + 1 + 1 + effort_rows + 1;
-    let rows = (h / 2 + 1).saturating_sub(fixed).clamp(1, MODEL_ROWS);
-    let shown = rows;
+    // the list shows (height - 17) / 2 models, two at least; a longer one scrolls
+    let shown = (h.saturating_sub(17) / 2).max(2).min(models.len());
+    let windowed = shown < models.len();
     // the widest name, the current one counted with its ` ✔`, then two columns
     let name_w = models
         .iter()
@@ -352,6 +362,18 @@ fn model(app: &App, sel: usize, w: usize, h: usize) -> Panel {
         + 2;
     let first = if sel >= shown { sel + 1 - shown } else { 0 };
     let last = (first + shown).min(models.len());
+    // the model the default entry points at, `Opus 5.5` in `(currently Opus 5.5)`, stands out
+    // wherever a description names it
+    let default_name = models.iter().find_map(|m| {
+        let at = m.provider.find("(currently ")? + "(currently ".len();
+        let end = m.provider[at..].find(')')?;
+        Some(m.provider[at..at + end].to_string())
+    });
+    // the number and its dot, a space, then the name: one more column once there are ten
+    let num_w = models.len().to_string().len() + 2;
+    // the description wraps three columns short of the edge, under its own first letter
+    let col = 5 + num_w + name_w;
+    let desc_w = w.saturating_sub(3 + col).max(1);
     for (i, m) in models.iter().enumerate().take(last).skip(first) {
         let current = m.id == app.cfg.model;
         let more_below = i + 1 == last && last < models.len();
@@ -366,7 +388,7 @@ fn model(app: &App, sel: usize, w: usize, h: usize) -> Panel {
         } else {
             row.push("     ", Style::new());
         }
-        row.push(format!("{:<4}", format!("{}.", i + 1)), th.dim());
+        row.push(format!("{:<num_w$}", format!("{}.", i + 1)), th.dim());
         let label = if current {
             format!("{} ✔", m.name)
         } else {
@@ -381,20 +403,34 @@ fn model(app: &App, sel: usize, w: usize, h: usize) -> Panel {
         };
         let pad = name_w.saturating_sub(width(&label));
         row.push(label, style);
-        if !m.provider.is_empty() {
-            row.push(" ".repeat(pad), Style::new());
-            row.push(
-                truncate(&m.provider, w.saturating_sub(9 + name_w + 2)),
-                th.dim(),
-            );
+        if m.provider.is_empty() {
+            top.push(row);
+            continue;
+        }
+        row.push(" ".repeat(pad), Style::new());
+        let mut spans: Vec<Span> = vec![(m.provider.clone(), th.dim())];
+        if let Some(name) = &default_name {
+            spans = restyle(spans, name, |_| th.fg(th.brand));
+        }
+        let mut lines = wrap(&spans, desc_w).into_iter();
+        if let Some(l) = lines.next() {
+            row.extend(l);
         }
         top.push(row);
+        for l in lines {
+            top.push(indent(l, col));
+        }
     }
-    if last < models.len() {
-        top.push(Row::of(
-            format!("      … +{} models", models.len() - last),
-            th.dim(),
-        ));
+    // a scrolled list says how many are below it, and leaves a row more before the effort
+    if windowed {
+        if last < models.len() {
+            let n = models.len() - last;
+            top.push(Row::of(
+                format!("      … +{n} model{}", if n == 1 { "" } else { "s" }),
+                th.dim(),
+            ));
+        }
+        top.push(Row::new());
     }
     top.push(Row::new());
     if !app.cfg.effort.is_empty() {
@@ -545,7 +581,7 @@ fn resume(app: &App, sel: usize, query: &str, w: usize, h: usize) -> Panel {
     let sel = sel.min(list.len() - 1);
     let first = if sel >= shown { sel + 1 - shown } else { 0 };
     let last = (first + shown).min(list.len());
-    let now = app.now_unix;
+    let now = app.resume_now;
     for (i, s) in list.iter().enumerate().take(last).skip(first) {
         let on = i == sel;
         let title = if s.title.is_empty() {
@@ -617,19 +653,39 @@ pub fn plan_review(buf: &mut Buffer, app: &App, req: &PermissionRequest, sel: us
         bottom.push(indent(r, 3));
     }
     bottom.push(Row::new());
-    for (i, (label, _)) in permission_options(req, app.auto_offered())
+    for (i, (label, choice)) in permission_options(req, app.auto_offered())
         .iter()
         .enumerate()
     {
         let on = i == sel;
-        bottom.push(
-            Row::of(if on { "   ❯ " } else { "     " }, accent)
-                .with(format!("{}.", i + 1), th.dim())
-                .with(" ", Style::new())
-                .with(label.clone(), if on { accent } else { Style::new() }),
-        );
+        let mut row = Row::of(if on { "   ❯ " } else { "     " }, accent);
+        row.push(format!("{}.", i + 1), th.dim());
+        row.push(" ", Style::new());
+        if *choice == crate::app::Choice::Feedback {
+            row.extend(feedback_line(app, label, on));
+        } else {
+            row.push(label.clone(), if on { accent } else { Style::new() });
+        }
+        bottom.push(row);
     }
+    bottom.push(Row::of(
+        "        shift+tab to approve with this feedback",
+        th.dim(),
+    ));
     bottom.push(Row::new());
+    let mut foot = Row::of(
+        format!(
+            "   ctrl+g to edit in {} \u{b7} {}",
+            crate::app::editor_display(),
+            crate::app::plan_file_of(req)
+        ),
+        th.dim(),
+    );
+    if app.plan_saved {
+        foot.push(" \u{b7} ", th.dim());
+        foot.push("\u{2714} Plan saved!", th.fg(th.success));
+    }
+    bottom.push(foot);
     let start = 2u16;
     let room = (h - start) as usize;
     // a plan longer than the pane is cut, its closing rule with it, and an arrow says so
@@ -655,6 +711,38 @@ pub fn plan_review(buf: &mut Buffer, app: &App, req: &PermissionRequest, sel: us
         blit(buf, 0, y0 + i as u16, r);
     }
     start
+}
+
+/// The plan review's text answer: its label as a placeholder until something is typed, then the
+/// text, with the cursor drawn as a reversed cell while the line is picked.
+fn feedback_line(app: &App, label: &str, on: bool) -> Row {
+    let th = app.theme;
+    let cursor = Style::new().add_modifier(Modifier::REVERSED);
+    let typed: Vec<char> = app.feedback.chars().collect();
+    if typed.is_empty() {
+        if !on {
+            return Row::of(label.to_string(), th.dim());
+        }
+        let mut chars = label.chars();
+        let first = chars.next().map(String::from).unwrap_or_default();
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        return Row::of(first, cursor).with(chars.as_str().to_string(), dim);
+    }
+    if !on {
+        return Row::of(typed.iter().collect::<String>(), Style::new());
+    }
+    let at = app.feedback_cur.min(typed.len());
+    let mut row = Row::of(typed[..at].iter().collect::<String>(), Style::new());
+    match typed.get(at) {
+        Some(c) => {
+            row.push(c.to_string(), cursor);
+            row.push(typed[at + 1..].iter().collect::<String>(), Style::new());
+        }
+        None => {
+            row.push(" ", cursor);
+        }
+    }
+    row
 }
 
 /// A permission prompt as rows for the end of the transcript.
@@ -722,10 +810,10 @@ pub fn permission(app: &App, req: &PermissionRequest, sel: usize, w: usize) -> V
             };
             rows.push(Row::of(" ", Style::new()).with(title, accent.add_modifier(Modifier::BOLD)));
             if app.auto_offered() {
-                rows.push(Row::of(
-                    " Tip: auto mode handles these prompts for you \u{2014} choose \"switch to auto mode\" below",
-                    th.bold(),
-                ));
+                let tip = "Tip: auto mode handles these prompts for you \u{2014} choose \"switch to auto mode\" below";
+                for r in wrap_str(tip, th.bold(), w.saturating_sub(1)) {
+                    rows.push(indent(r, 1));
+                }
             }
             let command = req
                 .input
@@ -766,10 +854,15 @@ pub fn permission(app: &App, req: &PermissionRequest, sel: usize, w: usize) -> V
             (crate::app::Choice::Auto, Some((head, tail))) => (head, Some(tail)),
             _ => (label.as_str(), None),
         };
-        for (k, mut r) in wrap_str(label, st, w.saturating_sub(8))
-            .into_iter()
-            .enumerate()
-        {
+        // the words that name what the answer does are bold
+        let mut spans: Vec<Span> = vec![(label.to_string(), st)];
+        for strong in [
+            "accept edits (auto-approve file edits and common file commands)",
+            "(shift+tab)",
+        ] {
+            spans = restyle(spans, strong, |base| base.add_modifier(Modifier::BOLD));
+        }
+        for (k, mut r) in wrap(&spans, w.saturating_sub(8)).into_iter().enumerate() {
             if let (Some(tail), 0) = (reason, k) {
                 r.push(format!(" \u{b7} {tail}"), th.dim());
             }

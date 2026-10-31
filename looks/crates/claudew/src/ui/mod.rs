@@ -164,16 +164,11 @@ fn draw_rows(buf: &mut Buffer, app: &mut App, rows: &[Row], area: Rect) {
     app.scroll = app.scroll.min(max_scroll);
     app.last_view = (rows.len(), view);
     let start = max_scroll - app.scroll;
-    // a prompt whose row above has scrolled off is not drawn at all, as the reference leaves
-    // it out; whatever else is cut at the top shows its tail
-    let user_bg = app.theme.user_bg;
-    let is_user = |r: &Row| r.0.first().is_some_and(|(_, st)| st.bg == Some(user_bg));
-    let mut hide = start > 0;
     for (i, row) in rows.iter().skip(start).take(view).enumerate() {
-        if hide && is_user(row) {
+        // the reference leaves a turn's duration line out when it is the first row on screen
+        if i == 0 && start > 0 && row.text().starts_with('✻') {
             continue;
         }
-        hide = false;
         blit(buf, area.x, area.y + i as u16, row);
     }
 }

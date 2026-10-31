@@ -337,18 +337,25 @@ fn tab_on_a_permission_prompt_sends_a_note_with_the_answer() {
 }
 
 #[test]
-fn the_effort_notice_goes_after_a_while_and_comes_back_for_a_turn() {
+fn the_effort_notice_goes_after_ten_seconds_and_a_closed_picker_brings_it_back() {
     let mut hn = harness();
     assert!(hn
         .app
         .notice
         .as_deref()
         .is_some_and(|n| n.contains("/effort")));
-    hn.advance(31_000);
+    hn.advance(11_000);
     assert_eq!(hn.app.notice, None);
     hn.type_str("hi");
     hn.press(KeyCode::Enter);
-    assert!(hn.app.notice.is_some(), "shown again while the turn runs");
+    assert_eq!(hn.app.notice, None, "a turn does not bring it back");
+    hn.event(Event::TurnEnd(StopReason::EndTurn));
+    hn.type_str("/help");
+    hn.press(KeyCode::Enter);
+    hn.press(KeyCode::Esc);
+    assert!(hn.app.notice.is_some(), "closing a panel does");
+    hn.advance(11_000);
+    assert_eq!(hn.app.notice, None);
 }
 
 #[test]
@@ -551,8 +558,15 @@ fn a_finished_plan_asks_and_the_answer_goes_back() {
     let screen = hn.render().plain();
     assert!(screen.contains("Ready to code?"), "{screen}");
     assert!(screen.contains("// entry point"), "{screen}");
-    assert!(screen.contains("❯ 1. Yes, proceed"), "{screen}");
-    assert!(screen.contains("2. No, keep planning"), "{screen}");
+    assert!(
+        screen.contains("❯ 1. Yes, manually approve edits"),
+        "{screen}"
+    );
+    assert!(screen.contains("2. Tell Wizard what to change"), "{screen}");
+    assert!(
+        screen.contains("ctrl+g to edit in Nvim \u{b7} .wizard/plan.md"),
+        "{screen}"
+    );
     hn.sent();
     hn.press(KeyCode::Enter);
     assert!(matches!(
@@ -560,6 +574,144 @@ fn a_finished_plan_asks_and_the_answer_goes_back() {
         [Request::Decide { id, allow: true, .. }] if id == "9"
     ));
     assert!(!hn.app.plan, "an approved plan leaves plan mode");
+}
+
+fn ask_about_plan(hn: &mut Harness) {
+    hn.app.plan = true;
+    hn.event(Event::TurnStart);
+    hn.event(Event::Permission(agent_core::PermissionRequest {
+        id: "9".into(),
+        tool: "exit_plan".into(),
+        kind: agent_core::ToolKind::Other,
+        title: "Ready to code?".into(),
+        input: serde_json::json!({ "plan": "1. Add the comment.", "plan_file": ".wizard/plan.md" }),
+        diff: None,
+        rule: String::new(),
+    }));
+    hn.sent();
+}
+
+/// The third way out of a plan is a line of text: typed there, Enter sends it back as the
+/// reason the plan was turned down, and plan mode stays on.
+#[test]
+fn a_plan_is_turned_down_with_what_the_user_typed() {
+    let mut hn = harness();
+    ask_about_plan(&mut hn);
+    // typing on the first answer does nothing
+    hn.type_str("x");
+    assert!(hn.app.feedback.is_empty(), "nothing is typed yet");
+    hn.press(KeyCode::Down);
+    hn.type_str("use tabs");
+    let screen = hn.render().plain();
+    assert!(screen.contains("\u{276f} 2. use tabs"), "{screen}");
+    assert!(
+        screen.contains("shift+tab to approve with this feedback"),
+        "{screen}"
+    );
+    hn.press(KeyCode::Enter);
+    assert!(matches!(
+        hn.sent().as_slice(),
+        [Request::Decide { id, allow: false, note, .. }] if id == "9" && note == "use tabs"
+    ));
+    assert!(hn.app.plan, "a plan turned down stays in plan mode");
+}
+
+/// A digit picks its answer; the feedback line takes digits as text once it is picked.
+#[test]
+fn digits_pick_a_plan_answer_and_the_feedback_line_takes_them_as_text() {
+    let mut hn = harness();
+    ask_about_plan(&mut hn);
+    hn.type_str("2");
+    assert!(hn
+        .render()
+        .plain()
+        .contains("\u{276f} 2. Tell Wizard what to change"));
+    hn.type_str("1 ab");
+    assert!(hn.render().plain().contains("2. 1 ab"));
+    // up and back down puts the cursor at the start of what is typed
+    hn.press(KeyCode::Up);
+    hn.press(KeyCode::Down);
+    hn.type_str("Z");
+    assert!(hn.render().plain().contains("2. Z1 ab"));
+    hn.press(KeyCode::Backspace);
+    hn.press(KeyCode::Enter);
+    assert!(matches!(
+        hn.sent().as_slice(),
+        [Request::Decide { allow: false, note, .. }] if note == "1 ab"
+    ));
+}
+
+/// shift+tab approves, and what is typed goes along with the approval.
+#[test]
+fn shift_tab_approves_a_plan_with_the_feedback() {
+    let mut hn = harness();
+    ask_about_plan(&mut hn);
+    hn.press(KeyCode::Down);
+    hn.type_str("mind the tests");
+    hn.press(KeyCode::BackTab);
+    assert!(matches!(
+        hn.sent().as_slice(),
+        [Request::Decide { allow: true, note, .. }] if note == "mind the tests"
+    ));
+    assert!(!hn.app.plan);
+}
+
+/// The model picker lists (height - 17) / 2 models and scrolls the rest; a description wraps
+/// under its own column, three columns short of the edge.
+#[test]
+fn the_model_picker_wraps_descriptions_and_scrolls_by_height() {
+    let mut hn = Harness::new("static-80x24.jsonl", 80, 24);
+    let model = |id: &str, name: &str, about: &str| agent_core::ModelOption {
+        id: id.into(),
+        name: name.into(),
+        provider: about.into(),
+    };
+    let mut cfg = hn.app.cfg.clone();
+    cfg.models = vec![
+        model(
+            "d",
+            "Default (recommended)",
+            "Use the default model (currently Opus 5.5) \u{b7} $4/$20 per Mtok",
+        ),
+        model("o", "Opus", "Opus 5.5 \u{b7} Best for everyday, complex tasks \u{b7} $4/$20 per Mtok"),
+        model(
+            "f",
+            "Fable",
+            "Fable 5.1 \u{b7} Most capable for your hardest and longest-running tasks \u{b7} $10/$50 per Mtok",
+        ),
+        model("s", "Sonnet", "Sonnet 5.5 \u{b7} Efficient for routine tasks \u{b7} $2/$10 per Mtok"),
+        model(
+            "h",
+            "Haiku",
+            "Haiku 5.5 \u{b7} Fastest for quick answers \u{b7} $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)",
+        ),
+    ];
+    cfg.model = "h".into();
+    hn.event(Event::ConfigChanged(cfg));
+    hn.type_str("/model");
+    hn.press(KeyCode::Enter);
+    let plain = hn.render().plain();
+    let rows: Vec<&str> = plain.lines().collect();
+    assert!(plain.contains("\u{2191} 3. Fable"), "{plain}");
+    let at = rows
+        .iter()
+        .position(|r| r.contains("Fable 5.1"))
+        .expect("Fable's description");
+    assert!(
+        rows[at + 1].starts_with(&" ".repeat(31)) && rows[at + 1].contains("longest-running"),
+        "{plain}"
+    );
+    assert!(
+        rows.iter()
+            .skip_while(|r| !r.contains("Select model"))
+            .all(|r| r.chars().count() <= 77),
+        "descriptions stop three columns short of the edge:\n{plain}"
+    );
+    // from the last model, Down wraps to the first and says how many are below
+    hn.press(KeyCode::Down);
+    let plain = hn.render().plain();
+    assert!(plain.contains("\u{276f} 1. Default"), "{plain}");
+    assert!(plain.contains("\u{2026} +2 models"), "{plain}");
 }
 
 #[test]

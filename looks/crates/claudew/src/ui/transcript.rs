@@ -106,10 +106,13 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
             // the task tools leave no row: the list is in the panel above the prompt
             Block::Tool(t) if is_task_call(t) => {}
             Block::Tool(_) => {
+                // the call a running turn has just finished stays as it was drawn while it ran,
+                // until something comes after it
+                let live = app.busy.is_some() && !detail;
                 let mut j = i;
                 let mut group: Vec<&ToolCall> = Vec::new();
                 while let Some(Block::Tool(t)) = blocks.get(j) {
-                    if detail || !folds(t) {
+                    if detail || !folds(t) || (live && j + 1 == blocks.len()) {
                         break;
                     }
                     group.push(t);
@@ -120,7 +123,13 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                         unreachable!()
                     };
                     out.push(Row::new());
-                    out.extend(tool(app, t, w, detail));
+                    if live && i + 1 == blocks.len() && folds(t) {
+                        let mut running = t.clone();
+                        running.status = ToolStatus::Running;
+                        out.extend(tool(app, &running, w, detail));
+                    } else {
+                        out.extend(tool(app, t, w, detail));
+                    }
                 } else {
                     out.push(Row::new());
                     out.extend(folded(&th, &group, w));
@@ -266,8 +275,10 @@ fn user(th: &Theme, text: &str, bash: bool, w: usize) -> Vec<Row> {
             if i == last && !bash && text.ends_with(' ') && text.starts_with('/') {
                 row.push(" ", bg);
             }
-            // a wrapped row keeps the space it broke at
-            if i < last {
+            // a wrapped row keeps the space it broke at, unless the row is already full (the
+            // first row runs one column further)
+            let full = w.saturating_sub(if i == 0 { 1 } else { 2 });
+            if i < last && row.width() < full {
                 row.push(" ", bg);
             }
             row
