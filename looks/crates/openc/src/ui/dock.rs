@@ -170,10 +170,12 @@ mod tests {
             Todo {
                 text: "a".into(),
                 status: TodoStatus::Completed,
+                active: None,
             },
             Todo {
                 text: "b".into(),
                 status: TodoStatus::InProgress,
+                active: None,
             },
         ];
         let q = VecDeque::new();
@@ -184,6 +186,7 @@ mod tests {
         let done = vec![Todo {
             text: "a".into(),
             status: TodoStatus::Completed,
+            active: None,
         }];
         assert!(dock_rows(&done, false, &q, false, 80, &p, &UNICODE).is_empty());
     }

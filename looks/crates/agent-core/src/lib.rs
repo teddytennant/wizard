@@ -109,6 +109,9 @@ pub enum TodoStatus {
 pub struct Todo {
     pub text: String,
     pub status: TodoStatus,
+    /// Present-tense phrasing shown while the task is in progress ("Running the tests").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

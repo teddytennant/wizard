@@ -306,6 +306,7 @@ fn todos(id: &str, items: &[(&str, TodoStatus)]) -> Vec<Step> {
         .map(|(t, s)| Todo {
             text: (*t).into(),
             status: *s,
+            active: None,
         })
         .collect();
     let json_items: Vec<Value> = list

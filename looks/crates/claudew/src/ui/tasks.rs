@@ -31,7 +31,7 @@ pub fn current(app: &App) -> Option<&str> {
     app.todos
         .iter()
         .find(|t| t.status == TodoStatus::InProgress)
-        .map(|t| t.text.as_str())
+        .map(|t| t.active.as_deref().unwrap_or(&t.text))
 }
 
 fn count(todos: &[Todo], status: TodoStatus) -> usize {

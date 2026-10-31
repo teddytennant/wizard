@@ -240,6 +240,7 @@ fn task(text: &str, status: agent_core::TodoStatus) -> agent_core::Todo {
     agent_core::Todo {
         text: text.into(),
         status,
+        active: None,
     }
 }
 

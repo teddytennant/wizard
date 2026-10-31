@@ -224,6 +224,7 @@ pub fn steps(cwd: &std::path::Path, prompt: &str) -> Vec<Step> {
             .map(|(text, status)| Todo {
                 text: (*text).into(),
                 status: *status,
+                active: None,
             })
             .collect();
             let c = call(

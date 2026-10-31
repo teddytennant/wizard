@@ -104,6 +104,7 @@ fn todo_pane_pushes_the_scrollback_down() {
     let done = |t: &str| Todo {
         text: t.into(),
         status: TodoStatus::Completed,
+        active: None,
     };
     h.event(Event::Todos(vec![
         done("Make a todo list of these steps"),

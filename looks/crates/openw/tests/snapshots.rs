@@ -77,10 +77,12 @@ fn tools_turn(h: &mut Harness) {
         Todo {
             text: "Read the code".into(),
             status: TodoStatus::Completed,
+            active: None,
         },
         Todo {
             text: "Fix greeting".into(),
             status: TodoStatus::InProgress,
+            active: None,
         },
     ]));
     h.event(Event::TextDelta(

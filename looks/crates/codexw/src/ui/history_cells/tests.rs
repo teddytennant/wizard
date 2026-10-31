@@ -36,6 +36,7 @@ fn todo(text: &str, status: TodoStatus) -> Todo {
     Todo {
         text: text.into(),
         status,
+        active: None,
     }
 }
 

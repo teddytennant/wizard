@@ -233,6 +233,7 @@ mod tests {
             todos: vec![Todo {
                 text: "Run the full suite".into(),
                 status: TodoStatus::InProgress,
+                active: None,
             }],
             agents: 0,
         };

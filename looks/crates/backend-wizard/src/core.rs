@@ -297,7 +297,7 @@ impl Core {
             Request::Cancel => {
                 // ACP: a cancel answers every open question as cancelled
                 for (_, (rpc, _)) in std::mem::take(&mut self.asks) {
-                    self.answer_permission(rpc, None);
+                    self.answer_permission(rpc, None, "");
                 }
                 // those prompts are already in the transcript, so say they will not be answered
                 let dropped = std::mem::take(&mut self.queue).len();
@@ -356,14 +356,16 @@ impl Core {
                 }
             }
             Request::Shutdown => self.out.push(Action::CloseStdin),
-            Request::Decide { id, allow, .. } => {
+            Request::Decide {
+                id, allow, note, ..
+            } => {
                 if let Some((rpc, options)) = self.asks.remove(&id) {
                     let want = if allow { "allow" } else { "reject" };
                     let pick = options
                         .iter()
                         .find(|o| str_of(o, "kind").starts_with(want))
                         .map(|o| str_of(o, "optionId").to_string());
-                    self.answer_permission(rpc, pick);
+                    self.answer_permission(rpc, pick, &note);
                 }
             }
             // Added to agent-core for openc; wizard has no steering yet.
@@ -513,13 +515,19 @@ impl Core {
         self.take()
     }
 
-    fn answer_permission(&mut self, rpc: Value, option: Option<String>) {
+    fn answer_permission(&mut self, rpc: Value, option: Option<String>, note: &str) {
         let outcome = match option {
             Some(o) => json!({"outcome": "selected", "optionId": o}),
             None => json!({"outcome": "cancelled"}),
         };
+        let mut result = json!({"outcome": outcome});
+        // what the user typed beside the answer: why a plan was turned down, or a word with
+        // the approval
+        if !note.trim().is_empty() {
+            result["_meta"] = json!({"feedback": note.trim()});
+        }
         self.out.push(Action::Send(
-            json!({"jsonrpc": "2.0", "id": rpc, "result": {"outcome": outcome}}),
+            json!({"jsonrpc": "2.0", "id": rpc, "result": result}),
         ));
     }
 
@@ -863,6 +871,7 @@ impl Core {
                     self.emit(Event::Todos(t));
                 }
             }
+            "plan" => self.emit(Event::Todos(wire::todos_of_plan(update))),
             "available_commands_update" => {
                 self.commands = wire::parse_commands(update);
                 self.custom = wire::custom_commands(update);

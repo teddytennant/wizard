@@ -129,6 +129,7 @@ fn todos_of(call: &ToolCall) -> Option<Vec<Todo>> {
                     Some("in_progress") => TodoStatus::InProgress,
                     _ => TodoStatus::Pending,
                 },
+                active: None,
             })
             .collect(),
     )

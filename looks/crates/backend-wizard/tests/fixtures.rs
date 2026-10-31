@@ -151,7 +151,8 @@ fn tool_turn_event_sequence() {
         todos[1],
         Todo {
             text: "count them".into(),
-            status: TodoStatus::Completed
+            status: TodoStatus::Completed,
+            active: None
         }
     );
     // `todo` has no kind on the wire.
