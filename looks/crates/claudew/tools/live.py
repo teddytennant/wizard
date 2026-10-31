@@ -48,6 +48,8 @@ def main():
     ap.add_argument('--sizes', default='120x40')
     ap.add_argument('--ref', help='reference captures: the shared scenes (x-*) run against their data')
     ap.add_argument('--shared-only', action='store_true', help='run only the shared scenes')
+    ap.add_argument('--only', help='run only these groups (comma separated), e.g. live-auto; the checks of the '
+                                   'others are skipped too')
     ap.add_argument('--xcwd', help='the project the shared scenes run in (default: --cwd)')
     a = ap.parse_args()
     out = os.path.join(a.work, 'live')
@@ -67,8 +69,13 @@ def main():
                             stderr=subprocess.DEVNULL)
     good = os.path.join(a.work, 'live-home')
     bad = os.path.join(a.work, 'live-home-broken')
+    auto = os.path.join(a.work, 'live-home-auto')
     home(good, 'model = "fake-model"\nactive_provider = "fake"\n\n[[providers]]\nname = "fake"\n'
                'kind = "openai"\nbase_url = "http://127.0.0.1:%d/v1"\nmodel = "fake-model"\n' % port)
+    # permissions on, so shift+tab steps through manual, accept edits, plan and auto
+    home(auto, 'model = "fake-model"\nactive_provider = "fake"\n\n[[providers]]\nname = "fake"\n'
+               'kind = "openai"\nbase_url = "http://127.0.0.1:%d/v1"\nmodel = "fake-model"\n'
+               '\n[permissions]\nmode = "default"\n' % port)
     # a provider whose key is never set
     home(bad, 'model = "grok-4"\nactive_provider = "xai"\n\n[[providers]]\nname = "xai"\nkind = "xai"\n'
               'base_url = "http://127.0.0.1:9/v1"\nmodel = "grok-4"\napi_key_env = "CLAUDEW_LIVE_NO_KEY"\n')
@@ -107,8 +114,16 @@ def main():
                                   ('live-carry-resume', good, a.cwd), ('live-btw', good, a.cwd),
                                   ('live-slash', good, a.cwd), ('live-early', early, a.cwd),
                                   ('live-early-cmd', early2, a.cwd),
+                                  ('live-auto', auto, a.cwd),
                                   ('live-fail', bad, a.cwd)):
+                if a.only and group not in a.only.split(','):
+                    continue
                 # the slow start's model list takes 8 s; a fresh home has none cached
+                if group == 'live-auto':
+                    with open(os.path.join(a.cwd, 'main.rs'), 'w') as f:
+                        f.write(main_rs)
+                    if os.path.exists(os.path.join(a.cwd, 'w.txt')):
+                        os.remove(os.path.join(a.cwd, 'w.txt'))
                 slow = os.path.join(os.path.dirname(log), 'shared-slow-get.txt')
                 if group in ('live-early', 'live-early-cmd'):
                     with open(slow, 'w') as f:
@@ -123,7 +138,7 @@ def main():
             if os.path.exists(slow):
                 os.remove(slow)
             history = os.path.join(a.work, 'live-state', 'history.jsonl')
-            fails += checks(out, size, version, log, a.cwd, history)
+            fails += checks(out, size, version, log, a.cwd, history, a.only)
             # the next size starts from a fresh history and fresh sessions
             for d in ('live-state',):
                 shutil.rmtree(os.path.join(a.work, d), ignore_errors=True)
@@ -275,11 +290,37 @@ def ran_in_plan(fails, scene, log, text, model=None):
         check(fails, scene, r['model'] == model, '%r ran on %s, not %s' % (text, model, r['model']))
 
 
-def checks(out, size, version, log, cwd, history):
+
+def auto_checks(fails, p, tag, log, cwd):
+    """Permissions on, shift+tab to auto mode, one edit judged and let through, one write refused."""
+    t = text(p('live-auto-modes'))
+    check(fails, tag('live-auto'), '\u23f5\u23f5 auto mode on' in t, 'three presses reach auto mode')
+    check(fails, tag('live-auto'), 'Auto mode lets Wizard handle permission prompts' in t,
+          'the first time on auto mode explains it')
+    t = text(p('live-auto-edit'))
+    check(fails, tag('live-auto'), 'Do you want' not in t and 'Update(main.rs)' in t,
+          'an edit in auto mode is judged and runs without a prompt')
+    check(fails, tag('live-auto'), 'println!("hi")' in open(os.path.join(cwd, 'main.rs')).read(),
+          'the judged edit was made')
+    t = text(p('live-auto-write'))
+    check(fails, tag('live-auto'), 'Do you want' not in t and 'Error writing file' in t,
+          'a write the judge refuses shows as a failed call, with no prompt')
+    check(fails, tag('live-auto'), any('Auto mode refused' in l and 'it writes a file the request did not name' in l
+                                       for l in open(log)),
+          "the judge's reason went back to the model as the tool result")
+    check(fails, tag('live-auto'), not os.path.exists(os.path.join(cwd, 'w.txt')), 'the refused write did not happen')
+    judged = [l for l in open(log) if 'Reply with one line: ALLOW' in l]
+    check(fails, tag('live-auto'), len(judged) >= 2, 'the judge was asked about the edit and the write')
+    return fails
+
+
+def checks(out, size, version, log, cwd, history, only=None):
     fails = []
     p = lambda scene: os.path.join(out, '%s-%s.ansi' % (scene, size))
     tag = lambda scene: '%s %s' % (scene, size)
 
+    if only:
+        return auto_checks(fails, p, tag, log, cwd)
     t = text(p('live-home'))
     check(fails, tag('live-home'), 'Wizard v%s' % version in t,
           'the header names wizard %s, the real binary' % version)
@@ -300,6 +341,8 @@ def checks(out, size, version, log, cwd, history):
     offered = [json.loads(l) for l in open(log) if '"say ok"' in l][-1]['tools']
     check(fails, tag('live-modes'), (sorted(offered) == ['web_fetch', 'web_search']) == (mode == 'chat'),
           'wizard ran the turn in the mode the footer shows (%r, offered %s)' % (mode, offered))
+
+    auto_checks(fails, p, tag, log, cwd)
 
     t = text(p('live-edit'))
     check(fails, tag('live-edit'), re.search(r'^\s+1\s+fn main\(\) \{', t, re.M),

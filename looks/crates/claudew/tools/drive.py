@@ -217,6 +217,16 @@ LIVE_CARRY_RESUME = [
                       ('fast_keys', 'Escape'), ('wait', 1.0), ('idle',)]),
 ]
 
+# Permissions on: shift+tab to auto mode (accept edits, plan, auto), where the model's edit is judged
+# and let through and its write is judged and refused.
+LIVE_AUTO = [
+    ('live-auto-modes', [('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'),
+                         ('wait', 3.0), ('snap', '')]),
+    ('live-auto-edit', [('type', 'please edit'), ('keys', 'Enter'), ('idle',), ('wait', 1.0), ('snap', '')]),
+    ('live-auto-write', [('type', 'please write'), ('keys', 'Enter'), ('idle',), ('wait', 1.0), ('snap', '')]),
+    ('live-auto-exit', [('quit',), ('wait', 0.5)]),
+]
+
 # A side question in flight in plan mode, closed, Esc once more, and a prompt sent while it is
 # still running: the prompt waits for it, and runs in plan mode.
 LIVE_BTW = [
@@ -492,7 +502,7 @@ HOME = [('home', [('snap', '')])]
 GROUPS = {'plan2': PLAN2, 'plan3': PLAN3, 'ttl7': TTL7, 'ttl6': TTL6, 'ttl5': TTL5, 'ttl4': TTL4, 'ttl3': TTL3, 'ttl2': TTL2, 'slashq': SLASHQ, 'ttl': TTL, 'model': [s for s in STATIC if s[0] == 'model'], 'shortcuts': [s for s in STATIC if s[0] == 'shortcuts'], 'plan4': PLAN4, 'plan5': PLAN5, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
-          'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
+          'live-carry': LIVE_CARRY, 'live-auto': LIVE_AUTO, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
           'live-btw': LIVE_BTW, 'live-early-cmd': LIVE_EARLY_CMD, 'live-slash': LIVE_SLASH,
           'shared-resume': SHARED_RESUME}
 

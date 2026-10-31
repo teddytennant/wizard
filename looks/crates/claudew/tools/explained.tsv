@@ -37,17 +37,13 @@ wz-model	shape-1	^   [❯↓ ] ?\d+\.\s{1,2}\S	model rows: the description colum
 wz-slash*	shape-1	^  [❯ ] /\S+\s	command rows: the description column starts after the longest command name, which differs
 wz-slash*	shape-ref	^\s{20,}\S	command rows: Claude Code's descriptions wrap to a second row and Wizard's fit in one, so the five-row window holds different rows
 help-[12]*	drop	^▔@@^\s{60,}(ctrl \+ g to edit in \$EDITOR|/keybindings to customize)\s*$	paste images and /keybindings: the reference's third column has two entries Wizard does not (no image paste over ACP, fixed keys), so its table is two rows taller
-light-bash	look	[○◐●◉] \w+ · /effort\s*$	account notice: earlier in this run the reference's weekly-limit notice took the notice row, and its effort notice did not come back
 write-done-80x24	look	^  line\. Then reply with exactly: done\s*$	permission prompt: after the write prompt it showed (one Wizard never raises), the reference's transcript is a row longer above the call; not understood, so not copied
-light-model*	look	 [○◐●◉] \w+ · /effort ▔?\s*$	effort notice on the picker's edge: the light run's reference shows none where the dark run's does; that run met the weekly-limit notice earlier, which looks like the cause, so it is not copied
+light-model*	look	 [○◐●◉] \w+ · /effort ▔?\s*$	effort notice on the picker's edge: it is up for ten seconds after the session opens, and the light run's /model lands on one side of that edge in one program and on the other in the other
 queue-esc	both	^  \d+\s*$	the count: on the reference it kept streaming between the queue capture and Esc, and the replay cannot land text in that gap, so the numbers on screen differ
 wz-help-commands-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
 wz-help-commands-200x50	shape	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
 queue-esc	both	(?<=^\* Verb…) \(.*\)\s*$	timing: how far the queued prompt's turn has got when the capture lands (thinking, tokens) differs from run to run
-clear-120x40	both	[○◐●◉] \w+ · /effort\s*$	effort notice after /clear: whether it is still up depends on how long the compact before it took; the reference shows it at 120x40 only
 wz-model	shape	^   ❯ \d+\.	model rows: ❯ marks the current model, first in the recorded wizard and fifth in the reference
-queue-esc*	drop-look	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner had not come up on the reference when it was captured
-queue-esc*	look	[○◐●◉] \w+ · /effort\s*$	timing: the reference's notice row was empty at that moment, between its weekly-limit notice and its effort notice
 x-*	norm	(?<=^  ⏸ )(manual|genie)(?= mode on)@@MODE	modes: the reference starts in manual mode, Wizard in genie, its first mode; the mark and colour are the same
 x-btw	both	(?<=↑/↓ to scroll ).*$$	copy and fork: the look has no clipboard path, and wizard cannot fork a session
 x-*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
@@ -72,7 +68,6 @@ x-resume	drop	^▔@@^\s+(to )?search · Esc to cancel\s*$	resume picker keys: th
 x-rewind-confirm	norm	(?<=^   │ \()\d+[smhd] ago@@N ago	ages: the two runs are seconds apart; the live checks make sure the clock moves
 wz-slash*-[18]*	shape-ref	^\s*$	command rows: Claude Code's two-row descriptions push its five-row window down a row, so the row above it is empty where Wizard's starts
 wz-slash*-[18]*	shape	^  ❯ /\S+\s	command rows: with its window a row lower, the reference's selected command sits a row lower than Wizard's
-queue-esc*	drop	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner comes up at a moment of its own; the look's had not yet when it was captured
 slash-filter	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
 light-slash	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
 help-typed	drop	^  ❯ /help@@^    /debug\s	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
