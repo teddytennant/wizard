@@ -252,3 +252,42 @@ mod tests {
         assert!(matches!(interpret(3, "", ""), Verdicts::Warn(w) if w == "exit 3"));
     }
 }
+
+/// The answer a `--permission-prompt-tool` gives, as the text of its result:
+/// `{"behavior":"allow","updatedInput":{...}}` lets the call run (with the new
+/// input when there is one), `{"behavior":"deny","message":"..."}` refuses it.
+/// Anything else is a refusal, since an unreadable answer must not allow.
+pub fn prompt_tool_answer(text: &str) -> Result<Option<Value>, String> {
+    let value: Value = serde_json::from_str(text.trim()).map_err(|_| {
+        format!("the permission prompt tool answered with something that is not JSON: {text}")
+    })?;
+    match value.get("behavior").and_then(Value::as_str) {
+        Some("allow") => Ok(value.get("updatedInput").filter(|v| v.is_object()).cloned()),
+        Some("deny") => Err(value
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("The permission prompt tool denied this call.")
+            .to_string()),
+        _ => Err(format!(
+            "the permission prompt tool gave no behavior: {text}"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod prompt_tool_tests {
+    use super::*;
+
+    #[test]
+    fn allow_deny_and_junk() {
+        assert_eq!(prompt_tool_answer(r#"{"behavior":"allow"}"#), Ok(None));
+        let updated = prompt_tool_answer(r#"{"behavior":"allow","updatedInput":{"command":"ls"}}"#);
+        assert_eq!(updated, Ok(Some(serde_json::json!({"command": "ls"}))));
+        assert_eq!(
+            prompt_tool_answer(r#"{"behavior":"deny","message":"no"}"#),
+            Err("no".to_string())
+        );
+        assert!(prompt_tool_answer("allow").is_err());
+        assert!(prompt_tool_answer(r#"{"behavior":"maybe"}"#).is_err());
+    }
+}

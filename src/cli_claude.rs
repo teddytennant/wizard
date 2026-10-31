@@ -144,6 +144,30 @@ pub struct ClaudeFlags {
     pub include_partial_messages: bool,
     #[arg(long, hide = true)]
     pub include_hook_events: bool,
+
+    /// The built-in tools to leave available: `""` for none, `default` for all,
+    /// or names such as `Bash,Edit,Read`. MCP tools are not affected.
+    #[arg(long, num_args = 0.., value_name = "TOOLS")]
+    pub tools: Option<Vec<String>>,
+
+    /// MCP tool (`mcp__server__tool`) that answers permission requests no
+    /// one is available to answer.
+    #[arg(long, value_name = "TOOL")]
+    pub permission_prompt_tool: Option<String>,
+
+    /// Which settings layers to read: any of `user`, `project`, `local`,
+    /// comma separated. `--settings` and managed settings are always read.
+    #[arg(long, value_name = "SOURCES")]
+    pub setting_sources: Option<String>,
+
+    /// Beta features to send in the `anthropic-beta` header, with the
+    /// `anthropic` provider.
+    #[arg(long, num_args = 1.., value_name = "BETAS")]
+    pub betas: Vec<String>,
+
+    /// Accepted: `bypassPermissions` is always a mode you may choose.
+    #[arg(long, hide = true)]
+    pub allow_dangerously_skip_permissions: bool,
     #[arg(long, hide = true)]
     pub replay_user_messages: bool,
 
@@ -202,6 +226,17 @@ pub mod env {
     pub const SETTINGS_FILE: &str = "WIZARD_SETTINGS_FILE";
     /// Set by `--no-session-persistence`.
     pub const EPHEMERAL_SESSION: &str = "WIZARD_EPHEMERAL_SESSION";
+    /// The setting sources `--setting-sources` keeps, comma separated.
+    pub const SETTING_SOURCES: &str = "WIZARD_SETTING_SOURCES";
+    /// The beta names `--betas` lists, for the `anthropic-beta` header.
+    pub const BETAS: &str = "WIZARD_BETAS";
+    /// The MCP tool `--permission-prompt-tool` names.
+    pub const PERMISSION_PROMPT_TOOL: &str = "WIZARD_PERMISSION_PROMPT_TOOL";
+    /// The built-in tools `--tools` leaves available, one per [`SEP`]. Set but
+    /// empty means none.
+    pub const TOOLS: &str = "WIZARD_TOOLS";
+    /// The hook events `--include-hook-events` asks the stream to carry.
+    pub const INCLUDE_HOOK_EVENTS: &str = "WIZARD_INCLUDE_HOOK_EVENTS";
 }
 
 /// Separator between values in the list-valued variables. A control
@@ -280,7 +315,8 @@ impl ClaudeFlags {
     /// as the role this session plays. `None` when no agent was named or none
     /// matches (the caller reports that, see [`prepare`]).
     pub fn agent_prompt(&self) -> Option<String> {
-        let name = self.agent.as_deref()?;
+        let from_settings = self.agent.is_none().then(settings_agent).flatten();
+        let name = self.agent.as_deref().or(from_settings.as_deref())?;
         // The last definition wins, the way a project shadows the user's.
         // Claude Code's three built-ins all run the one built-in worker here.
         let name = match name {
@@ -343,6 +379,23 @@ impl ClaudeFlags {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
+    /// The names `--tools` leaves available, split on commas and spaces.
+    /// `None` is every tool: the flag is absent, or says `default`.
+    pub fn tool_filter(&self) -> Option<Vec<String>> {
+        let values = self.tools.as_ref()?;
+        let names: Vec<String> = values
+            .iter()
+            .flat_map(|value| value.split([',', ' ']))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
+        if names.iter().any(|name| name == "default") {
+            return None;
+        }
+        Some(names)
+    }
+
     /// Publish what other subsystems read as environment variables.
     ///
     /// # Safety
@@ -395,6 +448,18 @@ impl ClaudeFlags {
         if self.no_session_persistence {
             set(env::EPHEMERAL_SESSION, "1".into());
         }
+        if let Some(sources) = &self.setting_sources {
+            set(env::SETTING_SOURCES, sources.into());
+        }
+        if !self.betas.is_empty() {
+            set(env::BETAS, self.betas.join(",").into());
+        }
+        if let Some(tool) = &self.permission_prompt_tool {
+            set(env::PERMISSION_PROMPT_TOOL, tool.into());
+        }
+        if let Some(list) = self.tool_filter() {
+            set(env::TOOLS, list.join(&SEP.to_string()).into());
+        }
         unsafe { crate::config::key_helper::export() };
         for (name, value) in
             crate::config::claude_env::publish(&|name: &str| std::env::var(name).ok())
@@ -403,7 +468,15 @@ impl ClaudeFlags {
                 set(name, value.into());
             }
         }
-        if self.verbose || self.debug.is_some() {
+        let from_settings = std::env::current_dir()
+            .map(|root| crate::config::claude::load(&root, crate::config::claude::Trust::Refused))
+            .unwrap_or_default();
+        if from_settings.reduced_motion == Some(true)
+            && std::env::var_os("WIZARD_REDUCED_MOTION").is_none()
+        {
+            set("WIZARD_REDUCED_MOTION", "1".into());
+        }
+        if self.verbose || from_settings.verbose == Some(true) || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
                 Some(None) => "debug".to_string(),
@@ -432,14 +505,24 @@ impl ClaudeFlags {
                 None => set_model(config, &model),
             }
         }
+        crate::config::fast::init(&settings, &get);
         let from_env = crate::config::claude_env::effort(&get);
         let effort = self
             .effort
             .as_deref()
             .or(from_env.as_deref())
-            .or(settings.effort_level.as_deref());
+            .or(settings.effort_level.as_deref())
+            .or(settings.thinking_effort());
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
+        }
+        match settings.view_mode.as_deref() {
+            Some("verbose") => config.ui.compact = false,
+            Some("focus") => config.ui.compact = true,
+            _ => {}
+        }
+        if let Some(verbs) = settings.spinner_verb_list(&config.ui.spinner_verbs) {
+            config.ui.spinner_verbs = verbs;
         }
         if let Some(window) = self.autocompact.as_deref().and_then(parse_window) {
             config.max_context_tokens = window;
@@ -456,6 +539,12 @@ impl ClaudeFlags {
     pub fn wants_print(&self) -> bool {
         self.print
     }
+}
+
+/// `agent` from the Claude-format settings, for the runs that gave no `--agent`.
+fn settings_agent() -> Option<String> {
+    let root = std::env::current_dir().ok()?;
+    crate::config::claude::load(&root, crate::config::claude::Trust::Refused).agent
 }
 
 /// Point the active provider at `model` for this run.
@@ -600,7 +689,6 @@ enum Takes {
 /// written for `claude` still starts. The permission flags are not here: the
 /// permissions subsystem owns those.
 const UNSUPPORTED: &[(&str, Takes, &str)] = &[
-    ("--betas", Takes::Many, "Anthropic beta headers"),
     ("--brief", Takes::Nothing, "no SendUserMessage tool"),
     (
         "--chrome",
@@ -651,24 +739,9 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
         "no screen-reader mode",
     ),
     (
-        "--tools",
-        Takes::Many,
-        "the tool set is fixed; --allowedTools and --disallowedTools narrow what runs",
-    ),
-    (
         "--permission-prompts",
         Takes::One,
         "headless runs never wait for a prompt",
-    ),
-    (
-        "--permission-prompt-tool",
-        Takes::One,
-        "no permission prompt tool",
-    ),
-    (
-        "--allow-dangerously-skip-permissions",
-        Takes::Nothing,
-        "--permission-mode bypassPermissions is always available",
     ),
     ("--advisor", Takes::One, "see /fusion and /ultra"),
     (
@@ -710,11 +783,6 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
     ),
     ("--plugin-url", Takes::One, "use /plugin install <url>"),
     ("--debug-file", Takes::One, "logs go to ~/.wizard/logs"),
-    (
-        "--setting-sources",
-        Takes::One,
-        "Wizard has no Claude settings layers",
-    ),
     ("--restricted", Takes::Nothing, "no restricted mode"),
 ];
 
@@ -1104,16 +1172,25 @@ mod tests {
     fn dash_v_is_version_and_the_last_permission_flags_are_stripped() {
         assert_eq!(norm(&["wizard", "-v"]), ["wizard", "--version"]);
         assert_eq!(
-            strip(&["wizard", "--tools", "Bash", "Edit", "--model", "m"]),
-            (vec!["wizard".into(), "--model".into(), "m".into()], 1)
-        );
-        assert_eq!(
             strip(&["wizard", "--permission-prompts", "none", "q"]),
             (vec!["wizard".into(), "q".into()], 1)
         );
+    }
+
+    #[test]
+    fn tools_flag_lists_names_and_default_means_all() {
+        let names = |args: &[&str]| parse(args).claude.tool_filter();
+        assert_eq!(names(&["wizard", "-p", "x"]), None);
+        assert_eq!(names(&["wizard", "--tools", "default", "-p", "x"]), None);
         assert_eq!(
-            strip(&["wizard", "--allow-dangerously-skip-permissions", "q"]),
-            (vec!["wizard".into(), "q".into()], 1)
+            names(&["wizard", "--tools", "Bash,Edit", "Read", "-p", "x"]),
+            Some(vec!["Bash".into(), "Edit".into(), "Read".into()])
+        );
+        assert_eq!(names(&["wizard", "--tools", "", "-p", "x"]), Some(vec![]));
+        assert!(
+            parse(&["wizard", "--allow-dangerously-skip-permissions", "-p", "x"])
+                .claude
+                .allow_dangerously_skip_permissions
         );
     }
 
@@ -1147,7 +1224,7 @@ mod tests {
     #[test]
     fn flags_for_features_wizard_lacks_are_removed_with_their_values() {
         assert_eq!(
-            strip(&["wizard", "--betas", "a", "b", "--model", "m", "q"]),
+            strip(&["wizard", "--channels", "a", "b", "--model", "m", "q"]),
             (
                 vec!["wizard".into(), "--model".into(), "m".into(), "q".into()],
                 1

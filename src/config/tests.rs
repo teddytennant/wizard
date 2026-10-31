@@ -355,6 +355,7 @@ fn full_file_round_trips() {
             deny: vec!["Bash".to_string()],
             ..PermissionsConfig::default()
         },
+        run_add_dirs: Vec::new(),
     };
     let raw = toml::to_string_pretty(&original).expect("serialize");
     let parsed: Config = toml::from_str(&raw).expect("parse back");

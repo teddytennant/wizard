@@ -488,6 +488,12 @@ fn marketplace_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// The Claude-format settings for the directory Wizard was started in.
+fn settings() -> crate::config::claude::ClaudeSettings {
+    let root = std::env::current_dir().unwrap_or_default();
+    crate::config::claude::load(&root, crate::config::claude::Trust::Refused)
+}
+
 fn find_marketplace(name: &str) -> Option<PathBuf> {
     marketplace_roots()
         .into_iter()
@@ -502,6 +508,9 @@ pub fn marketplace_add(source: &str) -> Result<String, String> {
 
 /// [`marketplace_add`], also saying what the marketplace is called.
 pub fn marketplace_add_named(source: &str) -> Result<(String, String), String> {
+    if let Some(why) = settings().policy.refuse_marketplace(source) {
+        return Err(why);
+    }
     let dir = marketplaces_dir()?;
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     if is_git_source(source) {
@@ -598,6 +607,19 @@ pub fn marketplace_list() -> String {
             Err(err) => lines.push(format!("(unreadable) {err}")),
         }
     }
+    let keys = settings().policy;
+    for (name, source) in
+        crate::config::claude_policy::extra_marketplace_sources(&keys.marketplaces)
+    {
+        if !lines
+            .iter()
+            .any(|line| line.starts_with(&format!("{name}  ")))
+        {
+            lines.push(format!(
+                "{name}  not added yet  from settings (extraKnownMarketplaces): {source}"
+            ));
+        }
+    }
     if lines.is_empty() {
         "no marketplaces; /plugin marketplace add <owner/repo|url|dir>".to_string()
     } else {
@@ -654,15 +676,16 @@ pub fn install(spec: &str) -> Result<String, String> {
         && !market.is_empty()
         && !name.contains('/')
     {
-        let root = find_marketplace(market).ok_or_else(|| {
-            format!("no marketplace '{market}'; /plugin marketplace add <source> first")
-        })?;
+        let root = match find_marketplace(market) {
+            Some(root) => root,
+            None => add_known_marketplace(market)?,
+        };
         let (_, plugins) = read_marketplace(&root)?;
         let entry = plugins
             .into_iter()
             .find(|p| p.name == name)
             .ok_or_else(|| format!("{market} lists no plugin '{name}'"))?;
-        return match entry.source {
+        let installed = match entry.source {
             PluginSource::Relative(rel) => {
                 let src = root.join(rel.trim_start_matches("./"));
                 install_dir(&src, spec)
@@ -672,11 +695,40 @@ pub fn install(spec: &str) -> Result<String, String> {
                 "{name} uses a '{kind}' source, which Wizard cannot fetch yet"
             )),
         };
+        return installed.map(with_trust_message);
     }
-    if is_git_source(spec) {
-        return install_git(&git_url(spec), spec);
+    let installed = if is_git_source(spec) {
+        install_git(&git_url(spec), spec)
+    } else {
+        install_dir(&expand_home(spec), spec)
+    };
+    installed.map(with_trust_message)
+}
+
+/// `pluginTrustMessage` from managed settings, added to what an install says.
+fn with_trust_message(report: String) -> String {
+    match settings().plugin_trust_message {
+        Some(note) => format!("{report}\n{note}"),
+        None => report,
     }
-    install_dir(&expand_home(spec), spec)
+}
+
+/// A marketplace named by `extraKnownMarketplaces` in settings, added on
+/// first use so `name@marketplace` works without a separate `marketplace add`.
+fn add_known_marketplace(market: &str) -> Result<PathBuf, String> {
+    let settings = settings();
+    let source =
+        crate::config::claude_policy::extra_marketplace_sources(&settings.policy.marketplaces)
+            .into_iter()
+            .find(|(name, _)| name == market)
+            .map(|(_, source)| source)
+            .ok_or_else(|| {
+                format!("no marketplace '{market}'; /plugin marketplace add <source> first")
+            })?;
+    marketplace_add(&source)?;
+    find_marketplace(market).ok_or_else(|| {
+        format!("settings name {source} as '{market}', but it is called something else")
+    })
 }
 
 fn install_git(url: &str, origin: &str) -> Result<String, String> {

@@ -1556,7 +1556,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         "show or set the context size compaction aims under",
         local
     ),
-    compat_row!("fast", "", "fast mode (not available here)", everywhere),
+    compat_row!(
+        "fast",
+        "[on|off]",
+        "the Anthropic provider's fast speed tier",
+        everywhere
+    ),
     compat_row!(
         "advisor",
         "",
@@ -1602,7 +1607,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     compat_row!(
         "privacy-settings",
         "",
-        "privacy settings (not available here)",
+        "where data leaves this machine",
         everywhere
     ),
     compat_row!("heapdump", "", "heap dump (not available here)", everywhere),
@@ -1688,7 +1693,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         "cloud environments (not available here)",
         everywhere
     ),
-    compat_row!("sandbox", "", "sandbox (not available here)", everywhere),
+    compat_row!(
+        "sandbox",
+        "",
+        "show the sandbox settings and what they deny",
+        everywhere
+    ),
     compat_row!("stickers", "", "stickers (not available here)", everywhere),
     compat_row!(
         "teleport",

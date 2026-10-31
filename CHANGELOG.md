@@ -28,6 +28,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 - Slash commands `/loop`, `/branch`, `/rename`, `/cd`, `/background`, `/stop`, `/statusline`, `/autocompact` and `/focus`; `/permissions` and `/hooks` list the real rules and hooks (and `/permissions allow|ask|deny|remove <rule>` edits them). Commands with no Wizard counterpart (`/fast`, `/voice`, `/advisor`, ...) say so and name what to use.
 - Hooks in enabled Claude-format plugins (`hooks/hooks.json`) run through the hooks engine.
 - Settings keys `modelOverrides`, `availableModels`, `effortLevel`, `fallbackModel`, `language`, `attribution`, `cleanupPeriodDays` and `apiKeyHelper` are honored; `docs/claude-code-parity.md` lists what is not.
+- More Claude Code settings keys do something: `includeCoAuthoredBy`, `includeGitInstructions`, `agent`, `alwaysThinkingEnabled`, `maxThinkingTokens`, `verbose`, `prefersReducedMotion`, `viewMode`, `spinnerVerbs`, `claudeMd`, `claudeMdExcludes`, `autoMemoryEnabled`, `autoMemoryDirectory`, `skillOverrides`, `companyAnnouncements`, `additionalDirectories`, `permissions.disableBypassPermissionsMode`, `sandbox` (its deny lists, for the file tools and `web_fetch`), `allowedMcpServers`, `deniedMcpServers`, the `allowManaged*Only` switches, `allowedHttpHookUrls`, `httpHookAllowedEnvVars`, the marketplace lists, `pluginTrustMessage` and `fastMode`. Every key that still does nothing has its reason in `docs/claude-code-parity.md`.
+- Flags `--tools`, `--permission-prompt-tool`, `--setting-sources`, `--betas` and `--allow-dangerously-skip-permissions` work instead of being removed with a warning. `--add-dir` also widens the `acceptEdits` scope.
+- `/fast` switches the `anthropic` provider's fast tier (`speed: fast` on Opus), `/sandbox` lists the sandbox deny rules, and `/privacy-settings` lists where data leaves the machine.
+- `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_BETAS`, `CLAUDE_CODE_EXTRA_BODY`, `CLAUDE_CODE_EXTRA_METADATA` (the `anthropic` provider), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`, `CLAUDE_CODE_DISABLE_FAST_MODE` and `DISABLE_COLORS`.
 
 ## [3.12.0] - 2026-10-30
 

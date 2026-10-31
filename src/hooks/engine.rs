@@ -513,6 +513,20 @@ impl HookEngine {
                         Before::Blocked(text)
                     }
                     None => {
+                        if let Some(answer) = self.ask_prompt_tool(tool, &args, tool_use_id).await {
+                            return match answer {
+                                Ok(updated) => Before::Proceed {
+                                    args: updated
+                                        .map(|input| toolmap::from_claude_input(tool, &input))
+                                        .unwrap_or(args),
+                                    context,
+                                },
+                                Err(text) => {
+                                    self.denied(tool, &args, &text, mode, events).await;
+                                    Before::Blocked(text)
+                                }
+                            };
+                        }
                         let reply = self
                             .ask_surface(tool, &args, &message, offer.clone(), events, cancel)
                             .await;
@@ -545,6 +559,41 @@ impl HookEngine {
                 }
             }
         }
+    }
+
+    /// `--permission-prompt-tool`: ask the named MCP tool. `None` when the
+    /// flag is not set. `Ok` allows the call, with new input if the tool sent
+    /// `updatedInput`; `Err` is the text the model reads.
+    async fn ask_prompt_tool(
+        &self,
+        tool: &str,
+        args: &Value,
+        tool_use_id: &str,
+    ) -> Option<Result<Option<Value>, String>> {
+        let name = std::env::var(crate::cli_claude::env::PERMISSION_PROMPT_TOOL).ok()?;
+        let Some((server, mcp_tool)) = name
+            .strip_prefix("mcp__")
+            .and_then(|rest| rest.split_once("__"))
+        else {
+            return Some(Err(format!(
+                "--permission-prompt-tool {name} is not an MCP tool name (mcp__server__tool)"
+            )));
+        };
+        let Some(backend) = self.backend() else {
+            return Some(Err(
+                "no MCP tools are connected to answer the prompt".to_string()
+            ));
+        };
+        let input = json!({
+            "tool_name": toolmap::claude_name(tool),
+            "input": toolmap::to_claude_input(tool, args),
+            "tool_use_id": tool_use_id,
+        });
+        Some(match backend.call_mcp(server, mcp_tool, input).await {
+            Ok((text, false)) => protocol::prompt_tool_answer(&text),
+            Ok((text, true)) => Err(format!("{name} failed: {text}")),
+            Err(err) => Err(format!("{name} failed: {err}")),
+        })
     }
 
     /// Put a prompt to the surface and wait for the answer. A surface that is

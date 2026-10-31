@@ -22,6 +22,7 @@ fn policy(mode: PermissionMode, allow: &[&str], ask: &[&str], deny: &[&str]) -> 
         deny: parse(deny),
         cwd: root.to_path_buf(),
         claude_defaults: false,
+        extra_dirs: Vec::new(),
     }
 }
 
@@ -582,4 +583,120 @@ fn a_flag_a_wizard_config_or_a_wizard_settings_file_turns_them_on() {
     settings.permissions_opt_in = true;
     let policy = build(&crate::config::Config::default(), &settings, root);
     assert!(is_deny(&run(&policy, "rm -rf build")));
+}
+
+fn settings_with_policy(json: serde_json::Value) -> crate::config::claude::ClaudeSettings {
+    let mut settings = crate::config::claude::ClaudeSettings::default();
+    crate::config::claude_policy::merge(&mut settings.policy, &json, false, true);
+    settings
+}
+
+#[test]
+fn an_enabled_sandbox_turns_its_paths_into_deny_rules_and_nothing_else() {
+    let root = Path::new("/proj");
+    let settings = settings_with_policy(json!({"sandbox": {"enabled": true,
+        "filesystem": {"denyRead": ["~/.ssh", "/etc/shadow"], "denyWrite": ["secrets"]},
+        "network": {"deniedDomains": ["evil.test"]}}}));
+    let policy = build(&crate::config::Config::default(), &settings, root);
+    for path in ["~/.ssh/id_rsa", "/etc/shadow"] {
+        assert!(
+            is_deny(&policy.check("read_file", ToolAccess::ReadOnly, &json!({"path": path}))),
+            "{path}"
+        );
+    }
+    assert!(is_deny(&policy.check(
+        "write_file",
+        ToolAccess::Edit,
+        &json!({"path": "/proj/secrets/k"})
+    )));
+    assert!(is_deny(&policy.check(
+        "web_fetch",
+        ToolAccess::ReadOnly,
+        &json!({"url": "https://evil.test/x"})
+    )));
+    assert_eq!(run(&policy, "cargo build"), Decision::Allow);
+    assert_eq!(
+        policy.check("write_file", ToolAccess::Edit, &json!({"path": "/proj/a"})),
+        Decision::Allow
+    );
+
+    let off = settings_with_policy(json!({"sandbox": {"filesystem": {"denyRead": ["~/.ssh"]}}}));
+    assert!(build(&crate::config::Config::default(), &off, root).is_inert());
+}
+
+#[test]
+fn additional_directories_widen_accept_edits() {
+    let root = Path::new("/proj");
+    let mut config = crate::config::Config::default();
+    config.run_permissions.mode = Some(PermissionMode::AcceptEdits);
+    let outside = json!({"path": "/data/out.txt"});
+    let before = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert!(matches!(
+        before.check("write_file", ToolAccess::Edit, &outside),
+        Decision::Ask(_)
+    ));
+    let settings =
+        settings_with_policy(json!({"permissions": {"additionalDirectories": ["/data"]}}));
+    let widened = build(&config, &settings, root);
+    assert_eq!(
+        widened.check("write_file", ToolAccess::Edit, &outside),
+        Decision::Allow
+    );
+    assert!(matches!(
+        widened.check("write_file", ToolAccess::Edit, &json!({"path": "/etc/x"})),
+        Decision::Ask(_)
+    ));
+    config.run_add_dirs = vec!["/more".into()];
+    let flagged = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert_eq!(
+        flagged.check("write_file", ToolAccess::Edit, &json!({"path": "/more/a"})),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn disable_bypass_downgrades_a_named_bypass_to_default() {
+    let root = Path::new("/proj");
+    let mut config = crate::config::Config::default();
+    config.run_permissions.mode = Some(PermissionMode::BypassPermissions);
+    let settings =
+        settings_with_policy(json!({"permissions": {"disableBypassPermissionsMode": "disable"}}));
+    let policy = build(&config, &settings, root);
+    assert_eq!(policy.mode, PermissionMode::Default);
+    assert!(matches!(
+        policy.check("write_file", ToolAccess::Edit, &json!({"path": "/proj/a"})),
+        Decision::Ask(_)
+    ));
+    let free = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert_eq!(free.mode, PermissionMode::BypassPermissions);
+}
+
+#[test]
+fn managed_only_rules_ignore_allowed_tools() {
+    let root = Path::new("/proj");
+    let mut config = crate::config::Config::default();
+    config.run_permissions.mode = Some(PermissionMode::DontAsk);
+    config.run_permissions.allow = vec!["Bash(cargo build:*)".to_string()];
+    let allowed = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert_eq!(run(&allowed, "cargo build"), Decision::Allow);
+    let mut managed = crate::config::claude::ClaudeSettings::default();
+    managed.policy.managed_permissions_only = true;
+    let narrowed = build(&config, &managed, root);
+    assert!(is_deny(&run(&narrowed, "cargo build")));
 }

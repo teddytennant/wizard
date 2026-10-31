@@ -2316,10 +2316,10 @@ fn open_draft_store(id: &str) -> Option<Arc<drafts::DraftStore>> {
 /// memories are saved. Failures are logged, not fatal — memory is an
 /// enhancement, never a reason a session cannot start.
 fn read_memory_index(project_root: &Path) -> Option<String> {
-    let store = match crate::memory::MemoryStore::open(project_root) {
+    let store = match crate::memory::MemoryStore::open_auto(project_root) {
         Ok(store) => store,
         Err(err) => {
-            tracing::warn!("could not open memory store: {err:#}");
+            tracing::info!("memory index not loaded: {err:#}");
             return None;
         }
     };
@@ -2563,10 +2563,15 @@ fn apply_tool_deferral(
 /// A skill tree that will not load costs its skills, never the session.
 pub fn load_skills() -> Vec<Skill> {
     let roots = crate::skills::default_roots();
-    crate::skills::load_skills(&roots).unwrap_or_else(|err| {
+    let skills = crate::skills::load_skills(&roots).unwrap_or_else(|err| {
         tracing::warn!("loading skills failed: {err}");
         Vec::new()
-    })
+    });
+    match std::env::current_dir() {
+        Ok(root) => crate::config::claude::load(&root, crate::config::claude::Trust::Refused)
+            .apply_skill_overrides(skills),
+        Err(_) => skills,
+    }
 }
 
 /// Connect every server in `~/.wizard/mcp.toml`. Never hard-fails: a missing or
