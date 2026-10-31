@@ -183,7 +183,7 @@ permissions, pickers and vim, `statusline` and `statusline-pad` run a test `stat
 `tests/fixtures/ref-2.1.314`, a capture of the installed 2.1.314 through the fake server; `REFDIR=tests/fixtures/ref`
 compares against the older 2.1.300 subscription capture instead, which `cargo test` still uses for the scenes both
 have. `REF=fake REF_BASE=tests/fixtures/ref-2.1.314 REF_GROUPS="todo" LOOK_GROUPS="todo"` redoes one group over the
-stored capture, and `COMPARE_CWD` moves the project directory (it must keep the length) when two runs share the box.
+stored capture, `REF=fake SAVE=1` regenerates the whole of `tests/fixtures/ref-2.1.314` (it leaves `ref` and the tests' replay alone), and `COMPARE_CWD` moves the project directory (it must keep the length) when two runs share the box.
 
 Product names and trademarks belong to their owners. The skins are an homage,
 and each one says whose look it wears on its own home screen.

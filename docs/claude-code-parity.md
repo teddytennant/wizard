@@ -499,8 +499,8 @@ mode line says which: `ctrl+t to hide tasks` / `ctrl+t to show tasks`, in place 
 Driving 2.1.314 to show it needs `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: the Task tools are on for models it knows,
 and the fake server's `claude-haiku-5-5` is not one. The model also has to ask for them first
 (`ToolSearch select:TaskCreate,TaskGet,TaskUpdate`); `fake_anthropic.py` scripts that for the `Make a task list`,
-`Make many tasks`, `Make long progress` and `Finish the tasks` prompts. `TodoWrite` is switched off in the
-interactive 2.1.314 whatever the key.
+`Make many tasks`, `Make long progress` and `Finish the tasks` prompts. `TodoWrite` stays off in the
+interactive 2.1.314 in that setup; only the Task tools show.
 
 ### Detailed transcript
 
