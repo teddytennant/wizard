@@ -25,6 +25,7 @@ pub mod doctor;
 pub mod entrypoint;
 pub mod event;
 pub mod evolve;
+pub mod fuse;
 pub mod gates;
 pub mod git_util;
 pub mod hardware;

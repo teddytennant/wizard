@@ -2029,7 +2029,7 @@ impl App {
     }
 
     /// Rebuild the suggestion list from the typed `/command` prefix.
-    /// Prefix matches rank above substring matches; suggestions disappear
+    /// Ranked by `fuse`, as Claude Code's menu is; suggestions disappear
     /// once arguments are being typed.
     fn refresh_suggestions(&mut self) {
         // Remember an actively moved highlight (off the top row) so it does
@@ -2064,21 +2064,23 @@ impl App {
             .map(Suggestion::from)
             .chain(self.custom_commands.iter().map(Suggestion::from))
             .collect();
-        // Rank: exact match, then prefix matches, then substring matches.
+        // Rank the way Claude Code's menu does: a fuzzy search over names, then commands whose
+        // descriptions have a word that starts with what is typed.
+        let ranked: Vec<usize> = if token.is_empty() {
+            (0..candidates.len()).collect()
+        } else {
+            let items: Vec<crate::fuse::Item> = candidates
+                .iter()
+                .map(|spec| crate::fuse::Item {
+                    name: &spec.name,
+                    description: &spec.description,
+                    aliases: &[],
+                })
+                .collect();
+            crate::fuse::rank(&items, token)
+        };
         self.suggestions
-            .extend(candidates.iter().filter(|spec| spec.name == token).cloned());
-        self.suggestions.extend(
-            candidates
-                .iter()
-                .filter(|spec| spec.name != token && spec.name.starts_with(token))
-                .cloned(),
-        );
-        self.suggestions.extend(
-            candidates
-                .iter()
-                .filter(|spec| !spec.name.starts_with(token) && spec.name.contains(token))
-                .cloned(),
-        );
+            .extend(ranked.into_iter().map(|i| candidates[i].clone()));
         self.suggestion_index = previous
             .and_then(|name| self.suggestions.iter().position(|spec| spec.name == name))
             .unwrap_or(0);
