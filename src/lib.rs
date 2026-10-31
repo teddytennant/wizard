@@ -5,8 +5,10 @@
 //! (native + LuaJIT-scripted + MCP) and tiered self-extension.
 //! See `docs/architecture.md` for the full design.
 
+pub mod advisor;
 pub mod agent;
 pub mod app;
+pub mod artifact;
 pub mod checkpoint;
 pub mod claude_dir;
 pub mod claude_resume;
@@ -40,6 +42,7 @@ pub mod llm;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
+pub mod minihttp;
 pub mod mux;
 pub mod onboarding;
 pub mod output;
@@ -72,6 +75,7 @@ pub mod trust;
 pub mod ui;
 pub mod update;
 pub mod usage;
+pub mod usersettings;
 pub mod vim;
 pub mod workflow;
 
@@ -326,6 +330,13 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             std::env::set_current_dir(dir)?;
         }
         return schedule::run(cmd.clone()).await;
+    }
+    // Local artifacts read and serve ~/.wizard/artifacts and need no model.
+    if let Some(cli::Command::Artifact { cmd }) = &cli.command {
+        if let Some(dir) = &cli.cwd {
+            std::env::set_current_dir(dir)?;
+        }
+        return artifact::serve::run(cmd.clone()).await;
     }
     // `wizard scheduler` bare is still the foreground daemon; with a
     // subcommand it manages that daemon as a background service. Both are

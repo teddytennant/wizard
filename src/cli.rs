@@ -297,6 +297,14 @@ pub enum Command {
         cmd: ScheduleCmd,
     },
 
+    /// Local artifacts: list the pages the `Artifact` tool published, or serve
+    /// them on localhost. Self-contained: no config, no model. See
+    /// docs/cloud-equivalents.md.
+    Artifact {
+        #[command(subcommand)]
+        cmd: crate::artifact::serve::ArtifactCmd,
+    },
+
     /// Run the scheduler daemon in the foreground: reload
     /// ~/.wizard/schedule.toml each pass and fire due entries as headless
     /// wizard child processes. With a subcommand, manage that daemon as a

@@ -4,6 +4,8 @@
 //! JavaScript). All four present a uniform interface through
 //! [`registry::ToolRegistry`], so the model calls them identically.
 
+pub mod advisor;
+pub mod artifact;
 pub mod code;
 pub mod command;
 pub mod compact;
