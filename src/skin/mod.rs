@@ -60,6 +60,9 @@ pub const DEFAULT_SKIN: &str = "wizard";
 /// ([`crate::config::UiConfig::skin`]) and above [`DEFAULT_SKIN`].
 pub const ENV_SKIN: &str = "WIZARD_SKIN";
 
+/// The `--provider` name of this run, for the `wizard acp` a full look starts.
+pub const ENV_PROVIDER: &str = "WIZARD_RUN_PROVIDER";
+
 // ---------------------------------------------------------------------------
 // The skins
 // ---------------------------------------------------------------------------

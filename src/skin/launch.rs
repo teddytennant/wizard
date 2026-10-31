@@ -28,7 +28,7 @@ const WIZARD_BIN_ENVS: [&str; 6] = [
 /// [`Skin::Wizard`] is an error.
 ///
 /// The terminal must already be restored: the look sets it up for itself.
-pub async fn run(skin: Skin, handoff: Option<&Handoff>) -> Result<i32> {
+pub async fn run(skin: Skin, handoff: Option<&Handoff>, provider: Option<&str>) -> Result<i32> {
     let Some(name) = skin.companion_bin() else {
         bail!("{} has no separate UI to start", skin.label());
     };
@@ -41,6 +41,11 @@ pub async fn run(skin: Skin, handoff: Option<&Handoff>) -> Result<i32> {
     // The look must not see WIZARD_SKIN: its own `wizard acp` children would
     // inherit it, and the choice it already made is the one being run.
     cmd.env_remove(super::ENV_SKIN);
+    // `--provider` is for this run, so the look's `wizard acp` has to be told.
+    match provider {
+        Some(name) => cmd.env(super::ENV_PROVIDER, name),
+        None => cmd.env_remove(super::ENV_PROVIDER),
+    };
     match handoff {
         Some(handoff) => cmd.env(handoff::ENV, handoff.to_env()),
         None => cmd.env_remove(handoff::ENV),
@@ -193,7 +198,31 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&look, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let _search = pin_search(dir.path());
-        assert_eq!(run(Skin::Pi, None).await.expect("the look runs"), 7);
+        assert_eq!(run(Skin::Pi, None, None).await.expect("the look runs"), 7);
+    }
+
+    #[tokio::test]
+    async fn the_runs_provider_reaches_the_look_and_a_stale_one_does_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let look = dir.path().join("wizard-ui-claude");
+        let seen = dir.path().join("seen");
+        std::fs::write(
+            &look,
+            format!(
+                "#!/bin/sh\nprintf %s \"$WIZARD_RUN_PROVIDER\" > {}\n",
+                seen.display()
+            ),
+        )
+        .expect("write the look");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&look, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let _search = pin_search(dir.path());
+        run(Skin::Claude, None, Some("claude"))
+            .await
+            .expect("the look runs");
+        assert_eq!(std::fs::read_to_string(&seen).expect("written"), "claude");
+        run(Skin::Claude, None, None).await.expect("the look runs");
+        assert_eq!(std::fs::read_to_string(&seen).expect("written"), "");
     }
 
     #[tokio::test]
@@ -221,7 +250,7 @@ mod tests {
             plan: false,
             omakase: false,
         };
-        run(Skin::Jcode, Some(&handoff))
+        run(Skin::Jcode, Some(&handoff), None)
             .await
             .expect("the look runs");
         let seen = std::fs::read_to_string(&seen).expect("the look wrote it");
@@ -232,7 +261,7 @@ mod tests {
     async fn a_missing_look_names_where_it_should_be() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _search = pin_search(dir.path());
-        let err = run(Skin::Opencode, None)
+        let err = run(Skin::Opencode, None, None)
             .await
             .expect_err("nothing is installed");
         assert!(format!("{err:#}").contains("wizard-ui-opencode"), "{err:#}");
@@ -241,6 +270,6 @@ mod tests {
             !format!("{err:#}").contains("wizard-ui-wizard-ui"),
             "{err:#}"
         );
-        assert!(run(Skin::Wizard, None).await.is_err());
+        assert!(run(Skin::Wizard, None, None).await.is_err());
     }
 }

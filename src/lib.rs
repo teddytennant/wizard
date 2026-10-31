@@ -260,6 +260,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             ));
         };
         let mut config = config::Config::load()?;
+        if let Some(name) = std::env::var(skin::ENV_PROVIDER)
+            .ok()
+            .filter(|name| !name.is_empty())
+        {
+            config = apply_provider_name(config, name, false).await?;
+        }
         // Same resolution as the TUI path below: an editor session should not
         // keep running a stamped Grok the account has moved past.
         llm::xai_oauth::refresh_unpinned_flagship(&mut config).await;
@@ -633,14 +639,20 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
 /// `--provider NAME` for this run. `claude` installs and signs in Claude Code
 /// first, on the terminal, before anything else starts; any other name has to
 /// be a provider already in `config.toml`.
-async fn apply_provider_flag(mut config: Config, cli: &cli::Cli) -> Result<Config> {
-    let Some(name) = cli.provider.clone() else {
-        return Ok(config);
-    };
+async fn apply_provider_flag(config: Config, cli: &cli::Cli) -> Result<Config> {
+    match cli.provider.clone() {
+        Some(name) => apply_provider_name(config, name, cli.yes).await,
+        None => Ok(config),
+    }
+}
+
+/// `--provider NAME`, by name. A full look runs `wizard acp` as a child that
+/// never sees the flag, so the launcher hands the name down in
+/// [`skin::ENV_PROVIDER`] and that child applies it here.
+async fn apply_provider_name(mut config: Config, name: String, assume_yes: bool) -> Result<Config> {
     if matches!(name.as_str(), "claude" | "claude-code" | "claudecode") {
         #[cfg(feature = "provider-claude-code")]
         {
-            let assume_yes = cli.yes;
             return tokio::task::spawn_blocking(move || {
                 plugins::claude_code::setup::select_for_run(&mut config, assume_yes)?;
                 Ok(config)
@@ -683,7 +695,7 @@ async fn run_interactive(
             let saved = config.ui.skin.clone();
             // Only what this look leaves on its way out counts.
             let _ = skin::handoff::Handoff::take();
-            match skin::launch::run(skin, handoff.take().as_ref()).await {
+            match skin::launch::run(skin, handoff.take().as_ref(), cli.provider.as_deref()).await {
                 Ok(code) => {
                     config = apply_provider_flag(Config::load()?, &cli).await?;
                     config.apply_cli(&cli);

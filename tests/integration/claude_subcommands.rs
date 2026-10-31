@@ -208,3 +208,25 @@ fn purge_dry_run_lists_a_projects_conversations_and_deletes_nothing() {
     assert!(real.status.success(), "{}", text(&real));
     assert!(!mine.exists() && other.exists());
 }
+
+/// A full look starts `wizard acp` without the run's `--provider`, so the
+/// launcher passes the name in `WIZARD_RUN_PROVIDER` and the child applies it.
+#[test]
+fn the_acp_child_of_a_look_applies_the_runs_provider() {
+    let home = Home::new("acp-provider");
+    let output = Command::new(env!("CARGO_BIN_EXE_wizard"))
+        .arg("acp")
+        .env("HOME", &home.0)
+        .env("WIZARD_HOME", home.0.join(".wizard"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("WIZARD_RUN_PROVIDER", "no-such-provider")
+        .current_dir(home.project())
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("no provider named 'no-such-provider'"),
+        "{}",
+        text(&output)
+    );
+}
