@@ -8,7 +8,10 @@ sovereign headless, perpetual, gateway).
 ## Slash commands
 
 Everything typed as `/command` in the TUI. Tab-completion lists these with
-inline hints.
+inline hints. The list narrows as you type and ranks like Claude Code's: a
+fuzzy match on the name (a letter left out of a longer name still finds it),
+then commands whose description has a word starting with what you typed. See
+[claude-code-parity.md](claude-code-parity.md#slash-menu-ranking).
 
 | Command | What it does |
 |---------|--------------|

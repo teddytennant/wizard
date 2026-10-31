@@ -326,8 +326,17 @@ def think(head):
     ]
 
 
-def wizard_head(cwd):
-    """Wizard's own models, efforts, modes and commands, from a recorded `wizard acp` session."""
+def model_count(ref):
+    """How many models the reference's picker lists, the ones its window shows and the ones its
+    `… +N models` line counts."""
+    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models?', l)] if m), 0)
+    return len(models(ref)) + hidden
+
+
+def wizard_head(cwd, ref):
+    """Wizard's own models, efforts, modes and commands, from a recorded `wizard acp` session. The
+    picker lists as many models as the reference's, so the two panels are as tall; the recorded
+    session has more."""
     options, commands = [], []
     for line in open(RECORDED, encoding='utf-8'):
         msg = json.loads(line)['msg']
@@ -342,7 +351,7 @@ def wizard_head(cwd):
     def values(o):
         return [v['value'] for v in o.get('options', [])]
     models = [{'id': m, 'name': m.split('/', 1)[-1], 'provider': m.split('/', 1)[0] if '/' in m else ''}
-              for m in values(opt('model'))]
+              for m in values(opt('model'))][:model_count(ref) or None]
     config = {
         'model': opt('model').get('currentValue', ''), 'models': models,
         'effort': opt('thought_level').get('currentValue', ''), 'efforts': values(opt('thought_level')),
@@ -517,7 +526,7 @@ def main():
                  'Doing step %d of the long job, with a name long enough to need cutting at narrow widths' % n)
                 for n in range(1, 15)]
         open(os.path.join(out, 'todo-many-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, many, 6000)) + '\n')
-        open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
+        open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd, ref)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')
 
 

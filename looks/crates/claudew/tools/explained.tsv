@@ -1,14 +1,10 @@
 # scene glob, side (ref, look, both, drop, block, cursor), row pattern, reason. See compare.py.
 *	ref	 · ← \d+ agents?(?=\s*$)	agent switcher: the reference counts its background agents in the footer (← opens them); Wizard's ACP reports no background agents
 *	ref	(?<=^.{11})\S+ [0-9.]+( with \w+ effort)? · Wizard \w+\s*$	model line: the reference names its model and plan, Wizard its model and provider
-modes-3	ref	⏵⏵ auto mode on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode cycle: the reference's third stop is auto mode; the replay gives the look two modes, so its third press is back at the first (wz-modes compares Wizard's own four)
 *shortcuts	drop	^\s{40,}[○◐●◉] \w+ · /effort\s*$|^─+$@@^\s{45,}\S.*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	look	(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	cursor		paste images and /keybindings: the table is two rows shorter, so the prompt sits two rows lower
-*shortcuts	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
-*shortcuts	both	(?<=@ for file paths)\s+(edits|modes)(?=\s)	shift+tab cycles Wizard's modes; it has no accept-edits mode
-help	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
 help*	both	https://\S+	docs link: Wizard's, not Anthropic's
 *model*	block	^   Switch between@@^\s*$	model picker text: a pick in Wizard applies to this session only (ACP config options reset on load)
 *model*	both	(?<=effort)( \(default\))? ←/→ to adjust\s*$	effort default: Wizard's efforts include an unnamed provider default, not a marked level
@@ -46,7 +42,6 @@ write-done-80x24	look	^  line\. Then reply with exactly: done\s*$	permission pro
 light-model*	look	 [○◐●◉] \w+ · /effort ▔?\s*$	effort notice on the picker's edge: the light run's reference shows none where the dark run's does; that run met the weekly-limit notice earlier, which looks like the cause, so it is not copied
 queue-esc	both	^  \d+\s*$	the count: on the reference it kept streaming between the queue capture and Esc, and the replay cannot land text in that gap, so the numbers on screen differ
 wz-help-commands-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
-help-80x24	both	(?<=^.{25})(edits|modes)(?=\s)	shift+tab cycles Wizard's modes; it has no accept-edits mode
 wz-help-commands-200x50	shape	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
 queue-esc	both	(?<=^\* Verb…) \(.*\)\s*$	timing: how far the queued prompt's turn has got when the capture lands (thinking, tokens) differs from run to run
 clear-120x40	both	[○◐●◉] \w+ · /effort\s*$	effort notice after /clear: whether it is still up depends on how long the compact before it took; the reference shows it at 120x40 only
@@ -56,7 +51,6 @@ queue-esc*	look	[○◐●◉] \w+ · /effort\s*$	timing: the reference's notice
 x-*	norm	(?<=^  ⏸ )(manual|genie)(?= mode on)@@MODE	modes: the reference starts in manual mode, Wizard in genie, its first mode; the mark and colour are the same
 x-btw	both	(?<=↑/↓ to scroll ).*$$	copy and fork: the look has no clipboard path, and wizard cannot fork a session
 x-*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
-x-rewind	both	^     ↑ \d+ more\s*$	rewind points: the reference counts /plan as one; wizard's /rewind goes back by turn, and /plan is not a turn
 x-rewind	both	^     (\S+\.md \+\d+|No code changes)\s*$	plan file: the reference writes its plan to a file and counts it as a change; wizard keeps the plan in .wizard/plan.md without an edit event
 x-ctrlr	norm	(?<=^  [❯↑↓ ] )\d+[smhd] ago +(?=\S)@@N ago   	ages: the two runs are seconds apart; the live checks make sure the clock moves
 x-resume-opened	drop-up	+^✻ \S+ for Ns · done H:MM XM\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	done lines: wizard's session record keeps no turn times, so a resumed transcript has none
@@ -79,6 +73,9 @@ x-rewind-confirm	norm	(?<=^   │ \()\d+[smhd] ago@@N ago	ages: the two runs are
 wz-slash*-[18]*	shape-ref	^\s*$	command rows: Claude Code's two-row descriptions push its five-row window down a row, so the row above it is empty where Wizard's starts
 wz-slash*-[18]*	shape	^  ❯ /\S+\s	command rows: with its window a row lower, the reference's selected command sits a row lower than Wizard's
 queue-esc*	drop	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner comes up at a moment of its own; the look's had not yet when it was captured
+slash-filter	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
+light-slash	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
+help-typed	drop	^  ❯ /help@@^    /debug\s	command search: the ranking is held to the real program by tests/slash_rank.rs; what differs here is the data. 2.1.314 searches a bundled skill's long description and prints a short one, and the replay has only the short one from the captured menu (update-config's long text has a word starting with mo, debug's one starting with hel)
 *	look	Try "prompt"\s*$	example prompt: 2.1.314 fills it from a cache a signed-in account refreshes; the fake-key capture has none, the subscription capture in tests/fixtures/ref has it
 *	norm	(?<=^▝▜██████▀  ).*$@@MODEL	model line: the reference names its model and billing (Haiku 5.5 · API Usage Billing); the look prints the model and provider it was given, and the replay puts the model picker description in the provider field, so the words differ
 todo*running	look	^[·✢*✳✶✻✽] .*$	spinner colours: the shimmer sweeps across the words, and where it is when the capture lands depends on the clock
@@ -88,11 +85,7 @@ plan-approve*	both	^  \S+ (manual|accept edits) mode on.*$|^  ⏵⏵ accept edit
 todo-many-80x24	scroll-look	1	the screen is too short for the footer: 2.1.314 keeps its transcript where it was and loses the mode line at the bottom; the look scrolls the transcript up a row and keeps the mode line
 plan*	both	(?<=ctrl\+g to edit in Nvim · )\S+	plan file: Wizard keeps the plan in .wizard/plan.md; Claude Code writes a generated file under ~/.claude/plans
 x-plan*	both	(?<=ctrl\+g to edit in Nvim · )\S+	plan file: Wizard keeps the plan in .wizard/plan.md; Claude Code writes a generated file under ~/.claude/plans
-modes-[34]	scroll-ref	1@@^● Auto mode lets	auto mode explanation: 2.1.314 prints it the first time shift+tab reaches auto mode, and it describes Claude's classifier, which Wizard's modes have none of; the reference's transcript is a row higher for it
-modes-[34]	block	^● Auto mode lets@@Shift\+Tab to change mode\.\s*$	auto mode explanation: 2.1.314 prints it the first time shift+tab reaches auto mode, and it describes Claude's classifier, which Wizard's modes have none of
-slash-filter	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the reference ranks matches with a fuzzy scorer over names and descriptions (/mo lists /update-config fifth); Wizard's menu ranks exact, prefix, name-contains and description-contains, so its fifth row is /cd
-light-slash	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the reference ranks matches with a fuzzy scorer over names and descriptions (/mo lists /update-config fifth); Wizard's menu ranks exact, prefix, name-contains and description-contains, so its fifth row is /cd
-help-typed	drop	^  ❯ /help@@^    /debug\s	command search: the reference's scorer also finds /debug for /help; Wizard's menu ranks exact, prefix, name-contains and description-contains, and /debug has no /help in its name or description
+modes-[34]	block	^● Auto mode lets@@Shift\+Tab to change mode\.\s*$	auto mode explanation: Wizard's own words for it, since 2.1.314's describe Claude's classifier; the rows are the same, the text is not
 turn-spinner	look	^[·✢*✳✶✻✽] .*$	spinner colours: the shimmer sweeps across the words, and where it is when the capture lands depends on the clock
 plan*-80x24	drop	>^  ─{20,}\s*$@@^   ~/\.claude/plans/\S+\s*$	plan file: the reference's longer path no longer fits the row after `ctrl+g to edit in Nvim ·`, so it takes a row of its own
 plan-approve*	drop-up	^     /plan to edit\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan file: the reference's longer path pushes `· /plan to edit` onto a row of its own; Wizard's note has no such tail

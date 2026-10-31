@@ -98,8 +98,7 @@ SHARED = [
     ('x-planesc', [('type', P_PLAN), ('keys', 'Enter'), ('until', r'Ready to code', 120), ('wait', 2.0),
                    ('fast_keys', 'Escape'), ('wait', 2.0), ('idle',), ('wait', 1.0), ('snap', '')]),
     ('x-rewind', [('fast_keys', 'Escape'), ('wait', 0.2), ('fast_keys', 'Escape'), ('wait', 2.0), ('snap', ''),
-                  # the reference counts /plan as a rewind point, so it takes one more Up to the edit
-                  ('keys', 'Up'), ('keys', 'Up'), ('ref_keys', 'Up'), ('keys', 'Enter'), ('wait', 1.5),
+                  ('keys', 'Up'), ('keys', 'Up'), ('keys', 'Up'), ('keys', 'Enter'), ('wait', 1.5),
                   ('snap', '-confirm'),
                   ('keys', 'Escape'), ('wait', 1.0), ('keys', 'Escape'), ('wait', 1.0)]),
     ('x-ctrlr', [('keys', 'C-r'), ('wait', 1.5), ('snap', ''), ('keys', 'Escape'), ('wait', 1.0)]),
