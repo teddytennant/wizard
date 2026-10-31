@@ -29,7 +29,7 @@ fn took(record: &RunRecord) -> String {
     }
 }
 
-fn one_line(text: &str, max: usize) -> String {
+pub fn one_line(text: &str, max: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         flat

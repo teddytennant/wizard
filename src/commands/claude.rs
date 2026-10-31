@@ -346,7 +346,13 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
             super::session_cmds::background(surface.snapshot().session.as_deref(), args, &root),
         ),
         "stop" => reply(surface, super::session_cmds::stop(args)),
-        "workflows" => reply(surface, crate::workflow::command::run(args, &root)),
+        "workflows" => {
+            // Bare `/workflows` opens the panel where the surface has one.
+            if args.is_empty() && surface.open(super::surface::Chooser::Workflows).await {
+                return;
+            }
+            reply(surface, crate::workflow::command::run(args, &root));
+        }
         "statusline" => reply(surface, super::misc::statusline(args, &root)),
         "autocompact" => reply(surface, super::misc::autocompact(args)),
         "fast" => reply(surface, super::misc::fast(args)),

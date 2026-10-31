@@ -79,6 +79,7 @@ mod overlay;
 pub(crate) mod permission_prompt;
 mod side;
 mod welcome;
+pub(crate) mod workflow_panel;
 
 pub(crate) use motion::fmt_tokens;
 
@@ -281,6 +282,9 @@ fn draw_house(frame: &mut Frame, app: &App) {
     }
     if let Some(prompt) = app.permission_prompts.first() {
         permission_prompt::draw(frame, prompt);
+    }
+    if let Some(panel) = &app.workflow_panel {
+        workflow_panel::draw(frame, panel, main_area);
     }
     // The dashboard is modal and full-screen, so it paints last (on top).
     if app.show_dashboard {
