@@ -57,6 +57,7 @@ to do.
 | [Headless](headless.md) | `wizard -p`, JSON and stream-JSON output |
 | [Fleet](fleet.md) | Running several agents at once |
 | [Scheduler](scheduler.md) | Recurring runs |
+| [Workflows](workflows.md) | `Workflow` and `/workflows`: scripts that fan subagents out |
 | [Tasks](tasks.md) | The todo surface the agent keeps |
 | [Sync](sync.md) | Moving state between machines |
 | [Images](image.md) | Showing the model an image, and generating one |

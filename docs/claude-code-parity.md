@@ -53,6 +53,7 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `Skill` | skills in the system prompt | new | Loads a skill's body by name from the same roots, with `args` appended. Unknown names get a "did you mean". |
 | `SubagentHandback` | none | partial | Registered. A subagent calls it with `report`, which becomes its result in place of its last message; the model is told to stop calling tools, and the run ends when it does. It does not force the run to stop, and there is no gate on the report as Claude has. Outside a subagent it says so. |
 | `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` | `todo` | new | A numbered board with `blocks`/`blockedBy`, `owner` and `metadata`; every change is mirrored into the `todo` list the TUI draws. A `todo` write does not touch the board. Result wording from the leaked source (the real binary exposes none of them over MCP in 2.1.314). |
+| `StructuredOutput` | none | partial | Given only to a workflow agent that was started with `agent(prompt, {schema})`; its input schema is the script's, a wrong shape comes back as an error to fix, and five bad calls fail the agent. It is not offered to the main loop or to ordinary subagents. |
 | `TaskOutput` | `task_output` | present | Claude Code removed it in 2.1.277. |
 | `TaskStop` | `task_kill`, `subagent_kill` | new | Stops a shell task or Monitor by number; `agent:<n>` or a name reaches a background subagent. Error strings match the real binary. |
 | `TodoWrite` | `todo` | alias | `activeForm` is dropped. |
@@ -60,9 +61,9 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `WaitForMcpServers` | none | partial | Registered. Wizard connects every MCP server before the first turn and loads their tools once, so nothing is ever pending: it answers `ready=true` with the connected servers, or `ready=false` naming the ones that are not connected. |
 | `WebFetch` | `web_fetch` | alias | Returns the page with the `prompt` placed above it for you to apply; there is no second model pass. `offset` drops that many characters. A non-URL fails with Claude's `Invalid URL`. |
 | `WebSearch` | `web_search` | alias | `allowed_domains` and `blocked_domains` become `site:` and `-site:` operators in the query, so they depend on the backend honouring them. |
-| `Workflow` | `run_code` | skipped | Claude Code's workflows are JavaScript that orchestrates subagents in the background, with resume across sessions, `agent()` calls and a task notification on completion. Running that needs a JavaScript runtime with Claude's workflow API, a resume store and a background runner with its own task type. Wizard's `run_code` is a sandboxed Lua program over its own tools, and `wizard fleet` fans out sessions; neither takes a Claude workflow script, and a partial runner would accept scripts it then ran differently. Not built. |
+| `Workflow` | none | new | Claude's input schema (`script`, `name`, `scriptPath`, `args`, `resumeFromRunId`, `title`, `description`) and script API (`agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, `budget`), run in the QuickJS kernel, so it needs the `plugin-js` feature (on by default; without it there is no tool). A run is a background task: `TaskStop` stops it, its agents are subagents on the rail, its result lands as a task note. In `-p`, the gateway and ACP the call waits and returns the result. Run ids, resume semantics and the error strings come from the real binary (`wf_<8 hex>-<3 hex>`; the unchanged prefix of `agent()` calls is cached, the first change and everything after it reruns). Runs live on disk under `~/.wizard/workflows/runs/`, so resume works across sessions, which Claude's does not. Not built: the approval dialog and `Workflow(<name>)` rules, remote runs, usage-limit waiting, stall restarts, cache staggering, the size warning, `ultracode`, `bashCommandClamp`. See [Workflows](workflows.md). |
 | `Write` | `write_file` | alias | |
-| `Artifact`, `DesignSync`, `Projects`, `StructuredOutput`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai-hosted pages and design sync, the SDK's structured output, and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
+| `Artifact`, `DesignSync`, `Projects`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai-hosted pages and design sync, the SDK's structured output, and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
 
 ### What was compared against the real binary
 
@@ -371,7 +372,7 @@ The 98 names below are the menu of an interactive 2.1.314 session plus the comma
 | `/usage` | present | `/usage` |  |
 | `/voice` | accepted-with-warning | `/voice` | Answers with one sentence saying why there is no counterpart. |
 | `/web-setup` | accepted-with-warning | `/web-setup` | Answers with one sentence saying why there is no counterpart. |
-| `/workflows` | accepted-with-warning | `/workflows` | Answers with one sentence saying why there is no counterpart. |
+| `/workflows` | present | `/workflows` | Lists runs and saved workflows, shows one run, stops one this process is executing. No panel with pause or per-agent keys. |
 | `/batch` | accepted-with-warning | `/batch` | Answers with one sentence saying why there is no counterpart. |
 | `/claude-api` | accepted-with-warning | `/claude-api` | Answers with one sentence saying why there is no counterpart. |
 | `/code-review` | present | `/code-review` | Wizard's own prompt. |
@@ -395,7 +396,7 @@ The 98 names below are the menu of an interactive 2.1.314 session plus the comma
 | `/team-onboarding` | present | `/team-onboarding` | Wizard's own prompt. |
 | `/update-config` | present | `/update-config` | Wizard's own prompt. |
 | `/verify` | present | `/verify` | Wizard's own prompt. |
-| `/workflow-authoring` | accepted-with-warning | `/workflow-authoring` | Answers with one sentence saying why there is no counterpart. |
+| `/workflow-authoring` | present | `/workflow-authoring` | Loads the script reference as a prompt. Wizard's text: same API and rules, Wizard's differences at the end. |
 | `/auto-mode-setup` | accepted-with-warning | `/auto-mode-setup` | Answers with one sentence saying why there is no counterpart. |
 | `/__remote-workflow` | missing |  | internal plumbing of the Workflow runtime |
 | `/workflow-launch-exec` | missing |  | internal plumbing of the Workflow runtime |
@@ -513,8 +514,8 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `autoMode` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
 | `useAutoModeDuringPlan` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
 | `disableAutoMode` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
-| `workflows` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
-| `disableWorkflows` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
+| `workflows` | accepted-with-warning | Read and ignored: the tool is on whenever the `plugin-js` feature is, and `CLAUDE_CODE_DISABLE_WORKFLOWS=1` turns it off |
+| `disableWorkflows` | accepted-with-warning | Read and ignored; `CLAUDE_CODE_DISABLE_WORKFLOWS=1` is the switch that works |
 | `skillOverrides` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
 | `disableSkillShellExecution` | accepted-with-warning | Read and ignored, because Wizard has no such feature (or fixes it) |
 | `worktree` | accepted-with-warning | Worktrees are fixed at `.claude/worktrees` and `.wizard/worktrees`. |
@@ -594,12 +595,12 @@ The binary reads about 400 names through `process.env` and carries over 800 `CLA
 | skill `run` | present | bundled prompt |
 | skill `run-skill-generator` | present | bundled prompt, writes `.wizard/skills/run` |
 | skill `batch` | missing | cloud agents that each open a PR; `wizard fleet` is the local version |
-| skill `deep-research` | missing | a Workflow script; `/ultra` fans a question out over lenses |
+| skill `deep-research` | missing | a bundled Workflow script in Claude Code; Wizard ships none, `/ultra` fans a question out over lenses |
 | skill `design` | missing | claude.ai Design product |
 | skill `design-sync` | missing | claude.ai Design product |
 | skill `dataviz` | missing | reference text only; a `.wizard/skills` entry of your own loads like any other |
 | skill `claude-api` | missing | reference text only; same |
-| skill `workflow-authoring` | missing | no Workflow runtime |
+| skill `workflow-authoring` | present | bundled prompt, `/workflow-authoring` |
 | skill `plugin-authoring` | missing | Claude Code mods; Wizard plugins are written per `docs/plugins.md` |
 | agent `general-purpose`, `Explore`, `Plan` | aliased | run the built-in `worker` |
 | agent `claude` | aliased | the main agent |
@@ -697,7 +698,7 @@ Rewritten before parsing, so the agent's `run_command` gate and every surface se
 | `/statusline [command\|off]` | Shows, sets or removes `statusLine` in `~/.wizard/settings.json`. Settings side only: the terminal UI draws the line. |
 | `/autocompact [tokens\|off]` | Shows or sets `max_context_tokens`, the window compaction counts (it starts at 80%). `200k` and `1m` work; applies from the next session. |
 | `/focus` | Alias of `/view`, which flips the compact transcript. |
-| `/fast`, `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/privacy-settings`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex`, `/autofix-pr`, `/chrome`, `/design`, `/design-sync`, `/design-login`, `/design-consent`, `/design-revoke`, `/install-github-app`, `/install-slack-app`, `/mobile`, `/powerup`, `/radio`, `/remote-env`, `/sandbox`, `/stickers`, `/teleport`, `/tui`, `/web-setup`, `/workflows`, `/workflow-authoring`, `/batch`, `/claude-api`, `/dataviz`, `/deep-research`, `/plugin-authoring`, `/auto-mode-setup` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/fast` points at `/effort low`, `/advisor` at `/fusion` and `/ultra`, `/voice` says there is no audio stack, `/batch` at `wizard fleet`, `/tui` at `/ui`). They change nothing. |
+| `/fast`, `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/privacy-settings`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex`, `/autofix-pr`, `/chrome`, `/design`, `/design-sync`, `/design-login`, `/design-consent`, `/design-revoke`, `/install-github-app`, `/install-slack-app`, `/mobile`, `/powerup`, `/radio`, `/remote-env`, `/sandbox`, `/stickers`, `/teleport`, `/tui`, `/web-setup`, `/batch`, `/claude-api`, `/dataviz`, `/deep-research`, `/plugin-authoring`, `/auto-mode-setup` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/fast` points at `/effort low`, `/advisor` at `/fusion` and `/ultra`, `/voice` says there is no audio stack, `/batch` at `wizard fleet`, `/tui` at `/ui`). They change nothing. |
 | `DISABLE_LOGIN_COMMAND` and the other `DISABLE_*_COMMAND` variables | `/login`, `/logout`, `/upgrade`, `/feedback` (and `/bug`), `/doctor`, `/usage-credits` and `/install-github-app` answer "turned off by NAME" when their variable is set. |
 | `/feedback [note]` | Where to report a bug and what to attach. |
 | `/schedule` | Lists `~/.wizard/schedule.toml`; `wizard schedule` manages it. |
@@ -730,11 +731,10 @@ directory as part of the task; it does not widen a file-access sandbox, because 
 ### Missing
 
 Of the 98 names in 2.1.314's menu, two have no row to answer them: `/__remote-workflow` and `/workflow-launch-exec`,
-which are plumbing of the Workflow runtime and not typed by anyone. Names an older spec lists that the 2.1.314
+which are plumbing of Claude's remote Workflow runtime and not typed by anyone. Names an older spec lists that the 2.1.314
 menu no longer shows (`/scroll-speed`, `/claude-in-chrome`, `/desktop`, `/cloud`, `/remote-control`, `/slides`,
 `/artifacts`, `/artifact-*`, `/skill-doctor`, `/ultrareview`) are not implemented; `wizard ultrareview` answers
-as the subcommand. The Workflow runtime, claude.ai-only tools and voice stay out for the reasons in the audit
-table above.
+as the subcommand. Claude.ai-only tools and voice stay out for the reasons in the audit table above.
 
 `/theme` is still `/ui`: a skin carries its palette, so Claude's theme names (`dark`, `light-daltonized`, ...) do not map to anything.
 
