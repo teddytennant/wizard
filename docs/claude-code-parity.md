@@ -520,3 +520,12 @@ approval dialog (`plan`, `plan-down`, `x-planesc`), and what follows approval (`
 - An approved plan prints `User approved Claude's plan` with a plan-coloured bullet, the plan file
   (`~/.claude/plans/<slug>.md · /plan to edit`) and the plan. Wizard keeps its plan in `.wizard/plan.md`.
 - After approval 2.1.314 is in the mode its option named; Wizard goes back to the mode the plan was entered from.
+
+### Welcome screen model line
+
+2.1.314 prints `Haiku 5.5 · API Usage Billing` (or the plan name for a subscription). The look prints
+`<model> · <provider>` from what wizard reports, for example `grok-4.7 · xai-oauth`: the same form, with the real
+model and the real way it is paid for, and nothing renamed to look like Claude. The long price string seen in
+`tools/compare.sh` runs is the replay's: a Claude model picker row carries its description in the same field
+wizard uses for the provider, so the replayed header reads `Haiku · Haiku 5.5 · Fastest for quick answers ...`. The
+comparison masks the words of that row (`explained.tsv`, `norm`), not its colours or its place.
