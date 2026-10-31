@@ -61,6 +61,73 @@ pub fn effort(get: Get) -> Option<String> {
     )
 }
 
+/// `ANTHROPIC_CUSTOM_HEADERS`: one `Name: value` per line.
+pub fn custom_headers(get: Get) -> Vec<(String, String)> {
+    let Some(raw) = get("ANTHROPIC_CUSTOM_HEADERS") else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, val)| (name.trim().to_string(), val.trim().to_string()))
+        .filter(|(name, _)| !name.is_empty())
+        .collect()
+}
+
+/// The `anthropic-beta` header value: `--betas` (published as
+/// `WIZARD_BETAS`, spaces or commas) and `ANTHROPIC_BETAS` (commas).
+pub fn betas(get: Get) -> Option<String> {
+    let mut all: Vec<String> = Vec::new();
+    for name in ["WIZARD_BETAS", "ANTHROPIC_BETAS"] {
+        for beta in value(get, name)
+            .unwrap_or_default()
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+        {
+            if !all.iter().any(|have| have == beta) {
+                all.push(beta.to_string());
+            }
+        }
+    }
+    (!all.is_empty()).then(|| all.join(","))
+}
+
+/// A JSON object from an environment variable, or why it is not one.
+fn json_object(get: Get, name: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let raw = value(get, name)?;
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Object(map)) => Some(map),
+        _ => {
+            tracing::warn!("{name} must be a JSON object; ignored");
+            None
+        }
+    }
+}
+
+/// Add `CLAUDE_CODE_EXTRA_BODY` (top-level keys) and
+/// `CLAUDE_CODE_EXTRA_METADATA` (keys of `metadata`) to an Anthropic request
+/// body. Keys the request already has are kept.
+pub fn extend_request_body(body: &mut serde_json::Value, get: Get) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    if let Some(extra) = json_object(get, "CLAUDE_CODE_EXTRA_BODY") {
+        for (key, val) in extra {
+            object.entry(key).or_insert(val);
+        }
+    }
+    if let Some(extra) = json_object(get, "CLAUDE_CODE_EXTRA_METADATA") {
+        let metadata = object
+            .entry("metadata")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(metadata) = metadata.as_object_mut() {
+            for (key, val) in extra {
+                metadata.entry(key).or_insert(val);
+            }
+        }
+    }
+}
+
 /// `CLAUDE_CODE_MAX_TURNS`.
 pub fn max_turns(get: Get) -> Option<u32> {
     value(get, "CLAUDE_CODE_MAX_TURNS")?
@@ -188,6 +255,35 @@ mod tests {
             active_provider: Some("claude".into()),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn custom_headers_betas_and_extra_body() {
+        let get = env(&[
+            ("ANTHROPIC_CUSTOM_HEADERS", "X-One: a b\nbad line\nX-Two:c"),
+            ("WIZARD_BETAS", "b1 b2"),
+            ("ANTHROPIC_BETAS", "b2,b3"),
+            ("CLAUDE_CODE_EXTRA_BODY", r#"{"top_k": 5, "model": "no"}"#),
+            ("CLAUDE_CODE_EXTRA_METADATA", r#"{"user_id": "u"}"#),
+        ]);
+        assert_eq!(
+            custom_headers(&get),
+            vec![
+                ("X-One".to_string(), "a b".to_string()),
+                ("X-Two".to_string(), "c".to_string())
+            ]
+        );
+        assert_eq!(betas(&get).as_deref(), Some("b1,b2,b3"));
+        let mut body = serde_json::json!({"model": "m"});
+        extend_request_body(&mut body, &get);
+        assert_eq!(body["top_k"], 5);
+        assert_eq!(body["model"], "m", "the request's own keys win");
+        assert_eq!(body["metadata"]["user_id"], "u");
+        let none = env(&[("CLAUDE_CODE_EXTRA_BODY", "[1]")]);
+        let mut body = serde_json::json!({"model": "m"});
+        extend_request_body(&mut body, &none);
+        assert_eq!(body, serde_json::json!({"model": "m"}));
+        assert_eq!(betas(&env(&[])), None);
     }
 
     #[test]

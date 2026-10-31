@@ -163,9 +163,17 @@ impl AnthropicProvider {
 
     /// Attach the Anthropic auth + version headers.
     fn headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        builder
+        let get = |name: &str| std::env::var(name).ok();
+        let mut builder = builder
             .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
+            .header("anthropic-version", API_VERSION);
+        if let Some(betas) = crate::config::claude_env::betas(&get) {
+            builder = builder.header("anthropic-beta", betas);
+        }
+        for (name, value) in crate::config::claude_env::custom_headers(&get) {
+            builder = builder.header(name, value);
+        }
+        builder
     }
 
     /// Translate a native [`ChatRequest`] into a Messages API request body.
@@ -192,6 +200,7 @@ impl AnthropicProvider {
             "messages": messages,
             "stream": true,
         });
+        crate::config::claude_env::extend_request_body(&mut body, &|name| std::env::var(name).ok());
         if !system.is_empty() {
             body["system"] = Value::Array(system);
         }

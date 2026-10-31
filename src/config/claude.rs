@@ -178,9 +178,24 @@ pub fn claude_dir() -> Option<PathBuf> {
     }
 }
 
+/// `--setting-sources`: whether `source` (`user`, `project` or `local`) is
+/// read. Every source is when the flag is absent.
+fn source_enabled(source: &str) -> bool {
+    in_sources(
+        std::env::var(crate::cli_claude::env::SETTING_SOURCES)
+            .ok()
+            .as_deref(),
+        source,
+    )
+}
+
+fn in_sources(list: Option<&str>, source: &str) -> bool {
+    list.is_none_or(|list| list.split(',').any(|item| item.trim() == source))
+}
+
 fn layers(project_root: &Path, user_dirs: &[(PathBuf, bool)], managed: &[PathBuf]) -> Vec<Layer> {
     let mut out = Vec::new();
-    for (dir, honors_model) in user_dirs {
+    for (dir, honors_model) in user_dirs.iter().filter(|_| source_enabled("user")) {
         out.push(Layer {
             path: dir.join("settings.json"),
             label: format!("user settings ({})", dir.join("settings.json").display()),
@@ -190,6 +205,9 @@ fn layers(project_root: &Path, user_dirs: &[(PathBuf, bool)], managed: &[PathBuf
     }
     for rel in PROJECT_FILES {
         let local = rel.contains(".local.");
+        if !source_enabled(if local { "local" } else { "project" }) {
+            continue;
+        }
         out.push(Layer {
             path: project_root.join(rel),
             label: format!(
@@ -921,6 +939,14 @@ mod tests {
         assert_eq!(s.announcement(3), None);
         s.company_announcements = vec!["a".into(), "b".into()];
         assert_eq!(s.announcement(3), Some("b"));
+    }
+
+    #[test]
+    fn setting_sources_pick_the_layers() {
+        assert!(in_sources(None, "project"));
+        assert!(in_sources(Some("user, local"), "local"));
+        assert!(!in_sources(Some("user"), "project"));
+        assert!(!in_sources(Some(""), "user"));
     }
 
     #[test]

@@ -28,6 +28,25 @@ use super::tasks::{TaskKillTool, TaskOutputTool};
 use super::todo::TodoTool;
 use super::turing::TuringTool;
 
+/// `--tools`: whether a built-in tool is among the ones left available. MCP
+/// tools (`server__tool`) are never filtered, and with no `--tools` every tool
+/// is.
+fn only_listed(name: &str) -> bool {
+    let Some(raw) = std::env::var_os(crate::cli_claude::env::TOOLS) else {
+        return true;
+    };
+    name.contains("__")
+        || raw
+            .to_string_lossy()
+            .split(crate::cli_claude::SEP)
+            .filter(|listed| !listed.is_empty())
+            .any(|listed| {
+                listed == name
+                    || listed == crate::hooks::toolmap::claude_name(name)
+                    || crate::hooks::toolmap::wizard_name(listed) == Some(name)
+            })
+}
+
 /// Registry of every callable tool, keyed by advertised name.
 /// Registration order is preserved for stable spec ordering in prompts.
 #[derive(Default)]
@@ -197,6 +216,9 @@ impl ToolRegistry {
     /// Register (or replace) a tool under its advertised name.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
+        if !only_listed(&name) {
+            return;
+        }
         if !self.tools.contains_key(&name) {
             self.order.push(name.clone());
         }
