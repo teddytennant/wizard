@@ -67,6 +67,13 @@ pub fn build_config(options: &[Value], cwd: &str, backend: &str) -> Config {
         c.mode = str_of(m, "currentValue").to_string();
         c.modes = option_values(m);
     }
+    if let Some(p) = options
+        .iter()
+        .find(|o| str_of(o, "id") == "permission_mode")
+    {
+        c.permission_mode = str_of(p, "currentValue").to_string();
+        c.permission_modes = option_values(p);
+    }
     c
 }
 

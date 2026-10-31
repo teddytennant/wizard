@@ -179,6 +179,8 @@ impl Harness {
             modes: ["default", "acceptEdits", "plan", "bypassPermissions"]
                 .map(String::from)
                 .to_vec(),
+            permission_mode: String::new(),
+            permission_modes: Vec::new(),
             cwd: "/work/proj".into(),
             backend: "claude 2.1.289".into(),
         };

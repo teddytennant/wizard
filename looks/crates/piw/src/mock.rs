@@ -34,6 +34,8 @@ pub fn config() -> Config {
             .to_vec(),
         mode: "genie".into(),
         modes: vec!["genie".into(), "sovereign".into()],
+        permission_mode: String::new(),
+        permission_modes: Vec::new(),
         cwd: std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_default(),

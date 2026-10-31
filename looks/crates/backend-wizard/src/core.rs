@@ -345,6 +345,7 @@ impl Core {
             }
             Request::SetEffort(v) => self.set_option("thought_level", v),
             Request::SetMode(v) => self.set_option("wizard_mode", v),
+            Request::SetPermissionMode(v) => self.set_option("permission_mode", v),
             Request::Refresh => {
                 if !self.commands.is_empty() {
                     let c = self.commands.clone();
