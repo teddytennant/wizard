@@ -1,0 +1,50 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.314[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · API Usage Billing[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[39m [38;5;246m◐ medium · /effort[38;5;153m ▔
+[39m   [1m[38;5;153mSelect model[0m
+   [38;5;246mSwitch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.[39m
+
+     [38;5;246m1. [39mDefault (recommended)  [38;5;246mUse the default model (currently [38;5;174mOpus 5.5[38;5;246m) · $4/$20 per Mtok[39m
+     [38;5;246m2. [39mOpus                   [38;5;174mOpus 5.5[38;5;246m · Best for everyday, complex tasks · $4/$20 per Mtok[39m
+     [38;5;246m3. [39mFable                  [38;5;246mFable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok[39m
+     [38;5;246m4. [39mSonnet                 [38;5;246mSonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok[39m
+   [38;5;153m❯[39m [38;5;246m5. [38;5;114mHaiku[39m [38;5;114m✔[39m                [38;5;246mHaiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)[39m
+
+   [38;5;174m◐[38;5;246m Medium effort (default)[38;5;239m ←/→ to adjust[39m
+
+   [38;5;246mEnter to set as default · s to use this session only · Esc to cancel[39m

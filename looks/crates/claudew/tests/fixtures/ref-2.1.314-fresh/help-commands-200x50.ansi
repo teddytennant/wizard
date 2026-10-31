@@ -1,0 +1,50 @@
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · API Usage Billing[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/tmp/claude-1000/-home-owner/00000000-0000-0000-0000-000000000000/scratchpad/look-claude/proj[39m
+
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+[39m   [1m[38;5;110mHelp[0m  General  [1m[38;5;16m[48;5;110m Commands [0m  Custom commands
+
+
+   Browse default commands
+
+   [38;5;246m❯[39m /add-dir
+     [38;5;246mAdd a new working directory[39m
+     /auto-mode-setup
+     [38;5;246mTeach auto mode about your environment, plus optional rule tweaks[39m
+     /autocompact
+     [38;5;246mSet how full the context gets before auto-summarizing[39m
+     /background
+     [38;5;246mSend this session to the background and free the terminal[39m
+     /batch
+     [38;5;246mPlan a large change; background agents each open a PR[39m
+     /branch
+     [38;5;246mCreate a branch of the current conversation at this point[39m
+     /btw
+     [38;5;246mAsk a quick side question without interrupting the main conversation[39m
+     /bug
+     [38;5;246mReport a bug or share your conversation[39m
+     /cd
+     [38;5;246mMove this session to a new working directory[39m
+     /claude-api
+     [38;5;246mBuild and debug apps that use the Claude API[39m
+     /clear
+     [38;5;246mStart a new session with empty context; previous session stays on disk (resumable with /resume)[39m
+     /code-review
+     [38;5;246mReview the current diff or a PR for bugs and cleanups[39m
+     /color
+     [38;5;246mSet the prompt bar color for this session[39m
+     /compact
+     [38;5;246mFree up context by summarizing the conversation so far[39m
+     /config
+     [38;5;246mOpen settings[39m
+     /context
+     [38;5;246mVisualize current context usage as a colored grid[39m
+     /copy
+     [38;5;246mCopy Claude's last response to clipboard (or /copy N for the Nth-latest)[39m
+
+     [38;5;246m↓ 63 more[39m
+
+
+   For more help: ]8;id=sdguk7;https://code.claude.com/docs/en/overview\https://code.claude.com/docs/en/overview]8;;\
+
+   [3m[38;5;246mEsc to cancel[0m
