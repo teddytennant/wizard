@@ -385,7 +385,7 @@ impl Tool for TaskUpdateTool {
             return Ok(invalid(self.name(), "taskId is required"));
         };
         let Some(id) = parse_id(raw_id) else {
-            return Ok(ToolOutput::ok(format!("Task #{raw_id} not found")));
+            return Ok(ToolOutput::ok("Task not found"));
         };
         let status_arg = str_arg(&args, "status");
         if let Some(status) = status_arg
@@ -422,7 +422,7 @@ fn apply_update(
     args: &Value,
 ) -> Result<(Vec<TodoItem>, String), String> {
     if board.get(id).is_none() {
-        return Err(format!("Task #{id} not found"));
+        return Err("Task not found".to_string());
     }
     let status_arg = str_arg(args, "status");
     if status_arg == Some("deleted") {
@@ -613,6 +613,39 @@ mod tests {
         tool.execute(args, ctx).await.unwrap()
     }
 
+    /// The calls and answers of Claude Code 2.1.314 (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, driven
+    /// through `claude -p` against a fake Messages server), one pair per step.
+    #[tokio::test]
+    async fn the_answers_match_claude_code_2_1_314_step_by_step() {
+        let ctx = ctx();
+        let steps: Vec<(&str, Value, &str)> = vec![
+            ("TaskCreate", json!({"subject":"Write the parser","description":"Parse the input","activeForm":"Writing the parser"}), "Task #1 created successfully: Write the parser"),
+            ("TaskCreate", json!({"subject":"Add tests","description":"Cover the parser","metadata":{"area":"tests"}}), "Task #2 created successfully: Add tests"),
+            ("TaskList", json!({}), "#1 [pending] Write the parser\n#2 [pending] Add tests"),
+            ("TaskGet", json!({"taskId":"1"}), "Task #1: Write the parser\nStatus: pending\nDescription: Parse the input"),
+            ("TaskUpdate", json!({"taskId":"1","status":"in_progress"}), "Updated task #1 status"),
+            ("TaskUpdate", json!({"taskId":"2","addBlockedBy":["1"],"owner":"bob"}), "Updated task #2 owner, blockedBy"),
+            ("TaskList", json!({}), "#1 [in_progress] Write the parser\n#2 [pending] Add tests (bob) [blocked by #1]"),
+            ("TaskGet", json!({"taskId":"2"}), "Task #2: Add tests\nStatus: pending\nDescription: Cover the parser\nBlocked by: #1"),
+            ("TaskUpdate", json!({"taskId":"1","status":"completed"}), "Updated task #1 status"),
+            ("TaskList", json!({}), "#1 [completed] Write the parser\n#2 [pending] Add tests (bob)"),
+            ("TaskGet", json!({"taskId":"99"}), "Task not found"),
+            ("TaskUpdate", json!({"taskId":"99","status":"completed"}), "Task not found"),
+            ("TaskUpdate", json!({"taskId":"1","subject":"Write the lexer","metadata":{"area":null,"k":"v"}}), "Updated task #1 subject, metadata"),
+            ("TaskGet", json!({"taskId":"1"}), "Task #1: Write the lexer\nStatus: completed\nDescription: Parse the input\nBlocks: #2"),
+            ("TaskUpdate", json!({"taskId":"2","status":"deleted"}), "Updated task #2 deleted"),
+            ("TaskList", json!({}), "#1 [completed] Write the lexer"),
+            ("TaskUpdate", json!({"taskId":"1"}), "Updated task #1 "),
+            ("TaskCreate", json!({"subject":"","description":"x"}), "Task #3 created successfully: "),
+        ];
+        let tools = tools();
+        for (name, args, want) in steps {
+            let tool = tools.iter().find(|t| t.name() == name).expect(name);
+            let got = call(tool.as_ref(), &ctx, args.clone()).await;
+            assert_eq!(got.content, want, "{name} {args}");
+        }
+    }
+
     #[tokio::test]
     async fn create_get_list_follow_claude_codes_wording() {
         let ctx = ctx();
@@ -733,7 +766,7 @@ mod tests {
         )
         .await;
         assert!(!out.is_error);
-        assert_eq!(out.content, "Task #7 not found");
+        assert_eq!(out.content, "Task not found");
     }
 
     #[test]

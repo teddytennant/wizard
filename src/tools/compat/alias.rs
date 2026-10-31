@@ -217,7 +217,7 @@ pub fn aliases(registry: &ToolRegistry) -> Vec<Arc<dyn Tool>> {
             "required": ["todos"]
         }),
         map_todo_write,
-        None,
+        Some(finish_todo_write),
         None,
     );
     add(
@@ -428,6 +428,17 @@ fn map_agent(args: &Value) -> Result<Value, String> {
     Ok(json!({ "subagent": subagent, "task": task, "background": background }))
 }
 
+/// Claude Code's answer to a `TodoWrite` that was accepted, word for word (2.1.314).
+const TODOS_WRITTEN: &str = "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable";
+
+fn finish_todo_write(out: ToolOutput, _args: &Value) -> ToolOutput {
+    if out.is_error {
+        out
+    } else {
+        ToolOutput::ok(TODOS_WRITTEN)
+    }
+}
+
 fn map_todo_write(args: &Value) -> Result<Value, String> {
     let todos = args
         .get("todos")
@@ -521,6 +532,17 @@ fn map_exit_plan(args: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_accepted_todo_write_answers_in_claude_codes_words() {
+        let ok = finish_todo_write(ToolOutput::ok("todo list updated - 1/2 done"), &json!({}));
+        assert_eq!(
+            ok.content,
+            "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable"
+        );
+        let bad = finish_todo_write(ToolOutput::error("boom"), &json!({}));
+        assert!(bad.is_error && bad.content == "boom");
+    }
 
     #[test]
     fn bash_timeout_is_milliseconds_rounded_up_to_seconds() {
