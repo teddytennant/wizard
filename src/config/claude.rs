@@ -65,6 +65,10 @@ pub struct ClaudeSettings {
     pub env: BTreeMap<String, String>,
     pub model: Option<String>,
     pub default_mode: Option<PermissionMode>,
+    /// A permissions block came from a file that asks Wizard for permissions:
+    /// Wizard's own `settings.json`, `--settings`, or managed settings. A
+    /// Claude Code file's `permissions` alone does not turn them on.
+    pub permissions_opt_in: bool,
     pub allow: Vec<Rule>,
     pub ask: Vec<Rule>,
     pub deny: Vec<Rule>,
@@ -114,6 +118,19 @@ struct Layer {
     /// Project-relative name, for fetching approved bytes from the surface.
     project_rel: Option<&'static str>,
     honors_model: bool,
+}
+
+impl Layer {
+    /// Wizard's own settings files (`honors_model` marks its user directory and
+    /// `--settings`) and managed settings are a request for permissions; a
+    /// Claude Code directory's files are not.
+    fn asks_for_permissions(&self) -> bool {
+        self.honors_model
+            || self.label.starts_with("managed settings")
+            || self
+                .project_rel
+                .is_some_and(|rel| rel.starts_with(".wizard/"))
+    }
 }
 
 /// Where the user-level Claude directory is.
@@ -271,6 +288,9 @@ fn merge_layer(
     let Some(perms) = value.get("permissions") else {
         return;
     };
+    if layer.asks_for_permissions() {
+        out.permissions_opt_in = true;
+    }
     let mut read = |key: &str, into: fn(&mut ClaudeSettings) -> &mut Vec<Rule>| {
         for raw in perms
             .get(key)
@@ -462,6 +482,28 @@ mod tests {
         assert_eq!(s.allow.len(), 1);
         assert_eq!(s.default_mode, Some(PermissionMode::DontAsk));
         assert_eq!(s.output_style.as_deref(), Some("verbose"));
+    }
+
+    #[test]
+    fn only_wizards_own_files_ask_for_permissions() {
+        let block = r#"{"permissions":{"deny":["Bash(rm:*)"],"defaultMode":"dontAsk"}}"#;
+        let d = dirs();
+        write(d.user.join("settings.json"), block);
+        write(d.project.join(".claude/settings.json"), block);
+        write(d.project.join(".claude/settings.local.json"), block);
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert!(!s.permissions_opt_in, "Claude Code's files do not opt in");
+        assert_eq!(s.deny.len(), 3, "their rules are still read");
+
+        for wizard_file in [
+            d.wizard.join("settings.json"),
+            d.project.join(".wizard/settings.json"),
+        ] {
+            write(wizard_file.clone(), block);
+            let s = run(&d, Trust::Approved(&Surface::default()));
+            assert!(s.permissions_opt_in, "{}", wizard_file.display());
+            std::fs::remove_file(wizard_file).unwrap();
+        }
     }
 
     #[test]

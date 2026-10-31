@@ -6,6 +6,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- Permissions are opt-in. Nothing is checked, prompted or refused by default, as if every run had `--dangerously-skip-permissions`. A `permissions` block in a Claude Code settings file (`~/.claude`, `.claude/settings.json`) no longer turns prompts or rules on by itself; a flag, `[permissions]` in `config.toml`, or a block in `~/.wizard/settings.json`, `.wizard/settings.json`, `--settings` or managed settings does.
+
 ### Added
 
 - Claude Code's subcommands, spelled the same: `wizard mcp add|add-json|add-from-claude-desktop|get|list|remove|reset-project-choices|serve`, `wizard plugin list|install|uninstall|enable|disable|update|validate|details|init|tag|prune|marketplace ...`, `wizard auth login|logout|status`, `wizard install`, `wizard import`, `wizard purge`, `wizard stop`/`kill`, `wizard rm`, `wizard setup-token`, `wizard upgrade`, and `wizard agents --json`. `attach`, `logs`, `respawn`, `auto-mode` and `ultrareview` parse and say why there is no counterpart. `wizard plugin` used to be a hidden spelling of `wizard builtins`; that name is now `builtins` only. `docs/claude-code-parity.md` has an audit of every subcommand, flag, slash command, settings key and environment variable of Claude Code 2.1.314 with its status.

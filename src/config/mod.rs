@@ -2118,7 +2118,10 @@ impl Config {
         if mode.is_none()
             && let Ok(root) = std::env::current_dir()
         {
-            mode = claude::load(&root, claude::Trust::Refused).default_mode;
+            let settings = claude::load(&root, claude::Trust::Refused);
+            if settings.permissions_opt_in {
+                mode = settings.default_mode;
+            }
         }
         if mode == Some(crate::permissions::PermissionMode::Plan) {
             self.plan_first = true;

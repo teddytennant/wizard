@@ -379,6 +379,11 @@ pub fn build(
     cwd: &std::path::Path,
 ) -> Policy {
     let mut policy = Policy::new(cwd.to_path_buf());
+    // Permissions are an option. Nothing asked for them, so every call runs, as
+    // it always did: a Claude Code `permissions` block on its own does not count.
+    if !opted_in(config, settings) {
+        return policy;
+    }
     policy.allow = settings.allow.clone();
     policy.ask = settings.ask.clone();
     policy.deny = settings.deny.clone();
@@ -421,4 +426,22 @@ pub fn build(
         mode
     };
     policy
+}
+
+/// Whether this run asked for permissions: a flag, `[permissions]` in
+/// `config.toml`, or a permissions block in one of Wizard's own settings files.
+pub fn opted_in(
+    config: &crate::config::Config,
+    settings: &crate::config::claude::ClaudeSettings,
+) -> bool {
+    let run = &config.run_permissions;
+    let own = &config.permissions;
+    run.mode.is_some()
+        || !run.allow.is_empty()
+        || !run.deny.is_empty()
+        || own.mode.is_some()
+        || !own.allow.is_empty()
+        || !own.ask.is_empty()
+        || !own.deny.is_empty()
+        || settings.permissions_opt_in
 }

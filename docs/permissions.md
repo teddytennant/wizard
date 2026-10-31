@@ -1,6 +1,6 @@
 # Permissions and settings
 
-Wizard runs the model's tool calls without asking. That has not changed: with no rules set and no mode named, every call runs. Permission rules narrow that, in the same syntax Claude Code uses, so a rule you already wrote for Claude works here. Naming a mode (`--permission-mode default`, `acceptEdits`, `plan`) turns on Claude Code's prompts: writes, commands and the like are asked about before they run.
+Wizard runs the model's tool calls without asking, as if every run had `--dangerously-skip-permissions`. That is the default and it has not changed. Permissions are an option you turn on: nothing is checked, prompted or refused until you pass `--permission-mode`, `--allowedTools` or `--disallowedTools`, set `[permissions]` in `config.toml`, or put a `permissions` block in `~/.wizard/settings.json`, `.wizard/settings.json`, a file given to `--settings`, or a managed settings file. A `permissions` block in a Claude Code file (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`) is read but does nothing on its own; once you have opted in, those files' rules apply too.
 
 Rules live in three lists, `deny`, `ask` and `allow`, under `permissions` in a settings file, in `[permissions]` in `config.toml`, or on the command line.
 
@@ -74,7 +74,7 @@ Modes accept `acceptEdits`, `accept-edits` and `accept_edits` alike.
 
 Checked against Claude Code 2.1.314 with a mock API (`-p` runs, which cannot ask and so refuse; the refusal texts above are its tool results). Its `default` refused writes, `touch`, `curl` and `WebFetch` and ran `ls` and `Read`. Its `acceptEdits` ran `touch`, `mkdir`, `mv`, `cp`, `rm` and `sed -i` in the project and asked for `touch /tmp/x`, `git commit`, `cd d && touch q` and a write outside the project. Its `dontAsk` refused anything no `allow` rule names, an `ask` rule still asked under `bypassPermissions`, and `plan` answered a write with `Cannot write to <path> while in plan mode.` while `ls` ran. Wizard matches all of that. Two differences stay: in `-p`, Claude's plan mode hands every other command to its classifier, where Wizard refuses it; and Claude's `acceptEdits` also lets a redirection such as `echo hi > z.txt` write inside the project, which Wizard still asks about.
 
-A mode named in `~/.claude/settings.json` counts: if your Claude settings say `"defaultMode": "default"`, Wizard prompts too.
+A mode named only in a Claude Code file does not count. If your `~/.claude/settings.json` says `"defaultMode": "default"`, Wizard still runs everything until you opt in; name the mode with `--permission-mode` or in `~/.wizard/settings.json` to turn prompts on.
 
 ## Command-line flags
 

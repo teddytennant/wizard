@@ -449,3 +449,64 @@ fn stream_json_input_needs_stream_json_output() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("requires output-format=stream-json"));
 }
+
+fn bash_result(values: &[Value]) -> (bool, String) {
+    let result = values
+        .iter()
+        .find(|v| v["message"]["content"][0]["type"] == "tool_result")
+        .expect("a tool_result message");
+    let block = &result["message"]["content"][0];
+    (
+        block["is_error"].as_bool().unwrap_or(false),
+        block["content"].to_string(),
+    )
+}
+
+#[test]
+fn a_claude_code_permissions_block_alone_does_not_stop_a_run() {
+    let mock = Mock::start();
+    let home = Home::new(&mock);
+    std::fs::create_dir_all(home.0.join(".claude")).expect("claude dir");
+    std::fs::write(
+        home.0.join(".claude").join("settings.json"),
+        r#"{"permissions":{"deny":["Bash"],"defaultMode":"dontAsk"}}"#,
+    )
+    .expect("settings");
+    let out = home.run(&[
+        "-p",
+        "echo hi",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]);
+    let (is_error, text) = bash_result(&lines(&out));
+    assert!(!is_error, "{text}");
+    assert!(text.contains("hi"), "the command ran: {text}");
+}
+
+#[test]
+fn a_flag_turns_permissions_on_and_every_settings_layer_applies() {
+    let mock = Mock::start();
+    let home = Home::new(&mock);
+    std::fs::create_dir_all(home.0.join(".claude")).expect("claude dir");
+    std::fs::write(
+        home.0.join(".claude").join("settings.json"),
+        r#"{"permissions":{"deny":["Bash"]}}"#,
+    )
+    .expect("settings");
+    let out = home.run(&[
+        "-p",
+        "echo hi",
+        "--permission-mode",
+        "bypassPermissions",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]);
+    let (is_error, text) = bash_result(&lines(&out));
+    assert!(
+        is_error,
+        "the deny rule applies once permissions are on: {text}"
+    );
+    assert!(text.contains("denied"), "{text}");
+}

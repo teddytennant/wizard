@@ -409,11 +409,11 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 
 | Key | Status | Notes |
 | :- | :- | :- |
-| `permissions` | present | Read and applied |
+| `permissions` | present | Read from every file. Applied once you opt in (a flag, `[permissions]` in `config.toml`, or a block in Wizard's own settings file); a Claude Code file's block alone does nothing, because Wizard runs everything by default. |
 | `additionalDirectories` | present | Permissions work: parsed there. |
 | `allow` | present | Read and applied |
 | `deny` | present | Read and applied |
-| `defaultMode` | present | Read and applied |
+| `defaultMode` | present | Applied once you opt in, as above. |
 | `hooks` | present | Read and applied |
 | `disableAllHooks` | present | Read and applied |
 | `env` | present | Read and applied |

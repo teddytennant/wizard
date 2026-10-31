@@ -532,3 +532,54 @@ fn the_summary_says_when_the_mode_asks() {
             .contains("asks before")
     );
 }
+
+fn claude_file_settings() -> crate::config::claude::ClaudeSettings {
+    let mut settings = crate::config::claude::ClaudeSettings::default();
+    let root = Path::new("/proj");
+    settings.deny = vec![
+        Rule::parse("Bash(rm:*)", root)
+            .unwrap()
+            .from_source("project settings (.claude/settings.json)"),
+    ];
+    settings.default_mode = Some(PermissionMode::DontAsk);
+    settings
+}
+
+#[test]
+fn nothing_is_checked_unless_permissions_were_asked_for() {
+    let config = crate::config::Config::default();
+    let policy = build(&config, &claude_file_settings(), Path::new("/proj"));
+    assert!(policy.is_inert());
+    assert_eq!(run(&policy, "rm -rf build"), Decision::Allow);
+    assert_eq!(
+        policy.check("write_file", ToolAccess::Edit, &json!({"path": "/proj/a"})),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn a_flag_a_wizard_config_or_a_wizard_settings_file_turns_them_on() {
+    let root = Path::new("/proj");
+    let mut config = crate::config::Config::default();
+    config.run_permissions.deny = vec!["Bash(rm:*)".to_string()];
+    let policy = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert!(is_deny(&run(&policy, "rm -rf build")));
+
+    let mut config = crate::config::Config::default();
+    config.permissions.mode = Some(PermissionMode::DontAsk);
+    let policy = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert!(is_deny(&run(&policy, "cargo build")));
+
+    let mut settings = claude_file_settings();
+    settings.permissions_opt_in = true;
+    let policy = build(&crate::config::Config::default(), &settings, root);
+    assert!(is_deny(&run(&policy, "rm -rf build")));
+}
