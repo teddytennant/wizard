@@ -426,7 +426,7 @@ impl App {
                 .map_or(0, |d| d.as_secs() as i64),
             cfg: Config::default(),
             session_id: String::new(),
-            commands: agent_core::commands::menu(&[], &[]),
+            commands: agent_core::commands::menu(&[], &claude_extras()),
             sessions: Vec::new(),
             files: Vec::new(),
             blocks: Vec::new(),
@@ -853,7 +853,7 @@ impl App {
                         c.push(custom.clone());
                     }
                 }
-                self.commands = agent_core::commands::menu(&c, &[]);
+                self.commands = agent_core::commands::menu(&c, &claude_extras());
                 self.refresh_menu();
             }
             Event::ConfigChanged(c) => {
@@ -1415,7 +1415,7 @@ impl App {
                 }
                 return;
             }
-            "settings" => {
+            "settings" | "config" => {
                 self.blocks.push(Block::User { text, bash: false });
                 self.output(agent_core::commands::NO_SETTINGS, String::new());
                 return;
@@ -3036,6 +3036,11 @@ pub fn effort_glyph(effort: &str) -> &'static str {
 
 /// Commands for what is typed after the slash: names that start with it, then names that
 /// contain it, then descriptions that do.
+/// Claude Code's names for commands this look answers itself.
+fn claude_extras() -> Vec<SlashCommand> {
+    agent_core::commands::extras(&[("config", "", "open the config panel")])
+}
+
 pub fn slash_matches(commands: &[SlashCommand], query: &str) -> Vec<usize> {
     if query.is_empty() {
         return (0..commands.len()).collect();

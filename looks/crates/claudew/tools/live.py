@@ -390,7 +390,7 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-carry-model'), footer_mode(text(p('live-carry-model'))) == 'plan',
           'the footer still says plan')
     ran_in_plan(fails, tag('live-carry-model'), log, 'first write', 'fake-other')
-    check(fails, tag('live-carry-model'), re.search(r'● Write\(w\.txt\)', t) and 'blocked by plan mode' in t,
+    check(fails, tag('live-carry-model'), re.search(r'● Write\(w\.txt\)', t) and 'while in plan mode' in t,
           'a write plan mode blocked is drawn with its name and the reason')
     for scene, prompt in (('live-carry-rewind', 'rewound write'), ('live-carry-resume', 'resumed write')):
         check(fails, tag(scene), footer_mode(text(p(scene))) == 'plan', 'the footer still says plan')
@@ -408,8 +408,8 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-plan-text'), footer_mode(text(p('live-plan-text'))) == 'plan',
           '/plan with text in plan mode leaves plan mode on')
     check(fails, tag('live-config'), request(log, '/config') is None, '/config is not sent to the model')
-    check(fails, tag('live-config'), 'Unknown slash command' in text(p('live-config')),
-          'wizard answers /config as unknown')
+    check(fails, tag('live-config'), 'has no settings view' in text(p('live-config')),
+          'the look answers /config as it does /settings')
     t = text(p('live-mode'))
     check(fails, tag('live-mode'), 'Select mode' in t and re.search(r'1\.\s+genie', t),
           '/mode opens a picker of wizard\'s modes')

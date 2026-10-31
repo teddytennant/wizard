@@ -249,7 +249,7 @@ fn the_menu_is_wizards_commands_and_the_shared_set() {
         names,
         [
             "model", "compact", "status", "btw", "deploy", "clear", "exit", "export", "help",
-            "quit", "resume", "settings"
+            "quit", "resume", "settings", "config"
         ]
     );
     assert!(
@@ -262,7 +262,7 @@ fn the_menu_is_wizards_commands_and_the_shared_set() {
 /// Names the look used to answer itself, or to alias, now go to wizard as typed.
 #[test]
 fn claude_codes_own_commands_go_to_wizard() {
-    for typed in ["/status", "/config", "/new", "/reset", "/continue"] {
+    for typed in ["/status", "/new", "/reset", "/continue"] {
         let mut hn = harness();
         hn.app.submit(typed.into());
         assert_eq!(hn.sent(), [Request::Prompt(typed.into())], "{typed}");
@@ -1040,4 +1040,12 @@ fn export_writes_the_conversation_and_settings_answers_here() {
         hn.app.blocks.last(),
         Some(Block::Output { text, .. }) if text == agent_core::commands::NO_SETTINGS
     ));
+}
+
+#[test]
+fn config_is_answered_here_like_settings() {
+    let mut hn = harness();
+    hn.app.submit("/config".into());
+    assert!(hn.sent().is_empty());
+    assert!(hn.render().plain().contains("no settings view"));
 }

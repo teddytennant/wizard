@@ -640,13 +640,7 @@ fn tool(app: &App, t: &ToolCall, w: usize, detail: bool) -> Vec<Row> {
         let text = text.strip_prefix("Error: ").unwrap_or(text);
         // a failed edit or write says only that, as the reference does; ctrl+o has the detail.
         // A call wizard refused never reached the file, so the reason is what is shown
-        let refused = [
-            "is not available in this turn",
-            "blocked by plan mode",
-            "blocked by pre_tool_use hook",
-        ]
-        .iter()
-        .any(|r| text.contains(r));
+        let refused = is_refusal(text);
         let short = match name.as_str() {
             _ if detail || refused || text == "Interrupted" => None,
             "Update" => Some("Error editing file"),
@@ -752,4 +746,35 @@ pub fn relative(from: &std::path::Path, path: &str) -> String {
             .map(|c| c.as_os_str().to_string_lossy().into_owned()),
     );
     out.join("/")
+}
+
+/// A call wizard refused never reached the file, so its reason is shown in
+/// place of the generic "Error editing file".
+fn is_refusal(text: &str) -> bool {
+    [
+        "is not available in this turn",
+        "blocked by plan mode",
+        "while in plan mode",
+        "haven't granted it yet",
+        "blocked by pre_tool_use hook",
+    ]
+    .iter()
+    .any(|reason| text.contains(reason))
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::is_refusal;
+
+    #[test]
+    fn a_refused_write_keeps_its_reason() {
+        assert!(is_refusal(
+            "Cannot write to /proj/w.txt while in plan mode: only read-only tools are allowed"
+        ));
+        assert!(is_refusal(
+            "Claude requested permissions to write to /proj/w.txt, but you haven't granted it yet."
+        ));
+        assert!(is_refusal("blocked by plan mode: only read-only tools"));
+        assert!(!is_refusal("No such file or directory"));
+    }
 }
