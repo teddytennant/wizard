@@ -380,6 +380,22 @@ def shape(ref_path, look_path, scene, extra):
                 del ref[y]
                 ref.insert(top, [BLANK] * w)
                 top += 1
+    # scroll-ref, as in the cell diff: the reference's rows above `anchor` sit N rows higher
+    # because its extra rows needed room the screen did not have. They move back down, and the
+    # N rows at the top, which the reference had scrolled out of view, are blank on both sides.
+    scrolled = {}
+    for g, side, pat, reason in extra:
+        if side == 'scroll-ref' and (fnmatch.fnmatch(scene, g) or fnmatch.fnmatch(full, g)):
+            n_text, anchor = pat.split('@@')
+            n = int(n_text)
+            ref = grids[0]
+            top = next((y for y, r in enumerate(ref) if re.search(anchor, text_of(r))), None)
+            if top is None:
+                continue
+            ref[:] = [[BLANK] * w for _ in range(n)] + ref[:top - n] + ref[top:]
+            for y in range(n):
+                grids[1][y] = [BLANK] * w
+            scrolled[reason] = scrolled.get(reason, 0) + n
     # fields only one side's panel has come out, as in the cell diff
     for g, side, pat, reason in extra:
         if side.startswith('squeeze-') and (fnmatch.fnmatch(scene, g) or fnmatch.fnmatch(full, g)):
@@ -387,7 +403,7 @@ def shape(ref_path, look_path, scene, extra):
             rx = re.compile(pat)
             keep = [r for r in grid if not rx.search(text_of(r))]
             grid[:] = keep + [[BLANK] * w for _ in range(h - len(keep))]
-    explained = {}
+    explained = dict(scrolled)
     bad = []
     for y in range(h):
         a, b = grids[0][y], grids[1][y]

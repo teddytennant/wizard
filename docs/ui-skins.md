@@ -227,10 +227,11 @@ statusline-pad wizard` at 80x24, 120x40 and 200x50:
 | Task list (6) | 0 | 0 |
 | Status line (6) | 0 | 0 |
 | **Unexplained cells** | **9,818** | **0** |
-| Rows laid out differently with Wizard's own data | 75 | 12 |
+| Rows laid out differently with Wizard's own data | 75 | 0 |
 
-The 12 rows are `wz-modes-3` and `wz-modes-4` at 80x24, where the reference's auto mode explanation scrolls its
-transcript up a row; the layout check has no way to say that.
+The last 12 rows were `wz-modes-3` and `wz-modes-4` at 80x24, where the reference's auto mode explanation scrolls
+its transcript up a row. The layout check now takes a `scroll-ref` rule as the cell diff does, and explained.tsv has
+one for those two scenes, so the whole compare exits 0.
 
 With a real `wizard` behind the look (`WIZARD_BIN=... compare.sh`, `live.py` against `fake_openai.py`) 0 checks
 fail, among them the three-answer plan dialog and the typed feedback reaching the model as
