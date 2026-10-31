@@ -1041,60 +1041,61 @@ fn a_prompt_sent_before_the_session_waits_for_early_presses() {
 }
 
 /// With permissions on, shift+tab steps through the permission modes as Claude Code does:
-/// accept edits, plan, auto, manual. Auto mode is explained the first time, and only then.
+/// accept edits, plan, auto, manual. Auto mode is explained once it has been rested on, and
+/// only the first time.
 #[test]
 fn shift_tab_cycles_the_permission_modes_with_plan_after_accept_edits() {
     let state = std::env::temp_dir().join(format!("claudew-auto-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     std::env::set_var("CLAUDEW_STATE_DIR", &state);
-    let (tx, mut requests) = tokio::sync::mpsc::unbounded_channel();
-    let (mtx, _msgs) = tokio::sync::mpsc::unbounded_channel();
-    let mut app = claudew::app::App::new(Default::default(), tx, mtx);
-    let config = |mode: &str| agent_core::Config {
-        mode: "genie".into(),
-        modes: vec!["genie".into(), "sovereign".into()],
-        permission_mode: mode.into(),
-        permission_modes: [
-            "default",
-            "acceptEdits",
-            "auto",
-            "dontAsk",
-            "bypassPermissions",
-        ]
-        .map(String::from)
-        .to_vec(),
-        ..Default::default()
+    let mut hn = Harness::new("static-120x40.jsonl", 120, 40);
+    assert!(hn.app.permissions());
+    hn.sent();
+    let base = hn.app.cfg.clone();
+    let config = |mode: &str| {
+        let mut c = base.clone();
+        c.permission_mode = mode.into();
+        c
     };
-    app.on_event(Event::Ready {
-        session_id: "s".into(),
-        config: config("default"),
-    });
-    while requests.try_recv().is_ok() {}
     let mut steps = Vec::new();
     let mut plan_on = false;
+    let mut notes = Vec::new();
     for _ in 0..4 {
-        app.on_key(crossterm::event::KeyEvent::from(KeyCode::BackTab));
+        hn.press(KeyCode::BackTab);
         // each step waits for wizard's answer before the next goes out
-        while let Ok(r) = requests.try_recv() {
-            let answered = match &r {
-                Request::SetPermissionMode(m) => Some(config(m)),
+        for r in hn.sent() {
+            match &r {
+                Request::SetPermissionMode(m) => {
+                    let c = config(m);
+                    steps.push(r.clone());
+                    hn.event(Event::ConfigChanged(c));
+                }
                 Request::Prompt(p) if p == "/plan" => {
                     plan_on = !plan_on;
-                    app.on_event(Event::TurnStart);
-                    app.on_event(Event::Notice {
-                        level: agent_core::NoticeLevel::Info,
-                        text: format!("plan mode {}", if plan_on { "on" } else { "off" }),
-                    });
-                    app.on_event(Event::TurnEnd(StopReason::EndTurn));
-                    None
+                    steps.push(r.clone());
+                    plan_answer(
+                        &mut hn,
+                        &format!("plan mode {}", if plan_on { "on" } else { "off" }),
+                    );
                 }
-                _ => None,
-            };
-            steps.push(r);
-            if let Some(c) = answered {
-                app.on_event(Event::ConfigChanged(c));
+                _ => steps.push(r.clone()),
             }
         }
+        for r in hn.sent() {
+            if let Request::SetPermissionMode(m) = &r {
+                let c = config(m);
+                steps.push(r.clone());
+                hn.event(Event::ConfigChanged(c));
+            }
+        }
+        hn.advance(1_000);
+        notes.push(
+            hn.app
+                .blocks
+                .iter()
+                .filter(|b| matches!(b, claudew::app::Block::Note(_)))
+                .count(),
+        );
     }
     let sets: Vec<&Request> = steps
         .iter()
@@ -1113,6 +1114,8 @@ fn shift_tab_cycles_the_permission_modes_with_plan_after_accept_edits() {
         steps.contains(&Request::Prompt("/plan".into())),
         "{steps:?}"
     );
+    // after accept edits, plan, auto, manual: the explanation came with auto, once
+    assert_eq!(notes, [0, 0, 1, 1]);
     assert!(state.join("auto-mode-explained").exists());
     let _ = std::fs::remove_dir_all(&state);
 }

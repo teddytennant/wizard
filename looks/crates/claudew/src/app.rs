@@ -375,6 +375,9 @@ pub struct App {
     pub backslash_used: bool,
     /// The explanation of auto mode has been printed, here or in an earlier run.
     auto_explained: bool,
+    /// When the explanation of auto mode is due: it follows a pause on auto mode, and is not
+    /// printed if the cycle moves on first.
+    auto_explain_at: Option<Duration>,
     /// The directory each entry of `prompts` was sent from.
     pub prompt_dirs: Vec<String>,
     /// The history search shows this project's prompts only.
@@ -511,6 +514,7 @@ impl App {
             history_file: None,
             backslash_used: false,
             auto_explained: false,
+            auto_explain_at: None,
             prompt_dirs: Vec::new(),
             search_here: false,
             chord: false,
@@ -2111,21 +2115,24 @@ impl App {
             .or_else(|| here.1.then(|| stops.iter().position(|s| s.1)).flatten())
             .unwrap_or(0);
         let next = stops[(at + 1) % stops.len()].clone();
-        if next.0 == "auto" && !next.1 {
-            self.explain_auto_mode();
-        }
+        let on_auto = next.0 == "auto" && !next.1;
+        self.auto_explain_at =
+            (on_auto && !self.auto_explained).then(|| self.clock.elapsed() + AUTO_EXPLAIN_AFTER);
         self.go_to(next);
     }
 
-    /// The first time shift+tab reaches auto mode 2.1.314 says what it does in the transcript,
+    /// The first time shift+tab rests on auto mode 2.1.314 says what it does in the transcript,
     /// and does not again, in this or a later run.
     fn explain_auto_mode(&mut self) {
-        if std::mem::replace(&mut self.auto_explained, true) {
+        self.auto_explain_at = None;
+        let (mode, plan) = self.shown_mode();
+        if mode != "auto" || plan || std::mem::replace(&mut self.auto_explained, true) {
             return;
         }
         self.blocks
             .push(Block::Note(AUTO_MODE_EXPLAINED.to_string()));
         self.scroll = 0;
+        self.dirty = true;
         if let Some(dir) = Self::state_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let _ = std::fs::write(dir.join("auto-mode-explained"), "");
@@ -3080,6 +3087,9 @@ impl App {
         }
         self.refresh_now();
         let now = self.clock.elapsed();
+        if self.auto_explain_at.is_some_and(|at| now >= at) {
+            self.explain_auto_mode();
+        }
         // the footer's `← for agents` goes away ten seconds in
         if now.saturating_sub(self.opened_at) >= AGENTS_HINT_FOR
             && now.saturating_sub(self.opened_at) < AGENTS_HINT_FOR + Duration::from_secs(1)
@@ -3109,11 +3119,16 @@ impl App {
         }
         let elapsed = self.clock.elapsed();
         let hint = self.hint.map(|(_, at)| at + HINT_TTL);
-        let timed = [hint, self.notice_until, self.mode_retry]
-            .into_iter()
-            .flatten()
-            .min()
-            .map(|at| now + at.saturating_sub(elapsed).max(Duration::from_millis(10)));
+        let timed = [
+            hint,
+            self.notice_until,
+            self.mode_retry,
+            self.auto_explain_at,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|at| now + at.saturating_sub(elapsed).max(Duration::from_millis(10)));
         [timed, self.statusline_due(now)]
             .into_iter()
             .flatten()
@@ -3327,9 +3342,12 @@ fn mode_of(cfg: &agent_core::Config) -> String {
     }
 }
 
+/// How long shift+tab has to rest on auto mode before the explanation is printed.
+const AUTO_EXPLAIN_AFTER: Duration = Duration::from_millis(800);
+
 /// What 2.1.314 prints the first time shift+tab reaches auto mode, in Wizard's own words: what
 /// its judge is, and what it is not.
-pub const AUTO_MODE_EXPLAINED: &str = "Auto mode lets Wizard handle permission prompts automatically \u{2014} a short model call judges each tool call against your request before it runs. Calls it judges safe are executed, while calls it judges risky are refused and the reason goes back to the model, which may try a different approach. Ideal for long-running tasks. Every judged call costs one more model request. The judge can be wrong, so it is recommended to only use in isolated environments. Shift+Tab to change mode.";
+pub const AUTO_MODE_EXPLAINED: &str = "Auto mode lets Wizard handle permission prompts automatically \u{2014} a short model call judges each tool call against your request before it runs. Calls it judges safe are executed, while calls it judges risky are refused and the reason goes back to the model, which may try a different approach. Deny and ask rules and hooks still run first. Ideal for long-running tasks. Every judged call costs one more model request. The judge can be wrong, so it is recommended to only use in isolated environments. Shift+Tab to change mode.";
 
 pub fn effort_glyph(effort: &str) -> &'static str {
     match effort {

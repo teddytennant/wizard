@@ -346,7 +346,12 @@ fn shortcut_entries(app: &App, short: bool) -> [Vec<&'static str>; 3] {
     }
     let b = vec![
         "double tap esc to clear input",
-        "shift + tab to cycle agent modes",
+        // with permissions on the cycle is Claude Code's, and its table words it as 2.1.314 does
+        if app.permissions() {
+            "shift + tab to auto-accept edits"
+        } else {
+            "shift + tab to cycle agent modes"
+        },
         "ctrl + o for verbose output",
         "ctrl + t to toggle tasks",
         if short {
