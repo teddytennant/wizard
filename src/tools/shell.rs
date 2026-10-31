@@ -961,7 +961,15 @@ pub(crate) fn render_command_result(result: &CommandResult) -> ToolOutput {
 /// the shared [`MAX_OUTPUT_BYTES`]. `execute` is half of all result bytes in
 /// real sessions, and what a model uses from a long log is its head and tail.
 fn execute_cap() -> usize {
-    if crate::token_profile::current().lean() {
+    let asked = crate::config::claude_env::bash_output_chars(
+        &|n| std::env::var(n).ok(),
+        std::env::var("WIZARD_BASH_OUTPUT_CHARS")
+            .ok()
+            .and_then(|v| v.parse().ok()),
+    );
+    if let Some(chars) = asked {
+        chars
+    } else if crate::token_profile::current().lean() {
         12_000
     } else {
         MAX_OUTPUT_BYTES

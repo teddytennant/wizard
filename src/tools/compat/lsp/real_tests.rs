@@ -84,18 +84,27 @@ async fn pyright_answers_all_nine_operations() {
     let def = p.ask("goToDefinition", 3, 16).await;
     assert!(def.contains("main.py:6"), "{def}");
     let refs = p.ask("findReferences", 6, 5).await;
-    assert!(refs.contains("Line 3:") && refs.contains("Line 13:"), "{refs}");
+    assert!(
+        refs.contains("Line 3:") && refs.contains("Line 13:"),
+        "{refs}"
+    );
     let hover = p.ask("hover", 6, 5).await;
     assert!(hover.contains("helper"), "{hover}");
     let symbols = p.ask("documentSymbol", 1, 1).await;
-    assert!(symbols.contains("Greeter") && symbols.contains("main"), "{symbols}");
+    assert!(
+        symbols.contains("Greeter") && symbols.contains("main"),
+        "{symbols}"
+    );
     let workspace = p.ask("workspaceSymbol", 1, 1).await;
     assert!(!workspace.starts_with("Error"), "{workspace}");
     let implementation = p.ask("goToImplementation", 2, 9).await;
     let prepared = p.ask("prepareCallHierarchy", 6, 5).await;
     assert!(prepared.contains("helper"), "{prepared}");
     let incoming = p.ask("incomingCalls", 6, 5).await;
-    assert!(incoming.contains("greet") && incoming.contains("main"), "{incoming}");
+    assert!(
+        incoming.contains("greet") && incoming.contains("main"),
+        "{incoming}"
+    );
     let outgoing = p.ask("outgoingCalls", 10, 5).await;
     assert!(outgoing.contains("helper"), "{outgoing}");
     // pyright has no implementation provider; Claude Code words the refusal this way
@@ -151,7 +160,10 @@ async fn rust_analyzer_answers_all_nine_operations() {
     let hover = p.ask("hover", 13, 8).await;
     assert!(hover.contains("total"), "{hover}");
     let symbols = p.ask("documentSymbol", 1, 1).await;
-    assert!(symbols.contains("Shape") && symbols.contains("Square"), "{symbols}");
+    assert!(
+        symbols.contains("Shape") && symbols.contains("Square"),
+        "{symbols}"
+    );
     let workspace = p.ask("workspaceSymbol", 1, 1).await;
     assert!(!workspace.starts_with("Error"), "{workspace}");
     let implementation = p.ask("goToImplementation", 2, 8).await;
@@ -191,7 +203,10 @@ async fn gopls_answers_all_nine_operations() {
     let hover = p.ask("hover", 11, 6).await;
     assert!(hover.contains("total"), "{hover}");
     let symbols = p.ask("documentSymbol", 1, 1).await;
-    assert!(symbols.contains("Square") && symbols.contains("main"), "{symbols}");
+    assert!(
+        symbols.contains("Square") && symbols.contains("main"),
+        "{symbols}"
+    );
     let workspace = p.ask("workspaceSymbol", 1, 1).await;
     assert!(!workspace.starts_with("Error"), "{workspace}");
     let implementation = p.ask("goToImplementation", 4, 3).await;
@@ -235,7 +250,10 @@ async fn typescript_language_server_answers_all_nine_operations() {
     let hover = p.ask("hover", 12, 10).await;
     assert!(hover.contains("total"), "{hover}");
     let symbols = p.ask("documentSymbol", 1, 1).await;
-    assert!(symbols.contains("Square") && symbols.contains("main"), "{symbols}");
+    assert!(
+        symbols.contains("Square") && symbols.contains("main"),
+        "{symbols}"
+    );
     let workspace = p.ask("workspaceSymbol", 1, 1).await;
     assert!(!workspace.starts_with("Error"), "{workspace}");
     let implementation = p.ask("goToImplementation", 2, 3).await;

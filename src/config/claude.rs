@@ -117,6 +117,12 @@ pub struct ClaudeSettings {
     pub auto_memory_dir: Option<String>,
     /// `includeGitInstructions`.
     pub include_git_instructions: Option<bool>,
+    /// `autoCompactEnabled`.
+    pub auto_compact_enabled: Option<bool>,
+    /// `modelPricing`, honored from managed settings only.
+    pub model_pricing: Option<Value>,
+    /// `bashOutputMaxChars`: characters of command output the model gets inline.
+    pub bash_output_max_chars: Option<u64>,
     /// `disableWorkflows`.
     pub disable_workflows: Option<bool>,
     /// `enableWorkflows`: the /config toggle; `false` takes the tool away.
@@ -439,6 +445,11 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     out.auto_memory_enabled = flag("autoMemoryEnabled").or(out.auto_memory_enabled);
     out.include_git_instructions = flag("includeGitInstructions").or(out.include_git_instructions);
     out.disable_workflows = flag("disableWorkflows").or(out.disable_workflows);
+    out.auto_compact_enabled = flag("autoCompactEnabled").or(out.auto_compact_enabled);
+    out.bash_output_max_chars = value
+        .get("bashOutputMaxChars")
+        .and_then(Value::as_u64)
+        .or(out.bash_output_max_chars);
     out.enable_workflows = flag("enableWorkflows").or(out.enable_workflows);
     out.workflow_size_guideline = text("workflowSizeGuideline")
         .filter(|v| matches!(v.as_str(), "unrestricted" | "small" | "medium" | "large"))
@@ -451,6 +462,9 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     if managed {
         out.claude_md = text("claudeMd").or(out.claude_md.take());
         out.plugin_trust_message = text("pluginTrustMessage").or(out.plugin_trust_message.take());
+        if let Some(pricing) = value.get("modelPricing").filter(|v| v.is_object()) {
+            out.model_pricing = Some(pricing.clone());
+        }
     }
     if let Some(map) = value.get("skillOverrides").and_then(Value::as_object) {
         for (name, mode) in map {
@@ -793,6 +807,18 @@ mod tests {
         );
         let s = run(&d, Trust::Approved(&Surface::default()));
         assert_eq!(s.workflow_size_guideline.as_deref(), Some("large"));
+    }
+
+    #[test]
+    fn auto_compact_and_the_output_cap_are_read() {
+        let d = dirs();
+        write(
+            d.user.join("settings.json"),
+            r#"{"autoCompactEnabled":false,"bashOutputMaxChars":50000}"#,
+        );
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert_eq!(s.auto_compact_enabled, Some(false));
+        assert_eq!(s.bash_output_max_chars, Some(50_000));
     }
 
     #[test]

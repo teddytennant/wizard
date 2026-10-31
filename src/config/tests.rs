@@ -248,6 +248,7 @@ fn full_file_round_trips() {
         self_check: true,
         token_profile: Some("lean".into()),
         compact_threshold_bytes: 96_000,
+        auto_compact: false,
         max_context_tokens: 200_000,
         prune_after_tokens: 64_000,
         time_wrap_up_at: 0.5,

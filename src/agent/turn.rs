@@ -326,6 +326,9 @@ pub(super) struct Policy {
     /// Prompt size past which old tool results are shrunk between compactions
     /// (`0` turns it off).
     pub prune_after_tokens: u64,
+    /// Whether a full prompt is compacted before the next request
+    /// (`autoCompactEnabled`). A reply cut off by an overflow is still compacted.
+    pub auto_compact: bool,
     /// Whether background tasks and subagents that finished are drained into
     /// history at the top of each step.
     pub background_drain: bool,
@@ -378,6 +381,7 @@ impl Policy {
             byte_threshold: agent.config.compact_threshold_bytes,
             max_context_tokens: agent.config.max_context_tokens,
             prune_after_tokens: agent.config.prune_after_tokens,
+            auto_compact: agent.config.auto_compact,
             background_drain: true,
             operator_control: agent.mode == crate::config::Mode::Sovereign,
             pressure_signal: true,
@@ -443,6 +447,7 @@ impl Policy {
             byte_threshold,
             max_context_tokens,
             prune_after_tokens,
+            auto_compact: true,
             // On, now that a sub-run has its own task and subagent registries.
             // Draining used to be declined because those registries were the
             // parent's, and a drain here would steal notifications the parent
@@ -761,7 +766,7 @@ pub(super) async fn run(host: &mut impl Host, policy: &Policy, sink: &Sink) -> R
         // next one is billed — and so a `/fork` that inherited an already-full
         // parent history is cut before it sends anything.
         let mut reading = measure(host, policy).await;
-        if reading.level == PressureLevel::Critical {
+        if reading.level == PressureLevel::Critical && policy.auto_compact {
             host.compact(sink).await;
             reading = measure(host, policy).await;
         } else if policy.prune_after_tokens > 0 && reading.tokens >= policy.prune_after_tokens {
@@ -3583,12 +3588,14 @@ mod tests {
             byte_threshold,
             max_context_tokens,
             prune_after_tokens,
+            auto_compact,
             background_drain,
             operator_control,
             pressure_signal,
             last_step_notice,
             time_budget,
         } = policy;
+        assert!(auto_compact, "a sub-run keeps its own context in bounds");
 
         // What it carries.
         assert_eq!(max_steps, 50);

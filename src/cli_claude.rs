@@ -476,6 +476,11 @@ impl ClaudeFlags {
         {
             set("WIZARD_REDUCED_MOTION", "1".into());
         }
+        if let Some(chars) = from_settings.bash_output_max_chars
+            && std::env::var_os("WIZARD_BASH_OUTPUT_CHARS").is_none()
+        {
+            set("WIZARD_BASH_OUTPUT_CHARS", chars.to_string().into());
+        }
         if self.verbose || from_settings.verbose == Some(true) || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
@@ -506,6 +511,12 @@ impl ClaudeFlags {
             }
         }
         crate::config::fast::init(&settings, &get);
+        if let Some(pricing) = &settings.model_pricing {
+            crate::usage::set_contract(crate::usage::Contract::parse(pricing));
+        }
+        if settings.auto_compact_enabled == Some(false) {
+            config.auto_compact = false;
+        }
         let from_env = crate::config::claude_env::effort(&get);
         let effort = self
             .effort

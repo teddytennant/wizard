@@ -282,7 +282,8 @@ fn map_bash(args: &Value) -> Result<Value, String> {
         if ms <= 0.0 {
             return Err("timeout must be positive".to_string());
         }
-        mapped["timeout_secs"] = json!(((ms / 1000.0).ceil() as u64).clamp(1, 600));
+        let cap = crate::config::claude_env::bash_max_timeout_secs(&|n| std::env::var(n).ok());
+        mapped["timeout_secs"] = json!(((ms / 1000.0).ceil() as u64).clamp(1, cap));
         // Claude's `timeout` kills the command; Wizard's own budget hands it
         // to a background task. Naming one picks Claude's.
         mapped["kill_on_timeout"] = json!(true);

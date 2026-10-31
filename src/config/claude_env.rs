@@ -190,6 +190,10 @@ pub fn apply(config: &mut Config, get: Get) {
     {
         config.shell.timeout_secs = ms.div_ceil(1000);
     }
+    // `DISABLE_COMPACT` turns off /compact as well; `DISABLE_AUTO_COMPACT` only the automatic pass.
+    if truthy(get, "DISABLE_COMPACT") || truthy(get, "DISABLE_AUTO_COMPACT") {
+        config.auto_compact = false;
+    }
     if let Some(shell) = value(get, "CLAUDE_CODE_SHELL") {
         config.shell.program = Some(shell);
     }
@@ -212,6 +216,50 @@ pub fn apply(config: &mut Config, get: Get) {
         let scaled = u64::from(config.max_context_tokens) * pct / 80;
         config.max_context_tokens = u32::try_from(scaled).unwrap_or(u32::MAX);
     }
+}
+
+/// Longest `timeout` the model may give a shell command: `BASH_MAX_TIMEOUT_MS`,
+/// rounded up to whole seconds, or ten minutes.
+pub fn bash_max_timeout_secs(get: Get) -> u64 {
+    value(get, "BASH_MAX_TIMEOUT_MS")
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map_or(600, |ms| ms.div_ceil(1000))
+}
+
+/// Characters of a successful command's output the model gets inline:
+/// `bashOutputMaxChars` (the setting) or `BASH_MAX_OUTPUT_LENGTH`, clamped to
+/// 4000 to 128000 as Claude Code clamps it. `None` leaves Wizard's own cap.
+pub fn bash_output_chars(get: Get, setting: Option<u64>) -> Option<usize> {
+    let asked = setting.or_else(|| value(get, "BASH_MAX_OUTPUT_LENGTH")?.parse().ok())?;
+    Some(asked.clamp(4_000, 128_000) as usize)
+}
+
+fn millis(get: Get, name: &str, default_ms: u64) -> std::time::Duration {
+    let ms = value(get, name)
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(default_ms);
+    std::time::Duration::from_millis(ms)
+}
+
+/// How long an MCP server has to start and answer `initialize`: `MCP_TIMEOUT`
+/// in milliseconds, twenty seconds without it.
+pub fn mcp_connect_timeout(get: Get) -> std::time::Duration {
+    millis(get, "MCP_TIMEOUT", 20_000)
+}
+
+/// How long one MCP tool call may run: `MCP_TOOL_TIMEOUT` in milliseconds, two
+/// minutes without it.
+pub fn mcp_call_timeout(get: Get) -> std::time::Duration {
+    millis(get, "MCP_TOOL_TIMEOUT", 120_000)
+}
+
+/// Tokens of an MCP result kept, from `MAX_MCP_OUTPUT_TOKENS`.
+pub fn mcp_output_tokens(get: Get) -> Option<usize> {
+    value(get, "MAX_MCP_OUTPUT_TOKENS")
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
 }
 
 /// The `WIZARD_*` variables the Claude ones stand for, as `(name, value)`
@@ -330,6 +378,49 @@ mod tests {
         assert_eq!(config.shell.program.as_deref(), Some("/bin/zsh"));
         assert!(!config.update.auto && !config.update.notify);
         assert_eq!(config.max_context_tokens, 100_000);
+    }
+
+    #[test]
+    fn the_shell_and_mcp_limits_read_claude_codes_variables() {
+        let none = env(&[]);
+        assert_eq!(bash_max_timeout_secs(&none), 600);
+        assert_eq!(
+            bash_max_timeout_secs(&env(&[("BASH_MAX_TIMEOUT_MS", "90001")])),
+            91
+        );
+        assert_eq!(bash_output_chars(&none, None), None);
+        let long = env(&[("BASH_MAX_OUTPUT_LENGTH", "999999")]);
+        assert_eq!(bash_output_chars(&long, None), Some(128_000));
+        assert_eq!(bash_output_chars(&long, Some(10)), Some(4_000));
+        assert_eq!(mcp_connect_timeout(&none).as_secs(), 20);
+        assert_eq!(
+            mcp_connect_timeout(&env(&[("MCP_TIMEOUT", "5000")])).as_secs(),
+            5
+        );
+        assert_eq!(mcp_call_timeout(&none).as_secs(), 120);
+        assert_eq!(
+            mcp_call_timeout(&env(&[("MCP_TOOL_TIMEOUT", "1500")])).as_millis(),
+            1500
+        );
+        assert_eq!(mcp_output_tokens(&none), None);
+        assert_eq!(
+            mcp_output_tokens(&env(&[("MAX_MCP_OUTPUT_TOKENS", "50000")])),
+            Some(50_000)
+        );
+    }
+
+    #[test]
+    fn the_compact_switches_turn_automatic_compaction_off() {
+        let mut config = Config::default();
+        assert!(config.auto_compact);
+        apply(&mut config, &env(&[("DISABLE_AUTO_COMPACT", "1")]));
+        assert!(!config.auto_compact);
+        let mut config = Config::default();
+        apply(&mut config, &env(&[("DISABLE_COMPACT", "true")]));
+        assert!(!config.auto_compact);
+        let mut config = Config::default();
+        apply(&mut config, &env(&[("DISABLE_AUTO_COMPACT", "0")]));
+        assert!(config.auto_compact);
     }
 
     #[test]

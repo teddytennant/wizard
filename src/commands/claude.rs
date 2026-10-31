@@ -170,6 +170,7 @@ pub fn disabled_by(command: &str, get: &dyn Fn(&str) -> Option<String>) -> Optio
         "doctor" => &["DISABLE_DOCTOR_COMMAND"],
         "usage-credits" => &["DISABLE_EXTRA_USAGE_COMMAND"],
         "install-github-app" => &["DISABLE_INSTALL_GITHUB_APP_COMMAND"],
+        "compact" => &["DISABLE_COMPACT"],
         _ => return None,
     };
     vars.iter().copied().find(|var| {
