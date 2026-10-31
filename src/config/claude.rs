@@ -117,6 +117,8 @@ pub struct ClaudeSettings {
     pub auto_memory_dir: Option<String>,
     /// `includeGitInstructions`.
     pub include_git_instructions: Option<bool>,
+    /// `disableWorkflows`.
+    pub disable_workflows: Option<bool>,
     /// `companyAnnouncements`.
     pub company_announcements: Vec<String>,
     /// `viewMode`: `default`, `verbose` or `focus`.
@@ -432,6 +434,7 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     out.always_thinking = flag("alwaysThinkingEnabled").or(out.always_thinking);
     out.auto_memory_enabled = flag("autoMemoryEnabled").or(out.auto_memory_enabled);
     out.include_git_instructions = flag("includeGitInstructions").or(out.include_git_instructions);
+    out.disable_workflows = flag("disableWorkflows").or(out.disable_workflows);
     out.agent = text("agent").or(out.agent.take());
     out.thinking_tokens = ["maxThinkingTokens", "thinkingBudget"]
         .iter()
@@ -750,6 +753,20 @@ mod tests {
             assert!(s.permissions_opt_in, "{}", wizard_file.display());
             std::fs::remove_file(wizard_file).unwrap();
         }
+    }
+
+    #[test]
+    fn disable_workflows_is_read_from_any_layer_and_the_last_one_wins() {
+        let d = dirs();
+        write(d.user.join("settings.json"), r#"{"disableWorkflows":true}"#);
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert_eq!(s.disable_workflows, Some(true));
+        write(
+            d.project.join(".claude/settings.json"),
+            r#"{"disableWorkflows":false}"#,
+        );
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert_eq!(s.disable_workflows, Some(false));
     }
 
     #[test]

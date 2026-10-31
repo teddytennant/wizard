@@ -529,7 +529,7 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `useAutoModeDuringPlan` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
 | `disableAutoMode` | accepted-with-warning | There is no auto mode to disable. |
 | `workflows` | accepted-with-warning | Read and ignored: the tool is on whenever the `plugin-js` feature is, and `CLAUDE_CODE_DISABLE_WORKFLOWS=1` turns it off |
-| `disableWorkflows` | accepted-with-warning | Read and ignored; `CLAUDE_CODE_DISABLE_WORKFLOWS=1` is the switch that works |
+| `disableWorkflows` | present | `true` removes the `Workflow` tool, as `CLAUDE_CODE_DISABLE_WORKFLOWS=1` does |
 | `skillOverrides` | aliased | `off` and `user-invocable-only` keep a skill out of the prompt, `name-only` drops its description. `/name` still runs it. |
 | `disableSkillShellExecution` | accepted-with-warning | Wizard never runs `!` commands inside skills or custom commands, so there is nothing to disable. |
 | `worktree` | accepted-with-warning | Worktrees are fixed at `.claude/worktrees` and `.wizard/worktrees`. |

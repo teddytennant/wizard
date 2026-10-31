@@ -2460,6 +2460,7 @@ pub async fn build_tool_registry(
     #[cfg(feature = "plugin-js")]
     if crate::token_profile::current().safe()
         && !crate::tools::workflow::disabled_by_env(&|name| std::env::var(name).ok())
+        && !workflows_disabled_in_settings()
     {
         registry.register(Arc::new(crate::tools::workflow::WorkflowTool::new(
             workflow_configs,
@@ -2688,6 +2689,16 @@ async fn build_headless_agent_inner(
     )?;
     agent.bind_subagent_model(subagent_model);
     Ok(agent)
+}
+
+/// `disableWorkflows` in a settings file. Any file may turn them off, trusted
+/// project or not, because that only takes a tool away.
+#[cfg(feature = "plugin-js")]
+fn workflows_disabled_in_settings() -> bool {
+    std::env::current_dir().is_ok_and(|root| {
+        crate::config::claude::load(&root, crate::config::claude::Trust::Refused).disable_workflows
+            == Some(true)
+    })
 }
 
 #[cfg(test)]
