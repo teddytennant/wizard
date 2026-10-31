@@ -109,7 +109,12 @@ Then `[permissions]` in `config.toml`, then the command line. Lists (`permission
 | `disableAllHooks` | Turns off every hook that came from a settings file (not `hooks.toml`). |
 | `statusLine`, `outputStyle` | Read and kept, but Wizard's interface does not draw them yet. |
 
-Keys that are not listed are ignored. `permissions.additionalDirectories` and the other Claude-only fences have no effect because Wizard has no directory sandbox.
+| `permissions.additionalDirectories`, `additionalDirectories`, `--add-dir` | Directories that count as inside the project for `acceptEdits`. A project that is not trusted cannot add any. |
+| `permissions.disableBypassPermissionsMode` | `"disable"` turns a named `bypassPermissions` mode into `default`. |
+| `sandbox` | With `enabled: true`, `filesystem.denyRead` and `denyWrite` become `Read` and `Edit` deny rules and `network.deniedDomains` become `WebFetch(domain:...)` deny rules. They turn the permission engine on but add nothing else, so every other call still runs. They cover the file tools and `web_fetch`; a shell command can still read what a deny rule hides, because Wizard has no process sandbox. `/sandbox` lists them. |
+| `allowManagedPermissionRulesOnly` | Managed settings only: rules from every other file and the allow rules of `--allowedTools` are dropped. |
+
+Keys that are not listed are ignored; `docs/claude-code-parity.md` says why for each.
 
 ### Trust
 

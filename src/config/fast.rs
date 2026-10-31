@@ -46,11 +46,10 @@ mod tests {
 
     #[test]
     fn settings_and_the_environment_decide_the_starting_state() {
-        let on = |opt_in: bool| {
-            let mut settings = super::super::claude::ClaudeSettings::default();
-            settings.fast_mode = Some(true);
-            settings.fast_mode_per_session_opt_in = opt_in;
-            settings
+        let on = |opt_in: bool| super::super::claude::ClaudeSettings {
+            fast_mode: Some(true),
+            fast_mode_per_session_opt_in: opt_in,
+            ..Default::default()
         };
         let none = |_: &str| None;
         let disabled = |name: &str| (name == "CLAUDE_CODE_DISABLE_FAST_MODE").then(|| "1".into());

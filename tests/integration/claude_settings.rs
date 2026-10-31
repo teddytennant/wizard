@@ -43,6 +43,14 @@ fn respond(mut stream: TcpStream, tool: Option<(String, String)>, seen: Arc<Mute
     }
     let mut body = vec![0u8; length];
     let _ = reader.read_exact(&mut body);
+    if request_line.starts_with("HEAD") {
+        // Wizard probes whether the host is reachable before it asks anything.
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        return;
+    }
     if request_line.contains("/v1/messages") {
         seen.lock()
             .unwrap()
@@ -65,7 +73,9 @@ fn respond(mut stream: TcpStream, tool: Option<(String, String)>, seen: Arc<Mute
         return;
     }
     let text = String::from_utf8_lossy(&body).to_string();
-    seen.lock().unwrap().push(format!("{headers}\n{text}"));
+    seen.lock()
+        .unwrap()
+        .push(format!("{request_line}{headers}\n{text}"));
     let has_tool_result = text.contains("\"role\":\"tool\"");
     let mut sse = chunk(serde_json::json!({"role": "assistant"}), None);
     match tool {
@@ -107,12 +117,24 @@ impl Mock {
     }
 
     /// The tool names of the first chat request.
-    fn tool_names(&self) -> Vec<String> {
+    fn tool_names(&self, out: &Output) -> Vec<String> {
         let seen = self.seen.lock().unwrap();
-        let request = seen.first().expect("a chat request was made");
+        let request = seen
+            .iter()
+            .find(|request| request.contains("chat/completions"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "a chat request was made, saw {:?}: {} {}",
+                    seen.iter()
+                        .map(|r| r.lines().next().unwrap_or("").to_string())
+                        .collect::<Vec<_>>(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                )
+            });
         let body: Value =
             serde_json::from_str(request.split_once("\n\n").map_or("", |(_, body)| body))
-                .expect("json body");
+                .unwrap_or_else(|err| panic!("json body ({err}) in {request:?}"));
         body["tools"]
             .as_array()
             .map(|tools| {
@@ -212,8 +234,8 @@ fn run_stream(home: &Home, prompt: &str, extra: &[&str]) -> Output {
 fn tools_flag_narrows_the_tool_list() {
     let mock = Mock::start(None);
     let home = Home::new(&mock, "openai");
-    run_stream(&home, "hi", &["--tools", "Read,Grep"]);
-    let names = mock.tool_names();
+    let out = run_stream(&home, "hi", &["--tools", "Read,Grep"]);
+    let names = mock.tool_names(&out);
     assert!(names.contains(&"read_file".to_string()), "{names:?}");
     assert!(names.contains(&"search_files".to_string()), "{names:?}");
     assert!(!names.contains(&"execute".to_string()), "{names:?}");
@@ -221,13 +243,13 @@ fn tools_flag_narrows_the_tool_list() {
 
     let mock = Mock::start(None);
     let home = Home::new(&mock, "openai");
-    run_stream(&home, "hi", &["--tools", ""]);
-    assert!(mock.tool_names().is_empty());
+    let out = run_stream(&home, "hi", &["--tools", ""]);
+    assert!(mock.tool_names(&out).is_empty());
 
     let mock = Mock::start(None);
     let home = Home::new(&mock, "openai");
-    run_stream(&home, "hi", &["--tools", "default"]);
-    assert!(mock.tool_names().contains(&"execute".to_string()));
+    let out = run_stream(&home, "hi", &["--tools", "default"]);
+    assert!(mock.tool_names(&out).contains(&"execute".to_string()));
 }
 
 #[test]
@@ -344,9 +366,8 @@ fn fast_mode_adds_the_speed_field_for_opus_only() {
             expect,
             "{model}: {request}"
         );
-        assert_eq!(
+        assert!(
             request.contains("fast-mode-2026-02-01"),
-            true,
             "the beta header is on whenever fast mode is"
         );
     }

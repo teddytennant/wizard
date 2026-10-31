@@ -93,10 +93,15 @@ pub fn describe(
         model: active.model.clone(),
         permission_mode: mode.as_str().to_string(),
         output_style: crate::claude_dir::styles::active_name(project_root),
-        tools: tools
-            .iter()
-            .map(|tool| toolmap::claude_name(tool))
-            .collect(),
+        tools: {
+            // A native tool and its Claude-named twin share a name here.
+            let mut seen = std::collections::HashSet::new();
+            tools
+                .iter()
+                .map(|tool| toolmap::claude_name(tool))
+                .filter(|name| seen.insert(name.clone()))
+                .collect()
+        },
         slash_commands,
         skills,
         agents,
