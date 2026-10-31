@@ -280,7 +280,8 @@ impl ClaudeFlags {
     /// as the role this session plays. `None` when no agent was named or none
     /// matches (the caller reports that, see [`prepare`]).
     pub fn agent_prompt(&self) -> Option<String> {
-        let name = self.agent.as_deref()?;
+        let from_settings = self.agent.is_none().then(settings_agent).flatten();
+        let name = self.agent.as_deref().or(from_settings.as_deref())?;
         // The last definition wins, the way a project shadows the user's.
         // Claude Code's three built-ins all run the one built-in worker here.
         let name = match name {
@@ -403,7 +404,11 @@ impl ClaudeFlags {
                 set(name, value.into());
             }
         }
-        if self.verbose || self.debug.is_some() {
+        let verbose_setting = std::env::current_dir().ok().is_some_and(|root| {
+            crate::config::claude::load(&root, crate::config::claude::Trust::Refused).verbose
+                == Some(true)
+        });
+        if self.verbose || verbose_setting || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
                 Some(None) => "debug".to_string(),
@@ -437,7 +442,8 @@ impl ClaudeFlags {
             .effort
             .as_deref()
             .or(from_env.as_deref())
-            .or(settings.effort_level.as_deref());
+            .or(settings.effort_level.as_deref())
+            .or(settings.thinking_effort());
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
         }
@@ -456,6 +462,12 @@ impl ClaudeFlags {
     pub fn wants_print(&self) -> bool {
         self.print
     }
+}
+
+/// `agent` from the Claude-format settings, for the runs that gave no `--agent`.
+fn settings_agent() -> Option<String> {
+    let root = std::env::current_dir().ok()?;
+    crate::config::claude::load(&root, crate::config::claude::Trust::Refused).agent
 }
 
 /// Point the active provider at `model` for this run.

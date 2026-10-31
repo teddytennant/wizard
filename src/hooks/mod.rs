@@ -185,7 +185,7 @@ fn load_specs_with(
     if !settings.disable_all_hooks {
         specs.extend(crate::claude_dir::plugins::hook_specs(project_root));
     }
-    (specs, settings)
+    (settings.limit_hooks(specs), settings)
 }
 
 /// The engine for a session: every hook source, the permission policy, and

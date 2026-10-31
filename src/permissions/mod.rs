@@ -123,6 +123,9 @@ pub struct Policy {
     /// before writes, commands and the like. Off, `default` is Wizard's own
     /// and runs whatever no rule objects to.
     pub claude_defaults: bool,
+    /// `additionalDirectories` and `--add-dir`: directories that count as
+    /// inside the project for `acceptEdits`.
+    pub extra_dirs: Vec<PathBuf>,
 }
 
 impl Policy {
@@ -214,7 +217,7 @@ impl Policy {
         }
         toolmap::paths(tool, args)
             .iter()
-            .all(|path| shell::inside(&self.cwd, path))
+            .all(|path| shell::within(&self.cwd, &self.extra_dirs, path))
     }
 
     /// A shell command made only of read-only pieces and file commands
@@ -235,10 +238,9 @@ impl Policy {
         {
             return false;
         }
-        parts
-            .commands
-            .iter()
-            .all(|sub| shell::is_read_only(sub) || shell::is_file_command(sub, &self.cwd))
+        parts.commands.iter().all(|sub| {
+            shell::is_read_only(sub) || shell::is_file_command_in(sub, &self.cwd, &self.extra_dirs)
+        })
     }
 
     /// A deny rule applies to the call, directly or through `Read`: a `Read`
@@ -387,6 +389,13 @@ pub fn build(
     policy.allow = settings.allow.clone();
     policy.ask = settings.ask.clone();
     policy.deny = settings.deny.clone();
+    policy.extra_dirs = scope_dirs(config, settings, cwd);
+    for rule in sandbox_rules(&settings.policy) {
+        match Rule::parse(&rule, cwd) {
+            Ok(rule) => policy.deny.push(rule.from_source("sandbox")),
+            Err(why) => tracing::warn!("sandbox: {why}"),
+        }
+    }
     let mut add = |list: &[String], into: fn(&mut Policy) -> &mut Vec<Rule>, source: &str| {
         for raw in list {
             match Rule::parse(raw, cwd) {
@@ -398,11 +407,13 @@ pub fn build(
     add(&config.permissions.allow, |p| &mut p.allow, "config.toml");
     add(&config.permissions.ask, |p| &mut p.ask, "config.toml");
     add(&config.permissions.deny, |p| &mut p.deny, "config.toml");
-    add(
-        &config.run_permissions.allow,
-        |p| &mut p.allow,
-        "--allowedTools",
-    );
+    if !settings.policy.managed_permissions_only {
+        add(
+            &config.run_permissions.allow,
+            |p| &mut p.allow,
+            "--allowedTools",
+        );
+    }
     add(
         &config.run_permissions.deny,
         |p| &mut p.deny,
@@ -413,6 +424,15 @@ pub fn build(
         .mode
         .or(config.permissions.mode)
         .or(settings.default_mode);
+    let named = match named {
+        Some(PermissionMode::BypassPermissions) if settings.policy.disable_bypass => {
+            eprintln!(
+                "wizard: bypassPermissions is turned off by disableBypassPermissionsMode; using default"
+            );
+            Some(PermissionMode::Default)
+        }
+        other => other,
+    };
     let mode = named.unwrap_or_default();
     // Naming a mode is what turns Claude's prompts on. `auto` stays Wizard's
     // own default: it is Claude's classifier mode and there is no classifier.
@@ -444,4 +464,57 @@ pub fn opted_in(
         || !own.ask.is_empty()
         || !own.deny.is_empty()
         || settings.permissions_opt_in
+        || !sandbox_rules(&settings.policy).is_empty()
+}
+
+/// `sandbox.filesystem.denyRead`, `denyWrite` and `network.deniedDomains` of
+/// an enabled sandbox, as deny rules. Wizard has no process sandbox, so a
+/// shell command is not covered; the file tools and `web_fetch` are.
+fn sandbox_rules(keys: &crate::config::claude_policy::PolicyKeys) -> Vec<String> {
+    // Rule paths anchor `//` at the filesystem root and `/` at the project.
+    let path = |raw: &String| {
+        if raw.starts_with('/') {
+            format!("/{raw}")
+        } else {
+            raw.clone()
+        }
+    };
+    let mut rules: Vec<String> = keys
+        .sandbox_deny_read
+        .iter()
+        .map(|raw| format!("Read({})", path(raw)))
+        .collect();
+    rules.extend(
+        keys.sandbox_deny_write
+            .iter()
+            .map(|raw| format!("Edit({})", path(raw))),
+    );
+    rules.extend(
+        keys.sandbox_denied_domains
+            .iter()
+            .map(|domain| format!("WebFetch(domain:{domain})")),
+    );
+    rules
+}
+
+/// The directories beyond the project that count as inside it: `--add-dir`
+/// and `additionalDirectories`.
+fn scope_dirs(
+    config: &crate::config::Config,
+    settings: &crate::config::claude::ClaudeSettings,
+    cwd: &std::path::Path,
+) -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let from_settings = settings
+        .policy
+        .extra_dirs
+        .iter()
+        .map(|raw| match raw.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => cwd.join(raw),
+        });
+    from_settings
+        .chain(config.run_add_dirs.iter().cloned())
+        .map(|dir| dir.canonicalize().unwrap_or(dir))
+        .collect()
 }

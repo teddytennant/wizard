@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod claude;
 pub mod claude_env;
+pub mod claude_policy;
 pub mod key_helper;
 
 use crate::cli::Cli;
@@ -1454,6 +1455,10 @@ pub struct Config {
     /// `--allowedTools`, `--disallowedTools`). Never written to disk.
     #[serde(skip)]
     pub run_permissions: PermissionsConfig,
+    /// `--add-dir` for this run: part of the permission scope as well as the
+    /// prompt. Never written to disk.
+    #[serde(skip)]
+    pub run_add_dirs: Vec<std::path::PathBuf>,
 }
 
 /// Permission rules in `config.toml` (`[permissions]`). The same lists a
@@ -1536,6 +1541,7 @@ impl Default for Config {
             computer: ComputerConfig::default(),
             permissions: PermissionsConfig::default(),
             run_permissions: PermissionsConfig::default(),
+            run_add_dirs: Vec::new(),
         }
     }
 }
@@ -2109,6 +2115,7 @@ impl Config {
         };
         self.run_permissions.allow = split(&cli.allowed_tools);
         self.run_permissions.deny = split(&cli.disallowed_tools);
+        self.run_add_dirs = cli.claude.add_dir.clone();
         let flag_mode = cli.permission_mode.or(cli
             .claude
             .dangerously_skip_permissions

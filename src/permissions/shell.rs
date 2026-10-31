@@ -264,6 +264,11 @@ const FILE_COMMANDS: [&str; 7] = ["mkdir", "touch", "rm", "rmdir", "mv", "cp", "
 /// operand stays inside `cwd`. Operands that cannot be resolved by reading
 /// them (`~`, `$VAR`, globs that climb out) are not inside.
 pub fn is_file_command(cmd: &str, cwd: &std::path::Path) -> bool {
+    is_file_command_in(cmd, cwd, &[])
+}
+
+/// [`is_file_command`] with more directories that count as inside.
+pub fn is_file_command_in(cmd: &str, cwd: &std::path::Path, extra: &[std::path::PathBuf]) -> bool {
     if cmd.contains(['>', '`', '$', '~']) || cmd.contains("$(") {
         return false;
     }
@@ -277,11 +282,12 @@ pub fn is_file_command(cmd: &str, cwd: &std::path::Path) -> bool {
     }
     words
         .filter(|word| !word.starts_with('-'))
-        .all(|word| inside(cwd, word.trim_matches(['\'', '"'])))
+        .all(|word| within(cwd, extra, word.trim_matches(['\'', '"'])))
 }
 
-/// `path`, resolved against `cwd` with `..` folded away, is under `cwd`.
-pub fn inside(cwd: &std::path::Path, path: &str) -> bool {
+/// `path`, resolved against `cwd` with `..` folded away, is under `cwd` or
+/// any directory in `extra`.
+pub fn within(cwd: &std::path::Path, extra: &[std::path::PathBuf], path: &str) -> bool {
     use std::path::Component;
     let joined = cwd.join(path);
     let mut folded = std::path::PathBuf::new();
@@ -294,7 +300,7 @@ pub fn inside(cwd: &std::path::Path, path: &str) -> bool {
             other => folded.push(other.as_os_str()),
         }
     }
-    folded.starts_with(cwd)
+    folded.starts_with(cwd) || extra.iter().any(|dir| folded.starts_with(dir))
 }
 
 /// True when the command line has a `cd` next to something that is not read

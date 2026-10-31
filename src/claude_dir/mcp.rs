@@ -276,7 +276,13 @@ pub fn overlay(config: crate::mcp::McpConfig, project_root: &Path) -> crate::mcp
     } else {
         config
     };
-    crate::import_claude::merge_mcp(&base, found.servers).0
+    let merged = crate::import_claude::merge_mcp(&base, found.servers).0;
+    let settings = crate::config::claude::load(project_root, crate::config::claude::Trust::Refused);
+    let (allowed, removed) = settings.policy.filter_mcp(merged);
+    for name in removed {
+        tracing::warn!("MCP server {name} is not allowed by allowedMcpServers or deniedMcpServers");
+    }
+    allowed
 }
 
 #[cfg(test)]

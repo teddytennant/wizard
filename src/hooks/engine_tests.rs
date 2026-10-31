@@ -477,6 +477,7 @@ fn policy_with(mode: PermissionMode, allow: &[&str], ask: &[&str], deny: &[&str]
         deny: parse(deny),
         cwd: root.to_path_buf(),
         claude_defaults: false,
+        extra_dirs: Vec::new(),
     }
 }
 

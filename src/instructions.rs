@@ -124,6 +124,10 @@ fn load_with(project_root: &Path, globals: &[PathBuf]) -> Option<String> {
         );
     }
     files.extend(chain.into_iter().map(|path| (path, Includes::Confined)));
+    let excludes = crate::config::claude::load(project_root, crate::config::claude::Trust::Refused);
+    if !excludes.claude_md_excludes.is_empty() {
+        files.retain(|(path, _)| !excludes.excludes_instruction_file(path));
+    }
 
     for (path, _) in &files {
         let global = globals.iter().any(|g| g == path);
