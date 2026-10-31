@@ -148,6 +148,18 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                     th.dim(),
                 ));
             }
+            Block::Note(text) => {
+                out.push(Row::new());
+                let st = th.fg(th.secondary);
+                for (n, r) in wrap_str(text, st, w.saturating_sub(8))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut row = Row::of(if n == 0 { "\u{25cf} " } else { "  " }, st);
+                    row.extend(r);
+                    out.push(row);
+                }
+            }
             Block::Notice { level, text } => {
                 let color = match level {
                     NoticeLevel::Info => th.secondary,

@@ -138,7 +138,7 @@ def ev(e):
     return json.dumps({'event': e}, ensure_ascii=False)
 
 
-def head(ref, cwd, size, auto=False):
+def head(ref, cwd, size):
     seen, cmds = set(), []
     # the two entries after /dataviz are never on screen, but their two-row height decides
     # whether anything is drawn under it
@@ -164,7 +164,8 @@ def head(ref, cwd, size, auto=False):
     opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(hidden)]
     config = {
         'model': current, 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
-        'mode': 'manual', 'modes': ['manual'] + (['auto'] if auto else []) + ['accept edits'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
+        'mode': 'manual', 'modes': ['manual'], 'permission_mode': 'default',
+        'permission_modes': ['default', 'acceptEdits', 'auto'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
     }
     return [
         ev({'Ready': {'session_id': '0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44', 'config': config}}),
@@ -500,8 +501,7 @@ def main():
         h = head(ref, cwd, size)
         open(os.path.join(out, 'static-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h) + '\n')
         script = h + turn(cwd, find_command(ref, cwd, size))
-        # the permission prompts offer "switch to auto mode" when the backend has a mode to go to
-        ha = head(ref, cwd, size, auto=True)
+        ha = h
         open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn3(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'plan2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + plan2(ref, cwd, size)) + '\n')

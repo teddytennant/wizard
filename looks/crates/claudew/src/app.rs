@@ -172,6 +172,9 @@ pub enum Block {
         level: NoticeLevel,
         text: String,
     },
+    /// A paragraph the look prints for itself: a bullet and grey text (the first time
+    /// shift+tab reaches auto mode).
+    Note(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -370,6 +373,8 @@ pub struct App {
     /// A newline has been typed with backslash and Enter before, here or in an earlier run: the
     /// shortcuts table then says `\⏎ for newline` instead of how to do it.
     pub backslash_used: bool,
+    /// The explanation of auto mode has been printed, here or in an earlier run.
+    auto_explained: bool,
     /// The directory each entry of `prompts` was sent from.
     pub prompt_dirs: Vec<String>,
     /// The history search shows this project's prompts only.
@@ -505,6 +510,7 @@ impl App {
             effort_preview: None,
             history_file: None,
             backslash_used: false,
+            auto_explained: false,
             prompt_dirs: Vec::new(),
             search_here: false,
             chord: false,
@@ -587,6 +593,8 @@ impl App {
     fn load_history(&mut self) {
         self.backslash_used =
             Self::state_dir().is_some_and(|d| d.join("backslash-return").exists());
+        self.auto_explained =
+            Self::state_dir().is_some_and(|d| d.join("auto-mode-explained").exists());
         let dir = match std::env::var_os("CLAUDEW_STATE_DIR") {
             Some(d) if !d.is_empty() => Some(PathBuf::from(d)),
             _ if self.opts.backend != BackendKind::Wizard => None,
@@ -768,24 +776,73 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Which entry of the shift+tab cycle is on: an index into the backend's modes, or `None`
-    /// for plan mode.
-    /// Where the presses so far lead: an index into the modes, or `None` for plan.
+    /// Whether wizard has permissions on. Its permission modes are then what shift+tab steps
+    /// through (manual, accept edits, plan, auto), as in Claude Code, in place of wizard's own.
+    pub fn permissions(&self) -> bool {
+        !self.cfg.permission_modes.is_empty()
+    }
+
+    /// The modes `/mode` lists: wizard's, or its permission modes while permissions are on.
+    pub fn modes(&self) -> &[String] {
+        if self.permissions() {
+            &self.cfg.permission_modes
+        } else {
+            &self.cfg.modes
+        }
+    }
+
+    /// The mode wizard confirmed, in the same list as [`App::modes`].
+    pub fn current_mode(&self) -> String {
+        mode_of(&self.cfg)
+    }
+
+    /// The entries of the shift+tab cycle, plan among them: (mode, plan). Plan comes after
+    /// accept edits when there are permission modes, after the last mode otherwise. The
+    /// permission modes that skip every check are for `/mode`, not for a stray key press.
+    fn stops(&self) -> Vec<(String, bool)> {
+        let skip = |m: &String| {
+            self.permissions() && matches!(m.as_str(), "dontAsk" | "bypassPermissions")
+        };
+        let modes: Vec<String> = self.modes().iter().filter(|m| !skip(m)).cloned().collect();
+        if modes.is_empty() {
+            let now = self.current_mode();
+            return vec![(now.clone(), false), (now, true)];
+        }
+        let plan_after = if self.permissions() {
+            modes
+                .iter()
+                .position(|m| m == "acceptEdits")
+                .unwrap_or(modes.len() - 1)
+        } else {
+            modes.len() - 1
+        };
+        let mut stops = Vec::new();
+        for (i, m) in modes.iter().enumerate() {
+            stops.push((m.clone(), false));
+            if i == plan_after {
+                stops.push((m.clone(), true));
+            }
+        }
+        stops
+    }
+
+    /// Which entry of the shift+tab cycle is on: an index into the modes, or `None` for plan
+    /// mode. This is where the presses so far lead.
     pub fn shown_index(&self) -> Option<usize> {
         let (mode, plan) = self.shown_mode();
         if plan {
             return None;
         }
-        Some(self.cfg.modes.iter().position(|m| *m == mode).unwrap_or(0))
+        Some(self.modes().iter().position(|m| *m == mode).unwrap_or(0))
     }
 
     /// Where wizard confirmed it is.
     pub fn mode_index(&self) -> Option<usize> {
-        let (mode, plan) = (self.cfg.mode.clone(), self.plan);
+        let (mode, plan) = (self.current_mode(), self.plan);
         if plan {
             return None;
         }
-        Some(self.cfg.modes.iter().position(|m| *m == mode).unwrap_or(0))
+        Some(self.modes().iter().position(|m| *m == mode).unwrap_or(0))
     }
 
     fn output(&mut self, text: impl Into<String>, accent: impl Into<String>) {
@@ -845,7 +902,7 @@ impl App {
                     self.opened_at = self.clock.elapsed();
                 }
                 let (mode, plan) = if first {
-                    (config.mode.clone(), self.plan)
+                    (mode_of(&config), self.plan)
                 } else {
                     self.shown_mode()
                 };
@@ -916,7 +973,7 @@ impl App {
                 self.cfg = c;
                 // only the change asked for answers the wait, not some other config update
                 let answered = match &self.mode_waiting {
-                    Some(ModeStep::Mode(m)) => *m == self.cfg.mode,
+                    Some(ModeStep::Mode(m)) => *m == self.current_mode(),
                     Some(ModeStep::Model(m)) => *m == self.cfg.model,
                     Some(ModeStep::Effort(e)) => *e == self.cfg.effort,
                     _ => false,
@@ -1370,7 +1427,7 @@ impl App {
                 return;
             }
             // plan mode through the same steps as shift+tab, so it is never entered on chat
-            "plan" if arg.is_empty() && !self.cfg.modes.is_empty() => {
+            "plan" if arg.is_empty() && !self.modes().is_empty() => {
                 self.blocks.push(Block::User { text, bash: false });
                 let (mode, plan) = self.shown_mode();
                 if plan {
@@ -1381,7 +1438,7 @@ impl App {
                 }
                 return;
             }
-            "plan" if matches!(arg.as_str(), "on" | "off") && !self.cfg.modes.is_empty() => {
+            "plan" if matches!(arg.as_str(), "on" | "off") && !self.modes().is_empty() => {
                 self.blocks.push(Block::User { text, bash: false });
                 let (mode, plan) = self.shown_mode();
                 let on = arg == "on";
@@ -1398,7 +1455,7 @@ impl App {
             }
             // `/plan <text>`: plan mode stays on (or goes on) and the text is the prompt, sent
             // once wizard is in plan mode
-            "plan" if !self.cfg.modes.is_empty() => {
+            "plan" if !self.modes().is_empty() => {
                 let (mode, plan) = self.shown_mode();
                 if !plan {
                     self.go_to((mode, true));
@@ -1438,13 +1495,13 @@ impl App {
                 self.set_effort(arg);
                 return;
             }
-            "mode" if arg.is_empty() && !self.cfg.modes.is_empty() => {
+            "mode" if arg.is_empty() && !self.modes().is_empty() => {
                 let (mode, _) = self.shown_mode();
-                let sel = self.cfg.modes.iter().position(|m| *m == mode).unwrap_or(0);
+                let sel = self.modes().iter().position(|m| *m == mode).unwrap_or(0);
                 self.dialog = Some(Dialog::Mode { sel });
                 return;
             }
-            "mode" if self.cfg.modes.contains(&arg) => {
+            "mode" if self.modes().contains(&arg) => {
                 self.blocks.push(Block::User { text, bash: false });
                 self.pick_mode_named(arg);
                 return;
@@ -2034,10 +2091,10 @@ impl App {
     pub fn shown_mode(&self) -> (String, bool) {
         self.mode_target
             .clone()
-            .unwrap_or_else(|| (self.cfg.mode.clone(), self.plan))
+            .unwrap_or_else(|| (self.current_mode(), self.plan))
     }
 
-    /// shift+tab: the next of wizard's modes, then plan, then back. Wizard takes one change at
+    /// shift+tab: the next stop of the cycle (see [`App::stops`]). Wizard takes one change at
     /// a time and none during a turn, so the steps queue and each waits for its answer.
     fn cycle_mode(&mut self) {
         // no session yet, so no modes to step through: count the press and replay it on Ready
@@ -2045,17 +2102,34 @@ impl App {
             self.early_presses += 1;
             return;
         }
-        let modes = self.cfg.modes.clone();
-        let (mode, plan) = self.shown_mode();
-        let at = modes.iter().position(|m| *m == mode).unwrap_or(0);
-        let next = if plan {
-            (modes.first().cloned().unwrap_or(mode.clone()), false)
-        } else if at + 1 < modes.len() {
-            (modes[at + 1].clone(), false)
-        } else {
-            (mode.clone(), true)
-        };
+        let stops = self.stops();
+        let here = self.shown_mode();
+        // not on a stop (plan on a mode with no stop of its own): plan's, else the first
+        let at = stops
+            .iter()
+            .position(|s| *s == here)
+            .or_else(|| here.1.then(|| stops.iter().position(|s| s.1)).flatten())
+            .unwrap_or(0);
+        let next = stops[(at + 1) % stops.len()].clone();
+        if next.0 == "auto" && !next.1 {
+            self.explain_auto_mode();
+        }
         self.go_to(next);
+    }
+
+    /// The first time shift+tab reaches auto mode 2.1.314 says what it does in the transcript,
+    /// and does not again, in this or a later run.
+    fn explain_auto_mode(&mut self) {
+        if std::mem::replace(&mut self.auto_explained, true) {
+            return;
+        }
+        self.blocks
+            .push(Block::Note(AUTO_MODE_EXPLAINED.to_string()));
+        self.scroll = 0;
+        if let Some(dir) = Self::state_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join("auto-mode-explained"), "");
+        }
     }
 
     /// Queue the steps from where the presses so far lead to `next` (mode, plan).
@@ -2169,7 +2243,11 @@ impl App {
             }
             Some(ModeStep::Mode(m)) => {
                 self.mode_waiting = Some(ModeStep::Mode(m.clone()));
-                self.send(Request::SetMode(m));
+                self.send(if self.permissions() {
+                    Request::SetPermissionMode(m)
+                } else {
+                    Request::SetMode(m)
+                });
             }
             Some(ModeStep::Omakase) => {
                 self.mode_waiting = Some(ModeStep::Omakase);
@@ -2378,7 +2456,7 @@ impl App {
                 }
             }
             Dialog::Mode { sel } => {
-                let n = self.cfg.modes.len().max(1);
+                let n = self.modes().len().max(1);
                 match key.code {
                     KeyCode::Down => self.dialog = Some(Dialog::Mode { sel: (sel + 1) % n }),
                     KeyCode::Up => {
@@ -2589,12 +2667,13 @@ impl App {
             .collect()
     }
 
-    /// The prompts the rewind picker offers, oldest first: what was typed, not commands.
+    /// The prompts the rewind picker offers, oldest first: what was typed, and `/plan`, which
+    /// 2.1.314 keeps as a point of its own. Other commands are not.
     pub fn rewind_targets(&self) -> Vec<String> {
         self.blocks
             .iter()
             .filter_map(|b| match b {
-                Block::User { text, bash: false } if !text.starts_with('/') => Some(text.clone()),
+                Block::User { text, bash: false } if is_rewind_prompt(text) => Some(text.clone()),
                 _ => None,
             })
             .collect()
@@ -2607,7 +2686,7 @@ impl App {
         let mut out: Vec<(String, usize, usize)> = Vec::new();
         for b in &self.blocks {
             match b {
-                Block::User { text, bash: false } if !text.starts_with('/') => {
+                Block::User { text, bash: false } if is_rewind_prompt(text) => {
                     if inside {
                         break;
                     }
@@ -2662,11 +2741,21 @@ impl App {
             .iter()
             .filter(|t| first(t) == first(&text))
             .count();
-        let turn = markers
-            .iter()
-            .filter(|(_, p)| first(p) == first(&text))
-            .nth(earlier)
-            .map(|(t, _)| *t);
+        // wizard keeps no turn for `/plan`: going back to before it is going back to the turn
+        // that follows it, the one after the typed prompts that came before
+        let turn = if text.trim() == "/plan" {
+            let typed = targets[..nth]
+                .iter()
+                .filter(|t| t.trim() != "/plan")
+                .count();
+            markers.get(typed).map(|(t, _)| *t)
+        } else {
+            markers
+                .iter()
+                .filter(|(_, p)| first(p) == first(&text))
+                .nth(earlier)
+                .map(|(t, _)| *t)
+        };
         match turn {
             Some(turn) => {
                 self.rewinding = Some(text);
@@ -2708,8 +2797,7 @@ impl App {
     /// Wizard's mode that approves for itself (Claude's auto mode), when it is not the one on.
     fn auto_mode(&self) -> Option<String> {
         let now = self.shown_mode().0;
-        self.cfg
-            .modes
+        self.modes()
             .iter()
             .find(|m| matches!(m.as_str(), "sovereign" | "auto") && **m != now)
             .cloned()
@@ -2849,7 +2937,7 @@ impl App {
     }
 
     fn pick_mode(&mut self, i: usize) {
-        let Some(m) = self.cfg.modes.get(i).cloned() else {
+        let Some(m) = self.modes().get(i).cloned() else {
             return;
         };
         self.dialog = None;
@@ -3224,6 +3312,25 @@ pub fn effort_notice_text(effort: &str) -> Option<String> {
     Some(format!("{} {effort} · /effort", effort_glyph(effort)))
 }
 
+/// A prompt the rewind picker lists: anything typed that is not a command, and `/plan`.
+fn is_rewind_prompt(text: &str) -> bool {
+    !text.starts_with('/') || text.trim() == "/plan"
+}
+
+/// The mode the look steps through: the permission mode while permissions are on, wizard's own
+/// otherwise.
+fn mode_of(cfg: &agent_core::Config) -> String {
+    if cfg.permission_modes.is_empty() {
+        cfg.mode.clone()
+    } else {
+        cfg.permission_mode.clone()
+    }
+}
+
+/// What 2.1.314 prints the first time shift+tab reaches auto mode, in Wizard's own words: what
+/// its judge is, and what it is not.
+pub const AUTO_MODE_EXPLAINED: &str = "Auto mode lets Wizard handle permission prompts automatically \u{2014} a short model call judges each tool call against your request before it runs. Calls it judges safe are executed, while calls it judges risky are refused and the reason goes back to the model, which may try a different approach. Ideal for long-running tasks. Every judged call costs one more model request. The judge can be wrong, so it is recommended to only use in isolated environments. Shift+Tab to change mode.";
+
 pub fn effort_glyph(effort: &str) -> &'static str {
     match effort {
         "low" | "minimal" | "none" => "○",
@@ -3233,38 +3340,53 @@ pub fn effort_glyph(effort: &str) -> &'static str {
     }
 }
 
-/// Commands for what is typed after the slash: names that start with it, then names that
-/// contain it, then descriptions that do.
 /// Claude Code's names for commands this look answers itself.
 fn claude_extras() -> Vec<SlashCommand> {
     agent_core::commands::extras(&[("config", "", "open the config panel")])
 }
 
+/// The other names a command answers to: Claude Code's, unless the menu has a command of that
+/// name already.
+fn aliases_in(commands: &[SlashCommand], name: &str) -> Vec<&'static str> {
+    crate::fuse::aliases_of(name)
+        .iter()
+        .copied()
+        .filter(|a| !commands.iter().any(|c| c.name == *a))
+        .collect()
+}
+
+/// Commands for what is typed after the slash, ranked the way Claude Code ranks them
+/// ([`crate::fuse`]); everything, in the menu's order, when nothing is typed.
 pub fn slash_matches(commands: &[SlashCommand], query: &str) -> Vec<usize> {
     if query.is_empty() {
         return (0..commands.len()).collect();
     }
-    let q = query.to_lowercase();
-    let mut ranked: Vec<(u8, usize)> = commands
+    let aliases: Vec<Vec<&str>> = commands
         .iter()
-        .enumerate()
-        .filter_map(|(i, c)| {
-            let name = c.name.to_lowercase();
-            if name == q {
-                Some((0, i))
-            } else if name.starts_with(&q) {
-                Some((1, i))
-            } else if name.contains(&q) {
-                Some((2, i))
-            } else if c.description.to_lowercase().contains(&q) {
-                Some((3, i))
-            } else {
-                None
-            }
+        .map(|c| aliases_in(commands, &c.name))
+        .collect();
+    let items: Vec<crate::fuse::Item> = commands
+        .iter()
+        .zip(&aliases)
+        .map(|(c, a)| crate::fuse::Item {
+            name: &c.name,
+            description: &c.description,
+            aliases: a,
         })
         .collect();
-    ranked.sort();
-    ranked.into_iter().map(|(_, i)| i).collect()
+    crate::fuse::rank(&items, query)
+}
+
+/// The alias of `commands[idx]` the query starts, which the menu writes after its name.
+pub fn slash_alias(commands: &[SlashCommand], idx: usize, query: &str) -> Option<String> {
+    let c = &commands[idx];
+    let aliases = aliases_in(commands, &c.name);
+    let item = crate::fuse::Item {
+        name: &c.name,
+        description: "",
+        aliases: &aliases,
+    };
+    crate::fuse::matched_alias(&item, query)
 }
 
 /// Paths for an `@` query: the top level when nothing is typed, otherwise every path that

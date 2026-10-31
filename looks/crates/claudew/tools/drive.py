@@ -22,7 +22,7 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
 # (no waiting after), ('restore',) (the size the program started at), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
-# reference only, ('look_keys', ...) to the look only (its replay cycles through auto mode on the way to plan).
+# reference only, ('look_keys', ...) to the look only.
 STATIC = [
     ('home', [('snap', '')]),
     ('shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
@@ -54,10 +54,10 @@ STATIC = [
     ('resize', [('resize', 100, 30), ('wait', 1.0), ('snap', '')]),
     # last but one, at the size it started: the reference prints a long explanation of auto mode
     # in the transcript the first time shift+tab reaches it, which every scene after would carry
-    # at 80x24. It has a fourth mode (auto) the backend does not; one more press brings it round
+    # at 80x24. The fourth press brings the cycle round
     ('modes', [('restore',), ('type', '/help'), ('keys', 'Enter'), ('until', r'For more help', 15), ('wait', 1.5),
                ('keys', 'Escape'), ('wait', 0.3), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
+               ('keys', 'BTab'), ('snap', '-3'), ('keys', 'BTab'), ('wait', 1.0),
                ('snap', '-4')]),
     ('exit', [('quit',), ('wait', 0.5), ('snap', '')]),
 ]
@@ -118,7 +118,7 @@ TURN3 = [
                ('fast_keys', 'Enter'), ('wait', 0.8), ('raw_snap', ''), ('fast_keys', 'Escape'),
                ('wait', 1.5), ('raw_snap', '-esc'), ('idle',)]),
     # manual, accept edits, plan
-    ('plan', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
               ('until', r'Ready to code', 120), ('wait', 2.0), ('snap', ''),
               ('keys', 'Down'), ('snap', '-down'), ('keys', 'Escape'), ('idle',)]),
 ]
@@ -299,7 +299,7 @@ LIGHT = [
     ('light-home', [('snap', '')]),
     ('light-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('light-modes', [('since', 20), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-                     ('keys', 'BTab'), ('ref_keys', 'BTab'), ('wait', 1.0)]),
+                     ('keys', 'BTab', 'BTab'), ('wait', 1.0)]),
     ('light-slash', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
     ('light-bash', [('type', '!'), ('snap', ''), ('keys', 'BSpace'), ('wait', 0.5)]),
     ('light-model', [('type', '/model'), ('keys', 'Enter'), ('until', r'Select model', 15),
@@ -393,7 +393,7 @@ TODO_MANY = [
 
 # A plan approved: Down picks "manually approve edits", the second of three ways out.
 PLAN2 = [
-    ('plan-approve', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan-approve', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
                       ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down'), ('keys', 'Enter'),
                       ('idle',), ('wait', 1.5), ('snap', '')]),
 ]
@@ -401,7 +401,7 @@ PLAN2 = [
 # The third way out of a plan, "Tell Claude what to change": Down twice picks it and the line
 # takes text, Enter sends it back as the reason the plan was not approved.
 PLAN3 = [
-    ('plan-feedback', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan-feedback', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
                        ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down', 'Down'), ('snap', '-pick'),
                        ('type', 'use tabs'), ('snap', '-typed'), ('keys', 'Enter'),
                        ('idle',), ('wait', 1.5), ('snap', '')]),

@@ -7,8 +7,14 @@ use claudew::app::{Block, Dialog};
 use common::Harness;
 use crossterm::event::KeyCode;
 
+/// The Claude data replay with wizard's own two modes in place of the permission modes it
+/// carries, for the tests of the mode steps themselves. The permission cycle has its own test.
 fn harness() -> Harness {
-    Harness::new("static-120x40.jsonl", 120, 40)
+    let mut hn = Harness::new("static-120x40.jsonl", 120, 40);
+    hn.app.cfg.modes = vec!["manual".into(), "accept edits".into()];
+    hn.app.cfg.permission_mode.clear();
+    hn.app.cfg.permission_modes.clear();
+    hn
 }
 
 fn plan_answer(hn: &mut common::Harness, text: &str) {
@@ -395,7 +401,7 @@ fn ctrl_r_finds_an_earlier_prompt() {
 #[test]
 fn completing_a_command_shows_what_it_takes() {
     let mut hn = Harness::new("wizard-120x40.jsonl", 120, 40);
-    hn.type_str("/mod");
+    hn.type_str("/model");
     hn.press(KeyCode::Tab);
     assert_eq!(hn.app.editor.text(), "/model ");
     let screen = hn.render().plain();
@@ -1032,6 +1038,83 @@ fn a_prompt_sent_before_the_session_waits_for_early_presses() {
     let first = requests.try_recv().ok();
     assert_eq!(first, Some(Request::SetMode("sovereign".into())));
     assert!(requests.try_recv().is_err(), "the prompt still waits");
+}
+
+/// With permissions on, shift+tab steps through the permission modes as Claude Code does:
+/// accept edits, plan, auto, manual. Auto mode is explained the first time, and only then.
+#[test]
+fn shift_tab_cycles_the_permission_modes_with_plan_after_accept_edits() {
+    let state = std::env::temp_dir().join(format!("claudew-auto-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::env::set_var("CLAUDEW_STATE_DIR", &state);
+    let (tx, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let (mtx, _msgs) = tokio::sync::mpsc::unbounded_channel();
+    let mut app = claudew::app::App::new(Default::default(), tx, mtx);
+    let config = |mode: &str| agent_core::Config {
+        mode: "genie".into(),
+        modes: vec!["genie".into(), "sovereign".into()],
+        permission_mode: mode.into(),
+        permission_modes: [
+            "default",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+        ]
+        .map(String::from)
+        .to_vec(),
+        ..Default::default()
+    };
+    app.on_event(Event::Ready {
+        session_id: "s".into(),
+        config: config("default"),
+    });
+    while requests.try_recv().is_ok() {}
+    let mut steps = Vec::new();
+    let mut plan_on = false;
+    for _ in 0..4 {
+        app.on_key(crossterm::event::KeyEvent::from(KeyCode::BackTab));
+        // each step waits for wizard's answer before the next goes out
+        while let Ok(r) = requests.try_recv() {
+            let answered = match &r {
+                Request::SetPermissionMode(m) => Some(config(m)),
+                Request::Prompt(p) if p == "/plan" => {
+                    plan_on = !plan_on;
+                    app.on_event(Event::TurnStart);
+                    app.on_event(Event::Notice {
+                        level: agent_core::NoticeLevel::Info,
+                        text: format!("plan mode {}", if plan_on { "on" } else { "off" }),
+                    });
+                    app.on_event(Event::TurnEnd(StopReason::EndTurn));
+                    None
+                }
+                _ => None,
+            };
+            steps.push(r);
+            if let Some(c) = answered {
+                app.on_event(Event::ConfigChanged(c));
+            }
+        }
+    }
+    let sets: Vec<&Request> = steps
+        .iter()
+        .filter(|r| matches!(r, Request::SetPermissionMode(_)))
+        .collect();
+    assert_eq!(
+        sets,
+        [
+            &Request::SetPermissionMode("acceptEdits".into()),
+            &Request::SetPermissionMode("auto".into()),
+            &Request::SetPermissionMode("default".into()),
+        ],
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&Request::Prompt("/plan".into())),
+        "{steps:?}"
+    );
+    assert!(state.join("auto-mode-explained").exists());
+    let _ = std::fs::remove_dir_all(&state);
 }
 
 /// `/plan <text>` turns plan mode on and sends the text once wizard is in it.
