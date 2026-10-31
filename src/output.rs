@@ -545,6 +545,7 @@ pub(crate) mod tests {
             AgentEvent::TodoUpdated(vec![TodoItem {
                 content: "ship it".to_string(),
                 status: TodoStatus::InProgress,
+                active_form: None,
             }]),
             AgentEvent::TaskFinished {
                 id: 1,

@@ -108,6 +108,7 @@ impl TaskBoard {
             .map(|t| TodoItem {
                 content: t.subject.clone(),
                 status: t.status,
+                active_form: t.active_form.clone(),
             })
             .collect()
     }

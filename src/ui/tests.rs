@@ -840,14 +840,17 @@ fn todo_band_sits_above_the_composer_without_covering_chat() {
         TodoItem {
             content: "done already".to_string(),
             status: TodoStatus::Completed,
+            active_form: None,
         },
         TodoItem {
             content: "working on this".to_string(),
             status: TodoStatus::InProgress,
+            active_form: None,
         },
         TodoItem {
             content: "later".to_string(),
             status: TodoStatus::Pending,
+            active_form: None,
         },
     ];
     app.transcript
@@ -1293,6 +1296,7 @@ fn todo_items(n: usize) -> Vec<crate::tools::todo::TodoItem> {
         .map(|i| TodoItem {
             content: format!("item {i}"),
             status: TodoStatus::Pending,
+            active_form: None,
         })
         .collect()
 }
@@ -1466,10 +1470,12 @@ fn adversarial_app() -> App {
         TodoItem {
             content: nasty[4].clone(),
             status: TodoStatus::InProgress,
+            active_form: None,
         },
         TodoItem {
             content: nasty[9].clone(),
             status: TodoStatus::Pending,
+            active_form: None,
         },
     ]));
     app.diff = Some(crate::app::DiffPane {

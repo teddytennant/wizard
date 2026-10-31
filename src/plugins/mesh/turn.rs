@@ -547,6 +547,7 @@ mod tests {
             .map(|_| crate::tools::todo::TodoItem {
                 content: String::new(),
                 status: crate::tools::todo::TodoStatus::Pending,
+                active_form: None,
             })
             .collect();
         let turn = crossed(AgentEvent::TodoUpdated(todos));

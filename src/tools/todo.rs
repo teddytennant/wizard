@@ -45,6 +45,9 @@ impl TodoStatus {
 pub struct TodoItem {
     pub content: String,
     pub status: TodoStatus,
+    /// Present-tense phrasing shown while the item is in progress ("Running the tests").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_form: Option<String>,
 }
 
 /// The agent's working todo list.
@@ -132,6 +135,10 @@ impl Tool for TodoTool {
                             "status": {
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "completed"]
+                            },
+                            "active_form": {
+                                "type": "string",
+                                "description": "Optional present-tense phrasing of the item, shown while it is in_progress (for example \"Running the tests\")"
                             }
                         },
                         "required": ["content", "status"]
@@ -197,6 +204,7 @@ mod tests {
         TodoItem {
             content: content.to_string(),
             status,
+            active_form: None,
         }
     }
 
@@ -242,6 +250,34 @@ mod tests {
         .await
         .expect("write ok");
         assert_eq!(ctx.todos.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn active_form_is_optional_and_carried_through() {
+        let tool = TodoTool;
+        let ctx = ctx();
+        tool.execute(
+            json!({ "action": "write", "items": [
+                { "content": "Run the tests", "status": "in_progress", "active_form": "Running the tests" },
+                { "content": "Ship it", "status": "pending" }
+            ] }),
+            &ctx,
+        )
+        .await
+        .expect("write ok");
+        let list = ctx.todos.lock().unwrap().clone();
+        assert_eq!(list[0].active_form.as_deref(), Some("Running the tests"));
+        assert_eq!(list[1].active_form, None);
+        // a list saved before the field existed still loads, and omits it when written back
+        let old: TodoItem =
+            serde_json::from_value(json!({ "content": "old", "status": "pending" })).unwrap();
+        assert_eq!(old.active_form, None);
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("active_form")
+                .is_none()
+        );
     }
 
     #[tokio::test]

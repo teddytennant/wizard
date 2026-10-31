@@ -436,10 +436,14 @@ fn map_todo_write(args: &Value) -> Result<Value, String> {
     let items: Vec<Value> = todos
         .iter()
         .map(|todo| {
-            json!({
+            let mut item = json!({
                 "content": str_arg(todo, "content").unwrap_or_default(),
                 "status": str_arg(todo, "status").unwrap_or("pending"),
-            })
+            });
+            if let Some(form) = str_arg(todo, "activeForm").filter(|f| !f.is_empty()) {
+                item["active_form"] = json!(form);
+            }
+            item
         })
         .collect();
     Ok(json!({ "action": "write", "items": items }))
@@ -651,6 +655,7 @@ mod tests {
         assert_eq!(mapped["action"], "write");
         assert_eq!(mapped["items"][0]["status"], "in_progress");
         assert!(mapped["items"][0].get("activeForm").is_none());
+        assert_eq!(mapped["items"][0]["active_form"], "doing a");
     }
 
     #[test]
