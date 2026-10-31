@@ -33,3 +33,6 @@ pub mod vm;
 
 /// The reference `/workflow-authoring` prints and the `Workflow` tool points at.
 pub const AUTHORING: &str = include_str!("authoring.md");
+
+#[cfg(all(test, feature = "plugin-js"))]
+mod bundled_tests;

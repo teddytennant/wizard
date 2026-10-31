@@ -229,7 +229,10 @@ async fn resolve_prefers_path_then_name_then_script_and_explains_misses() {
         None,
     )
     .unwrap_err();
-    assert_eq!(missing, "Workflow \"nope\" not found. Available: saved");
+    assert_eq!(
+        missing,
+        "Workflow \"nope\" not found. Available: saved, deep-research, code-review, batch"
+    );
 
     let gone = resolve(
         &Input {

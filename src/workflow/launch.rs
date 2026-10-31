@@ -88,14 +88,15 @@ pub fn resolve(input: &Input, cwd: &Path, home: Option<&Path>) -> Result<Resolve
                 }
             ));
         };
-        let text = std::fs::read_to_string(&named.path)
+        let text = named
+            .read()
             .map_err(|e| format!("Failed to load workflow from {}: {e}", named.path.display()))?;
         let parsed = script::parse(&text).map_err(invalid_script)?;
         return Ok(Resolved {
             text,
             parsed,
             source: format!("name:{}", named.name),
-            file: Some(named.path),
+            file: named.bundled.is_none().then_some(named.path),
         });
     }
     if let Some(text) = &input.script {
