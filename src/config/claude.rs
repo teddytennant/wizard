@@ -119,6 +119,10 @@ pub struct ClaudeSettings {
     pub include_git_instructions: Option<bool>,
     /// `companyAnnouncements`.
     pub company_announcements: Vec<String>,
+    /// `fastMode`.
+    pub fast_mode: Option<bool>,
+    /// `fastModePerSessionOptIn`.
+    pub fast_mode_per_session_opt_in: bool,
     /// `pluginTrustMessage`, managed settings only.
     pub plugin_trust_message: Option<String>,
     /// `skillOverrides`: skill name to `on`, `name-only`, `user-invocable-only`
@@ -416,6 +420,9 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     let flag = |key: &str| value.get(key).and_then(Value::as_bool);
     out.include_co_authored_by = flag("includeCoAuthoredBy").or(out.include_co_authored_by);
     out.verbose = flag("verbose").or(out.verbose);
+    out.fast_mode = flag("fastMode").or(out.fast_mode);
+    out.fast_mode_per_session_opt_in =
+        flag("fastModePerSessionOptIn").unwrap_or(out.fast_mode_per_session_opt_in);
     out.always_thinking = flag("alwaysThinkingEnabled").or(out.always_thinking);
     out.auto_memory_enabled = flag("autoMemoryEnabled").or(out.auto_memory_enabled);
     out.include_git_instructions = flag("includeGitInstructions").or(out.include_git_instructions);

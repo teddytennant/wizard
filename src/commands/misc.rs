@@ -10,10 +10,6 @@ use crate::config::Config;
 /// `(command, what to say)` for the commands with no Wizard counterpart.
 pub const NOT_AVAILABLE: &[(&str, &str)] = &[
     (
-        "fast",
-        "fast mode is an Anthropic model setting. /effort low trims reasoning, and /model switches to a quicker model.",
-    ),
-    (
         "advisor",
         "the advisor pairs Claude models. /fusion has several providers debate and /ultra fans one model out over lenses.",
     ),
@@ -40,10 +36,6 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
     (
         "rate-limit-options",
         "there are no Claude rate-limit tiers here. /usage shows the limits of your sign-ins.",
-    ),
-    (
-        "privacy-settings",
-        "Wizard sends nothing to an analytics service. What a provider keeps is that provider's policy.",
     ),
     (
         "heapdump",
@@ -116,10 +108,6 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
     (
         "remote-env",
         "cloud agents and their environments are Anthropic's. `wizard fleet` and /background run work in parallel on this machine.",
-    ),
-    (
-        "sandbox",
-        "Wizard has no OS sandbox to toggle. Permission rules decide what runs: /permissions shows them.",
     ),
     ("stickers", "stickers are Anthropic merchandise."),
     (
@@ -232,6 +220,114 @@ pub fn statusline(args: &str, root: &std::path::Path) -> Result<String, String> 
     }
 }
 
+/// `/fast [on|off]`: the Anthropic provider's speed tier.
+pub fn fast(args: &str) -> Result<String, String> {
+    let args = args.trim();
+    let on = match args {
+        "" => !crate::config::fast::enabled(),
+        "on" | "true" | "1" => true,
+        "off" | "false" | "0" => false,
+        other => return Err(format!("/fast takes on or off, not '{other}'")),
+    };
+    let get = |name: &str| std::env::var(name).ok();
+    if on && crate::config::claude_env::truthy(&get, "CLAUDE_CODE_DISABLE_FAST_MODE") {
+        return Err("fast mode is turned off by CLAUDE_CODE_DISABLE_FAST_MODE".to_string());
+    }
+    crate::config::fast::set(on);
+    let (path, mut settings) = user_settings()?;
+    if let Some(object) = settings.as_object_mut() {
+        object.insert("fastMode".to_string(), json!(on));
+        write_settings(&path, &settings)?;
+    }
+    let config = Config::load().map_err(|err| format!("{err:#}"))?;
+    let active = config.active();
+    let state = if on { "on" } else { "off" };
+    Ok(if active.kind == crate::config::ProviderKind::ANTHROPIC {
+        if crate::config::fast::applies_to(&active.model) {
+            format!(
+                "fast mode {state}: requests to {} carry speed=fast",
+                active.model
+            )
+        } else {
+            format!(
+                "fast mode {state}, but {} has no fast tier; only Opus models do",
+                active.model
+            )
+        }
+    } else {
+        format!(
+            "fast mode {state} (saved to fastMode). The active provider, {}, has no speed tier, so nothing changes until an anthropic provider is active.",
+            active.name
+        )
+    })
+}
+
+/// `/sandbox`: what the `sandbox` settings turn into, since Wizard has no
+/// process sandbox to switch on.
+pub fn sandbox(root: &std::path::Path) -> String {
+    let keys = crate::config::claude::load(root, crate::config::claude::Trust::Refused).policy;
+    let paths = |label: &str, list: &[String]| {
+        if list.is_empty() {
+            String::new()
+        } else {
+            format!("  {label}: {}\n", list.join(", "))
+        }
+    };
+    let rules = paths("no reading", &keys.sandbox_deny_read)
+        + &paths("no writing", &keys.sandbox_deny_write)
+        + &paths("no fetching from", &keys.sandbox_denied_domains);
+    if rules.is_empty() {
+        return "no sandbox rules. Wizard has no OS sandbox; with \"sandbox\": {\"enabled\": true} in settings, filesystem.denyRead, filesystem.denyWrite and network.deniedDomains become deny rules for the file tools and web_fetch (shell commands are not covered). /permissions shows the rest.".to_string();
+    }
+    format!(
+        "sandbox settings, applied as deny rules to the file tools and web_fetch (shell commands are not covered)\n{}",
+        rules.trim_end()
+    )
+}
+
+/// `/privacy-settings`: where data leaves this machine.
+pub fn privacy() -> String {
+    let config = Config::load().unwrap_or_default();
+    let active = config.active();
+    let mut lines = vec![
+        "Wizard sends no telemetry, analytics or error reports.".to_string(),
+        format!(
+            "model requests go to {} ({})",
+            active.name,
+            if active.base_url.is_empty() {
+                "its default endpoint"
+            } else {
+                active.base_url.as_str()
+            }
+        ),
+    ];
+    let others: Vec<&str> = config
+        .providers
+        .iter()
+        .filter(|provider| provider.name != active.name)
+        .map(|provider| provider.name.as_str())
+        .collect();
+    if !others.is_empty() {
+        lines.push(format!(
+            "also configured, used only when selected: {}",
+            others.join(", ")
+        ));
+    }
+    lines.push(if config.update.notify || config.update.auto {
+        format!(
+            "update check: asks GitHub ({}) about new releases every {}h",
+            config.update.repo, config.update.interval_hours
+        )
+    } else {
+        "update check: off".to_string()
+    });
+    lines.push(
+        "web_fetch and web_search reach the sites and search backend you or the model name; MCP http servers reach their own URLs.".to_string(),
+    );
+    lines.push("What a provider keeps is that provider's policy.".to_string());
+    lines.join("\n")
+}
+
 /// `/autocompact [tokens|off]`: the context size compaction aims under.
 /// Compaction starts at 80% of `max_context_tokens`; `0` uses the model's own
 /// window.
@@ -297,7 +393,8 @@ mod tests {
             assert!(text.len() > 20, "/{name} says too little");
             assert!(!text.contains('\u{2014}'), "/{name}: no em dashes");
         }
-        assert!(not_available("fast").is_some());
+        assert!(not_available("voice").is_some());
+        assert!(not_available("fast").is_none(), "/fast is a real command");
         assert!(not_available("nope").is_none());
     }
 }

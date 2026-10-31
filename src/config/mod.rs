@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub mod claude;
 pub mod claude_env;
 pub mod claude_policy;
+pub mod fast;
 pub mod key_helper;
 
 use crate::cli::Cli;

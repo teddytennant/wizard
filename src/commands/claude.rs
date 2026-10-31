@@ -301,6 +301,9 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
         "stop" => reply(surface, super::session_cmds::stop(args)),
         "statusline" => reply(surface, super::misc::statusline(args, &root)),
         "autocompact" => reply(surface, super::misc::autocompact(args)),
+        "fast" => reply(surface, super::misc::fast(args)),
+        "sandbox" => surface.notice(super::misc::sandbox(&root)),
+        "privacy-settings" => surface.notice(super::misc::privacy()),
         other if super::misc::not_available(other).is_some() => {
             surface.notice(
                 super::misc::not_available(other)

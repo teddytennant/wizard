@@ -167,7 +167,15 @@ impl AnthropicProvider {
         let mut builder = builder
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION);
-        if let Some(betas) = crate::config::claude_env::betas(&get) {
+        let mut betas = crate::config::claude_env::betas(&get);
+        if crate::config::fast::enabled() {
+            let fast = crate::config::fast::BETA;
+            betas = Some(match betas {
+                Some(have) => format!("{have},{fast}"),
+                None => fast.to_string(),
+            });
+        }
+        if let Some(betas) = betas {
             builder = builder.header("anthropic-beta", betas);
         }
         for (name, value) in crate::config::claude_env::custom_headers(&get) {
@@ -201,6 +209,9 @@ impl AnthropicProvider {
             "stream": true,
         });
         crate::config::claude_env::extend_request_body(&mut body, &|name| std::env::var(name).ok());
+        if crate::config::fast::enabled() && crate::config::fast::applies_to(&request.model) {
+            body["speed"] = json!("fast");
+        }
         if !system.is_empty() {
             body["system"] = Value::Array(system);
         }

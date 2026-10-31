@@ -501,6 +501,7 @@ impl ClaudeFlags {
                 None => set_model(config, &model),
             }
         }
+        crate::config::fast::init(&settings, &get);
         let from_env = crate::config::claude_env::effort(&get);
         let effort = self
             .effort
