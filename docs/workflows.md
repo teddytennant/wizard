@@ -134,18 +134,85 @@ directory is a saved workflow, run with `Workflow({name, args})`:
 The name is `meta.name`; the file name works too. A file that fails to parse is
 listed with the reason by `/workflows` and skipped.
 
+## Bundled workflows
+
+Three ship in the binary and run by name, like a saved one:
+
+| Name | Takes `args` | Does |
+| :- | :- | :- |
+| `deep-research` | the question | Splits it into search angles, searches each, drops duplicate URLs, reads the best twelve sources for checkable claims, has three skeptics try to refute each claim (two refutations kill it), and writes a cited report with confidence, caveats and open questions. |
+| `code-review` | a target such as a branch or PR number, optional | Five reviewers (correctness, security, concurrency, tests, simplicity) read the change; two skeptics try to refute each finding; what survives comes back ranked. |
+| `batch` | the instruction | A planner splits the change into units that own different files, one worker per unit edits in its own git worktree, a reviewer checks each unit's diff. Nothing is merged or pushed; each unit's result names its worktree. |
+
+`/deep-research <question>` and `/batch <instruction>` are commands that send the
+prompt Claude Code's workflow commands send ("Run the "deep-research" workflow. ...
+Invoke: Workflow(...)"), so the model calls the tool with your text as `args`.
+`/code-review` stays the single-agent review prompt; run the workflow with "use the
+code-review workflow". A file named `deep-research.js` (and so on) in a
+`workflows/` directory replaces the bundled one, and
+`CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1` hides all of them. The scripts are
+`src/workflow/bundled/*.js`; they are written for Wizard's tools (`WebSearch`,
+`WebFetch`, `git`) and are not copies of Claude Code's.
+
 ## `/workflows`
 
 ```
-/workflows                  list runs, newest first, and saved workflows
-/workflows <run id>         details of one run (an unambiguous prefix works)
-/workflows stop <run id>    stop a run this process is executing
+/workflows                  open the panel (a text list where there is no panel)
+/workflows list             list runs, newest first, and saved workflows
+/workflows <run id>         details of one run, its agents included (a prefix works)
+/workflows stop <run id>    stop a run, in this process or another
 ```
 
-A run recorded as running whose process is gone shows as `interrupted`. Stopping a
-run that belongs to another process is refused with its pid. `TaskStop` with the
-task id from the launch text does the same as `/workflows stop` for the live
-session.
+A run recorded as running whose process is gone shows as `interrupted`. A run that
+belongs to another process is stopped by writing a `stop` file in its run directory,
+which that process checks every second. `TaskStop` with the task id from the launch
+text does the same as `/workflows stop` for the live session.
+
+### The panel
+
+In the terminal UI and in the claude look, `/workflows` opens a panel that follows
+the runs on disk. With one run (or one running) it opens on that run: its name and
+description, `done/total agents` and elapsed time on top, its phases on the left
+(`1 Scan   1/2`) and the agents of the selected phase on the right. Enter goes one
+level in (phase, agents, one agent's prompt and outcome), Esc comes back and then
+closes, the arrows select, and `x` stops the run. With several runs it opens on the
+list of runs first.
+
+The state behind it is `agents.json` in the run's directory, written about once a
+second by the process running the workflow: each `agent()` call's label, phase,
+subagent, state (`queued`, `running`, `done`, `cached`, `failed`, `stopped`), times,
+prompt and outcome (cut at 1500 characters; the journal has the whole result). Any
+reader can use it, and the look does: it is a separate process that reads the files
+and shares no code with Wizard.
+
+Compared with Claude Code 2.1.314's panel (driven with a fake Messages server and a
+three-agent script, four screens captured at 140x45), the look's panel matches cell
+by cell, colours included, in every cell except the model and token column (Wizard
+shows the subagent that ran it, and has no per-agent token count), the clocks, and
+the key hint line, which lists only the keys Wizard has. Not built: pause, restart,
+per-agent stop, filter, save-as-workflow, the pill under the prompt that shows a
+running workflow (`◯ name ▰▰▱▱ 1/2`), and the "Running in background" line in the
+tool result.
+
+## Settings and permissions
+
+| Key | Meaning |
+| :- | :- |
+| `disableWorkflows` | `true` removes the tool (any settings layer). |
+| `enableWorkflows` | `false` removes it too; the `/config` toggle in Claude Code. |
+| `workflowSizeGuideline` | `unrestricted`, `small` (fewer than 5 agents), `medium` (fewer than 10, the default) or `large` (fewer than 50). Added to the tool's description as Claude Code words it; advisory, not a limit. |
+
+With permissions on (a named mode or rules), a `Workflow` call is asked about, in
+`default` and `acceptEdits`, with "Review dynamic workflow before running"; the
+prompt lists the script's description and phases. `bypassPermissions` runs it,
+`dontAsk` refuses it, `plan` refuses it. Rules:
+
+- `Workflow` allows or denies every call.
+- `Workflow(deep-research)` names a saved or bundled workflow. A call with a
+  `scriptPath` is never covered by a name rule, whatever its `name` says.
+- A deny rule answers "Workflow <name> blocked by permission rules"; an ask rule
+  asks even when an allow rule also matches.
+- "Yes, and don't ask again" on a named workflow writes `Workflow(<name>)`.
 
 ## What the default build does
 
@@ -156,14 +223,15 @@ prints the reference.
 
 ## Where it differs from Claude Code
 
-- Runs are tasks of the session. `TaskStop` and `task_output` are how you stop and
-  read one; there is no workflow panel with pause, per-agent stop or restart.
-- No approval dialog and no `Workflow(<name>)` permission rule. The agents' tool
-  calls go through the usual permission rules and hooks.
+- Runs are tasks of the session. `TaskStop` and `task_output` stop and read one, and
+  the panel has no pause, per-agent stop or restart.
+- The approval prompt lists the phases from the script's `meta` and offers yes, yes and
+  don't ask again, and no. Claude Code's also offers "View workflow summary", "View raw
+  script" and editing the script in `$EDITOR`.
 - No remote (CCR) runs, usage-limit waiting, stall restarts (`stallMs` is ignored),
-  prefix-cache staggering, size guideline warning, `ultracode` keyword or mode, or
-  `workflowSizeGuideline` and related settings. Only `CLAUDE_CODE_DISABLE_WORKFLOWS`
-  is read.
+  prefix-cache staggering, size warning, or `ultracode` keyword or mode
+  (`workflowKeywordTriggerEnabled` is read and ignored).
 - `agent()` options `bashCommandClamp` and `isolation: 'remote'` are not supported.
 - `effort` is accepted and ignored; subagents use the configured effort.
-- Bundled workflows (such as `deep-research`) are not shipped; saved workflows are.
+- Bundled: Claude Code 2.1.314 ships one workflow, `deep-research`; Wizard ships that
+  and `code-review` and `batch`, with its own scripts.

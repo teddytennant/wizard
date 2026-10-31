@@ -304,6 +304,10 @@ impl Named {
     }
 }
 
+/// `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS`: the bundled workflows and prompt
+/// commands are left out, as Claude Code leaves out its bundled skills.
+pub const BUNDLED_OFF: &str = "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS";
+
 /// The workflows that ship in the binary, by name.
 pub const BUNDLED: &[(&str, &str)] = &[
     ("deep-research", include_str!("bundled/deep-research.js")),
@@ -384,7 +388,8 @@ pub fn discover(cwd: &Path, home: Option<&Path>) -> (Vec<Named>, Vec<String>) {
             }
         }
     }
-    for (file, text) in BUNDLED {
+    let hidden = crate::config::claude_env::truthy(&|n| std::env::var(n).ok(), BUNDLED_OFF);
+    for (file, text) in BUNDLED.iter().filter(|_| !hidden) {
         match script::parse(text) {
             Ok(parsed) if !found.iter().any(|n| n.name == parsed.meta.name) => {
                 found.push(Named {

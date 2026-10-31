@@ -281,6 +281,12 @@ fn workflow_command(name: &str, noun: &str, ask: &str) -> Option<CustomCommand> 
 
 /// The prompt commands that ship in the binary.
 pub fn bundled() -> Vec<CustomCommand> {
+    if crate::config::claude_env::truthy(
+        &|n| std::env::var(n).ok(),
+        crate::workflow::store::BUNDLED_OFF,
+    ) {
+        return Vec::new();
+    }
     let mut commands: Vec<CustomCommand> = BUNDLED
         .iter()
         .map(|(name, raw)| {

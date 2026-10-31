@@ -225,11 +225,8 @@ impl WorkflowPanel {
     }
 
     fn hint(&self) -> String {
-        let stop = self
-            .current()
-            .is_some_and(|r| r.status == "running")
-            .then_some(" · x stop workflow")
-            .unwrap_or("");
+        let running = self.current().is_some_and(|r| r.status == "running");
+        let stop = if running { " · x stop workflow" } else { "" };
         match self.level {
             Level::Runs => format!("↑↓ select · enter open{stop} · esc close"),
             Level::Phases => format!("↑↓ select · enter agents{stop} · esc back"),
