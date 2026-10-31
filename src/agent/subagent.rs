@@ -498,6 +498,7 @@ const FORK_TOOL_DENYLIST: &[&str] = &[
     // The Claude Code names for the same four, which `compat` registers on
     // top of the tools above.
     "Agent",
+    "Workflow",
     "ExitPlanMode",
     "EnterPlanMode",
     "AskUserQuestion",

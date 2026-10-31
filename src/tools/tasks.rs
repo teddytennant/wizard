@@ -414,6 +414,24 @@ impl TaskRegistry {
         });
     }
 
+    /// Register a running task with no process behind it (a workflow run). The
+    /// receiver fires when [`kill`](Self::kill) or [`kill_all`](Self::kill_all)
+    /// is called on it; the owner stops its work and calls
+    /// [`finish_virtual`](Self::finish_virtual).
+    pub fn add_virtual(&self, command: impl Into<String>) -> (u32, oneshot::Receiver<()>) {
+        let id = self.add(command);
+        let (kill_tx, kill_rx) = oneshot::channel();
+        if let Some(entry) = self.lock().get_mut(&id) {
+            entry.kill = Some(kill_tx);
+        }
+        (id, kill_rx)
+    }
+
+    /// Record how a [`add_virtual`](Self::add_virtual) task ended.
+    pub fn finish_virtual(&self, id: u32, status: TaskStatus) {
+        self.finish(id, status);
+    }
+
     /// Record the final status of a task and drop its kill handle.
     fn finish(&self, id: u32, status: TaskStatus) {
         if let Some(entry) = self.lock().get_mut(&id) {

@@ -2444,6 +2444,8 @@ pub async fn build_tool_registry(
     let subagent_configs = subagent::available_configs_with_claude(&subagents_dir);
     let base = Arc::new(base);
     let mut registry = subagent::scoped_registry(&base, None);
+    #[cfg(feature = "plugin-js")]
+    let workflow_configs = subagent_configs.clone();
     let spawn_tool = Arc::new(subagent::SpawnSubagentTool::new(
         subagent_configs,
         Arc::clone(client),
@@ -2452,6 +2454,21 @@ pub async fn build_tool_registry(
     ));
     let subagent_model = spawn_tool.model_handle();
     registry.register(spawn_tool);
+    // Over `base`, like the spawn tool, so a workflow's agents cannot start
+    // workflows. Deferred behind `tool_search`, so under `stock` (which defers
+    // nothing) it is left out rather than paid for in full on every request.
+    #[cfg(feature = "plugin-js")]
+    if crate::token_profile::current().safe()
+        && !crate::tools::workflow::disabled_by_env(&|name| std::env::var(name).ok())
+    {
+        registry.register(Arc::new(crate::tools::workflow::WorkflowTool::new(
+            workflow_configs,
+            Arc::clone(client),
+            Arc::clone(&base),
+            Arc::clone(hooks),
+            Arc::clone(&subagent_model),
+        )));
+    }
     registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
         config.clone(),
     )));

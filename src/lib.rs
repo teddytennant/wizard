@@ -73,6 +73,7 @@ pub mod ui;
 pub mod update;
 pub mod usage;
 pub mod vim;
+pub mod workflow;
 
 use std::io::IsTerminal;
 

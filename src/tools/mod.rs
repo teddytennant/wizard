@@ -35,6 +35,9 @@ pub mod tasks;
 pub mod todo;
 pub mod tool_search;
 pub mod turing;
+/// Claude Code's `Workflow` tool: a JavaScript script that fans subagents out.
+#[cfg(feature = "plugin-js")]
+pub mod workflow;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

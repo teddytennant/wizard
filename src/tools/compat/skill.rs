@@ -77,6 +77,13 @@ impl Tool for SkillTool {
         let wanted = wanted.trim().trim_start_matches('/');
         let all = self.load();
         let Some(skill) = all.iter().find(|s| s.name == wanted) else {
+            // Bundled in the binary rather than on disk, like the command.
+            if wanted == "workflow-authoring" {
+                return Ok(ToolOutput::ok(format!(
+                    "Launching skill: workflow-authoring\n\n{}",
+                    crate::workflow::AUTHORING.trim()
+                )));
+            }
             let hint = closest(wanted, &all)
                 .map(|name| format!(" Did you mean {name}?"))
                 .unwrap_or_default();
