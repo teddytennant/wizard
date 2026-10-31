@@ -44,7 +44,11 @@ fn frame(status: u16, body: &Value, summary: Option<String>) -> ToolOutput {
 }
 
 fn failure(err: ApiError) -> ToolOutput {
-    frame(err.status, &json!({"error": {"message": err.message}}), None)
+    frame(
+        err.status,
+        &json!({"error": {"message": err.message}}),
+        None,
+    )
 }
 
 impl RemoteTriggerTool {
@@ -62,7 +66,9 @@ impl RemoteTriggerTool {
         };
         let id = text("trigger_id");
         if let Some(id) = id
-            && !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
             return ToolOutput::error("trigger_id must match ^[\\w-]+$");
         }
@@ -123,7 +129,10 @@ impl RemoteTriggerTool {
                     Ok(run) => frame(
                         200,
                         &run,
-                        Some("→ Local: a headless Wizard session on this machine, not a cloud run.".into()),
+                        Some(
+                            "→ Local: a headless Wizard session on this machine, not a cloud run."
+                                .into(),
+                        ),
                     ),
                     Err(e) => failure(e),
                 }
@@ -170,7 +179,11 @@ impl RemoteTriggerTool {
                 } else {
                     None
                 };
-                frame(200, &json!({"trigger_id": id, "data": runs, "next_cursor": null}), note)
+                frame(
+                    200,
+                    &json!({"trigger_id": id, "data": runs, "next_cursor": null}),
+                    note,
+                )
             }
             "get_run_log" => {
                 let Some(session) = text("session_id") else {
@@ -283,7 +296,16 @@ mod tests {
         assert_eq!(schema["required"], json!(["action"]));
         assert_eq!(
             props["action"]["enum"],
-            json!(["list", "get", "create", "update", "run", "create_webhook_trigger", "list_runs", "get_run_log"])
+            json!([
+                "list",
+                "get",
+                "create",
+                "update",
+                "run",
+                "create_webhook_trigger",
+                "list_runs",
+                "get_run_log"
+            ])
         );
     }
 
@@ -298,7 +320,11 @@ mod tests {
         .await;
         assert!(!out.is_error, "{}", out.content);
         assert!(out.content.starts_with("HTTP 200\n{"), "{}", out.content);
-        assert!(out.content.contains("→ Scheduled: next run"), "{}", out.content);
+        assert!(
+            out.content.contains("→ Scheduled: next run"),
+            "{}",
+            out.content
+        );
         let id = out
             .content
             .split("\"id\":\"")
@@ -328,18 +354,43 @@ mod tests {
         for (args, needle) in [
             (json!({"action": "get"}), "get requires trigger_id"),
             (json!({"action": "create"}), "create requires body"),
-            (json!({"action": "update", "trigger_id": "x"}), "update requires body"),
+            (
+                json!({"action": "update", "trigger_id": "x"}),
+                "update requires body",
+            ),
             (json!({"action": "run"}), "run requires trigger_id"),
-            (json!({"action": "list_runs"}), "list_runs requires trigger_id"),
-            (json!({"action": "get_run_log"}), "get_run_log requires session_id"),
-            (json!({"action": "get", "trigger_id": "../x"}), "trigger_id must match"),
+            (
+                json!({"action": "list_runs"}),
+                "list_runs requires trigger_id",
+            ),
+            (
+                json!({"action": "get_run_log"}),
+                "get_run_log requires session_id",
+            ),
+            (
+                json!({"action": "get", "trigger_id": "../x"}),
+                "trigger_id must match",
+            ),
             (json!({"action": "bogus"}), "Unknown action"),
         ] {
             let out = call(&t, dir.path(), args.clone()).await;
-            assert!(out.is_error && out.content.contains(needle), "{args}: {}", out.content);
+            assert!(
+                out.is_error && out.content.contains(needle),
+                "{args}: {}",
+                out.content
+            );
         }
-        let out = call(&t, dir.path(), json!({"action": "get", "trigger_id": "trg_nope"})).await;
-        assert!(out.is_error && out.content.starts_with("HTTP 404"), "{}", out.content);
+        let out = call(
+            &t,
+            dir.path(),
+            json!({"action": "get", "trigger_id": "trg_nope"}),
+        )
+        .await;
+        assert!(
+            out.is_error && out.content.starts_with("HTTP 404"),
+            "{}",
+            out.content
+        );
     }
 
     #[tokio::test]
@@ -353,7 +404,15 @@ mod tests {
         .await;
         assert!(!out.content.contains("wzt_"), "{}", out.content);
         assert!(out.content.contains("/v1/triggers/"), "{}", out.content);
-        let id = out.content.split("\"id\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        let id = out
+            .content
+            .split("\"id\":\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
         let again = call(
             &t,
             dir.path(),
@@ -361,7 +420,11 @@ mod tests {
         )
         .await;
         assert!(!again.content.contains("wzt_"), "{}", again.content);
-        assert!(again.content.contains("wizard trigger token"), "{}", again.content);
+        assert!(
+            again.content.contains("wizard trigger token"),
+            "{}",
+            again.content
+        );
     }
 
     #[tokio::test]
@@ -373,12 +436,38 @@ mod tests {
             json!({"action": "create", "body": {"prompt": "p", "webhook": true}}),
         )
         .await;
-        let id = out.content.split("\"id\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
-        let none = call(&t, dir.path(), json!({"action": "list_runs", "trigger_id": id})).await;
-        assert!(none.content.contains("no runs recorded"), "{}", none.content);
+        let id = out
+            .content
+            .split("\"id\":\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        let none = call(
+            &t,
+            dir.path(),
+            json!({"action": "list_runs", "trigger_id": id}),
+        )
+        .await;
+        assert!(
+            none.content.contains("no runs recorded"),
+            "{}",
+            none.content
+        );
         let ran = call(&t, dir.path(), json!({"action": "run", "trigger_id": id})).await;
-        assert!(ran.content.contains("headless Wizard session"), "{}", ran.content);
-        let listed = call(&t, dir.path(), json!({"action": "list_runs", "trigger_id": id})).await;
+        assert!(
+            ran.content.contains("headless Wizard session"),
+            "{}",
+            ran.content
+        );
+        let listed = call(
+            &t,
+            dir.path(),
+            json!({"action": "list_runs", "trigger_id": id}),
+        )
+        .await;
         assert!(listed.content.contains("manual run"), "{}", listed.content);
     }
 }

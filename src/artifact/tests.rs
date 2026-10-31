@@ -78,7 +78,10 @@ fn an_update_to_an_unknown_artifact_is_an_error_and_a_claude_link_is_explained()
     let (tmp, store) = store();
     let file = page(tmp.path(), "a.html", HTML);
     let err = store
-        .call(&json!({"file_path": file, "url": "nope-123456"}), tmp.path())
+        .call(
+            &json!({"file_path": file, "url": "nope-123456"}),
+            tmp.path(),
+        )
         .unwrap_err();
     assert!(err.contains("no local artifact"), "{err}");
     let err = store
@@ -104,7 +107,10 @@ fn edits_apply_all_or_none_and_the_source_file_follows() {
         )
         .unwrap_err();
     assert!(err.contains("occurs 2 times"), "{err}");
-    assert!(store.all().is_empty(), "nothing is published on a failed edit");
+    assert!(
+        store.all().is_empty(),
+        "nothing is published on a failed edit"
+    );
     assert!(std::fs::read_to_string(&file).unwrap().contains("one"));
 
     let reply = store
@@ -185,7 +191,10 @@ fn a_file_can_come_from_another_local_artifact() {
             )
             .unwrap(),
     );
-    assert_eq!(std::fs::read_to_string(store.dir(&b).join("copy.txt")).unwrap(), "f");
+    assert_eq!(
+        std::fs::read_to_string(store.dir(&b).join("copy.txt")).unwrap(),
+        "f"
+    );
 }
 
 #[test]
@@ -195,10 +204,7 @@ fn published_paths_cannot_escape_or_shadow_the_page() {
     std::fs::write(tmp.path().join("x"), "x").unwrap();
     for bad in ["../x", "/etc/x", ".artifact.json"] {
         let err = store
-            .call(
-                &json!({"file_path": file, "files": {bad: "x"}}),
-                tmp.path(),
-            )
+            .call(&json!({"file_path": file, "files": {bad: "x"}}), tmp.path())
             .unwrap_err();
         assert!(
             err.contains("relative") || err.contains("reserved"),
@@ -219,7 +225,9 @@ fn the_documented_size_limits_hold() {
     let (tmp, store) = store();
     let big = "x".repeat(MAX_TEXT_BYTES as usize + 1);
     let file = page(tmp.path(), "big.html", &big);
-    let err = store.call(&json!({"file_path": file}), tmp.path()).unwrap_err();
+    let err = store
+        .call(&json!({"file_path": file}), tmp.path())
+        .unwrap_err();
     assert!(err.contains("at most"), "{err}");
 
     let file = page(tmp.path(), "a.html", HTML);
@@ -248,19 +256,32 @@ fn list_read_open_pin_and_delete() {
     let file = page(tmp.path(), "a.html", HTML);
     let slug = slug_in(&store.call(&json!({"file_path": file}), tmp.path()).unwrap());
     let other = page(tmp.path(), "b.html", "<title>Other</title>");
-    let other_slug = slug_in(&store.call(&json!({"file_path": other}), tmp.path()).unwrap());
+    let other_slug = slug_in(
+        &store
+            .call(&json!({"file_path": other}), tmp.path())
+            .unwrap(),
+    );
 
     let list = store.call(&json!({"action": "list"}), tmp.path()).unwrap();
-    assert!(list.contains("Cost Chart") && list.contains("Other"), "{list}");
+    assert!(
+        list.contains("Cost Chart") && list.contains("Other"),
+        "{list}"
+    );
     assert!(list.contains("file://"), "{list}");
 
     let read = store
         .call(&json!({"action": "read", "url": slug}), tmp.path())
         .unwrap();
-    assert!(read.contains("<p>hi</p>") && read.contains("version 1"), "{read}");
+    assert!(
+        read.contains("<p>hi</p>") && read.contains("version 1"),
+        "{read}"
+    );
 
     let opened = store
-        .call(&json!({"action": "open", "url": store.file_url(&slug)}), tmp.path())
+        .call(
+            &json!({"action": "open", "url": store.file_url(&slug)}),
+            tmp.path(),
+        )
         .unwrap();
     assert!(opened.contains("Open this in a browser"), "{opened}");
 
@@ -274,7 +295,10 @@ fn list_read_open_pin_and_delete() {
     assert!(!store.meta(&other_slug).unwrap().pinned);
 
     let files = store
-        .call(&json!({"action": "list", "scope": "files", "url": slug}), tmp.path())
+        .call(
+            &json!({"action": "list", "scope": "files", "url": slug}),
+            tmp.path(),
+        )
         .unwrap();
     assert!(files.contains("index.html"), "{files}");
 
@@ -305,14 +329,20 @@ fn assets_upload_list_read_copy_and_delete() {
         .unwrap();
     assert!(reply.contains("url assets/"), "{reply}");
     let assets = store
-        .call(&json!({"action": "list", "scope": "assets", "url": slug}), tmp.path())
+        .call(
+            &json!({"action": "list", "scope": "assets", "url": slug}),
+            tmp.path(),
+        )
         .unwrap();
     let id = assets.split_whitespace().next().unwrap().to_string();
     assert_eq!(id.len(), 32);
 
     let other = slug_in(
         &store
-            .call(&json!({"file_path": page(tmp.path(), "b.html", "<title>B</title>")}), tmp.path())
+            .call(
+                &json!({"file_path": page(tmp.path(), "b.html", "<title>B</title>")}),
+                tmp.path(),
+            )
             .unwrap(),
     );
     let copied = store
@@ -325,7 +355,10 @@ fn assets_upload_list_read_copy_and_delete() {
     assert_eq!(list_len(&store, &other), 1);
 
     store
-        .call(&json!({"action": "delete", "url": slug, "path": id}), tmp.path())
+        .call(
+            &json!({"action": "delete", "url": slug, "path": id}),
+            tmp.path(),
+        )
         .unwrap();
     assert_eq!(list_len(&store, &slug), 0);
 }
@@ -344,12 +377,17 @@ fn what_needs_the_hosted_service_is_named_not_dropped() {
             tmp.path(),
         )
         .unwrap();
-    assert!(reply.contains("Not applied locally: capabilities"), "{reply}");
+    assert!(
+        reply.contains("Not applied locally: capabilities"),
+        "{reply}"
+    );
     let err = store
         .call(&json!({"file_path": file, "type_url": "x"}), tmp.path())
         .unwrap_err();
     assert!(err.contains("claude.ai Artifact type"), "{err}");
-    let q = store.call(&json!({"action": "quickstart"}), tmp.path()).unwrap();
+    let q = store
+        .call(&json!({"action": "quickstart"}), tmp.path())
+        .unwrap();
     assert!(q.contains("local counterpart"), "{q}");
     assert!(store.call(&json!({"action": "bogus"}), tmp.path()).is_err());
 }
@@ -371,7 +409,10 @@ fn the_static_server_serves_pages_and_refuses_the_rest() {
     std::fs::write(tmp.path().join("s.css"), "p{}").unwrap();
     let slug = slug_in(
         &store
-            .call(&json!({"file_path": file, "files": {"s.css": "s.css"}}), tmp.path())
+            .call(
+                &json!({"file_path": file, "files": {"s.css": "s.css"}}),
+                tmp.path(),
+            )
             .unwrap(),
     );
     let (status, kind, body) = serve::route(&store, &get(&format!("/{slug}/")));
@@ -379,8 +420,14 @@ fn the_static_server_serves_pages_and_refuses_the_rest() {
     assert_eq!(body, HTML.as_bytes());
     let (status, kind, _) = serve::route(&store, &get(&format!("/{slug}/s.css")));
     assert_eq!((status, kind.as_str()), (200, "text/css; charset=utf-8"));
-    assert_eq!(serve::route(&store, &get(&format!("/{slug}/.artifact.json"))).0, 403);
-    assert_eq!(serve::route(&store, &get(&format!("/{slug}/%2e%2e/x"))).0, 403);
+    assert_eq!(
+        serve::route(&store, &get(&format!("/{slug}/.artifact.json"))).0,
+        403
+    );
+    assert_eq!(
+        serve::route(&store, &get(&format!("/{slug}/%2e%2e/x"))).0,
+        403
+    );
     assert_eq!(serve::route(&store, &get("/missing-000000/")).0, 404);
     let (status, _, body) = serve::route(&store, &get("/"));
     assert_eq!(status, 200);
@@ -419,7 +466,9 @@ fn claude_code_2_1_314s_action_names_mean_the_scope_and_asset_forms() {
         .call(&json!({"action": "list_assets", "url": slug}), tmp.path())
         .unwrap();
     assert!(assets.contains("2 bytes"), "{assets}");
-    let types = store.call(&json!({"action": "list_types"}), tmp.path()).unwrap();
+    let types = store
+        .call(&json!({"action": "list_types"}), tmp.path())
+        .unwrap();
     assert!(types.contains("No artifact types"), "{types}");
     let watch = store
         .call(&json!({"action": "watch", "url": slug}), tmp.path())

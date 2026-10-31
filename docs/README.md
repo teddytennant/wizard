@@ -57,6 +57,7 @@ to do.
 | [Headless](headless.md) | `wizard -p`, JSON and stream-JSON output |
 | [Fleet](fleet.md) | Running several agents at once |
 | [Scheduler](scheduler.md) | Recurring runs |
+| [Cloud features, run locally](cloud-equivalents.md) | `Artifact`, `RemoteTrigger`, `/teleport`, `/remote-control`, `/advisor`, `/voice`, Bedrock and Vertex without Anthropic's servers |
 | [Workflows](workflows.md) | `Workflow` and `/workflows`: scripts that fan subagents out |
 | [Tasks](tasks.md) | The todo surface the agent keeps |
 | [Sync](sync.md) | Moving state between machines |

@@ -108,8 +108,13 @@ impl Cli {
             .map(|program| Self { program })
     }
 
+    /// `claude` with the cloud route's variables, so `auth status` agrees with
+    /// what a turn will do: Claude Code reports a Bedrock, Vertex or Foundry
+    /// route as signed in (`authMethod: third_party`) only when it sees them.
     fn command(&self) -> std::process::Command {
-        std::process::Command::new(&self.program)
+        let mut command = std::process::Command::new(&self.program);
+        crate::cloudroute::apply_std(&mut command);
+        command
     }
 
     pub fn version(&self) -> Result<String> {

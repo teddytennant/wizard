@@ -72,7 +72,11 @@ pub fn latest(dir: &Path, cwd: Option<&Path>) -> Option<String> {
 }
 
 fn header_cwd(path: &Path) -> Option<String> {
-    let first = std::fs::read_to_string(path).ok()?.lines().next()?.to_string();
+    let first = std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .next()?
+        .to_string();
     serde_json::from_str::<serde_json::Value>(&first)
         .ok()?
         .get("cwd")?
@@ -82,7 +86,11 @@ fn header_cwd(path: &Path) -> Option<String> {
 
 /// Wrap session `id` from `dir` as gzip bytes.
 pub fn pack(dir: &Path, id: &str) -> Result<Vec<u8>> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
         bail!("'{id}' is not a session id");
     }
     let path = dir.join(format!("{id}.jsonl"));
@@ -132,7 +140,10 @@ pub fn unpack(bytes: &[u8]) -> Result<Envelope> {
     }
     for (n, line) in envelope.session.lines().enumerate() {
         if !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(line).is_err() {
-            bail!("line {} of the session is not JSON; refusing to import it", n + 1);
+            bail!(
+                "line {} of the session is not JSON; refusing to import it",
+                n + 1
+            );
         }
     }
     Ok(envelope)
@@ -168,7 +179,10 @@ pub enum Source {
     File(PathBuf),
     Url(String),
     /// `[user@]host` and the session id (`latest` when none).
-    Ssh { host: String, id: String },
+    Ssh {
+        host: String,
+        id: String,
+    },
 }
 
 pub fn parse_source(text: &str) -> Source {
@@ -183,7 +197,11 @@ pub fn parse_source(text: &str) -> Source {
     let (host, id) = text.split_once(':').unwrap_or((text, "latest"));
     Source::Ssh {
         host: host.to_string(),
-        id: if id.is_empty() { "latest".into() } else { id.to_string() },
+        id: if id.is_empty() {
+            "latest".into()
+        } else {
+            id.to_string()
+        },
     }
 }
 
@@ -191,14 +209,17 @@ pub fn parse_source(text: &str) -> Source {
 pub async fn fetch(source: &Source) -> Result<Vec<u8>> {
     match source {
         Source::File(path) => {
-            let meta = std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
+            let meta =
+                std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
             if meta.len() > MAX_BYTES {
                 bail!("{} is larger than {MAX_BYTES} bytes", path.display());
             }
             std::fs::read(path).with_context(|| format!("reading {}", path.display()))
         }
         Source::Url(url) => {
-            let response = reqwest::get(url).await.with_context(|| format!("fetching {url}"))?;
+            let response = reqwest::get(url)
+                .await
+                .with_context(|| format!("fetching {url}"))?;
             if !response.status().is_success() {
                 bail!("{url} answered HTTP {}", response.status());
             }
@@ -273,7 +294,11 @@ pub async fn run(cmd: TeleportCmd) -> Result<i32> {
             println!(
                 "imported session {id} from {} (it ran in {}). Continue it with: wizard --resume {id}",
                 envelope.host,
-                if envelope.cwd.is_empty() { "an unknown directory" } else { &envelope.cwd }
+                if envelope.cwd.is_empty() {
+                    "an unknown directory"
+                } else {
+                    &envelope.cwd
+                }
             );
             Ok(0)
         }

@@ -67,11 +67,23 @@ pub fn from_settings(
         .collect()
 }
 
-/// Add the settings file's cloud variables to a `claude` child.
-pub fn apply(command: &mut tokio::process::Command) {
+/// The settings file's cloud variables, less what the process already sets.
+fn pending() -> Vec<(String, String)> {
     let block = crate::usersettings::env_block();
     let process = |name: &str| std::env::var(name).ok();
-    for (name, value) in from_settings(&block, &process) {
+    from_settings(&block, &process)
+}
+
+/// Add the settings file's cloud variables to a `claude` child.
+pub fn apply(command: &mut tokio::process::Command) {
+    for (name, value) in pending() {
+        command.env(name, value);
+    }
+}
+
+/// [`apply`] for a `std` command (`claude --version`, `claude auth status`).
+pub fn apply_std(command: &mut std::process::Command) {
+    for (name, value) in pending() {
         command.env(name, value);
     }
 }
@@ -236,7 +248,14 @@ mod tests {
         ] {
             assert!(is_cloud_name(ok), "{ok}");
         }
-        for no in ["LD_PRELOAD", "PATH", "HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "NODE_OPTIONS"] {
+        for no in [
+            "LD_PRELOAD",
+            "PATH",
+            "HOME",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "NODE_OPTIONS",
+        ] {
             assert!(!is_cloud_name(no), "{no}");
         }
     }
@@ -256,11 +275,16 @@ mod tests {
     #[test]
     fn a_child_command_gets_the_settings_names() {
         let mut command = tokio::process::Command::new("claude");
-        for (name, value) in from_settings(&[("CLAUDE_CODE_USE_BEDROCK".into(), "1".into())], &env(&[])) {
+        for (name, value) in
+            from_settings(&[("CLAUDE_CODE_USE_BEDROCK".into(), "1".into())], &env(&[]))
+        {
             command.env(name, value);
         }
         let seen: Vec<_> = command.as_std().get_envs().collect();
-        assert!(seen.iter().any(|(k, v)| *k == "CLAUDE_CODE_USE_BEDROCK" && v.is_some()));
+        assert!(
+            seen.iter()
+                .any(|(k, v)| *k == "CLAUDE_CODE_USE_BEDROCK" && v.is_some())
+        );
     }
 
     #[test]
@@ -275,7 +299,11 @@ mod tests {
         assert_eq!(r.cloud, Cloud::Bedrock);
         assert_eq!(r.missing.len(), 2, "{r:?}");
         let r = route(
-            &env(&[("CLAUDE_CODE_USE_BEDROCK", "1"), ("AWS_REGION", "us-east-1"), ("AWS_PROFILE", "p")]),
+            &env(&[
+                ("CLAUDE_CODE_USE_BEDROCK", "1"),
+                ("AWS_REGION", "us-east-1"),
+                ("AWS_PROFILE", "p"),
+            ]),
             None,
         )
         .unwrap();
@@ -284,7 +312,10 @@ mod tests {
         std::fs::create_dir(home.path().join(".aws")).unwrap();
         std::fs::write(home.path().join(".aws/credentials"), "x").unwrap();
         let r = route(
-            &env(&[("CLAUDE_CODE_USE_BEDROCK", "1"), ("AWS_DEFAULT_REGION", "us-east-1")]),
+            &env(&[
+                ("CLAUDE_CODE_USE_BEDROCK", "1"),
+                ("AWS_DEFAULT_REGION", "us-east-1"),
+            ]),
             Some(home.path()),
         )
         .unwrap();

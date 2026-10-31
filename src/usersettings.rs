@@ -30,7 +30,10 @@ pub fn load_at(path: PathBuf) -> Result<(PathBuf, Value), String> {
         Err(err) => return Err(format!("{}: {err}", path.display())),
     };
     if !value.is_object() {
-        return Err(format!("{} is not a JSON object; left alone", path.display()));
+        return Err(format!(
+            "{} is not a JSON object; left alone",
+            path.display()
+        ));
     }
     Ok((path, value))
 }

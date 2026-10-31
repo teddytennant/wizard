@@ -714,20 +714,36 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
     ("--remote", Takes::Nothing, "no cloud sessions"),
     ("--environment", Takes::One, "no cloud sessions"),
     ("--ref", Takes::One, "no cloud sessions"),
-    ("--remote-control", Takes::Optional, "no Anthropic relay; /remote-control says how to attach directly"),
-    ("--rc", Takes::Optional, "no Anthropic relay; /remote-control says how to attach directly"),
+    (
+        "--remote-control",
+        Takes::Optional,
+        "no Anthropic relay; /remote-control says how to attach directly",
+    ),
+    (
+        "--rc",
+        Takes::Optional,
+        "no Anthropic relay; /remote-control says how to attach directly",
+    ),
     (
         "--remote-control-session-name-prefix",
         Takes::One,
         "no remote control",
     ),
-    ("--teleport", Takes::Optional, "no cloud sessions; wizard teleport pull moves a session between your machines"),
+    (
+        "--teleport",
+        Takes::Optional,
+        "no cloud sessions; wizard teleport pull moves a session between your machines",
+    ),
     (
         "--background",
         Takes::Nothing,
         "start background sessions from wizard agents",
     ),
-    ("--desktop", Takes::Nothing, "no session handoff; wizard gui opens the desktop app"),
+    (
+        "--desktop",
+        Takes::Nothing,
+        "no session handoff; wizard gui opens the desktop app",
+    ),
     (
         "--tmux",
         Takes::Optional,

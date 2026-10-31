@@ -81,7 +81,9 @@ pub async fn run(cmd: TriggerCmd) -> Result<i32> {
         TriggerCmd::List => {
             let all = store.list().map_err(api)?;
             if all.is_empty() {
-                println!("no triggers. `wizard trigger add <name> --prompt ... --cron '0 9 * * 1-5'`");
+                println!(
+                    "no triggers. `wizard trigger add <name> --prompt ... --cron '0 9 * * 1-5'`"
+                );
             }
             for t in all {
                 let when = Triggers::next_run(&t).map_or("-".to_string(), local);
@@ -89,10 +91,16 @@ pub async fn run(cmd: TriggerCmd) -> Result<i32> {
                     "{}  {}  {}  next {}  {}{}",
                     t.id,
                     if t.enabled { "on " } else { "off" },
-                    t.cron_expression.as_deref().unwrap_or(if t.run_once_at.is_some() { "once" } else { "-" }),
+                    t.cron_expression
+                        .as_deref()
+                        .unwrap_or(if t.run_once_at.is_some() { "once" } else { "-" }),
                     when,
                     t.name,
-                    if t.webhook_token.is_some() { "  [webhook]" } else { "" }
+                    if t.webhook_token.is_some() {
+                        "  [webhook]"
+                    } else {
+                        ""
+                    }
                 );
             }
             Ok(0)
@@ -121,7 +129,11 @@ pub async fn run(cmd: TriggerCmd) -> Result<i32> {
                 map.insert("max_hours".into(), json!(h));
             }
             let t = store.create(&body, &cwd).map_err(api)?;
-            println!("added {}\n{}", t.id, summary(&t, crate::schedule::daemon_running()));
+            println!(
+                "added {}\n{}",
+                t.id,
+                summary(&t, crate::schedule::daemon_running())
+            );
             Ok(0)
         }
         TriggerCmd::Remove { id } => {
@@ -164,9 +176,13 @@ pub async fn run(cmd: TriggerCmd) -> Result<i32> {
             let listener = TcpListener::bind(addr)
                 .await
                 .with_context(|| format!("binding {addr}"))?;
-            println!("listening on http://{addr}  (POST /v1/triggers/<id>/run, bearer token per trigger; Ctrl-C stops it)");
+            println!(
+                "listening on http://{addr}  (POST /v1/triggers/<id>/run, bearer token per trigger; Ctrl-C stops it)"
+            );
             if !addr.ip().is_loopback() {
-                eprintln!("warning: {addr} is not loopback; anything that can reach it and holds a token can start a run");
+                eprintln!(
+                    "warning: {addr} is not loopback; anything that can reach it and holds a token can start a run"
+                );
             }
             serve(listener, store).await;
             Ok(0)
@@ -204,7 +220,13 @@ async fn handle(mut stream: TcpStream, store: &Triggers) -> std::io::Result<()> 
     let (status, body) = tokio::task::spawn_blocking(move || route(&store, &request))
         .await
         .unwrap_or((500, json!({"error": "internal error"})));
-    respond(&mut stream, status, "application/json", body.to_string().as_bytes()).await
+    respond(
+        &mut stream,
+        status,
+        "application/json",
+        body.to_string().as_bytes(),
+    )
+    .await
 }
 
 /// The response for one request: status and JSON body.
@@ -229,7 +251,14 @@ pub fn route(store: &Triggers, request: &Request) -> (u16, Value) {
         .unwrap_or("");
     if let Err(e) = store.authorize(id, presented) {
         // An unknown trigger and a bad token read the same from outside.
-        return err(if e.status == 404 { ApiError { status: 401, message: "bad token".into() } } else { e });
+        return err(if e.status == 404 {
+            ApiError {
+                status: 401,
+                message: "bad token".into(),
+            }
+        } else {
+            e
+        });
     }
     let payload = String::from_utf8_lossy(&request.body).into_owned();
     match store.run(id, Some(&payload), "webhook") {

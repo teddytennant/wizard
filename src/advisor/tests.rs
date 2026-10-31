@@ -18,10 +18,16 @@ fn a_spec_resolves_to_a_provider_a_model_on_one_or_the_active_provider() {
     let active = providers[0].clone();
 
     let t = resolve("big", &providers, &active);
-    assert_eq!((t.provider.name.as_str(), t.model.as_str()), ("big", "huge-1"));
+    assert_eq!(
+        (t.provider.name.as_str(), t.model.as_str()),
+        ("big", "huge-1")
+    );
 
     let t = resolve("big/huge-2", &providers, &active);
-    assert_eq!((t.provider.name.as_str(), t.model.as_str()), ("big", "huge-2"));
+    assert_eq!(
+        (t.provider.name.as_str(), t.model.as_str()),
+        ("big", "huge-2")
+    );
 
     let t = resolve("big:huge-3", &providers, &active);
     assert_eq!(t.model, "huge-3");
@@ -30,7 +36,10 @@ fn a_spec_resolves_to_a_provider_a_model_on_one_or_the_active_provider() {
     assert_eq!(t.provider.name, "big");
 
     let t = resolve("opus", &providers, &active);
-    assert_eq!((t.provider.name.as_str(), t.model.as_str()), ("local", "opus"));
+    assert_eq!(
+        (t.provider.name.as_str(), t.model.as_str()),
+        ("local", "opus")
+    );
     assert!(t.how.contains("active provider"), "{}", t.how);
 }
 

@@ -56,9 +56,8 @@ impl Tool for ArtifactTool {
     fn parameters(&self) -> Value {
         let text = |d: &str| json!({ "type": "string", "description": d });
         let flag = |d: &str| json!({ "type": "boolean", "description": d });
-        let strings = |d: &str| {
-            json!({ "type": "array", "items": { "type": "string" }, "description": d })
-        };
+        let strings =
+            |d: &str| json!({ "type": "array", "items": { "type": "string" }, "description": d });
         json!({
             "type": "object",
             "properties": {
@@ -154,11 +153,39 @@ mod tests {
     /// The properties of Claude Code's `Artifact` input, as the real tool
     /// lists them (2.1.316's schema, which 2.1.314 shares for these).
     const CLAUDE_CODE_PROPERTIES: &[&str] = &[
-        "action", "after", "asset", "asset_ids", "auto_open", "capabilities", "contract",
-        "description", "edits", "favicon", "file_path", "file_paths", "files", "force",
-        "from_url", "icon", "intent", "label", "limit", "out_dir", "overwrite_unread", "page",
-        "path", "paths", "pin", "prompt", "root", "scope", "title", "type", "type_query",
-        "type_url", "url",
+        "action",
+        "after",
+        "asset",
+        "asset_ids",
+        "auto_open",
+        "capabilities",
+        "contract",
+        "description",
+        "edits",
+        "favicon",
+        "file_path",
+        "file_paths",
+        "files",
+        "force",
+        "from_url",
+        "icon",
+        "intent",
+        "label",
+        "limit",
+        "out_dir",
+        "overwrite_unread",
+        "page",
+        "path",
+        "paths",
+        "pin",
+        "prompt",
+        "root",
+        "scope",
+        "title",
+        "type",
+        "type_query",
+        "type_url",
+        "url",
     ];
 
     #[test]
@@ -185,15 +212,9 @@ mod tests {
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
         assert!(out.content.contains("not hosted"), "{}", out.content);
-        let out = tool
-            .execute(json!({"action": "list"}), &ctx)
-            .await
-            .unwrap();
+        let out = tool.execute(json!({"action": "list"}), &ctx).await.unwrap();
         assert!(out.content.contains("Hello Page"), "{}", out.content);
-        let out = tool
-            .execute(json!({"action": "nope"}), &ctx)
-            .await
-            .unwrap();
+        let out = tool.execute(json!({"action": "nope"}), &ctx).await.unwrap();
         assert!(out.is_error);
     }
 }

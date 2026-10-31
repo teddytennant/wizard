@@ -142,7 +142,10 @@ impl Recorder {
                 c
             }
         };
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             command.process_group(0);
@@ -170,7 +173,10 @@ fn shell_quote(path: &Path) -> String {
 /// How to turn a recording into text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Transcriber {
-    WhisperCpp { bin: PathBuf, model: PathBuf },
+    WhisperCpp {
+        bin: PathBuf,
+        model: PathBuf,
+    },
     Vosk(PathBuf),
     /// `[voice] command`, run through the shell.
     Custom(String),
@@ -189,7 +195,11 @@ impl Transcriber {
         let mut command = match self {
             Transcriber::WhisperCpp { bin, model } => {
                 let mut c = Command::new(bin);
-                c.arg("-m").arg(model).arg("-f").arg(wav).args(["-nt", "-np"]);
+                c.arg("-m")
+                    .arg(model)
+                    .arg("-f")
+                    .arg(wav)
+                    .args(["-nt", "-np"]);
                 c
             }
             Transcriber::Vosk(bin) => {
@@ -338,18 +348,19 @@ impl Found {
         if needs.is_empty() {
             None
         } else {
-            Some(format!(
-                "voice dictation needs {}.",
-                needs.join("; and ")
-            ))
+            Some(format!("voice dictation needs {}.", needs.join("; and ")))
         }
     }
 
     pub fn report(&self) -> String {
         format!(
             "recorder: {}\ntranscriber: {}",
-            self.recorder.as_ref().map_or("none".to_string(), |r| r.name().to_string()),
-            self.transcriber.as_ref().map_or("none".to_string(), |t| t.name().to_string()),
+            self.recorder
+                .as_ref()
+                .map_or("none".to_string(), |r| r.name().to_string()),
+            self.transcriber
+                .as_ref()
+                .map_or("none".to_string(), |t| t.name().to_string()),
         )
     }
 }
@@ -407,7 +418,10 @@ pub async fn dictate(plan: &Plan, seconds: u64) -> Result<String, String> {
         return Err("already recording; /voice stop ends it".into());
     }
     let seconds = seconds.clamp(1, MAX_SECONDS);
-    let wav = std::env::temp_dir().join(format!("wizard-voice-{}.wav", uuid::Uuid::new_v4().simple()));
+    let wav = std::env::temp_dir().join(format!(
+        "wizard-voice-{}.wav",
+        uuid::Uuid::new_v4().simple()
+    ));
     let result = dictate_to(plan, seconds, &wav).await;
     let _ = std::fs::remove_file(&wav);
     result
@@ -441,16 +455,30 @@ async fn dictate_to(plan: &Plan, seconds: u64, wav: &Path) -> Result<String, Str
         return Err(format!(
             "{} recorded no audio{}",
             plan.recorder.name(),
-            if why.is_empty() { String::new() } else { format!(": {why}") }
+            if why.is_empty() {
+                String::new()
+            } else {
+                format!(": {why}")
+            }
         ));
     }
     let output = tokio::time::timeout(TRANSCRIBE_TIMEOUT, plan.transcriber.command(wav).output())
         .await
-        .map_err(|_| format!("{} did not finish within {}s", plan.transcriber.name(), TRANSCRIBE_TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            format!(
+                "{} did not finish within {}s",
+                plan.transcriber.name(),
+                TRANSCRIBE_TIMEOUT.as_secs()
+            )
+        })?
         .map_err(|e| format!("starting {}: {e}", plan.transcriber.name()))?;
     if !output.status.success() {
         let why = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{} failed: {}", plan.transcriber.name(), why.trim()));
+        return Err(format!(
+            "{} failed: {}",
+            plan.transcriber.name(),
+            why.trim()
+        ));
     }
     let text = clean(&String::from_utf8_lossy(&output.stdout));
     if text.is_empty() {

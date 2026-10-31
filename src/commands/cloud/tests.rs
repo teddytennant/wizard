@@ -47,7 +47,10 @@ fn setup_bedrock_writes_the_env_block_keeps_the_rest_and_never_a_key() {
     let whole: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(whole["model"], "keep-me");
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(!text.contains("SECRET") && !text.contains("ACCESS_KEY"), "{text}");
+    assert!(
+        !text.contains("SECRET") && !text.contains("ACCESS_KEY"),
+        "{text}"
+    );
 
     let off = setup_bedrock(&file, "off").unwrap();
     assert!(off.contains("removed"), "{off}");
@@ -76,7 +79,11 @@ fn setup_vertex_needs_a_project_and_defaults_the_region() {
     setup_vertex(&file, "my-proj region=us-east5 model=m").unwrap();
     assert_eq!(env_of_file(&file)["CLOUD_ML_REGION"], "us-east5");
     setup_vertex(&file, "off").unwrap();
-    assert!(env_of_file(&file).get("ANTHROPIC_VERTEX_PROJECT_ID").is_none());
+    assert!(
+        env_of_file(&file)
+            .get("ANTHROPIC_VERTEX_PROJECT_ID")
+            .is_none()
+    );
 }
 
 #[test]
@@ -106,10 +113,20 @@ fn remote_control_prints_how_to_attach_and_on_off_manage_the_token() {
     }
     let on = remote_control(&store, "on").unwrap();
     let token = store.list().unwrap()[0].webhook_token.clone().unwrap();
-    assert!(on.contains(&token), "the user's own terminal shows the token: {on}");
-    assert!(on.contains("wizard trigger serve") && on.contains("/v1/triggers/"), "{on}");
+    assert!(
+        on.contains(&token),
+        "the user's own terminal shows the token: {on}"
+    );
+    assert!(
+        on.contains("wizard trigger serve") && on.contains("/v1/triggers/"),
+        "{on}"
+    );
     remote_control(&store, "on").unwrap();
-    assert_eq!(store.list().unwrap().len(), 1, "asking again makes no second trigger");
+    assert_eq!(
+        store.list().unwrap().len(),
+        1,
+        "asking again makes no second trigger"
+    );
     let off = remote_control(&store, "off").unwrap();
     assert!(off.contains("no longer works"), "{off}");
     assert!(store.list().unwrap().is_empty());

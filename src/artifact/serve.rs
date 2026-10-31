@@ -101,7 +101,8 @@ async fn handle(mut stream: TcpStream, store: &Artifacts) -> std::io::Result<()>
 
 /// The response for one request: status, media type, body.
 pub fn route(store: &Artifacts, request: &Request) -> (u16, String, Vec<u8>) {
-    let plain = |status: u16, text: &str| (status, "text/plain".to_string(), text.as_bytes().to_vec());
+    let plain =
+        |status: u16, text: &str| (status, "text/plain".to_string(), text.as_bytes().to_vec());
     if request.method != "GET" && request.method != "HEAD" {
         return plain(405, "read-only");
     }
@@ -110,7 +111,11 @@ pub fn route(store: &Artifacts, request: &Request) -> (u16, String, Vec<u8>) {
     };
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() {
-        return (200, "text/html; charset=utf-8".into(), index(store).into_bytes());
+        return (
+            200,
+            "text/html; charset=utf-8".into(),
+            index(store).into_bytes(),
+        );
     }
     let (slug, rest) = trimmed.split_once('/').unwrap_or((trimmed, ""));
     if !valid_slug(slug) || store.meta(slug).is_none() {

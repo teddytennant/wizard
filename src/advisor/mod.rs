@@ -145,7 +145,10 @@ pub async fn consult(
         crate::agent::ultra::collect_text_billed(stream, usage).await
     };
     match tokio::time::timeout(TIMEOUT, ask).await {
-        Err(_) => Err(format!("the advisor did not answer within {}s", TIMEOUT.as_secs())),
+        Err(_) => Err(format!(
+            "the advisor did not answer within {}s",
+            TIMEOUT.as_secs()
+        )),
         Ok(Err(err)) => Err(format!("the advisor call failed: {err:#}")),
         Ok(Ok(text)) if text.trim().is_empty() => {
             Err("the advisor answered with nothing".to_string())
@@ -181,11 +184,13 @@ pub fn command(args: &str) -> Result<String, String> {
     let args = args.trim();
     match args {
         "" => Ok(match configured() {
-            None => "Advisor: off. Usage: /advisor <model>|off, where the model is a provider name, \
+            None => {
+                "Advisor: off. Usage: /advisor <model>|off, where the model is a provider name, \
                      <provider>/<model>, or a model tag. The agent can then call the `advisor` \
                      tool for a second opinion: one plain completion over the summary the agent \
                      writes. For a standing panel see /fusion and /ultra."
-                .to_string(),
+                    .to_string()
+            }
             Some(spec) => match target(&spec) {
                 Ok(t) => format!(
                     "Advisor: {spec} ({}: {}). /advisor off clears it.",

@@ -1685,7 +1685,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         "Slack app (not available here)",
         everywhere
     ),
-    compat_row!("mobile", "", "the Android app and how to connect it", everywhere),
+    compat_row!(
+        "mobile",
+        "",
+        "the Android app and how to connect it",
+        everywhere
+    ),
     compat_row!("powerup", "", "lessons (not available here)", everywhere),
     compat_row!("radio", "", "radio (not available here)", everywhere),
     compat_row!(

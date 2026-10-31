@@ -166,9 +166,11 @@ fn parse_files(
 
 pub(super) fn publish(store: &Artifacts, input: &Value, cwd: &Path) -> Result<String, String> {
     if input.get("type_url").is_some() {
-        return Err("type_url names a claude.ai Artifact type. Local artifacts have no types; \
+        return Err(
+            "type_url names a claude.ai Artifact type. Local artifacts have no types; \
                     publish a page with file_path instead."
-            .into());
+                .into(),
+        );
     }
     if input.get("asset").and_then(Value::as_bool) == Some(true) {
         return upload_assets(store, input, cwd);
@@ -187,8 +189,8 @@ pub(super) fn publish(store: &Artifacts, input: &Value, cwd: &Path) -> Result<St
         None => None,
     };
 
-    let mut html = std::fs::read_to_string(&page_path)
-        .map_err(|e| format!("{}: {e}", page_path.display()))?;
+    let mut html =
+        std::fs::read_to_string(&page_path).map_err(|e| format!("{}: {e}", page_path.display()))?;
     let edited = match input.get("edits").and_then(Value::as_array) {
         Some(edits) if !edits.is_empty() => {
             html = apply_edits(html, edits)?;
@@ -332,7 +334,10 @@ pub(super) fn publish(store: &Artifacts, input: &Value, cwd: &Path) -> Result<St
         store.served_url(&slug),
     );
     let ignored: Vec<&str> = [
-        ("capabilities", input.get("capabilities").is_some_and(non_empty)),
+        (
+            "capabilities",
+            input.get("capabilities").is_some_and(non_empty),
+        ),
         ("contract", input.get("contract").is_some()),
         ("auto_open", input.get("auto_open").is_some()),
     ]
@@ -443,9 +448,10 @@ fn upload_assets(store: &Artifacts, input: &Value, cwd: &Path) -> Result<String,
         for id in ids {
             let file = asset_path(&store.dir(&source.slug), id)
                 .ok_or_else(|| format!("{} has no asset {id}", source.slug))?;
-            let bytes =
-                std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            let ext = file.extension().map_or(String::new(), |e| e.to_string_lossy().into_owned());
+            let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let ext = file
+                .extension()
+                .map_or(String::new(), |e| e.to_string_lossy().into_owned());
             let (new_id, url) = store_asset(&dir, &bytes, &ext)?;
             lines.push(format!("{id} copied as {new_id}: url {url}"));
         }

@@ -103,11 +103,19 @@ fn http(port: u16, request: &str) -> String {
 fn artifacts_published_through_the_library_are_listed_and_served_by_the_binary() {
     let home = Home::new("artifact");
     let empty = home.run(&["artifact", "list"]);
-    assert!(text(&empty).contains("No local artifacts yet"), "{}", text(&empty));
+    assert!(
+        text(&empty).contains("No local artifacts yet"),
+        "{}",
+        text(&empty)
+    );
 
     let store = wizard::artifact::Artifacts::at(home.wizard_dir().join("artifacts"));
     let page = home.project().join("p.html");
-    std::fs::write(&page, "<!doctype html><title>Served Page</title><p>hello</p>").unwrap();
+    std::fs::write(
+        &page,
+        "<!doctype html><title>Served Page</title><p>hello</p>",
+    )
+    .unwrap();
     let reply = store
         .call(
             &serde_json::json!({"file_path": page.display().to_string()}),
@@ -152,17 +160,19 @@ fn artifacts_published_through_the_library_are_listed_and_served_by_the_binary()
 fn a_trigger_is_scheduled_listed_fired_over_http_and_removed() {
     let home = Home::new("trigger");
     let add = home.run(&[
-        "trigger", "add", "morning", "--prompt", "check CI", "--cron", "7 9 * * 1-5", "--webhook",
+        "trigger",
+        "add",
+        "morning",
+        "--prompt",
+        "check CI",
+        "--cron",
+        "7 9 * * 1-5",
+        "--webhook",
     ]);
     assert!(add.status.success(), "{}", text(&add));
     let added = text(&add);
     assert!(added.contains("Scheduled: next run"), "{added}");
-    let id = added
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .trim()
-        .to_string();
+    let id = added.split_whitespace().nth(1).unwrap().trim().to_string();
     assert!(id.starts_with("trg_"), "{added}");
 
     let schedule = std::fs::read_to_string(home.wizard_dir().join("schedule.toml")).unwrap();
@@ -170,7 +180,11 @@ fn a_trigger_is_scheduled_listed_fired_over_http_and_removed() {
     assert!(schedule.contains("7 9 * * 1-5"), "{schedule}");
 
     let list = home.run(&["trigger", "list"]);
-    assert!(text(&list).contains("morning") && text(&list).contains("[webhook]"), "{}", text(&list));
+    assert!(
+        text(&list).contains("morning") && text(&list).contains("[webhook]"),
+        "{}",
+        text(&list)
+    );
 
     let token = String::from_utf8_lossy(&home.run(&["trigger", "token", &id]).stdout)
         .trim()
@@ -224,14 +238,18 @@ fn a_trigger_is_scheduled_listed_fired_over_http_and_removed() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(log.contains("fired with:"), "{log}");
-    assert!(log.contains("check CI") && log.contains("deploy finished"), "{log}");
+    assert!(
+        log.contains("check CI") && log.contains("deploy finished"),
+        "{log}"
+    );
 
     let runs = home.run(&["trigger", "runs", &id]);
     assert!(text(&runs).contains("completed"), "{}", text(&runs));
 
     let remove = home.run(&["trigger", "remove", &id]);
     assert!(remove.status.success(), "{}", text(&remove));
-    let schedule = std::fs::read_to_string(home.wizard_dir().join("schedule.toml")).unwrap_or_default();
+    let schedule =
+        std::fs::read_to_string(home.wizard_dir().join("schedule.toml")).unwrap_or_default();
     assert!(!schedule.contains(&id), "{schedule}");
 }
 
@@ -255,17 +273,91 @@ fn a_session_teleports_between_two_machines() {
 
     let pull = to.run(&["teleport", "pull", &envelope.display().to_string()]);
     assert!(pull.status.success(), "{}", text(&pull));
-    assert!(text(&pull).contains("wizard --resume 2026-10-31T10-00-00"), "{}", text(&pull));
+    assert!(
+        text(&pull).contains("wizard --resume 2026-10-31T10-00-00"),
+        "{}",
+        text(&pull)
+    );
     let landed =
-        std::fs::read_to_string(to.wizard_dir().join("sessions/2026-10-31T10-00-00.jsonl")).unwrap();
+        std::fs::read_to_string(to.wizard_dir().join("sessions/2026-10-31T10-00-00.jsonl"))
+            .unwrap();
     assert!(landed.contains("remember the plan"), "{landed}");
     assert!(
-        landed.lines().next().unwrap().contains(&to.project().display().to_string()),
+        landed
+            .lines()
+            .next()
+            .unwrap()
+            .contains(&to.project().display().to_string()),
         "the session now points at the directory it was pulled into: {landed}"
     );
 
-    let bad = to.run(&["teleport", "pull", &from.0.join("missing.gz").display().to_string()]);
+    let bad = to.run(&[
+        "teleport",
+        "pull",
+        &from.0.join("missing.gz").display().to_string(),
+    ]);
     assert!(!bad.status.success());
+}
+
+const FAKE_CLAUDE_EVENTS: &str = r#"{"type":"system","subtype":"init","tools":[],"model":"claude-haiku-5-5"}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":2}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Plinth."}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Plinth."}]}}
+{"duration_api_ms":1,"stop_reason":"end_turn","total_cost_usd":0.0,"usage":{"input_tokens":2,"output_tokens":7},"is_error":false,"type":"result","subtype":"success","result":"Plinth."}
+"#;
+
+#[test]
+fn the_claude_code_provider_hands_claude_the_cloud_route_from_settings() {
+    let home = Home::new("route");
+    let fake = home.0.join("fake");
+    std::fs::create_dir_all(&fake).unwrap();
+    std::os::unix::fs::symlink(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake-claude"),
+        fake.join("claude"),
+    )
+    .unwrap();
+    std::fs::write(fake.join("signed-in"), "").unwrap();
+    std::fs::write(fake.join("events"), FAKE_CLAUDE_EVENTS).unwrap();
+    std::fs::create_dir_all(home.wizard_dir()).unwrap();
+    std::fs::write(
+        home.wizard_dir().join("config.toml"),
+        "active_provider = \"claude\"\n[[providers]]\nname = \"claude\"\nkind = \"claudecode\"\nbase_url = \"\"\nmodel = \"sonnet\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.wizard_dir().join("settings.json"),
+        r#"{"env": {"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1", "AWS_PROFILE": "from-settings", "LD_PRELOAD": "/evil.so", "ANTHROPIC_API_KEY": "sk-leak"}}"#,
+    )
+    .unwrap();
+
+    let out = home
+        .command()
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        // The process environment beats the settings file.
+        .env("AWS_PROFILE", "from-shell")
+        .args(["-p", "say hi"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("Plinth."), "{}", text(&out));
+
+    let seen = std::fs::read_to_string(fake.join("env")).expect("claude was started");
+    assert!(seen.contains("CLAUDE_CODE_USE_BEDROCK=1"), "{seen}");
+    assert!(seen.contains("AWS_REGION=eu-west-1"), "{seen}");
+    assert!(seen.contains("AWS_PROFILE=from-shell"), "{seen}");
+    assert!(!seen.contains("from-settings"), "{seen}");
+    assert!(
+        !seen.contains("LD_PRELOAD"),
+        "only cloud-route names cross: {seen}"
+    );
+    assert!(!seen.contains("sk-leak"), "an API key stays out: {seen}");
 }
 
 #[test]
@@ -282,5 +374,8 @@ fn doctor_names_a_half_configured_cloud_route() {
         .unwrap();
     let report = text(&out);
     assert!(report.contains("cloud route"), "{report}");
-    assert!(report.contains("Bedrock is on but needs AWS_REGION"), "{report}");
+    assert!(
+        report.contains("Bedrock is on but needs AWS_REGION"),
+        "{report}"
+    );
 }

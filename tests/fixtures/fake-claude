@@ -15,6 +15,7 @@ case "$1 $2" in
 "auth login") [ -e "$here/login-fails" ] || touch "$here/signed-in" ;;
 *)
     printf '%s\n' "$@" >"$here/args"
+    env >"$here/env"
     mcp=
     while [ $# -gt 0 ]; do
         [ "$1" = --system-prompt-file ] && cp "$2" "$here/system"

@@ -543,7 +543,11 @@ fn schedule_report() -> String {
         }
         _ => out.push_str("  none\n"),
     }
-    out.push_str("\nManage them with `wizard schedule` (docs/scheduler.md).");
+    out.push_str(
+        "\nManage them with `wizard schedule` (docs/scheduler.md). Entries named trigger-<id> are \
+         routines made by RemoteTrigger or `wizard trigger`; those can also fire on an HTTP call \
+         (docs/cloud-equivalents.md). Nothing fires unless `wizard scheduler` is running.",
+    );
     out
 }
 

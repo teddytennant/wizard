@@ -10,7 +10,11 @@ use crate::minihttp::Request;
 fn store() -> (tempfile::TempDir, Triggers) {
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("fake-wizard.sh");
-    std::fs::write(&script, "#!/bin/sh\nprintf 'ARGS:'\nfor a in \"$@\"; do printf ' [%s]' \"$a\"; done\necho\n").unwrap();
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf 'ARGS:'\nfor a in \"$@\"; do printf ' [%s]' \"$a\"; done\necho\n",
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -60,7 +64,11 @@ fn a_scheduled_trigger_becomes_a_scheduler_entry_and_goes_away_with_it() {
         "a disabled trigger leaves the schedule"
     );
     store
-        .update(&t.id, &json!({"enabled": true, "cron_expression": "*/5 * * * *"}), tmp.path())
+        .update(
+            &t.id,
+            &json!({"enabled": true, "cron_expression": "*/5 * * * *"}),
+            tmp.path(),
+        )
         .unwrap();
     let file = schedule::load_schedule(&tmp.path().join("schedule.toml")).unwrap();
     assert_eq!(file.entries[0].cron, "*/5 * * * *");
@@ -95,13 +103,31 @@ fn a_one_shot_becomes_a_once_entry_at_that_local_minute() {
 fn bad_input_is_a_400_with_the_reason() {
     let (tmp, store) = store();
     let cases = [
-        (json!({"prompt": "x", "cron_expression": "not cron"}), "invalid cron_expression"),
-        (json!({"prompt": "x", "cron_expression": "* * * *"}), "5 fields"),
+        (
+            json!({"prompt": "x", "cron_expression": "not cron"}),
+            "invalid cron_expression",
+        ),
+        (
+            json!({"prompt": "x", "cron_expression": "* * * *"}),
+            "5 fields",
+        ),
         (json!({"cron_expression": "* * * * *"}), "needs a prompt"),
-        (json!({"prompt": "x"}), "cron_expression, run_once_at or webhook"),
-        (json!({"prompt": "x", "webhook": true, "cwd": "/no/such/dir"}), "not a directory"),
-        (json!({"prompt": "x", "webhook": true, "mode": "wild"}), "mode must be"),
-        (json!({"prompt": "x", "run_once_at": "tomorrow"}), "RFC 3339"),
+        (
+            json!({"prompt": "x"}),
+            "cron_expression, run_once_at or webhook",
+        ),
+        (
+            json!({"prompt": "x", "webhook": true, "cwd": "/no/such/dir"}),
+            "not a directory",
+        ),
+        (
+            json!({"prompt": "x", "webhook": true, "mode": "wild"}),
+            "mode must be",
+        ),
+        (
+            json!({"prompt": "x", "run_once_at": "tomorrow"}),
+            "RFC 3339",
+        ),
     ];
     for (body, needle) in cases {
         let err = store.create(&body, tmp.path()).unwrap_err();
@@ -141,7 +167,10 @@ fn the_view_never_carries_the_webhook_token() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(store.file_path()).unwrap().permissions().mode();
+        let mode = std::fs::metadata(store.file_path())
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o077, 0, "the token file is private");
     }
 }
@@ -150,7 +179,10 @@ fn the_view_never_carries_the_webhook_token() {
 fn run_starts_a_headless_wizard_with_the_prompt_and_logs_it() {
     let (tmp, store) = store();
     let t = store
-        .create(&json!({"prompt": "do the thing", "webhook": true}), tmp.path())
+        .create(
+            &json!({"prompt": "do the thing", "webhook": true}),
+            tmp.path(),
+        )
         .unwrap();
     let started = store.run(&t.id, None, "manual").unwrap();
     let run_id = started["id"].as_str().unwrap().to_string();
@@ -209,7 +241,10 @@ fn the_webhook_needs_the_right_token_and_says_nothing_extra_otherwise() {
     let path = Triggers::webhook_path(&t.id);
 
     assert_eq!(serve::route(&store, &post(&path, None, "")).0, 401);
-    assert_eq!(serve::route(&store, &post(&path, Some("wzt_wrong"), "")).0, 401);
+    assert_eq!(
+        serve::route(&store, &post(&path, Some("wzt_wrong"), "")).0,
+        401
+    );
     // An id that does not exist is indistinguishable from a bad token.
     assert_eq!(
         serve::route(&store, &post("/v1/triggers/trg_nope/run", Some(&token), "")).0,
@@ -224,7 +259,9 @@ fn the_webhook_needs_the_right_token_and_says_nothing_extra_otherwise() {
     assert_eq!(serve::route(&store, &get).0, 405);
     assert_eq!(serve::route(&store, &post("/elsewhere", None, "")).0, 404);
 
-    store.update(&t.id, &json!({"enabled": false}), tmp.path()).unwrap();
+    store
+        .update(&t.id, &json!({"enabled": false}), tmp.path())
+        .unwrap();
     assert_eq!(serve::route(&store, &post(&path, Some(&token), "")).0, 403);
 }
 
@@ -232,7 +269,10 @@ fn the_webhook_needs_the_right_token_and_says_nothing_extra_otherwise() {
 fn a_trigger_without_a_webhook_cannot_be_started_over_http() {
     let (tmp, store) = store();
     let t = store
-        .create(&json!({"prompt": "p", "cron_expression": "* * * * *"}), tmp.path())
+        .create(
+            &json!({"prompt": "p", "cron_expression": "* * * * *"}),
+            tmp.path(),
+        )
         .unwrap();
     assert_eq!(
         serve::route(&store, &post(&Triggers::webhook_path(&t.id), Some("x"), "")).0,
@@ -244,7 +284,10 @@ fn a_trigger_without_a_webhook_cannot_be_started_over_http() {
 fn the_summary_warns_when_no_scheduler_is_running() {
     let (tmp, store) = store();
     let t = store
-        .create(&json!({"prompt": "p", "cron_expression": "0 9 * * *"}), tmp.path())
+        .create(
+            &json!({"prompt": "p", "cron_expression": "0 9 * * *"}),
+            tmp.path(),
+        )
         .unwrap();
     assert!(summary(&t, false).contains("scheduler is not running"));
     assert!(!summary(&t, true).contains("scheduler is not running"));

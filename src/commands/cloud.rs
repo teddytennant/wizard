@@ -93,7 +93,9 @@ fn artifacts(args: &str) -> Result<String, String> {
 async fn voice<S: CommandSurface + Send + ?Sized>(args: &str, surface: &mut S) {
     if args == "stop" {
         return if crate::voice::stop() {
-            surface.notice("stopping the recording; the text arrives in the composer in a moment".into());
+            surface.notice(
+                "stopping the recording; the text arrives in the composer in a moment".into(),
+            );
         } else {
             surface.error("not recording".into());
         };
@@ -105,7 +107,10 @@ async fn voice<S: CommandSurface + Send + ?Sized>(args: &str, surface: &mut S) {
         let mut text = format!("voice dictation\n{}", found.report());
         text.push_str(&match found.missing() {
             Some(missing) => format!("\n{missing}"),
-            None => "\nready: /voice records, /voice stop ends it, and the text lands in the composer.".into(),
+            None => {
+                "\nready: /voice records, /voice stop ends it, and the text lands in the composer."
+                    .into()
+            }
         });
         return surface.notice(text);
     }
@@ -116,7 +121,10 @@ async fn voice<S: CommandSurface + Send + ?Sized>(args: &str, surface: &mut S) {
         "" => config.seconds,
         n => match n.parse::<u64>() {
             Ok(n) if n > 0 => n,
-            _ => return surface.error("usage: /voice [seconds] | /voice stop | /voice status".into()),
+            _ => {
+                return surface
+                    .error("usage: /voice [seconds] | /voice stop | /voice status".into());
+            }
         },
     };
     let Some(composer) = surface.composer() else {
@@ -177,10 +185,18 @@ async fn teleport<S: CommandSurface + Send + ?Sized>(args: &str, surface: &mut S
             ));
         }
         Some("pack") => {
-            let id = match words.next().map(str::to_string).or_else(|| surface.snapshot().session) {
-                Some(id) => id,
-                None => return surface.error("no session yet; send a message first, or name one: /teleport pack <id>".into()),
-            };
+            let id =
+                match words
+                    .next()
+                    .map(str::to_string)
+                    .or_else(|| surface.snapshot().session)
+                {
+                    Some(id) => id,
+                    None => return surface.error(
+                        "no session yet; send a message first, or name one: /teleport pack <id>"
+                            .into(),
+                    ),
+                };
             let result = (|| -> anyhow::Result<std::path::PathBuf> {
                 let bytes = crate::teleport::pack(&sessions, &id)?;
                 let dir = crate::config::Config::wizard_dir()?.join("teleport");
@@ -214,7 +230,11 @@ async fn teleport<S: CommandSurface + Send + ?Sized>(args: &str, surface: &mut S
                     surface.notice(format!(
                         "imported session {id} from {} (it ran in {}); continuing it here in {}",
                         envelope.host,
-                        if envelope.cwd.is_empty() { "an unknown directory" } else { &envelope.cwd },
+                        if envelope.cwd.is_empty() {
+                            "an unknown directory"
+                        } else {
+                            &envelope.cwd
+                        },
                         cwd.display()
                     ));
                     surface.resume(id).await;
@@ -269,7 +289,10 @@ fn remote_control(store: &Triggers, args: &str) -> Result<String, String> {
             return match existing {
                 Some(t) => {
                     store.delete(&t.id).map_err(|e| e.message)?;
-                    Ok(format!("removed the {REMOTE_TRIGGER} trigger {}; its token no longer works", t.id))
+                    Ok(format!(
+                        "removed the {REMOTE_TRIGGER} trigger {}; its token no longer works",
+                        t.id
+                    ))
                 }
                 None => Ok("no remote-control trigger to remove".into()),
             };
@@ -326,7 +349,11 @@ fn remote_env(store: &Triggers) -> Result<String, String> {
             t.cwd.display(),
             t.mode,
             t.max_hours.map_or("none".to_string(), |h| h.to_string()),
-            if t.webhook_token.is_some() { "  webhook" } else { "" }
+            if t.webhook_token.is_some() {
+                "  webhook"
+            } else {
+                ""
+            }
         ));
     }
     out.push_str(&format!(
@@ -403,7 +430,12 @@ fn options(args: &str) -> (Vec<String>, std::collections::BTreeMap<String, Strin
     (bare, named)
 }
 
-const BEDROCK_NAMES: &[&str] = &["CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "AWS_PROFILE", "ANTHROPIC_MODEL"];
+const BEDROCK_NAMES: &[&str] = &[
+    "CLAUDE_CODE_USE_BEDROCK",
+    "AWS_REGION",
+    "AWS_PROFILE",
+    "ANTHROPIC_MODEL",
+];
 const VERTEX_NAMES: &[&str] = &[
     "CLAUDE_CODE_USE_VERTEX",
     "ANTHROPIC_VERTEX_PROJECT_ID",
@@ -419,9 +451,17 @@ fn route_verdict(file: &Path) -> String {
     match crate::cloudroute::route_with(&block) {
         None => "no cloud route is on".into(),
         Some(r) if r.missing.is_empty() => {
-            format!("{} route is complete ({})", r.cloud.name(), r.found.join(", "))
+            format!(
+                "{} route is complete ({})",
+                r.cloud.name(),
+                r.found.join(", ")
+            )
         }
-        Some(r) => format!("{} route still needs: {}", r.cloud.name(), r.missing.join("; ")),
+        Some(r) => format!(
+            "{} route still needs: {}",
+            r.cloud.name(),
+            r.missing.join("; ")
+        ),
     }
 }
 
@@ -432,7 +472,11 @@ const HOW_TO_USE: &str = "It applies to the Claude Code provider: `wizard --prov
 fn setup_bedrock(file: &Path, args: &str) -> Result<String, String> {
     if args == "off" {
         let path = crate::usersettings::merge_env_at(file.to_path_buf(), &[], BEDROCK_NAMES)?;
-        return Ok(format!("Bedrock route removed from {}. {}", path.display(), route_verdict(file)));
+        return Ok(format!(
+            "Bedrock route removed from {}. {}",
+            path.display(),
+            route_verdict(file)
+        ));
     }
     let (bare, named) = options(args);
     let region = named
@@ -457,9 +501,15 @@ fn setup_bedrock(file: &Path, args: &str) -> Result<String, String> {
              first, and sign in the usual way (`aws sso login`, a profile, or AWS_BEARER_TOKEN_BEDROCK in your shell). \
              {HOW_TO_USE}",
             if aws { "found" } else { "not found (optional)" },
-            have("AWS_REGION").or_else(|| have("AWS_DEFAULT_REGION")).unwrap_or_else(|| "not set".into()),
+            have("AWS_REGION")
+                .or_else(|| have("AWS_DEFAULT_REGION"))
+                .unwrap_or_else(|| "not set".into()),
             have("AWS_PROFILE").unwrap_or_else(|| "not set".into()),
-            if dirs::home_dir().is_some_and(|h| h.join(".aws").is_dir()) { "present" } else { "absent" },
+            if dirs::home_dir().is_some_and(|h| h.join(".aws").is_dir()) {
+                "present"
+            } else {
+                "absent"
+            },
             route_verdict(file),
         ));
     };
@@ -477,7 +527,11 @@ fn setup_bedrock(file: &Path, args: &str) -> Result<String, String> {
     Ok(format!(
         "Bedrock route saved to {} ({}). Now: {}. {HOW_TO_USE}",
         path.display(),
-        pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", "),
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
         route_verdict(file)
     ))
 }
@@ -485,14 +539,23 @@ fn setup_bedrock(file: &Path, args: &str) -> Result<String, String> {
 fn setup_vertex(file: &Path, args: &str) -> Result<String, String> {
     if args == "off" {
         let path = crate::usersettings::merge_env_at(file.to_path_buf(), &[], VERTEX_NAMES)?;
-        return Ok(format!("Vertex route removed from {}. {}", path.display(), route_verdict(file)));
+        return Ok(format!(
+            "Vertex route removed from {}. {}",
+            path.display(),
+            route_verdict(file)
+        ));
     }
     let (bare, named) = options(args);
-    let project = named.get("project").cloned().or_else(|| bare.first().cloned());
+    let project = named
+        .get("project")
+        .cloned()
+        .or_else(|| bare.first().cloned());
     let Some(project) = project else {
         let have = |n: &str| std::env::var(n).ok().filter(|v| !v.is_empty());
-        let adc = dirs::home_dir()
-            .is_some_and(|h| h.join(".config/gcloud/application_default_credentials.json").is_file());
+        let adc = dirs::home_dir().is_some_and(|h| {
+            h.join(".config/gcloud/application_default_credentials.json")
+                .is_file()
+        });
         let gcloud = std::env::var_os("PATH")
             .map(|p| std::env::split_paths(&p).any(|d| d.join("gcloud").is_file()))
             .unwrap_or(false);
@@ -506,13 +569,20 @@ fn setup_vertex(file: &Path, args: &str) -> Result<String, String> {
              Run /setup-vertex <project-id> [region=<region>] [model=<model id>] to save the route to \
              ~/.wizard/settings.json (region defaults to global), and /setup-vertex off to remove it. Enable the Claude \
              models in Vertex Model Garden first, and sign in with `gcloud auth application-default login`. {HOW_TO_USE}",
-            if gcloud { "found" } else { "not found (optional)" },
+            if gcloud {
+                "found"
+            } else {
+                "not found (optional)"
+            },
             if adc { "present" } else { "absent" },
             have("GOOGLE_APPLICATION_CREDENTIALS").unwrap_or_else(|| "not set".into()),
             route_verdict(file),
         ));
     };
-    let region = named.get("region").cloned().unwrap_or_else(|| "global".into());
+    let region = named
+        .get("region")
+        .cloned()
+        .unwrap_or_else(|| "global".into());
     let mut pairs = vec![
         ("CLAUDE_CODE_USE_VERTEX", "1".to_string()),
         ("ANTHROPIC_VERTEX_PROJECT_ID", project),
@@ -525,7 +595,11 @@ fn setup_vertex(file: &Path, args: &str) -> Result<String, String> {
     Ok(format!(
         "Vertex route saved to {} ({}). Now: {}. {HOW_TO_USE}",
         path.display(),
-        pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", "),
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
         route_verdict(file)
     ))
 }

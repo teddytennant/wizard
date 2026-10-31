@@ -166,7 +166,10 @@ impl Artifacts {
     fn existing(&self, url: &str) -> Result<Meta, String> {
         let slug = self.slug_of(url)?;
         self.meta(&slug).ok_or_else(|| {
-            format!("no local artifact '{slug}' under {}; use action \"list\"", self.root.display())
+            format!(
+                "no local artifact '{slug}' under {}; use action \"list\"",
+                self.root.display()
+            )
         })
     }
 
@@ -204,9 +207,11 @@ impl Artifacts {
                 return publish::publish(self, &mapped, cwd);
             }
             "watch" | "unwatch" | "status" => {
-                return Ok("Nothing to watch: a local artifact is a file on this machine. Read it again \
+                return Ok(
+                    "Nothing to watch: a local artifact is a file on this machine. Read it again \
                            with action \"read\" to see changes."
-                    .to_string());
+                        .to_string(),
+                );
             }
             other => (other, input),
         };
@@ -262,12 +267,16 @@ impl Artifacts {
                 out.push_str("The second URL works while `wizard artifact serve` is running.");
                 Ok(out)
             }
-            "shared" => Ok("Nothing is shared with you: local artifacts have no sharing. \
+            "shared" => Ok(
+                "Nothing is shared with you: local artifacts have no sharing. \
                  Copy the artifact's directory to give someone else a copy."
-                .to_string()),
-            "types" => Ok("No artifact types: they are claude.ai templates. A local artifact is \
+                    .to_string(),
+            ),
+            "types" => Ok(
+                "No artifact types: they are claude.ai templates. A local artifact is \
                  one HTML page plus its files."
-                .to_string()),
+                    .to_string(),
+            ),
             "files" => {
                 let meta = self.existing(url_of(input)?)?;
                 Ok(self.files_listing(&meta.slug))

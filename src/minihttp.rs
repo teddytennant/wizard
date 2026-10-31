@@ -41,14 +41,20 @@ pub async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>>
             break at;
         }
         if buf.len() > MAX_HEAD {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "header too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "header too large",
+            ));
         }
         let n = stream.read(&mut chunk).await?;
         if n == 0 {
             return if buf.is_empty() {
                 Ok(None)
             } else {
-                Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short request"))
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "short request",
+                ))
             };
         }
         buf.extend_from_slice(&chunk[..n]);
@@ -58,7 +64,10 @@ pub async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>>
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad request line"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad request line",
+        ));
     };
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let headers: HashMap<String, String> = lines

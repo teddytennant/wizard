@@ -147,7 +147,10 @@ pub struct Triggers {
 }
 
 fn new_id(prefix: &str) -> String {
-    format!("{prefix}_{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!(
+        "{prefix}_{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 fn new_token() -> String {
@@ -161,7 +164,9 @@ fn new_token() -> String {
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 impl Triggers {
@@ -194,17 +199,24 @@ impl Triggers {
     fn load(&self) -> Result<File> {
         match std::fs::read_to_string(self.file_path()) {
             Ok(raw) => serde_json::from_str(&raw).map_err(|e| {
-                ApiError::new(500, format!("{} is not valid: {e}", self.file_path().display()))
+                ApiError::new(
+                    500,
+                    format!("{} is not valid: {e}", self.file_path().display()),
+                )
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(File::default()),
-            Err(e) => Err(ApiError::new(500, format!("{}: {e}", self.file_path().display()))),
+            Err(e) => Err(ApiError::new(
+                500,
+                format!("{}: {e}", self.file_path().display()),
+            )),
         }
     }
 
     fn save(&self, file: &File) -> Result<()> {
         let fail = |e: std::io::Error| ApiError::new(500, format!("{}: {e}", self.dir.display()));
         std::fs::create_dir_all(&self.dir).map_err(fail)?;
-        let text = serde_json::to_string_pretty(file).map_err(|e| ApiError::new(500, e.to_string()))?;
+        let text =
+            serde_json::to_string_pretty(file).map_err(|e| ApiError::new(500, e.to_string()))?;
         let path = self.file_path();
         std::fs::write(&path, text).map_err(fail)?;
         #[cfg(unix)]
@@ -362,15 +374,13 @@ impl Triggers {
             trigger.mode = mode.to_string();
         }
         if let Some(hours) = body.get("max_hours") {
-            trigger.max_hours = match hours {
-                Value::Null => None,
-                other => Some(
-                    other
-                        .as_f64()
-                        .filter(|h| *h > 0.0)
-                        .ok_or_else(|| ApiError::new(400, "max_hours must be a positive number"))?,
-                ),
-            };
+            trigger.max_hours =
+                match hours {
+                    Value::Null => None,
+                    other => Some(other.as_f64().filter(|h| *h > 0.0).ok_or_else(|| {
+                        ApiError::new(400, "max_hours must be a positive number")
+                    })?),
+                };
         }
         if let Some(enabled) = body.get("enabled").and_then(Value::as_bool) {
             trigger.enabled = enabled;
@@ -384,7 +394,9 @@ impl Triggers {
                     if c.split_whitespace().count() != 5 || schedule::parse_cron(c).is_err() {
                         return Err(ApiError::new(
                             400,
-                            format!("invalid cron_expression '{c}': expected 5 fields (minute hour day month weekday)"),
+                            format!(
+                                "invalid cron_expression '{c}': expected 5 fields (minute hour day month weekday)"
+                            ),
                         ));
                     }
                     trigger.run_once_at = None;
@@ -398,7 +410,12 @@ impl Triggers {
                 Value::Null => None,
                 Value::String(text) => {
                     let parsed = DateTime::parse_from_rfc3339(text)
-                        .map_err(|_| ApiError::new(400, format!("run_once_at '{text}' is not an RFC 3339 time")))?
+                        .map_err(|_| {
+                            ApiError::new(
+                                400,
+                                format!("run_once_at '{text}' is not an RFC 3339 time"),
+                            )
+                        })?
                         .with_timezone(&Utc);
                     trigger.cron_expression = None;
                     Some(parsed)
@@ -598,7 +615,7 @@ impl Triggers {
                 ));
             }
         }
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.0));
         rows.into_iter().map(|(_, v)| v).collect()
     }
 
@@ -639,7 +656,12 @@ impl Triggers {
             .map_err(|e| ApiError::new(500, format!("{}: {e}", path.display())))?;
         let all: Vec<&str> = text.lines().collect();
         let start = all.len().saturating_sub(lines);
-        let mut out = format!("log: {} ({} of {} lines)\n", path.display(), all.len() - start, all.len());
+        let mut out = format!(
+            "log: {} ({} of {} lines)\n",
+            path.display(),
+            all.len() - start,
+            all.len()
+        );
         out.push_str(&all[start..].join("\n"));
         Ok(out)
     }

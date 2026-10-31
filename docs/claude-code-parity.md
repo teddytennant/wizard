@@ -43,7 +43,7 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `PowerShell` | `execute` | partial | Registered only where `pwsh`, `powershell` or `powershell.exe` is on `PATH`, so on Windows and on a Mac or Linux box with PowerShell installed. The script is passed as `-EncodedCommand`, so no quoting is involved. Rules `PowerShell(...)` use the shell-command matcher, which splits on `;`, `&&` and `|` and does not understand PowerShell syntax beyond that. Not run on Windows here. |
 | `PushNotification` | none | partial | A session notice every surface renders, plus `notify-send` or `osascript` when present. No phone push; the result says so. |
 | `Read` | `read_file` | alias | `offset` is the 1-based start line, `limit` a line count. A `.ipynb` renders as `<cell id="..">` blocks. Lines are not numbered, on purpose: numbered output made models copy the gutter into `old_string`. `pages` and `allow_large` are accepted and ignored. |
-| `RemoteTrigger` | none | skipped | Calls the claude.ai routines API with a claude.ai login. Wizard's cloud-side equivalent is `wizard scheduler` on a machine you run. |
+| `RemoteTrigger` | none | partial | Claude's schema (`action`, `trigger_id`, `session_id`, `cursor`, `body`, the eight actions, the `^[\w-]+$` id rule, the `HTTP <status>` reply frame and its `→` summary lines, read from the 2.1.314 binary) over triggers that run on this machine: a scheduler entry `trigger-<id>` or a bearer-token webhook on `wizard trigger serve`, each started as a headless session. Fires only while the machine is on and, for schedules, `wizard scheduler` runs; no GitHub-event sources; the webhook token is never in a reply. See [cloud equivalents](cloud-equivalents.md). |
 | `ReportFindings` | none | partial | Validates the shape (max 32, required fields) and returns the ranked list as text. There is no typed review panel to render it in. |
 | `ScheduleWakeup` | none | new | One-shot scheduler entry `wakeup-<id>` at now plus the delay (clamped to 60 to 3600 s, rounded up to a whole minute), replacing the last one for the directory. `stop: true` cancels it. Fires a headless session, not this one. |
 | `SendFeedback` | none | partial | Writes the text to `~/.wizard/feedback/feedback-<time>-<pid>.md` and says nothing was sent. There is no endpoint to send it to. |
@@ -63,7 +63,9 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `WebSearch` | `web_search` | alias | `allowed_domains` and `blocked_domains` become `site:` and `-site:` operators in the query, so they depend on the backend honouring them. |
 | `Workflow` | none | new | Claude's input schema (`script`, `name`, `scriptPath`, `args`, `resumeFromRunId`, `title`, `description`) and script API (`agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, `budget`), run in the QuickJS kernel, so it needs the `plugin-js` feature (on by default; without it there is no tool). A run is a background task: `TaskStop` stops it, its agents are subagents on the rail, its result lands as a task note. In `-p`, the gateway and ACP the call waits and returns the result. Run ids, resume semantics and the error strings come from the real binary (`wf_<8 hex>-<3 hex>`; the unchanged prefix of `agent()` calls is cached, the first change and everything after it reruns). Runs live on disk under `~/.wizard/workflows/runs/`, so resume works across sessions, which Claude's does not. Not built: the approval dialog and `Workflow(<name>)` rules, remote runs, usage-limit waiting, stall restarts, cache staggering, the size warning, `ultracode`, `bashCommandClamp`. See [Workflows](workflows.md). |
 | `Write` | `write_file` | alias | |
-| `Artifact`, `DesignSync`, `Projects`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai-hosted pages and design sync, and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
+| `Artifact` | none | partial | Every property of Claude's input (none required), publishing to `~/.wizard/artifacts/<slug>/` and returning a `file://` URL; `wizard artifact serve` serves them on localhost. Update in place by `url`, `edits`, `files`, assets, `list`/`read`/`open`/`pin`/`delete`, and Claude's limits (16MB, 15MB binary, 255 files and 64MB per publish). Local, not hosted: `capabilities`, types, design systems, comments and sharing are named in the reply and not applied. See [cloud equivalents](cloud-equivalents.md). |
+| `advisor` | none | new | Not a Claude Code tool name (there it is a server-side tool whose block Wizard cannot decode). `question` and a `context` summary go to the model named by `advisorModel` as one plain completion, billed to the session; the advisor has no tools and never acts. |
+| `DesignSync`, `Projects`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai design sync, projects and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
 
 ### What was compared against the real binary
 
@@ -242,6 +244,7 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 | :- | :- | :- |
 | `--print` | present |  |
 | `--add-dir` | present | Named in the system prompt, and counts as inside the project for `acceptEdits`. |
+| `--advisor` | present | `--advisor <model>` is `advisorModel` for this run (published as `WIZARD_ADVISOR_MODEL`). |
 | `--agent` | present |  |
 | `--agents` | present |  |
 | `--allow-dangerously-skip-permissions` | aliased | Parses and changes nothing: `bypassPermissions` is always a mode you may choose. `permissions.disableBypassPermissionsMode` still wins. |
@@ -266,7 +269,7 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 | `--dangerously-skip-permissions` | present |  |
 | `--debug` | present |  |
 | `--debug-file` | accepted-with-warning | Logs go to `~/.wizard/logs`; `--debug` sets the filter. |
-| `--desktop` | accepted-with-warning | No desktop app handoff; `wizard gui` opens Wizard GUI. |
+| `--desktop` | accepted-with-warning | No session handoff; `/desktop open` or `wizard gui` opens Wizard GUI. |
 | `--disable-slash-commands` | present |  |
 | `--disallowedTools` | present |  |
 | `--disallowed-tools` | present |  |
@@ -295,8 +298,8 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 | `--permission-prompt-tool` | present | An MCP tool (`mcp__server__tool`) answers a request nobody could. It gets `tool_name`, `input` and `tool_use_id` and replies `{"behavior":"allow","updatedInput":{}}` or `{"behavior":"deny","message":""}`; anything else refuses. |
 | `--plugin-url` | accepted-with-warning | Use `/plugin install <url>`. |
 | `--prompt-suggestions` | accepted-with-warning | No prompt suggestions. |
-| `--remote-control` | accepted-with-warning | No remote control. |
-| `--remote-control-session-name-prefix` | accepted-with-warning | No remote control. |
+| `--remote-control` | accepted-with-warning | No Anthropic relay; `/remote-control` prints how to attach directly (ssh, ACP, an HTTP trigger). |
+| `--remote-control-session-name-prefix` | accepted-with-warning | No Anthropic relay; see `--remote-control`. |
 | `--replay-user-messages` | present | Each `stream-json` input user message is echoed back with `isReplay: true`. |
 | `--restricted` | accepted-with-warning | No restricted mode. |
 | `--tools` | present | Keeps only the listed built-in tools: `""` none, `default` all, or names such as `Bash,Edit,Read`. MCP tools are not affected. |
@@ -305,7 +308,7 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 | `--session-id` | present |  |
 | `--setting-sources` | present | Reads only the listed layers: `user`, `project`, `local`. `--settings` and managed files are always read. |
 | `--system-prompt-snapshot` | accepted-with-warning | The prompt is built per session. |
-| `--teleport` | accepted-with-warning | No cloud sessions. |
+| `--teleport` | accepted-with-warning | No cloud sessions; `wizard teleport pull <source>` moves a session between your own machines. |
 | `--tmux` | accepted-with-warning | Worktrees do not open tmux sessions. |
 | `--worktree` | present |  |
 | `--verbose` | present |  |
@@ -355,7 +358,7 @@ The 98 names below are the menu of an interactive 2.1.314 session plus the comma
 | `/logout` | present | `/logout` |  |
 | `/mcp` | present | `/mcp` |  |
 | `/memory` | present | `/memory` |  |
-| `/mobile` | accepted-with-warning | `/mobile` | there is no Claude mobile app link. |
+| `/mobile` | accepted-with-warning | `/mobile` | There is no Claude mobile app link. The reply describes the Android app (ssh to your machine, `wizard acp`) and gives the APK link; it pairs nothing. |
 | `/model` | present | `/model` |  |
 | `/output-style` | present | `/output-style` |  |
 | `/permissions` | present | `/permissions` |  |
@@ -368,7 +371,7 @@ The 98 names below are the menu of an interactive 2.1.314 session plus the comma
 | `/release-notes` | present | `/release-notes` |  |
 | `/reload-plugins` | aliased | `/reload` |  |
 | `/reload-skills` | aliased | `/reload` |  |
-| `/remote-env` | accepted-with-warning | `/remote-env` | cloud agents and their environments are Anthropic's. |
+| `/remote-env` | present | `/remote-env` | Lists where triggers run (directory, mode, cap) and whether the scheduler is up. An environment is a directory on a machine you run, not an Anthropic sandbox. |
 | `/rename` | present | `/rename` |  |
 | `/resume` | present | `/resume` |  |
 | `/rewind` | present | `/rewind` |  |
@@ -378,13 +381,19 @@ The 98 names below are the menu of an interactive 2.1.314 session plus the comma
 | `/stickers` | accepted-with-warning | `/stickers` | Stickers are Anthropic merchandise. |
 | `/subtask` | aliased | `/fork` |  |
 | `/tasks` | aliased | `/bashes` |  |
-| `/teleport` | accepted-with-warning | `/teleport` | cloud sessions are Anthropic's. |
+| `/teleport` | present | `/teleport` | Moves a session between your own machines: `pack` writes a gzip envelope, `/teleport user@host[:id]` pulls over ssh, a file or an https URL, then resumes it here. No cloud sessions; the envelope is not signed. Same as `wizard teleport`. |
 | `/terminal-setup` | present | `/terminal-setup` |  |
 | `/theme` | aliased | `/ui` | The skin carries the palette, so picking a skin picks the theme. |
 | `/tui` | accepted-with-warning | `/tui` | there is one terminal UI. |
 | `/upgrade` | accepted-with-warning | `/upgrade` | plans are a Claude subscription matter. |
 | `/usage` | present | `/usage` |  |
-| `/voice` | accepted-with-warning | `/voice` | Needs a recorder and a local speech-to-text binary; Wizard drives neither. Dictate through the OS. |
+| `/voice` | present | `/voice` | Records with `arecord`, `ffmpeg` or `sox` (or `[voice] recorder`), transcribes with `whisper-cli`, `vosk-transcriber` or `[voice] command`, and puts the text in the composer. `/voice stop` ends a recording early. Claude streams audio to Anthropic for transcription; this is local. Terminal UI only. |
+| `/advisor` | present | `/advisor` | `/advisor <model>\|off` sets `advisorModel` and prints Claude's "Advisor set to", "Advisor disabled." and "Advisor:" lines; the `advisor` tool consults it. A provider name, `provider/model` or a model tag, asked for one plain completion over a summary the agent writes. Not in the 2.1.314 menu of a logged-out session. |
+| `/artifacts` | present | `/artifacts` | Lists the local pages the `Artifact` tool wrote, with their `file://` and localhost links; `open`, `delete`, `pin`, `unpin`, `serve`. Not in the 2.1.314 menu. |
+| `/desktop` | present | `/desktop` | Reports whether Wizard GUI is installed; `/desktop open` starts it (same as `wizard gui`). A separate app with its own session, not a handoff. Not in the 2.1.314 menu. |
+| `/remote-control` | present | `/remote-control`, `/rc` | Prints how to reach this machine without Anthropic's relay (ssh, `wizard acp`, the gateway), and `on` makes an HTTP trigger and prints its bearer token. Terminal UI only, because it prints a token. In the 2.1.314 binary, gated to a claude.ai login. |
+| `/setup-bedrock` | present | `/setup-bedrock` | Guided: shows what is detected, then `/setup-bedrock <region> [profile=..] [model=..]` writes `CLAUDE_CODE_USE_BEDROCK` and the rest to the `env` block of `~/.wizard/settings.json` (never a key); `off` removes it. Applies to the Claude Code provider, and `wizard doctor` gets a `cloud route` row. |
+| `/setup-vertex` | present | `/setup-vertex` | Likewise for Vertex: `/setup-vertex <project> [region=..] [model=..]`. |
 | `/web-setup` | accepted-with-warning | `/web-setup` | cloud sessions with a GitHub account are Anthropic's service. |
 | `/workflows` | present | `/workflows` | Lists runs and saved workflows, shows one run, stops one this process is executing. No panel with pause or per-agent keys. |
 | `/batch` | accepted-with-warning | `/batch` | no cloud batch of PR agents. |
@@ -473,10 +482,10 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `xaaIdp` | accepted-with-warning | Anthropic enterprise identity; Wizard has no identity provider integration. |
 | `gatewayInternalNetworks` | accepted-with-warning | Anthropic enterprise gateway plumbing; `wizard gateway` is the messaging gateway. |
 | `attributionProjectPolicy` | accepted-with-warning | An Anthropic admin policy over project attribution; `attribution` itself is read. |
-| `awsAuthRefresh` | accepted-with-warning | Bedrock is not a provider here. |
-| `awsCredentialExport` | accepted-with-warning | Bedrock is not a provider here. |
-| `gcpAuthRefresh` | accepted-with-warning | Vertex is not a provider here. |
-| `awsPairs` | accepted-with-warning | Bedrock is not a provider here. |
+| `awsAuthRefresh` | accepted-with-warning | Not run. The Claude Code provider starts `claude` with `--setting-sources ""`, so this is never read; sign in with `aws sso login` or export credentials. |
+| `awsCredentialExport` | accepted-with-warning | Not run, as `awsAuthRefresh`. |
+| `gcpAuthRefresh` | accepted-with-warning | Not run, as `awsAuthRefresh`; use `gcloud auth application-default login`. |
+| `awsPairs` | accepted-with-warning | Not read, as `awsAuthRefresh`. |
 | `otelHeadersHelper` | accepted-with-warning | Wizard exports no OpenTelemetry data. |
 | `allowedMcpServers` | present | Entries are `serverName`, `serverCommand` (exact command and args) or `serverUrl` (`*` wildcards). Applies to servers from `mcp.toml`, `.mcp.json`, `~/.claude.json`, plugins and `--mcp-config`. Empty list allows none. |
 | `deniedMcpServers` | present | Same entry forms; a denial beats an allowance. |
@@ -512,8 +521,8 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `diffTool` | accepted-with-warning | `/diff` prints a diff; it opens no external tool. |
 | `notifChannel` | accepted-with-warning | Wizard rings no terminal bell or desktop notification of its own; hooks run `notification` events. |
 | `preferredNotifChannel` | accepted-with-warning | Same as `notifChannel`. |
-| `voiceEnabled` | accepted-with-warning | No audio capture stack. |
-| `voice` | accepted-with-warning | No audio capture stack. |
+| `voiceEnabled` | accepted-with-warning | Dictation is configured under `[voice]` in `config.toml` and started with `/voice`; this key changes nothing. |
+| `voice` | accepted-with-warning | Same: `[voice]` in `config.toml`. |
 | `screenReader` | accepted-with-warning | No screen-reader mode; `prefersReducedMotion` stills the animations. |
 | `teammateMode` | accepted-with-warning | No teammates. |
 | `autoConnectIde` | accepted-with-warning | Editors connect to Wizard over ACP (`wizard acp`); Wizard connects to none. |
@@ -524,7 +533,7 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `sandbox` | aliased | With `enabled: true`, `filesystem.denyRead` and `denyWrite` become `Read` and `Edit` deny rules and `network.deniedDomains` become `WebFetch(domain:)` deny rules. These turn the permission engine on with nothing else changed. They cover the file tools and `web_fetch`, not shell commands: there is no process sandbox. `/sandbox` lists them. |
 | `fastMode` | aliased | Starts the session in fast mode: with the `anthropic` provider on an Opus model, requests carry `speed: fast`. Other providers have no tier. `/fast` switches it. |
 | `fastModePerSessionOptIn` | present | `true` starts each session with fast mode off. |
-| `advisorModel` | accepted-with-warning | Anthropic's server-side advisor tool needs a response block Wizard does not decode, and `spawn_subagent` takes no model; `/fusion` and `/ultra` are the multi-model forms. |
+| `advisorModel` | present | Read from `~/.wizard/settings.json` (and `--advisor`, `WIZARD_ADVISOR_MODEL`): a provider name, `provider/model` or a model tag. The `advisor` tool asks it; see `/advisor`. |
 | `autoMode` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
 | `useAutoModeDuringPlan` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
 | `disableAutoMode` | accepted-with-warning | There is no auto mode to disable. |
@@ -584,7 +593,8 @@ The binary reads about 400 names through `process.env` and carries over 800 `CLA
 | CLAUDE_PROJECT_DIR, CLAUDE_PLUGIN_ROOT | present | Set for hooks and plugin commands (existing). |
 | CLAUDE_CODE_CHILD_SESSION, MCP_TOOL_TIMEOUT | present | Set for the `claude` provider and the status line (existing). |
 | ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_EXTRA_BODY, CLAUDE_CODE_EXTRA_METADATA | present | The `anthropic` provider only: `ANTHROPIC_CUSTOM_HEADERS` is `Name: value` lines sent as headers, `ANTHROPIC_BETAS` the `anthropic-beta` header, `CLAUDE_CODE_EXTRA_BODY` a JSON object whose top-level keys are added to the request, `CLAUDE_CODE_EXTRA_METADATA` one whose keys go into `metadata`. A key the request already has wins. |
-| ANTHROPIC_BEDROCK_*, ANTHROPIC_VERTEX_*, ANTHROPIC_FOUNDRY_*, ANTHROPIC_AWS_*, ANTHROPIC_GOOGLE_*, CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY / MANTLE / GATEWAY / ANTHROPIC_AWS / ANTHROPIC_GOOGLE_CLOUD, CLAUDE_CODE_SKIP_BEDROCK_AUTH / VERTEX_AUTH, AWS_*, AZURE_*, GOOGLE_*, CLOUDSDK_*, CLOUD_ML_REGION, VERTEX_REGION_* | missing | Bedrock, Vertex and Foundry are not providers here; `/provider` adds one that is. |
+| ANTHROPIC_BEDROCK_*, ANTHROPIC_VERTEX_*, ANTHROPIC_FOUNDRY_*, ANTHROPIC_AWS_*, ANTHROPIC_GOOGLE_*, CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY / MANTLE, CLAUDE_CODE_SKIP_BEDROCK_AUTH / VERTEX_AUTH / FOUNDRY_AUTH, AWS_*, AZURE_*, GOOGLE_*, CLOUDSDK_*, CLOUD_ML_REGION, VERTEX_REGION_* | present | Through the Claude Code provider only (`--provider claude`): the shell's values reach `claude` untouched, the same names from the `env` block of `~/.wizard/settings.json` are added (process wins), `claude auth status` is asked with them so a third-party route counts as signed in, and `wizard doctor` has a `cloud route` row. `/setup-bedrock` and `/setup-vertex` write the block. Wizard's own `anthropic` provider ignores them: Foundry works there with `base_url = "https://<resource>.services.ai.azure.com/anthropic"`; Bedrock and Vertex need the Claude Code provider. See [cloud equivalents](cloud-equivalents.md). |
+| CLAUDE_CODE_USE_GATEWAY / ANTHROPIC_AWS / ANTHROPIC_GOOGLE_CLOUD | missing | Anthropic's gateway and cloud-account modes have no counterpart. |
 | DISABLE_COMPACT, DISABLE_AUTO_COMPACT | missing | Compaction has no off switch; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` moves where it starts. |
 | BASH_MAX_TIMEOUT_MS, BASH_MAX_OUTPUT_LENGTH, MAX_MCP_OUTPUT_TOKENS, MCP_TIMEOUT, MCP_TOOL_TIMEOUT (for MCP calls), CLAUDE_CODE_MAX_OUTPUT_TOKENS, CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS, API_TIMEOUT_MS, CLAUDE_STREAM_IDLE_TIMEOUT_MS, CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS, CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS, CLAUDE_SLOW_FIRST_BYTE_MS, API_FORCE_IDLE_TIMEOUT, CLAUDE_CODE_MAX_RETRIES | accepted-with-warning | Wizard's limits are fixed constants or come from `config.toml`; none reads these names. |
 | CLAUDE_CODE_DISABLE_AUTO_MEMORY, CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS, CLAUDE_CODE_DISABLE_FAST_MODE, DISABLE_COLORS | present | The same as `autoMemoryEnabled: false`, `includeGitInstructions: false`, a session that cannot use `/fast`, and `NO_COLOR`. |
@@ -632,13 +642,13 @@ The binary reads about 400 names through `process.env` and carries over 800 `CLA
 | subcommands | 8 | 6 | 5 | 1 | 20 |
 | mcp verbs | 7 | 1 | 2 | 0 | 10 |
 | plugin verbs | 11 | 0 | 0 | 3 | 14 |
-| flags | 44 | 2 | 23 | 1 | 70 |
-| slash | 55 | 11 | 30 | 2 | 98 |
-| settings | 45 | 10 | 71 | 0 | 126 |
-| env rows | 22 | 4 | 4 | 4 | 34 |
+| flags | 45 | 2 | 23 | 1 | 71 |
+| slash | 66 | 11 | 25 | 2 | 104 |
+| settings | 47 | 10 | 69 | 0 | 126 |
+| env rows | 23 | 4 | 4 | 4 | 35 |
 | skills | 11 | 0 | 0 | 8 | 19 |
 | agents and plugins | 3 | 2 | 0 | 2 | 7 |
-| **all** | 206 | 36 | 135 | 21 | 398 |
+| **all** | 221 | 36 | 128 | 21 | 406 |
 
 ### Switching from `~/.claude`
 
@@ -716,7 +726,8 @@ Rewritten before parsing, so the agent's `run_command` gate and every surface se
 | `/fast [on\|off]` | Switches the `anthropic` provider's fast tier: Opus requests carry `speed: fast` and the `fast-mode-2026-02-01` beta, and `fastMode` is saved to `~/.wizard/settings.json`. On any other provider the setting is stored and the reply says nothing changes. `CLAUDE_CODE_DISABLE_FAST_MODE` forbids it. |
 | `/sandbox` | Lists the `sandbox` settings and the deny rules they become (file tools and `web_fetch`; shell commands are not covered). |
 | `/privacy-settings` | Where data leaves this machine: the active provider's endpoint, the other configured providers, the update check, the web tools. Wizard sends no telemetry. |
-| `/advisor`, `/color`, `/voice`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/heapdump`, `/insights`, `/restart`, `/setup-bedrock`, `/setup-vertex`, `/autofix-pr`, `/chrome`, `/design`, `/design-sync`, `/design-login`, `/design-consent`, `/design-revoke`, `/install-github-app`, `/install-slack-app`, `/mobile`, `/powerup`, `/radio`, `/remote-env`, `/stickers`, `/teleport`, `/tui`, `/web-setup`, `/workflows`, `/workflow-authoring`, `/batch`, `/claude-api`, `/dataviz`, `/deep-research`, `/plugin-authoring`, `/auto-mode-setup` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/advisor` points at `/fusion` and `/ultra`, `/voice` says there is no audio stack, `/batch` at `wizard fleet`, `/tui` at `/ui`). They change nothing. `/color` waits on a prompt-bar colour setting in the terminal UIs, and `/advisor` on a block decoder for Anthropic's server-side advisor tool. |
+| `/color`, `/usage-credits`, `/passes`, `/upgrade`, `/rate-limit-options`, `/heapdump`, `/insights`, `/restart`, `/autofix-pr`, `/chrome`, `/design`, `/design-sync`, `/design-login`, `/design-consent`, `/design-revoke`, `/install-github-app`, `/install-slack-app`, `/mobile`, `/powerup`, `/radio`, `/stickers`, `/tui`, `/web-setup`, `/workflows`, `/workflow-authoring`, `/batch`, `/claude-api`, `/dataviz`, `/deep-research`, `/plugin-authoring`, `/auto-mode-setup` | Exist so the name answers. Each prints one sentence saying there is no counterpart and what to use instead (`/batch` at `wizard fleet`, `/tui` at `/ui`). They change nothing. `/color` waits on a prompt-bar colour setting in the terminal UIs. |
+| `/artifacts`, `/advisor`, `/voice`, `/teleport`, `/remote-control`, `/remote-env`, `/desktop`, `/setup-bedrock`, `/setup-vertex` | Local counterparts of Claude Code's cloud features, each saying in its reply what runs here. They have their own page: [cloud equivalents](cloud-equivalents.md). |
 | `DISABLE_LOGIN_COMMAND` and the other `DISABLE_*_COMMAND` variables | `/login`, `/logout`, `/upgrade`, `/feedback` (and `/bug`), `/doctor`, `/usage-credits` and `/install-github-app` answer "turned off by NAME" when their variable is set. |
 | `/feedback [note]` | Where to report a bug and what to attach. |
 | `/schedule` | Lists `~/.wizard/schedule.toml`; `wizard schedule` manages it. |
@@ -750,9 +761,10 @@ directory as part of the task; it does not widen a file-access sandbox, because 
 
 Of the 98 names in 2.1.314's menu, two have no row to answer them: `/__remote-workflow` and `/workflow-launch-exec`,
 which are plumbing of Claude's remote Workflow runtime and not typed by anyone. Names an older spec lists that the 2.1.314
-menu no longer shows (`/scroll-speed`, `/claude-in-chrome`, `/desktop`, `/cloud`, `/remote-control`, `/slides`,
-`/artifacts`, `/artifact-*`, `/skill-doctor`, `/ultrareview`) are not implemented; `wizard ultrareview` answers
-as the subcommand. Claude.ai-only tools and voice stay out for the reasons in the audit table above.
+menu no longer shows (`/scroll-speed`, `/claude-in-chrome`, `/cloud`, `/slides`, `/artifact-*`, `/skill-doctor`,
+`/ultrareview`) are not implemented; `wizard ultrareview` answers as the subcommand. `/desktop`, `/remote-control`
+and `/artifacts` from that list are built, as local counterparts (see [cloud equivalents](cloud-equivalents.md)).
+Claude.ai-only tools stay out for the reasons in the audit table above.
 
 `/theme` is `/ui`: a skin carries its palette, so picking a skin is picking the theme. Claude's own theme names (`dark`, `light-daltonized`, ...) do not map to anything.
 
@@ -813,7 +825,7 @@ above.
 `--betas`, `--brief`, `--chrome`, `--no-chrome`, `--ide`, `--cloud`, `--remote`, `--environment`, `--ref`,
 `--remote-control`/`--rc` and its prefix flag, `--teleport`, `--background`, `--desktop`, `--tmux`,
 `--from-pr`, `--file`, `--init`, `--init-only`, `--maintenance`, `--ax-screen-reader`,
-`--advisor`, `--prompt-suggestions`, `--teammate-mode`, `--permission-prompts`, `--channels` and the
+`--prompt-suggestions`, `--teammate-mode`, `--permission-prompts`, `--channels` and the
 development-channels flag, `--forward-subagent-text`, `--exclude-dynamic-system-prompt-sections`,
 `--system-prompt-snapshot`, the two `--append-subagent-system-prompt` flags, `--plugin-url`,
 `--debug-file`, `--restricted`. The reason for each is in the flag table above.
