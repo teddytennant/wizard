@@ -688,6 +688,7 @@ async fn run_interactive(
     mut cli: cli::Cli,
     mut first_run: Option<onboarding::FirstRun>,
 ) -> Result<i32> {
+    print_company_announcement();
     let mut look = startup_look(&config, &cli);
     let mut handoff = None;
     loop {
@@ -845,6 +846,24 @@ fn should_onboard_given(cli: &cli::Cli, interactive: bool) -> Result<bool> {
         return Ok(false);
     }
     Ok(!config::Config::path()?.exists())
+}
+
+/// One line of `companyAnnouncements`, picked by the clock when there are
+/// several, printed before the terminal UI takes the screen.
+fn print_company_announcement() {
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let Ok(root) = std::env::current_dir() else {
+        return;
+    };
+    let settings = config::claude::load(&root, config::claude::Trust::Refused);
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos() as usize);
+    if let Some(line) = settings.announcement(seed) {
+        println!("{line}");
+    }
 }
 
 /// `cleanupPeriodDays` from the Claude-format settings: delete the sessions

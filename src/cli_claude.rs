@@ -447,6 +447,9 @@ impl ClaudeFlags {
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
         }
+        if let Some(verbs) = settings.spinner_verb_list(&config.ui.spinner_verbs) {
+            config.ui.spinner_verbs = verbs;
+        }
         if let Some(window) = self.autocompact.as_deref().and_then(parse_window) {
             config.max_context_tokens = window;
         }

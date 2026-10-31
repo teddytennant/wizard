@@ -119,6 +119,13 @@ pub struct ClaudeSettings {
     pub include_git_instructions: Option<bool>,
     /// `companyAnnouncements`.
     pub company_announcements: Vec<String>,
+    /// `pluginTrustMessage`, managed settings only.
+    pub plugin_trust_message: Option<String>,
+    /// `skillOverrides`: skill name to `on`, `name-only`, `user-invocable-only`
+    /// or `off`.
+    pub skill_overrides: BTreeMap<String, String>,
+    /// `spinnerVerbs`: whether they replace the defaults, and the verbs.
+    pub spinner_verbs: Option<(bool, Vec<String>)>,
     /// The allow, deny and scope keys; see [`claude_policy`].
     pub policy: PolicyKeys,
     /// Files that were read, lowest precedence first.
@@ -401,6 +408,31 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
         .or(out.thinking_tokens);
     if managed {
         out.claude_md = text("claudeMd").or(out.claude_md.take());
+        out.plugin_trust_message = text("pluginTrustMessage").or(out.plugin_trust_message.take());
+    }
+    if let Some(map) = value.get("skillOverrides").and_then(Value::as_object) {
+        for (name, mode) in map {
+            if let Some(mode) = mode.as_str() {
+                out.skill_overrides.insert(name.clone(), mode.to_string());
+            }
+        }
+    }
+    if let Some(block) = value.get("spinnerVerbs") {
+        let verbs: Vec<String> = block
+            .get("verbs")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !verbs.is_empty() {
+            let replace = block.get("mode").and_then(Value::as_str) == Some("replace");
+            out.spinner_verbs = Some((replace, verbs));
+        }
     }
     if !project {
         out.auto_memory_dir = text("autoMemoryDirectory").or(out.auto_memory_dir.take());
@@ -461,6 +493,53 @@ impl ClaudeSettings {
             );
         }
         (self.always_thinking == Some(false)).then_some("low")
+    }
+
+    /// One of `companyAnnouncements`, chosen by `seed`.
+    pub fn announcement(&self, seed: usize) -> Option<&str> {
+        let count = self.company_announcements.len();
+        (count > 0).then(|| self.company_announcements[seed % count].as_str())
+    }
+
+    /// `skillOverrides` applied to the skills the model is told about:
+    /// `off` and `user-invocable-only` hide a skill from the prompt, and
+    /// `name-only` drops its description.
+    pub fn apply_skill_overrides(
+        &self,
+        skills: Vec<crate::skills::Skill>,
+    ) -> Vec<crate::skills::Skill> {
+        skills
+            .into_iter()
+            .filter_map(|mut skill| {
+                match self.skill_overrides.get(&skill.name).map(String::as_str) {
+                    Some("off" | "user-invocable-only") => None,
+                    Some("name-only") => {
+                        skill.meta.description = None;
+                        Some(skill)
+                    }
+                    _ => Some(skill),
+                }
+            })
+            .collect()
+    }
+
+    /// The spinner verbs `spinnerVerbs` asks for, given the ones already
+    /// configured (`[ui] spinner_verbs`, empty for the built-in list).
+    pub fn spinner_verb_list(&self, current: &[String]) -> Option<Vec<String>> {
+        let (replace, verbs) = self.spinner_verbs.as_ref()?;
+        if *replace {
+            return Some(verbs.clone());
+        }
+        let mut list: Vec<String> = if current.is_empty() {
+            crate::config::UiConfig::DEFAULT_SPINNER_VERBS
+                .iter()
+                .map(|verb| verb.to_string())
+                .collect()
+        } else {
+            current.to_vec()
+        };
+        list.extend(verbs.iter().cloned());
+        Some(list)
     }
 
     /// `claudeMdExcludes`: whether an instruction file is skipped.
@@ -801,6 +880,47 @@ mod tests {
         let text = s.prompt_addendum().expect("addendum");
         assert!(text.contains("Do not add attribution lines"), "{text}");
         assert!(text.contains("Do not commit, push"), "{text}");
+    }
+
+    #[test]
+    fn skill_overrides_and_spinner_verbs_and_the_trust_message() {
+        let d = dirs();
+        write(
+            d.user.join("settings.json"),
+            r#"{"skillOverrides":{"a":"off","b":"name-only","c":"user-invocable-only"},
+               "spinnerVerbs":{"mode":"append","verbs":["Pondering"]},"pluginTrustMessage":"nope"}"#,
+        );
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert!(s.plugin_trust_message.is_none(), "managed settings only");
+        let skill = |name: &str| crate::skills::Skill {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            meta: crate::skills::SkillMeta {
+                description: Some("d".into()),
+                ..Default::default()
+            },
+            body: String::new(),
+        };
+        let kept = s.apply_skill_overrides(vec![skill("a"), skill("b"), skill("c"), skill("d")]);
+        let names: Vec<&str> = kept.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, ["b", "d"]);
+        assert!(kept[0].meta.description.is_none());
+        assert!(kept[1].meta.description.is_some());
+
+        let appended = s.spinner_verb_list(&[]).unwrap();
+        assert_eq!(appended.last().map(String::as_str), Some("Pondering"));
+        assert!(appended.len() > 1, "the defaults are kept");
+        let mut replace = s;
+        replace.spinner_verbs = Some((true, vec!["Only".into()]));
+        assert_eq!(replace.spinner_verb_list(&[]).unwrap(), vec!["Only"]);
+    }
+
+    #[test]
+    fn an_announcement_is_picked_from_the_list() {
+        let mut s = ClaudeSettings::default();
+        assert_eq!(s.announcement(3), None);
+        s.company_announcements = vec!["a".into(), "b".into()];
+        assert_eq!(s.announcement(3), Some("b"));
     }
 
     #[test]

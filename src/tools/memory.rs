@@ -104,7 +104,7 @@ impl Tool for MemoryTool {
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let args: MemoryArgs = parse_args(self.name(), args)?;
-        let store = MemoryStore::open(&ctx.cwd).map_err(|err| ToolError::Execution {
+        let store = MemoryStore::open_auto(&ctx.cwd).map_err(|err| ToolError::Execution {
             tool: self.name().to_string(),
             source: err,
         })?;

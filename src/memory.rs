@@ -110,7 +110,36 @@ impl MemoryStore {
     /// `~/.wizard/memory/<slug>/`, where the slug is the canonicalized root
     /// path with every non-alphanumeric character replaced by `-` (e.g.
     /// `-home-user-projects-app`).
+    ///
+    /// `autoMemoryDirectory` in the Claude-format settings (user, local and
+    /// managed files, never a project's checked-in one) replaces that
+    /// directory.
     pub fn open(project_root: &Path) -> Result<Self> {
+        let settings =
+            crate::config::claude::load(project_root, crate::config::claude::Trust::Refused);
+        Self::open_with(project_root, settings.auto_memory_dir.as_deref())
+    }
+
+    /// [`MemoryStore::open`] for what the agent reads and writes by itself:
+    /// the memory tool and the prompt's index. `autoMemoryEnabled: false`
+    /// turns both off, while `/memory` still works for the user.
+    pub fn open_auto(project_root: &Path) -> Result<Self> {
+        let settings =
+            crate::config::claude::load(project_root, crate::config::claude::Trust::Refused);
+        if settings.auto_memory_enabled == Some(false) {
+            bail!("memory is turned off by autoMemoryEnabled: false in settings");
+        }
+        Self::open_with(project_root, settings.auto_memory_dir.as_deref())
+    }
+
+    fn open_with(project_root: &Path, custom_dir: Option<&str>) -> Result<Self> {
+        if let Some(raw) = custom_dir {
+            let dir = match raw.strip_prefix("~/") {
+                Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+                None => project_root.join(raw),
+            };
+            return Ok(Self { dir });
+        }
         let canonical = project_root
             .canonicalize()
             .unwrap_or_else(|_| project_root.to_path_buf());
