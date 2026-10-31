@@ -58,7 +58,7 @@ x-btw	both	(?<=↑/↓ to scroll ).*$$	copy and fork: the look has no clipboard 
 x-*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
 x-rewind	both	^     ↑ \d+ more\s*$	rewind points: the reference counts /plan as one; wizard's /rewind goes back by turn, and /plan is not a turn
 x-rewind	both	^     (\S+\.md \+\d+|No code changes)\s*$	plan file: the reference writes its plan to a file and counts it as a change; wizard keeps the plan in .wizard/plan.md without an edit event
-x-ctrlr	norm	(?<=^  [❯↑↓ ] )\d+[smhd] ago@@N ago	ages: the two runs are seconds apart; the live checks make sure the clock moves
+x-ctrlr	norm	(?<=^  [❯↑↓ ] )\d+[smhd] ago +(?=\S)@@N ago   	ages: the two runs are seconds apart; the live checks make sure the clock moves
 x-resume-opened	drop-up	+^✻ \S+ for Ns · done H:MM XM\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	done lines: wizard's session record keeps no turn times, so a resumed transcript has none
 x-resume-opened	drop-up	^  ⎿\s\sEnabled plan mode\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
 x-resume-opened	drop-up	+^❯ /plan\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	/plan: the look runs it itself, through the mode steps, so wizard's record has no turn for it
@@ -104,4 +104,5 @@ wz-model*	shape	^     … \+\d+ models?\s*$	model panel: the recorded wizard lis
 wz-model*	shape	^\s*$	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
 wz-model*	shape	^   [❯↓↑ ] ?\d+\.\s*\S	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
 plan-feedback	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
-x-ctrlr	norm	\d+[smhd] ago +(?=\S)@@N ago   	history ages: the two programs sent their prompts at different speeds, so how long ago each was differs
+x-plancmd	both	^\s+[○◐●◉] \w+ · /effort\s*$	effort notice: the reference was captured inside the ten seconds after it opened, and real wizard takes longer to start than the look's replay, so the live look is past them
+x-resume-opened	both	^\s+[○◐●◉] \w+ · /effort\s*$	effort notice: the reference was captured inside the ten seconds after it opened, and real wizard takes longer to start than the look's replay, so the live look is past them
