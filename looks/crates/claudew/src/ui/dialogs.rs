@@ -46,6 +46,14 @@ pub fn draw(buf: &mut Buffer, app: &mut App, dialog: &Dialog) -> u16 {
             h as usize,
         ),
         Dialog::Search { query, sel } => search(app, query, *sel, w as usize),
+        Dialog::Workflows(state) => {
+            let (top, bottom) = super::workflows::rows(&th, state, w as usize, h as usize);
+            Panel {
+                top,
+                bottom,
+                fill: Some(super::workflows::KEEP),
+            }
+        }
         Dialog::Permission { .. } => return h,
     };
     let need = (panel.top.len() + panel.bottom.len() + 1) as u16;
@@ -65,7 +73,10 @@ pub fn draw(buf: &mut Buffer, app: &mut App, dialog: &Dialog) -> u16 {
     let notice = match dialog {
         Dialog::Model { .. } => crate::app::effort_notice_text(&app.cfg.effort),
         // the side question's panel carries no notice on its edge
-        Dialog::Btw { .. } | Dialog::Search { .. } | Dialog::RewindConfirm { .. } => None,
+        Dialog::Btw { .. }
+        | Dialog::Search { .. }
+        | Dialog::RewindConfirm { .. }
+        | Dialog::Workflows(_) => None,
         _ => app.notice.clone(),
     };
     if let Some(n) = &notice {

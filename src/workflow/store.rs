@@ -269,6 +269,8 @@ pub fn effective_status(record: &RunRecord) -> &'static str {
 pub enum Origin {
     Project,
     User,
+    /// Shipped in the binary; any file of the same name shadows it.
+    Bundled,
 }
 
 impl Origin {
@@ -276,6 +278,7 @@ impl Origin {
         match self {
             Origin::Project => "project",
             Origin::User => "user",
+            Origin::Bundled => "bundled",
         }
     }
 }
@@ -287,7 +290,30 @@ pub struct Named {
     pub path: PathBuf,
     pub origin: Origin,
     pub meta: script::Meta,
+    /// The script itself, for a bundled workflow that has no file to read.
+    pub bundled: Option<&'static str>,
 }
+
+impl Named {
+    /// The script text, from the file or from the binary.
+    pub fn read(&self) -> std::io::Result<String> {
+        match self.bundled {
+            Some(text) => Ok(text.to_string()),
+            None => std::fs::read_to_string(&self.path),
+        }
+    }
+}
+
+/// `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS`: the bundled workflows and prompt
+/// commands are left out, as Claude Code leaves out its bundled skills.
+pub const BUNDLED_OFF: &str = "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS";
+
+/// The workflows that ship in the binary, by name.
+pub const BUNDLED: &[(&str, &str)] = &[
+    ("deep-research", include_str!("bundled/deep-research.js")),
+    ("code-review", include_str!("bundled/code-review.js")),
+    ("batch", include_str!("bundled/batch.js")),
+];
 
 /// File names a workflow may have, Claude's rule.
 pub fn valid_file_name(file: &str) -> bool {
@@ -354,11 +380,28 @@ pub fn discover(cwd: &Path, home: Option<&Path>) -> (Vec<Named>, Vec<String>) {
                             path,
                             origin,
                             meta: parsed.meta,
+                            bundled: None,
                         });
                     }
                 }
                 Err(why) => problems.push(format!("{}: {why}", path.display())),
             }
+        }
+    }
+    let hidden = crate::config::claude_env::truthy(&|n| std::env::var(n).ok(), BUNDLED_OFF);
+    for (file, text) in BUNDLED.iter().filter(|_| !hidden) {
+        match script::parse(text) {
+            Ok(parsed) if !found.iter().any(|n| n.name == parsed.meta.name) => {
+                found.push(Named {
+                    name: parsed.meta.name.clone(),
+                    path: PathBuf::from(format!("bundled/{file}.js")),
+                    origin: Origin::Bundled,
+                    meta: parsed.meta,
+                    bundled: Some(text),
+                });
+            }
+            Ok(_) => {}
+            Err(why) => problems.push(format!("bundled/{file}.js: {why}")),
         }
     }
     (found, problems)
@@ -488,7 +531,11 @@ mod tests {
         std::fs::write(project.join(".claude/workflows/broken.js"), "return 1").unwrap();
 
         let (found, problems) = discover(&inner, Some(&home));
-        let names: Vec<&str> = found.iter().map(|n| n.name.as_str()).collect();
+        let names: Vec<&str> = found
+            .iter()
+            .filter(|n| n.origin != Origin::Bundled)
+            .map(|n| n.name.as_str())
+            .collect();
         assert_eq!(names, ["shared", "only-claude", "mine"]);
         assert_eq!(found[0].meta.description, ".wizard");
         assert_eq!(found[0].origin, Origin::Project);

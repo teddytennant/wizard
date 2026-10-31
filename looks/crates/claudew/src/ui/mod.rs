@@ -7,6 +7,7 @@ pub mod markdown;
 pub mod prompt;
 pub mod tasks;
 pub mod transcript;
+pub mod workflows;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

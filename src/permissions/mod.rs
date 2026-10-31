@@ -100,6 +100,9 @@ impl std::fmt::Display for PermissionMode {
     }
 }
 
+/// What a `Workflow` call that needs approval says, in Claude Code's words.
+const REVIEW_WORKFLOW: &str = "Review dynamic workflow before running";
+
 /// What the policy says about one call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -152,22 +155,32 @@ impl Policy {
     pub fn check(&self, tool: &str, access: ToolAccess, args: &Value) -> Decision {
         let name = toolmap::claude_name(tool);
         let what = describe(tool, args);
+        let workflow = name == "Workflow";
 
         if self.deny.iter().any(|rule| self.denies(rule, tool, args)) {
-            return Decision::Deny(format!("Permission to use {name}{what} has been denied."));
+            return Decision::Deny(match prompt::saved_workflow(args).filter(|_| workflow) {
+                Some(saved) => format!("Workflow {saved} blocked by permission rules"),
+                None => format!("Permission to use {name}{what} has been denied."),
+            });
         }
         if self
             .ask
             .iter()
             .any(|rule| rule.matches_call(tool, args, &self.cwd, true))
         {
-            return Decision::Ask(format!("{name}{what} requires approval (ask rule)."));
+            return Decision::Ask(if workflow {
+                REVIEW_WORKFLOW.to_string()
+            } else {
+                format!("{name}{what} requires approval (ask rule).")
+            });
         }
         let read_only = access == ToolAccess::ReadOnly;
         match self.mode {
             PermissionMode::Default if self.claude_defaults => {
                 if read_only || !prompt::asks_in_claude(tool) || self.allowed(tool, args) {
                     Decision::Allow
+                } else if workflow {
+                    Decision::Ask(REVIEW_WORKFLOW.to_string())
                 } else {
                     Decision::Ask(format!("{name}{what} needs approval."))
                 }
@@ -201,6 +214,8 @@ impl Policy {
                     || self.allowed(tool, args)
                 {
                     Decision::Allow
+                } else if workflow {
+                    Decision::Ask(REVIEW_WORKFLOW.to_string())
                 } else {
                     Decision::Ask(format!("{name}{what} needs approval in acceptEdits mode."))
                 }
@@ -371,6 +386,8 @@ fn describe(tool: &str, args: &Value) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod workflow_tests;
 
 /// The policy for a session: every settings layer, `[permissions]` in
 /// `config.toml`, and this run's flags. Deny wins whichever list it came

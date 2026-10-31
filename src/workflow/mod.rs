@@ -6,6 +6,7 @@
 //! - [`schema`]: the JSON Schema subset `agent({schema})` checks and validates with
 //! - [`engine`]: call numbering, the agent cap, the concurrency gate, resume and the journal
 //! - [`store`]: run records, journals and named workflows on disk
+//! - [`board`]: each run's agents and their states, on disk for the panels
 //! - [`live`]: runs this process is executing, and how to stop them
 //! - `vm` (feature `plugin-js`): the QuickJS side, `agent()`, `parallel()` and the rest
 //! - `launch`, `runner`, `structured`: the `Workflow` tool, wired to real subagents
@@ -15,6 +16,7 @@
 //! `/workflows` can still list and show runs. Without the feature there is no
 //! `Workflow` tool, because there is no engine to run a script in.
 
+pub mod board;
 pub mod command;
 pub mod engine;
 pub mod live;
@@ -33,3 +35,6 @@ pub mod vm;
 
 /// The reference `/workflow-authoring` prints and the `Workflow` tool points at.
 pub const AUTHORING: &str = include_str!("authoring.md");
+
+#[cfg(all(test, feature = "plugin-js"))]
+mod bundled_tests;

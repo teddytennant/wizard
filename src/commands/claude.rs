@@ -107,10 +107,8 @@ pub const COMPAT: &[&str] = &[
     "tui",
     "web-setup",
     "workflows",
-    "batch",
     "claude-api",
     "dataviz",
-    "deep-research",
     "plugin-authoring",
     "auto-mode-setup",
 ];
@@ -153,10 +151,8 @@ const READ_ONLY: &[&str] = &[
     "stickers",
     "tui",
     "web-setup",
-    "batch",
     "claude-api",
     "dataviz",
-    "deep-research",
     "plugin-authoring",
     "auto-mode-setup",
 ];
@@ -174,6 +170,7 @@ pub fn disabled_by(command: &str, get: &dyn Fn(&str) -> Option<String>) -> Optio
         "doctor" => &["DISABLE_DOCTOR_COMMAND"],
         "usage-credits" => &["DISABLE_EXTRA_USAGE_COMMAND"],
         "install-github-app" => &["DISABLE_INSTALL_GITHUB_APP_COMMAND"],
+        "compact" => &["DISABLE_COMPACT"],
         _ => return None,
     };
     vars.iter().copied().find(|var| {
@@ -242,8 +239,54 @@ const BUNDLED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Bundled workflows that are also slash commands: the name, what the
+/// arguments are called, and what to ask for when there are none.
+const WORKFLOW_COMMANDS: &[(&str, &str, &str)] = &[
+    ("deep-research", "question", "the question to research"),
+    ("batch", "instruction", "the change to make everywhere"),
+];
+
+/// `/<name> <args>` for a bundled workflow: the prompt Claude Code's workflow
+/// commands send, which tells the model to call `Workflow` with the arguments.
+fn workflow_command(name: &str, noun: &str, ask: &str) -> Option<CustomCommand> {
+    let (_, text) = crate::workflow::store::BUNDLED
+        .iter()
+        .find(|(file, _)| *file == name)?;
+    let meta = crate::workflow::script::parse(text).ok()?.meta;
+    let mut body = format!("Run the \"{name}\" workflow.\n{}\n", meta.description);
+    if let Some(when) = &meta.when_to_use {
+        body.push_str(when);
+        body.push('\n');
+    }
+    if !meta.phases.is_empty() {
+        body.push_str("\nPhases:\n");
+        for phase in &meta.phases {
+            match &phase.detail {
+                Some(detail) => body.push_str(&format!("- {}: {detail}\n", phase.title)),
+                None => body.push_str(&format!("- {}\n", phase.title)),
+            }
+        }
+    }
+    body.push_str(&format!(
+        "\nThe {noun}: $ARGUMENTS\n\nIf that is empty, ask the user for {ask} and wait. Otherwise invoke: Workflow({{ name: \"{name}\", args: <the {noun} above, as a JSON string> }})\n"
+    ));
+    Some(CustomCommand {
+        name: name.to_string(),
+        description: Some(meta.description),
+        template: body,
+        path: std::path::PathBuf::from(format!("bundled/{name}.js")),
+        pi_syntax: false,
+    })
+}
+
 /// The prompt commands that ship in the binary.
 pub fn bundled() -> Vec<CustomCommand> {
+    if crate::config::claude_env::truthy(
+        &|n| std::env::var(n).ok(),
+        crate::workflow::store::BUNDLED_OFF,
+    ) {
+        return Vec::new();
+    }
     let mut commands: Vec<CustomCommand> = BUNDLED
         .iter()
         .map(|(name, raw)| {
@@ -257,6 +300,11 @@ pub fn bundled() -> Vec<CustomCommand> {
             }
         })
         .collect();
+    for (name, noun, ask) in WORKFLOW_COMMANDS {
+        if let Some(command) = workflow_command(name, noun, ask) {
+            commands.push(command);
+        }
+    }
     // The reference lives next to the runtime it describes.
     commands.push(CustomCommand {
         name: "workflow-authoring".to_string(),
@@ -305,7 +353,13 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
             super::session_cmds::background(surface.snapshot().session.as_deref(), args, &root),
         ),
         "stop" => reply(surface, super::session_cmds::stop(args)),
-        "workflows" => reply(surface, crate::workflow::command::run(args, &root)),
+        "workflows" => {
+            // Bare `/workflows` opens the panel where the surface has one.
+            if args.is_empty() && surface.open(super::surface::Chooser::Workflows).await {
+                return;
+            }
+            reply(surface, crate::workflow::command::run(args, &root));
+        }
         "statusline" => reply(surface, super::misc::statusline(args, &root)),
         "autocompact" => reply(surface, super::misc::autocompact(args)),
         "fast" => reply(surface, super::misc::fast(args)),
@@ -786,6 +840,30 @@ mod tests {
         }
         let review = all.iter().find(|c| c.name == "review").unwrap();
         assert!(review.expand("123").contains("Target: 123"));
+    }
+
+    #[test]
+    fn workflow_commands_tell_the_model_to_call_the_workflow_tool() {
+        let all = bundled();
+        let research = all.iter().find(|c| c.name == "deep-research").unwrap();
+        let prompt = research.expand("is zinc worth taking");
+        assert!(
+            prompt.starts_with("Run the \"deep-research\" workflow."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Phases:\n- Scope: split the question"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("The question: is zinc worth taking"));
+        assert!(prompt.contains("Workflow({ name: \"deep-research\", args:"));
+        let batch = all.iter().find(|c| c.name == "batch").unwrap();
+        assert!(
+            batch
+                .expand("rename Foo")
+                .contains("The instruction: rename Foo")
+        );
+        assert!(!COMPAT.contains(&"batch") && !COMPAT.contains(&"deep-research"));
     }
 
     #[test]

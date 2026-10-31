@@ -2011,6 +2011,9 @@ impl CommandSurface for CommandContext<'_> {
             Chooser::Settings => self.app.open_settings_picker(),
             Chooser::FusionPanel => self.app.open_fusion_picker(),
             Chooser::UltraRoster => self.app.open_ultra_picker(),
+            Chooser::Workflows => {
+                self.app.workflow_panel = Some(crate::ui::workflow_panel::WorkflowPanel::open());
+            }
         }
         true
     }

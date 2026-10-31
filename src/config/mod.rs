@@ -362,6 +362,10 @@ fn is_false(b: &bool) -> bool {
 }
 
 /// Compact view is the default, so the key is written only when it is off.
+fn default_true() -> bool {
+    true
+}
+
 fn default_compact() -> bool {
     true
 }
@@ -1350,6 +1354,11 @@ pub struct Config {
     /// history exceeds this many bytes, compact older messages into a summary.
     /// With a known window, the reported prompt size governs instead.
     pub compact_threshold_bytes: usize,
+    /// Compact a full context before the next request. `false` is Claude
+    /// Code's `autoCompactEnabled: false` and `DISABLE_AUTO_COMPACT`: the
+    /// history grows until the provider refuses it, and `/compact` still works.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub auto_compact: bool,
     /// Treat the provider's context window as no larger than this many
     /// tokens (`0` uses the whole window). Compaction triggers at 80% of it,
     /// so the default compacts at 120k tokens whatever the model claims to
@@ -1520,6 +1529,7 @@ impl Default for Config {
             self_check: false,
             token_profile: None,
             compact_threshold_bytes: 48_000,
+            auto_compact: true,
             time_wrap_up_at: default_wrap_up_at(),
             time_finish_at: default_finish_at(),
             max_context_tokens: 150_000,

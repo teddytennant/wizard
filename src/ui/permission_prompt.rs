@@ -132,6 +132,9 @@ impl PermissionPrompt {
 
     /// The heading Claude puts over the tool's own detail.
     fn heading(&self) -> &'static str {
+        if toolmap::claude_name(&self.tool) == "Workflow" {
+            return super::workflow_panel::approval(&self.args).0;
+        }
         match toolmap::class(&self.tool) {
             ToolClass::Shell => "Bash command",
             ToolClass::Edit => "Edit file",
@@ -145,6 +148,9 @@ impl PermissionPrompt {
     /// lines of what is written to it, the URL.
     fn detail(&self) -> Vec<String> {
         let text = |key: &str| self.args.get(key).and_then(Value::as_str);
+        if toolmap::claude_name(&self.tool) == "Workflow" {
+            return super::workflow_panel::approval(&self.args).1;
+        }
         match toolmap::class(&self.tool) {
             ToolClass::Shell => {
                 let mut out: Vec<String> = text("command")

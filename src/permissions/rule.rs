@@ -125,6 +125,7 @@ impl Rule {
                     .iter()
                     .filter_map(|key| args.get(*key).and_then(Value::as_str))
                     .any(|name| name == spec),
+                "Workflow" => super::prompt::saved_workflow(args).is_some_and(|name| name == spec),
                 _ => false,
             },
         }

@@ -12,6 +12,7 @@ use super::structured::{self, StructuredOutputTool};
 use crate::agent::AgentEvent;
 use crate::agent::subagent::{self, SharedActiveModel, SpawnOptions, SubagentConfig, SubagentStop};
 use crate::hooks::HookEngine;
+use crate::hooks::toolmap;
 use crate::llm::provider::LlmProvider;
 use crate::tools::ToolContext;
 use crate::tools::registry::ToolRegistry;
@@ -30,6 +31,20 @@ fn framed(prompt: &str) -> String {
 }
 
 const STRUCTURED_FRAME: &str = "\n\nCRITICAL: you must return your answer by calling the StructuredOutput tool exactly once. The tool's input schema is the shape the script reads. Do your work first (read files, run commands), then call StructuredOutput with the answer, and end your turn. Do not put the answer in a text reply. If the call is rejected, read the error and call it again with a corrected shape.";
+
+/// The registered names a `disallowedTools` entry takes away: the name as
+/// written, Wizard's tool for a Claude name (`Bash` is `execute`), and the
+/// other tools that count as the same Claude tool (`Edit` covers `apply_patch`).
+fn taken_away(name: &str) -> Vec<String> {
+    let mut names = vec![name.to_string()];
+    if let Some(own) = toolmap::wizard_name(name) {
+        names.push(own.to_string());
+    }
+    if matches!(name, "Edit" | "edit_file") {
+        names.push("apply_patch".to_string());
+    }
+    names
+}
 
 pub struct SubagentRunner {
     pub configs: Vec<SubagentConfig>,
@@ -74,7 +89,9 @@ impl SubagentRunner {
         let mut config = self.config_for(request)?;
         let mut registry = subagent::scoped_registry(&self.registry, None);
         for name in &request.disallowed_tools {
-            registry.remove(name);
+            for taken in taken_away(name) {
+                registry.remove(&taken);
+            }
         }
         let mut task = framed(&request.prompt);
         let captured = match &request.schema {
@@ -208,7 +225,28 @@ impl AgentRunner for SubagentRunner {
             AgentOutcome::Done(Value::String(text)) => {
                 AgentOutcome::Done(Value::String(text + &note))
             }
+            AgentOutcome::Done(Value::Object(mut fields)) => {
+                fields.insert(
+                    "worktree".to_string(),
+                    Value::String(path.display().to_string()),
+                );
+                AgentOutcome::Done(Value::Object(fields))
+            }
             other => other,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::taken_away;
+
+    #[test]
+    fn a_claude_tool_name_takes_away_wizards_tool() {
+        assert!(taken_away("Bash").contains(&"execute".to_string()));
+        let edit = taken_away("Edit");
+        assert!(edit.contains(&"edit_file".to_string()));
+        assert!(edit.contains(&"apply_patch".to_string()));
+        assert_eq!(taken_away("mcp__x__y"), ["mcp__x__y"]);
     }
 }

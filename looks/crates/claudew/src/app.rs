@@ -233,6 +233,8 @@ pub enum Dialog {
         nth: usize,
         sel: usize,
     },
+    /// `/workflows`: the live panel of workflow runs.
+    Workflows(crate::ui::workflows::State),
     /// ctrl+r: earlier prompts, filtered by what is typed.
     Search {
         query: String,
@@ -1492,6 +1494,10 @@ impl App {
                 self.open_model();
                 return;
             }
+            "workflows" if arg.is_empty() => {
+                self.dialog = Some(Dialog::Workflows(crate::ui::workflows::State::open()));
+                return;
+            }
             "resume" if arg.is_empty() => {
                 self.resume_now = self.now_unix;
                 self.sessions.clear();
@@ -2495,6 +2501,9 @@ impl App {
                     KeyCode::Enter => self.dialog = None,
                     _ => {}
                 }
+            }
+            Dialog::Workflows(state) => {
+                self.dialog = crate::ui::workflows::key(state, key).map(Dialog::Workflows);
             }
             Dialog::Btw {
                 question,

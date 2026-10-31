@@ -968,12 +968,110 @@ fn lookup_price(model: &str, endpoint: &str) -> Option<ModelPrice> {
         .map(|(_, price, _)| price)
 }
 
+/// Contracted rates from managed settings (`modelPricing`): a multiplier on every
+/// computed cost, and exact prices for named models.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Contract {
+    /// Scales every cost, overridden or not. `(0, 10]`; `1.0` leaves prices alone.
+    pub multiplier: Option<f64>,
+    /// Lowercased model id (or built-in key) to its four rates.
+    pub overrides: Vec<(String, ModelPrice)>,
+}
+
+impl Contract {
+    /// Read the `modelPricing` object. An invalid row or multiplier is skipped
+    /// with a warning and the rest still apply, as in Claude Code.
+    pub fn parse(value: &serde_json::Value) -> Self {
+        let mut out = Contract::default();
+        if let Some(m) = value.get("multiplier") {
+            match m.as_f64().filter(|m| *m > 0.0 && *m <= 10.0) {
+                Some(m) => out.multiplier = Some(m),
+                None => tracing::warn!("modelPricing.multiplier must be above 0 and at most 10"),
+            }
+        }
+        if let Some(rows) = value.get("overrides").and_then(|v| v.as_object()) {
+            for (model, row) in rows {
+                let rate = |key: &str| {
+                    row.get(key)
+                        .and_then(|v| v.as_f64())
+                        .filter(|r| (0.0..=10_000.0).contains(r))
+                };
+                match (
+                    rate("input"),
+                    rate("output"),
+                    rate("cacheRead"),
+                    rate("cacheWrite"),
+                ) {
+                    (Some(input), Some(output), Some(cache_read), Some(cache_write)) => {
+                        out.overrides.push((
+                            model.to_ascii_lowercase(),
+                            ModelPrice {
+                                input,
+                                output,
+                                cache_read,
+                                cache_write,
+                            },
+                        ));
+                    }
+                    _ => tracing::warn!(
+                        "modelPricing.overrides.{model} needs input, output, cacheRead and cacheWrite, each 0 to 10000"
+                    ),
+                }
+            }
+        }
+        out
+    }
+
+    /// The contracted price for `model`: an exact id wins, then a key that is
+    /// one of the built-in model keys and appears in the id (so a dated or
+    /// provider-prefixed spelling of the same model is covered).
+    fn price_for(&self, model: &str) -> Option<ModelPrice> {
+        let id = model.trim().to_ascii_lowercase();
+        if let Some((_, price)) = self.overrides.iter().find(|(key, _)| *key == id) {
+            return Some(*price);
+        }
+        self.overrides
+            .iter()
+            .filter(|(key, _)| {
+                PRICES.iter().any(|(built_in, _)| built_in == key) && id.contains(key)
+            })
+            .max_by_key(|(key, _)| key.len())
+            .map(|(_, price)| *price)
+    }
+}
+
+fn contract() -> &'static std::sync::RwLock<Contract> {
+    static CONTRACT: std::sync::OnceLock<std::sync::RwLock<Contract>> = std::sync::OnceLock::new();
+    CONTRACT.get_or_init(Default::default)
+}
+
+/// Install the contracted rates for this process.
+pub fn set_contract(new: Contract) {
+    *contract().write().unwrap_or_else(|e| e.into_inner()) = new;
+}
+
 /// Estimated cost of one turn, with the rate's provenance.
 ///
 /// Precedence: configured rates, then a self-hosted backend, then the price
 /// table, then [`FALLBACK_PRICE`]. There is no "no answer" arm: every turn
 /// gets a number, because a blank cost column is what this replaced.
 pub fn estimate_cost(tokens: TurnTokens, inputs: &PriceInputs<'_>) -> PricedTurn {
+    let priced = estimate_list_cost(tokens, inputs);
+    let contract = contract().read().unwrap_or_else(|e| e.into_inner());
+    if priced.source == PriceSource::Local {
+        return priced;
+    }
+    let usd = match contract.price_for(inputs.model) {
+        Some(price) => price_tokens(tokens, price),
+        None => priced.usd,
+    };
+    PricedTurn {
+        usd: usd * contract.multiplier.unwrap_or(1.0),
+        source: priced.source,
+    }
+}
+
+fn estimate_list_cost(tokens: TurnTokens, inputs: &PriceInputs<'_>) -> PricedTurn {
     let (price, source) = match (inputs.usd_per_mtok_in, inputs.usd_per_mtok_out) {
         // Config has no cache fields, so configured rates get the default
         // multipliers. The user asked for these numbers; they outrank both
@@ -2718,5 +2816,52 @@ mod tests {
         let mut rollup = Rollup::default();
         rollup.add(&turn);
         assert!(!rollup.estimated, "only 'fallback' flags a row as a guess");
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn model_pricing_reads_a_multiplier_and_named_rows() {
+        let contract = Contract::parse(&json!({
+            "multiplier": 0.85,
+            "overrides": {
+                "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cacheRead": 0.2, "cacheWrite": 2.5},
+                "my-gateway-alias": {"input": 1.0, "output": 4.0, "cacheRead": 0.1, "cacheWrite": 1.25},
+                "broken": {"input": 1.0}
+            }
+        }));
+        assert_eq!(contract.multiplier, Some(0.85));
+        assert_eq!(
+            contract.overrides.len(),
+            2,
+            "the row missing fields is skipped"
+        );
+        // A built-in key covers dated and provider-prefixed spellings.
+        let dated = contract.price_for("claude-sonnet-5-20260101").unwrap();
+        assert_eq!((dated.input, dated.output), (2.0, 10.0));
+        assert!(contract.price_for("anthropic/claude-sonnet-5").is_some());
+        // Any other key matches that id only, case-insensitively.
+        assert!(contract.price_for("My-Gateway-Alias").is_some());
+        assert!(contract.price_for("my-gateway-alias-2").is_none());
+        assert!(contract.price_for("claude-opus-5").is_none());
+    }
+
+    #[test]
+    fn a_multiplier_outside_zero_to_ten_is_ignored() {
+        for bad in [json!(0), json!(-1), json!(11), json!("2")] {
+            assert_eq!(
+                Contract::parse(&json!({"multiplier": bad})).multiplier,
+                None
+            );
+        }
+        assert_eq!(
+            Contract::parse(&json!({"multiplier": 10})).multiplier,
+            Some(10.0)
+        );
     }
 }

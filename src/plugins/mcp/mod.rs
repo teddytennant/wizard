@@ -66,11 +66,17 @@ pub(crate) const PROTOCOL_VERSION: &str = "2025-03-26";
 /// `npx`/`uvx` server cannot pass doctor and fail the runtime. Core holding
 /// the constant was the old arrangement and would have meant core holding one
 /// protocol's timing.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+fn connect_timeout() -> Duration {
+    crate::config::claude_env::mcp_connect_timeout(&|n| std::env::var(n).ok())
+}
 /// Budget for one `tools/list` page.
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Budget for one `tools/call`.
-const CALL_TIMEOUT_SECS: u64 = 120;
+fn call_timeout_secs() -> u64 {
+    crate::config::claude_env::mcp_call_timeout(&|n| std::env::var(n).ok())
+        .as_secs()
+        .max(1)
+}
 /// How long to wait for a stdio child to exit before giving up on it.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// Hard cap on `tools/list` pagination so a misbehaving server that keeps
@@ -79,7 +85,9 @@ const MAX_LIST_PAGES: usize = 64;
 /// Budget for one stdio JSON-RPC round trip, so a server that answers with
 /// the wrong ids (or nothing at all) cannot wedge a request forever. Matches
 /// the `tools/call` budget — the longest legitimate operation.
-const STDIO_REQUEST_TIMEOUT: Duration = Duration::from_secs(CALL_TIMEOUT_SECS);
+fn stdio_request_timeout() -> Duration {
+    Duration::from_secs(call_timeout_secs())
+}
 /// Stale/mismatched-id responses tolerated per request before we give up on
 /// the server instead of reading its stdout to EOF.
 const MAX_STALE_RESPONSES: usize = 50;
@@ -214,13 +222,13 @@ impl McpConnection {
             transport,
             next_id: AtomicU64::new(1),
         };
-        timeout(CONNECT_TIMEOUT, connection.initialize())
+        timeout(connect_timeout(), connection.initialize())
             .await
             .map_err(|_| {
                 anyhow!(
                     "MCP server '{}' did not complete initialize within {}s",
                     connection.config.name,
-                    CONNECT_TIMEOUT.as_secs()
+                    connect_timeout().as_secs()
                 )
             })??;
         Ok(connection)
@@ -461,7 +469,7 @@ impl McpConnection {
     /// One write-then-read round trip over the child's pipes. Skips
     /// notifications, junk lines, and (a bounded number of) stale responses;
     /// politely refuses server-to-client requests. The whole round trip is
-    /// capped at [`STDIO_REQUEST_TIMEOUT`].
+    /// capped at [`stdio_request_timeout`].
     async fn stdio_request_once(
         &self,
         transport: &StdioTransport,
@@ -472,14 +480,14 @@ impl McpConnection {
         let mut io = transport.io.lock().await;
         write_line(&mut io.stdin, message, name).await?;
         timeout(
-            STDIO_REQUEST_TIMEOUT,
+            stdio_request_timeout(),
             read_stdio_response(&mut io, id, name),
         )
         .await
         .map_err(|_| {
             anyhow!(
                 "MCP server '{name}' did not answer within {}s",
-                STDIO_REQUEST_TIMEOUT.as_secs()
+                stdio_request_timeout().as_secs()
             )
         })?
     }
@@ -507,12 +515,12 @@ impl McpConnection {
             "params": initialize_params(),
         });
         write_line(&mut io.stdin, &message, name).await?;
-        timeout(CONNECT_TIMEOUT, read_stdio_response(&mut io, id, name))
+        timeout(connect_timeout(), read_stdio_response(&mut io, id, name))
             .await
             .map_err(|_| {
                 anyhow!(
                     "respawned MCP server '{name}' did not complete initialize within {}s",
-                    CONNECT_TIMEOUT.as_secs()
+                    connect_timeout().as_secs()
                 )
             })??;
         let initialized = json!({
@@ -859,7 +867,7 @@ fn open_http(config: &McpServerConfig) -> Result<HttpTransport> {
     let client = reqwest::Client::builder()
         .default_headers(headers)
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(CALL_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(call_timeout_secs()))
         .build()
         .context("failed to build HTTP client for MCP")?;
     Ok(HttpTransport {
@@ -1093,7 +1101,7 @@ impl Connections {
     /// on `initialize` — `npx -y @playwright/mcp@latest` is a couple of seconds
     /// of npm resolution before it says a word — and doing them one after
     /// another made startup the *sum* of every server's cold start, with a
-    /// single unreachable one contributing the whole [`CONNECT_TIMEOUT`] to
+    /// single unreachable one contributing the whole [`connect_timeout`] to
     /// that sum. Concurrently it is the slowest one instead. Nothing about a
     /// connect depends on another connect having finished, so there is no
     /// ordering to preserve here beyond the one the results come back in, and
@@ -1265,20 +1273,20 @@ impl McpConnector for Connector {
 
     /// One handshake, one `tools/list`, one sentence.
     ///
-    /// The budget is [`CONNECT_TIMEOUT`], the same one a session connects
+    /// The budget is [`connect_timeout`], the same one a session connects
     /// under, which is the reason this is the plugin's method rather than
     /// doctor connecting for itself: a diagnostic that is more patient than
     /// the runtime passes servers that will fail every session.
     async fn probe(&self, server: McpServerConfig) -> Result<String> {
         let name = server.name.clone();
-        let connection = match timeout(CONNECT_TIMEOUT, McpConnection::connect(server)).await {
+        let connection = match timeout(connect_timeout(), McpConnection::connect(server)).await {
             Ok(result) => result?,
-            Err(_) => bail!("no handshake within {}s", CONNECT_TIMEOUT.as_secs()),
+            Err(_) => bail!("no handshake within {}s", connect_timeout().as_secs()),
         };
         // A server that shook hands and cannot list is still reachable, which
         // is the fact doctor was asking about, so the tool count degrades
         // rather than turning the whole check red.
-        let detail = match timeout(CONNECT_TIMEOUT, connection.list_tools()).await {
+        let detail = match timeout(connect_timeout(), connection.list_tools()).await {
             Ok(Ok(tools)) => format!("handshake ok, {} tool(s)", tools.len()),
             _ => "handshake ok".to_string(),
         };
@@ -1331,11 +1339,11 @@ impl Tool for McpTool {
             });
         }
         let call = self.connection.call_tool(&self.info.name, args);
-        match timeout(Duration::from_secs(CALL_TIMEOUT_SECS), call).await {
+        match timeout(Duration::from_secs(call_timeout_secs()), call).await {
             // Images ride back even on a failed call: a browser tool that
             // reports a broken page still returns the screenshot of it.
             Ok(Ok((content, is_error))) => Ok(ToolOutput {
-                content: content.text,
+                content: cap_result(content.text),
                 is_error,
                 images: content.images,
             }),
@@ -1345,15 +1353,48 @@ impl Tool for McpTool {
             }),
             Err(_) => Err(ToolError::Timeout {
                 tool: self.registered_name.clone(),
-                seconds: CALL_TIMEOUT_SECS,
+                seconds: call_timeout_secs(),
             }),
         }
     }
 }
 
+/// `MAX_MCP_OUTPUT_TOKENS`: a result longer than that many tokens (four bytes
+/// each, as the rest of Wizard counts) is cut and says so.
+fn cap_result(text: String) -> String {
+    let Some(tokens) = crate::config::claude_env::mcp_output_tokens(&|n| std::env::var(n).ok())
+    else {
+        return text;
+    };
+    let limit = tokens.saturating_mul(4);
+    if text.len() <= limit {
+        return text;
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n[cut: this MCP result was about {} tokens and MAX_MCP_OUTPUT_TOKENS is {tokens}]",
+        &text[..end],
+        text.len() / 4
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mcp_result_past_the_token_cap_is_cut_with_a_note() {
+        // SAFETY: only this test sets the variable.
+        unsafe { std::env::set_var("MAX_MCP_OUTPUT_TOKENS", "10") };
+        let cut = cap_result("x".repeat(100));
+        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS") };
+        assert!(cut.starts_with(&"x".repeat(40)) && !cut.starts_with(&"x".repeat(41)));
+        assert!(cut.contains("MAX_MCP_OUTPUT_TOKENS is 10"), "{cut}");
+        assert_eq!(cap_result("short".to_string()), "short");
+    }
 
     #[tokio::test]
     async fn reserved_tool_names_match_the_native_registry() {

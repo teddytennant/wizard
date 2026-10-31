@@ -229,7 +229,10 @@ async fn resolve_prefers_path_then_name_then_script_and_explains_misses() {
         None,
     )
     .unwrap_err();
-    assert_eq!(missing, "Workflow \"nope\" not found. Available: saved");
+    assert_eq!(
+        missing,
+        "Workflow \"nope\" not found. Available: saved, deep-research, code-review, batch"
+    );
 
     let gone = resolve(
         &Input {
@@ -274,4 +277,43 @@ async fn validate_refuses_a_syntax_error_and_the_clock() {
     let err = validate(&clock).await.unwrap_err();
     assert!(err.starts_with(script::NONDETERMINISM), "{err}");
     assert!(err.contains("Load the `workflow-authoring` skill"), "{err}");
+}
+
+#[tokio::test]
+async fn a_run_writes_its_board_and_a_stop_file_stops_it() {
+    let ctx = ToolContext::new(std::env::temp_dir());
+    let mock = Arc::new(Mock::default());
+    let run = launched(
+        inline(
+            "export const meta = {name: 'panel', description: 'd', phases: [{title: 'Go'}]}\nphase('Go')\nconst a = await agent('quick', {label: 'q', phase: 'Go'})\nreturn await agent('hang', {label: 'h', phase: 'Go'})",
+        ),
+        &mock,
+        &ctx,
+    )
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let board = loop {
+        if let Some(board) = board::read(&run.run_id)
+            && board.agents.len() == 2
+            && board.agents[1].state == board::AgentState::Running
+        {
+            break board;
+        }
+        assert!(Instant::now() < deadline, "no board written");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(board.phases, ["Go"]);
+    assert_eq!(board.agents[0].state, board::AgentState::Done);
+    assert_eq!(board.agents[0].outcome.as_deref(), Some("got quick"));
+    assert_eq!(board.agents[1].label, "h");
+    assert_eq!(board.phase_progress("Go"), (1, 2));
+
+    board::request_stop(&run.run_id).unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), run.done)
+        .await
+        .expect("the stop file ends the run")
+        .unwrap();
+    assert_eq!(outcome.status, Status::Stopped);
+    let after = board::read(&run.run_id).unwrap();
+    assert_eq!(after.agents[1].state, board::AgentState::Stopped);
 }

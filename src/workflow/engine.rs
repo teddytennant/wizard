@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
+use super::board::{self, AgentRow, AgentState, Board};
 use super::live::Cancel;
 use super::store::{self, JournalEntry};
 
@@ -141,6 +142,7 @@ pub struct Engine {
     progress: Arc<dyn Progress>,
     phases: Mutex<Vec<String>>,
     failures: Mutex<Vec<String>>,
+    rows: Mutex<Vec<AgentRow>>,
     persist: AtomicBool,
     spent: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
@@ -165,6 +167,7 @@ impl Engine {
             progress,
             phases: Mutex::new(Vec::new()),
             failures: Mutex::new(Vec::new()),
+            rows: Mutex::new(Vec::new()),
             persist: AtomicBool::new(false),
             spent: Arc::new(|| 0),
         }
@@ -220,6 +223,37 @@ impl Engine {
             .clone()
     }
 
+    /// Every agent called so far and its state, for the panel.
+    pub fn board(&self) -> Board {
+        Board {
+            phases: self.phases(),
+            agents: self.rows.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        }
+    }
+
+    fn row(&self, index: u32, change: impl FnOnce(&mut AgentRow)) {
+        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(row) = rows.iter_mut().find(|row| row.i == index) {
+            change(row);
+        }
+    }
+
+    /// The run was stopped: whatever had not finished did not.
+    pub fn stop_rows(&self) {
+        let now = store::now_ms();
+        for row in self
+            .rows
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter_mut()
+        {
+            if !row.state.finished() {
+                row.state = AgentState::Stopped;
+                row.ended_ms = Some(now);
+            }
+        }
+    }
+
     pub fn log(&self, text: &str) {
         self.progress.line(text);
     }
@@ -253,6 +287,24 @@ impl Engine {
             ));
         }
         request.index = index;
+        self.rows
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(AgentRow {
+                i: index,
+                label: request.label.clone(),
+                phase: request.phase.clone(),
+                state: AgentState::Queued,
+                agent: request
+                    .agent_type
+                    .clone()
+                    .unwrap_or_else(|| "worker".into()),
+                started_ms: None,
+                ended_ms: None,
+                prompt: board::kept(&request.prompt),
+                outcome: None,
+                error: None,
+            });
         let key = store::call_key(
             &request.prompt,
             &json!({
@@ -272,6 +324,11 @@ impl Engine {
                         .line(&format!("agent {index} [{}] cached", request.label));
                     let replay = entry.clone();
                     drop(cache);
+                    let outcome = board::kept(&outcome_text(&replay.result));
+                    self.row(index, |row| {
+                        row.state = AgentState::Cached;
+                        row.outcome = Some(outcome);
+                    });
                     // Kept in the new journal so a second resume still has it.
                     self.record(&replay);
                     return Pending::Cached(replay.result);
@@ -297,6 +354,10 @@ impl Engine {
             () = self.cancel.cancelled() => return Err(aborted()),
             permit = Arc::clone(&self.gate).acquire_owned() => permit.map_err(|_| aborted())?,
         };
+        self.row(request.index, |row| {
+            row.state = AgentState::Running;
+            row.started_ms = Some(store::now_ms());
+        });
         self.progress.line(&format!(
             "agent {} [{}] started{}",
             request.index,
@@ -326,11 +387,22 @@ impl Engine {
         };
         match outcome? {
             AgentOutcome::Done(value) => {
+                let text = board::kept(&outcome_text(&value));
+                self.row(index, |row| {
+                    row.state = AgentState::Done;
+                    row.ended_ms = Some(store::now_ms());
+                    row.outcome = Some(text);
+                });
                 self.progress.line(&format!("agent {index} [{label}] done"));
                 self.record(&entry(true, value.clone(), None));
                 Ok(value)
             }
             AgentOutcome::Failed(why) => {
+                self.row(index, |row| {
+                    row.state = AgentState::Failed;
+                    row.ended_ms = Some(store::now_ms());
+                    row.error = Some(board::kept(&why));
+                });
                 self.fail(&format!("agent {index} [{label}]: {why}"));
                 self.record(&entry(false, Value::Null, Some(why)));
                 Ok(Value::Null)
@@ -345,6 +417,14 @@ impl Engine {
         if let Err(err) = store::append_journal(&self.run_id, entry) {
             tracing::warn!("workflow journal write failed: {err:#}");
         }
+    }
+}
+
+/// An agent's result as the panel shows it: text as it is, anything else as JSON.
+fn outcome_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => serde_json::to_string_pretty(other).unwrap_or_default(),
     }
 }
 

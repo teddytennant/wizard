@@ -561,3 +561,6 @@ while True:
         assert!(second.content.starts_with("Already in plan mode."));
     }
 }
+
+#[cfg(test)]
+mod real_tests;

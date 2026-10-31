@@ -122,6 +122,8 @@ pub enum Chooser {
     FusionPanel,
     /// `/ultra config`: which lenses form the roster.
     UltraRoster,
+    /// `/workflows`: the live panel of workflow runs.
+    Workflows,
 }
 
 impl Chooser {
@@ -148,6 +150,7 @@ impl Chooser {
             | Chooser::Resume
             | Chooser::ResumeClaude
             | Chooser::Agents
+            | Chooser::Workflows
             | Chooser::Provider
             | Chooser::Settings => None,
         }

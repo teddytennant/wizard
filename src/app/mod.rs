@@ -396,6 +396,8 @@ pub struct App {
     pub plan_review: Option<PlanReview>,
     /// Tool calls waiting for approval; the first is the one on screen.
     pub permission_prompts: Vec<crate::ui::permission_prompt::PermissionPrompt>,
+    /// The panel `/workflows` opens; it takes every key while it is up.
+    pub workflow_panel: Option<crate::ui::workflow_panel::WorkflowPanel>,
     /// Open interview modal (the turn is paused inside the `interview` tool
     /// until the user answers or dismisses), if any.
     pub interview: Option<Interview>,
@@ -685,6 +687,7 @@ impl App {
             ultra: None,
             plan_review: None,
             permission_prompts: Vec::new(),
+            workflow_panel: None,
             interview: None,
             console: None,
             console_pending: None,
@@ -2729,6 +2732,9 @@ impl App {
             Event::Tick => {
                 self.tick = self.tick.wrapping_add(1);
                 self.statusline_tick();
+                if let Some(panel) = self.workflow_panel.as_mut() {
+                    panel.refresh();
+                }
                 if self
                     .copied
                     .is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR)
@@ -3091,6 +3097,14 @@ impl App {
                 // there, so you never lose a keystroke to the rail.
                 _ => self.rail_focus = None,
             }
+        }
+
+        // The workflow panel captures every key until it is closed.
+        if let Some(panel) = self.workflow_panel.as_mut() {
+            if panel.handle_key(key) {
+                self.workflow_panel = None;
+            }
+            return Ok(None);
         }
 
         // A permission prompt captures all keys: the turn is parked before the

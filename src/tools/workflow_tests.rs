@@ -225,3 +225,31 @@ fn the_environment_variable_turns_workflows_off() {
     assert!(!disabled_by_env(&env("")));
     assert!(!disabled_by_env(&|_| None));
 }
+
+#[test]
+fn the_size_guideline_follows_the_setting() {
+    let default = size_guideline(None).unwrap();
+    assert!(default.starts_with("This session has the default workflow size guideline: medium"));
+    assert!(default.contains("under 10 agents") && default.contains("workflowSizeGuideline"));
+    let small = size_guideline(Some("small")).unwrap();
+    assert!(small.starts_with("A workflow size guideline is configured for this session: small"));
+    assert!(small.contains("under 5 agents") && !small.contains("Set workflowSizeGuideline"));
+    assert!(
+        size_guideline(Some("large"))
+            .unwrap()
+            .contains("under 50 agents")
+    );
+    assert_eq!(size_guideline(Some("unrestricted")), None);
+
+    let described = tool()
+        .with_size_guideline(Some(small.clone()))
+        .description()
+        .to_string();
+    assert!(described.ends_with(&small));
+    assert!(
+        !tool()
+            .with_size_guideline(None)
+            .description()
+            .contains("guideline")
+    );
+}
