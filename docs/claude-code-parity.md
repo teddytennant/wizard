@@ -52,10 +52,10 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `ShareOnboardingGuide` | none | skipped | Uploads to claude.ai for Team and Enterprise plans. |
 | `Skill` | skills in the system prompt | new | Loads a skill's body by name from the same roots, with `args` appended. Unknown names get a "did you mean". |
 | `SubagentHandback` | none | partial | Registered. A subagent calls it with `report`, which becomes its result in place of its last message; the model is told to stop calling tools, and the run ends when it does. It does not force the run to stop, and there is no gate on the report as Claude has. Outside a subagent it says so. |
-| `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` | `todo` | new | A numbered board with `blocks`/`blockedBy`, `owner` and `metadata`; every change is mirrored into the `todo` list the TUI draws. A `todo` write does not touch the board. Result wording from the leaked source (the real binary exposes none of them over MCP in 2.1.314). |
+| `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` | `todo` | new | A numbered board with `blocks`/`blockedBy`, `owner` and `metadata`; every change is mirrored into the `todo` list the TUI draws, `activeForm` included. A `todo` write does not touch the board. Result wording from the leaked source (the real binary exposes none of them over MCP in 2.1.314). |
 | `TaskOutput` | `task_output` | present | Claude Code removed it in 2.1.277. |
 | `TaskStop` | `task_kill`, `subagent_kill` | new | Stops a shell task or Monitor by number; `agent:<n>` or a name reaches a background subagent. Error strings match the real binary. |
-| `TodoWrite` | `todo` | alias | `activeForm` is dropped. |
+| `TodoWrite` | `todo` | alias | `activeForm` becomes the item's optional `active_form`, which the task list shows beside the spinner. |
 | `ToolSearch` | `tool_search` | present | Same `select:` syntax. The deferred names are listed in the system prompt. |
 | `WaitForMcpServers` | none | partial | Registered. Wizard connects every MCP server before the first turn and loads their tools once, so nothing is ever pending: it answers `ready=true` with the connected servers, or `ready=false` naming the ones that are not connected. |
 | `WebFetch` | `web_fetch` | alias | Returns the page with the `prompt` placed above it for you to apply; there is no second model pass. `offset` drops that many characters. A non-URL fails with Claude's `Invalid URL`. |
@@ -995,8 +995,10 @@ mode line says which: `ctrl+t to hide tasks` / `ctrl+t to show tasks`, in place 
   and the rest is counted: `   … +6 pending, 3 completed`.
 - A finished list (every task completed) goes away when the turn ends. A task's text is cut with `…` at
   `width - 15`.
-- With a task in progress the spinner names it instead of a verb. 2.1.314 shows the task's `activeForm`
-  ("Changing hello to hi"); Wizard's `todo` has no such field, so the look shows the task's own text.
+- With a task in progress the spinner names it instead of a verb, by its `activeForm` ("Changing hello to hi")
+  where the model gave one and by the task's own text where it did not. Wizard's `todo` items take an optional
+  `active_form`; `TodoWrite` and `TaskCreate`/`TaskUpdate` pass `activeForm` into it, and it travels to the look in
+  the ACP `plan` update's `_meta.active_form`. A list saved before the field existed loads without it.
 
 Driving 2.1.314 to show it needs `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: the Task tools are on for models it knows,
 and the fake server's `claude-haiku-5-5` is not one. The model also has to ask for them first
@@ -1017,8 +1019,13 @@ reports hyperlinks), so the look no longer does either.
 Compared state by state with 2.1.314: `⏸ plan mode on (shift+tab to cycle)` in the footer, the plan and its
 approval dialog (`plan`, `plan-down`, `x-planesc`), and what follows approval (`plan-approve`). Where they differ:
 
-- 2.1.314 offers three ways out of the dialog (use auto mode, manually approve edits, tell it what to change,
-  with `shift+tab to approve with this feedback`); Wizard offers approve and keep planning.
+- The dialog offers the three ways out 2.1.314 does: `Yes, and use auto mode` (when Wizard has a mode that
+  approves for itself), `Yes, manually approve edits`, and `Tell Wizard what to change`, a line of text. Typing on
+  the third line, or picking it with `3`, takes text; Enter sends it back to the model as the reason the plan was
+  turned down (ACP `_meta.feedback` on the permission answer, which `exit_plan` returns as `plan rejected:
+  <text>`), and plan mode stays on. `shift+tab` approves and carries the text along (`The reviewer added: ...`).
+  `ctrl+g` opens the plan in the editor; a saved edit is written back to `.wizard/plan.md` and goes to the model
+  with the approval. The footer line reads `ctrl+g to edit in Nvim · .wizard/plan.md`.
 - An approved plan prints `User approved Claude's plan` with a plan-coloured bullet, the plan file
   (`~/.claude/plans/<slug>.md · /plan to edit`) and the plan. Wizard keeps its plan in `.wizard/plan.md`.
 - After approval 2.1.314 is in the mode its option named; Wizard goes back to the mode the plan was entered from.

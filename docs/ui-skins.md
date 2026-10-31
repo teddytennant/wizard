@@ -174,16 +174,80 @@ scenes' fixed prompts with scripted tool calls, and runs `claude` against it in 
 of its own, so nothing reaches a subscription or `~/.claude`. `REF_GROUPS="turn3 shared"`
 captures only those scene groups. What it cannot give is the subscription's own screens
 (plan name, weekly-limit notice, account-specific commands and models), so its captures are
-for finding differences, not for replacing `tests/fixtures/ref`.
+for finding differences, not for replacing `tests/fixtures/ref`. The installed `claude` updates itself (it moved to
+2.1.316 while the fixtures were being retaken), so a capture meant for `ref-2.1.314` sets
+`CLAUDE_BIN=~/.local/share/claude/versions/2.1.314`.
 
 The `claude` look's scene groups are in `tools/drive.py`. Besides the ones for the home screen, turns,
 permissions, pickers and vim, `statusline` and `statusline-pad` run a test `statusLine` command
 (`tools/statusline-a.sh`, `statusline-pad.sh`; `compare.sh` writes the project settings for them), `todo` and
-`todo-many` drive the task list, and `plan2` approves a plan. `compare.sh` compares against
+`todo-many` drive the task list, `plan2` approves a plan and `plan3` turns one down with typed feedback.
+`compare.sh` compares against
 `tests/fixtures/ref-2.1.314`, a capture of the installed 2.1.314 through the fake server; `REFDIR=tests/fixtures/ref`
 compares against the older 2.1.300 subscription capture instead, which `cargo test` still uses for the scenes both
 have. `REF=fake REF_BASE=tests/fixtures/ref-2.1.314 REF_GROUPS="todo" LOOK_GROUPS="todo"` redoes one group over the
 stored capture, `REF=fake SAVE=1` regenerates the whole of `tests/fixtures/ref-2.1.314` (it leaves `ref` and the tests' replay alone), and `COMPARE_CWD` moves the project directory (it must keep the length) when two runs share the box.
+
+### Timing in the captures
+
+Several things on the `claude` screen depend on the clock, and a capture taken at the wrong moment differs
+for no reason the look could fix. What 2.1.314 does, found by leaving it alone with the fake server and
+taking a capture every second:
+
+- The `◐ medium · /effort` notice sits right-aligned above the prompt for ten seconds after the session opens, and
+  for ten seconds after a panel closes (`/model`, `/resume`, `/help`) or a permission prompt is
+  answered. A turn does not bring it back, typing and `ctrl+c` do not, and neither does a resize.
+- `← for agents` leaves the mode line ten seconds after the session opens, and `/clear` does not bring it back.
+- The first time shift+tab reaches auto mode it prints a long explanation of it in the transcript. The look has no
+  such text, because Wizard's modes have no classifier to describe (`modes-3`, `modes-4`).
+- The `backslash (\) + return (⏎) for newline` entry of the shortcuts table becomes `\⏎ for newline` once a
+  newline has been typed that way. The look keeps that in a flag file in its state directory.
+
+`drive.py` waits for these before the scenes that need them to be absent (`('since', N)` counts from the process
+start, a `wait` from the scene), so the look, which starts faster than `claude`, and the reference are in the same
+state when they are captured. `turn-spinner` relies on `fake_anthropic.py` holding its answer after the shell
+command for three seconds (`FAKE_BASH_PAUSE`).
+
+### Where the look stands against 2.1.314
+
+`compare.sh` counts the cells that differ after `explained.tsv` has taken out what is a real difference of data
+(the plan name, the model list, the usage numbers, Wizard's own commands and keys). Every row there has a reason.
+Unexplained cells in the last full run, `static light turn turn2 turn3 plan2 plan3 todo todo-many think statusline
+statusline-pad wizard` at 80x24, 120x40 and 200x50:
+
+| Scene group | Before | After |
+|---|---:|---:|
+| Home, shortcuts, prompt and menus (32 scenes) | 1,860 | 0 |
+| Model picker (5) | 4,115 | 0 |
+| Resume picker (2) | 806 | 0 |
+| Modes (6) | 167 | 0 |
+| Permissions: bash, edit, write (5) | 1,271 | 0 |
+| Turns and transcript (16) | 1,200 | 0 |
+| Plan: dialog, approval, feedback (6) | 399 | 0 |
+| Task list (6) | 0 | 0 |
+| Status line (6) | 0 | 0 |
+| **Unexplained cells** | **9,818** | **0** |
+| Rows laid out differently with Wizard's own data | 75 | 12 |
+
+The 12 rows are `wz-modes-3` and `wz-modes-4` at 80x24, where the reference's auto mode explanation scrolls its
+transcript up a row; the layout check has no way to say that.
+
+With a real `wizard` behind the look (`WIZARD_BIN=... compare.sh`, `live.py` against `fake_openai.py`) 0 checks
+fail, among them the three-answer plan dialog and the typed feedback reaching the model as
+`plan rejected: use tabs`, and the shared scenes compared with the reference have 0 unexplained cells.
+
+Before this work the same run counted 9,818 unexplained cells: the model picker 4,115, bash and edit permissions
+1,271, the home screen and menus 1,860 (the shortcuts table at 80x24, the help panel at 200x50), turns 1,200,
+the resume picker 806, the plan dialog 399, modes 167. What changed was the look in most cases: the 2.1.314
+model picker (descriptions wrapped under their names, a window of `(height - 17) / 2` models, the default
+model's name in the brand colour), the three-answer plan dialog, bold phrases in the permission answers, a tip that
+wraps, the shortcuts table's newline entry, the notice and hint timing above, a prompt scrolled half off the top
+of the screen keeping its tail, and the task spinner naming the task's `activeForm`. The rest was captures taken
+at a moment that happened to differ, which are retaken with the waits above (the reference groups `static`,
+`light`, `turn`, `turn2`, `turn3`, `think`, `plan2` and `todo` were captured again, so Before and After are not
+cells of the same files). In `explained.tsv` ten rows that described the old two-answer plan dialog and a stale
+scroll were removed, and rows were added for the auto mode explanation, the command search ranking, the clock
+bound spinner colours and bullet, the plan file path and Wizard's own model panel; each says why.
 
 Product names and trademarks belong to their owners. The skins are an homage,
 and each one says whose look it wears on its own home screen.
