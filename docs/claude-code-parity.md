@@ -63,7 +63,7 @@ and is added; **partial** is added with a stated gap; **skipped** has a reason.
 | `WebSearch` | `web_search` | alias | `allowed_domains` and `blocked_domains` become `site:` and `-site:` operators in the query, so they depend on the backend honouring them. |
 | `Workflow` | none | new | Claude's input schema (`script`, `name`, `scriptPath`, `args`, `resumeFromRunId`, `title`, `description`) and script API (`agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, `budget`), run in the QuickJS kernel, so it needs the `plugin-js` feature (on by default; without it there is no tool). A run is a background task: `TaskStop` stops it, its agents are subagents on the rail, its result lands as a task note. In `-p`, the gateway and ACP the call waits and returns the result. Run ids, resume semantics and the error strings come from the real binary (`wf_<8 hex>-<3 hex>`; the unchanged prefix of `agent()` calls is cached, the first change and everything after it reruns). Runs live on disk under `~/.wizard/workflows/runs/`, so resume works across sessions, which Claude's does not. Not built: the approval dialog and `Workflow(<name>)` rules, remote runs, usage-limit waiting, stall restarts, cache staggering, the size warning, `ultracode`, `bashCommandClamp`. See [Workflows](workflows.md). |
 | `Write` | `write_file` | alias | |
-| `Artifact`, `DesignSync`, `Projects`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai-hosted pages and design sync, the SDK's structured output, and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
+| `Artifact`, `DesignSync`, `Projects`, `RefreshMcpTools`, `ReadMcpResourceDirTool`, `ShowOnboardingRolePicker` | none | skipped | claude.ai-hosted pages and design sync, and onboarding UI. Wizard has no claude.ai backend, and its `--json` output is separate. |
 
 ### What was compared against the real binary
 
@@ -96,6 +96,20 @@ nor the `Task*` tools (`TodoWrite is disabled for this session`), `Grep`,
 output; Wizard's versions stand on the leaked source. A model-free
 comparison of the permission dialog's own layout was not done: it needs the
 terminal pixels, and the claude look owns that.
+
+`Workflow` was driven the same way, with a fake Messages server that answers the
+main loop with a `Workflow` call and its agents with text or a `StructuredOutput` call.
+That gave the real launch text, run id shape (`wf_<8 hex>-<3 hex>`), the refusal text for
+a script with no `meta`, a clock call, TypeScript, an unknown name and no input, the
+`task_progress` stream (phase, then one entry per agent with `queued`, `start` and `done`),
+and the on-disk layout. Wizard's launch text and refusals use the real wording, except that
+a syntax error carries QuickJS's message without the source line and caret, and empty input
+gets a plain sentence instead of the schema validator's JSON. Its
+journal does not match the real format (Claude keys lines by a content digest with `started`
+and `result` events; Wizard numbers calls in script order and keys each by a digest of
+prompt and options), because nothing outside the runtime reads it. The script API, the
+`meta` rules, the limits and the framing of an agent's task come from the binary's own text
+(its tool description, its `workflow-authoring` text and its error strings), not from the spec.
 
 Known differences from the real results, beyond the rows above: `Read` returns
 plain text rather than `{type, file}` JSON; `Edit`, `Write` and `NotebookEdit`
