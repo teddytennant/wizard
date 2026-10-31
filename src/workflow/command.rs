@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use super::board;
 use super::live;
 use super::store::{self, RunRecord};
 
@@ -35,6 +36,26 @@ fn one_line(text: &str, max: usize) -> String {
     } else {
         let cut: String = flat.chars().take(max.saturating_sub(3)).collect();
         format!("{cut}...")
+    }
+}
+
+/// The mark the plain-text views put before an agent in this state.
+pub fn glyph(state: board::AgentState) -> &'static str {
+    use board::AgentState::*;
+    match state {
+        Queued => "-",
+        Running => "*",
+        Done | Cached => "+",
+        Failed => "x",
+        Stopped => "~",
+    }
+}
+
+fn agent_took(agent: &board::AgentRow) -> String {
+    match (agent.started_ms, agent.ended_ms) {
+        (Some(start), Some(end)) => format!("  {}s", end.saturating_sub(start) / 1000),
+        (Some(start), None) => format!("  {}s", store::now_ms().saturating_sub(start) / 1000),
+        _ => String::new(),
     }
 }
 
@@ -104,6 +125,21 @@ fn show(id: &str) -> Result<String, String> {
     if !run.phases.is_empty() {
         let _ = writeln!(out, "  phases: {}", run.phases.join(", "));
     }
+    if let Some(board) = board::read(&id) {
+        for agent in board.agents.iter().take(30) {
+            let _ = writeln!(
+                out,
+                "    {} {:<28} {}{}",
+                glyph(agent.state),
+                one_line(&agent.label, 28),
+                agent.phase.as_deref().unwrap_or("-"),
+                agent_took(agent),
+            );
+        }
+        if board.agents.len() > 30 {
+            let _ = writeln!(out, "    ... and {} more agents", board.agents.len() - 30);
+        }
+    }
     if !run.args.is_null() {
         let _ = writeln!(out, "  args: {}", one_line(&run.args.to_string(), 100));
     }
@@ -136,8 +172,9 @@ fn stop(id: &str) -> Result<String, String> {
     }
     let run = store::load(&id).map_err(|e| format!("{e:#}"))?;
     if store::effective_status(&run) == "running" {
-        return Err(format!(
-            "{id} is running in another process (pid {}); stop it there",
+        board::request_stop(&id).map_err(|e| format!("{e:#}"))?;
+        return Ok(format!(
+            "asked process {} to stop {id}; it checks every second",
             run.pid
         ));
     }
@@ -213,6 +250,17 @@ mod tests {
         let err = run(&format!("stop {}", done.run_id), &cwd).unwrap_err();
         assert!(err.contains("is not running (completed)"), "{err}");
         assert!(run("stop wf_nothere", &cwd).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_run_of_another_process_is_stopped_with_a_file() {
+        // The test runner's parent is alive and is not this process.
+        let theirs = record(Status::Running, std::os::unix::process::parent_id());
+        store::create(&theirs, "x").unwrap();
+        let said = run(&format!("stop {}", theirs.run_id), &std::env::temp_dir()).unwrap();
+        assert!(said.contains("to stop"), "{said}");
+        assert!(board::stop_requested(&theirs.run_id));
     }
 
     #[test]

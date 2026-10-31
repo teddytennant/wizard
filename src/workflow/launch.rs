@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use super::board;
 use super::engine::{AgentRunner, Engine, Limits, Progress};
 use super::live::{self, Cancel};
 use super::script::{self, Parsed};
@@ -341,10 +342,19 @@ pub async fn launch(deps: Deps, input: &Input, resolved: Resolved) -> Result<Lau
             let record = record.clone();
             tokio::spawn(async move {
                 let mut record = record;
+                let mut ticks = 0u32;
                 loop {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    snapshot(&mut record, &engine);
-                    let _ = store::write_record(&record);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    // A stop another process asked for, as a file in the run's directory.
+                    if board::stop_requested(&engine.run_id) {
+                        engine.cancel.cancel();
+                    }
+                    let _ = board::write(&engine.run_id, &engine.board());
+                    ticks += 1;
+                    if ticks.is_multiple_of(2) {
+                        snapshot(&mut record, &engine);
+                        let _ = store::write_record(&record);
+                    }
                 }
             })
         };
@@ -354,6 +364,10 @@ pub async fn launch(deps: Deps, input: &Input, resolved: Resolved) -> Result<Lau
         ticker.abort();
 
         let stopped = driver_cancel.is_cancelled();
+        if stopped {
+            engine.stop_rows();
+        }
+        let _ = board::write(&engine.run_id, &engine.board());
         let outcome = finish(&engine, &name, started.elapsed(), result, stopped);
         let mut record = store::load(&engine.run_id).unwrap_or(record);
         snapshot(&mut record, &engine);
