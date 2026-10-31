@@ -1720,12 +1720,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         everywhere
     ),
     compat_row!(
-        "batch",
-        "",
-        "batch of PR agents (not available here)",
-        everywhere
-    ),
-    compat_row!(
         "claude-api",
         "",
         "Claude API reference (not available here)",
@@ -1735,12 +1729,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         "dataviz",
         "",
         "chart guidance (not available here)",
-        everywhere
-    ),
-    compat_row!(
-        "deep-research",
-        "",
-        "deep research (not available here)",
         everywhere
     ),
     compat_row!(

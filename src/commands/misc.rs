@@ -123,20 +123,12 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
         "cloud sessions with a GitHub account are Anthropic's service.",
     ),
     (
-        "batch",
-        "no cloud batch of PR agents. `wizard fleet run -n N` splits a mission over parallel worktrees and merges them back.",
-    ),
-    (
         "claude-api",
         "the Claude API reference skill is not bundled. A skill of your own under .wizard/skills or .claude/skills loads like any other.",
     ),
     (
         "dataviz",
         "the chart-design skill is not bundled. A skill of your own under .wizard/skills or .claude/skills loads like any other.",
-    ),
-    (
-        "deep-research",
-        "the deep-research workflow is not built. /ultra fans a question out over lenses and judges the answers.",
     ),
     (
         "plugin-authoring",
