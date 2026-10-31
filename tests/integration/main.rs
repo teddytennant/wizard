@@ -19,6 +19,7 @@
 
 #[cfg(all(feature = "provider-ollama", feature = "acp"))]
 mod acp;
+mod claude_settings;
 mod claude_subcommands;
 mod cli;
 mod headless_shapes;
