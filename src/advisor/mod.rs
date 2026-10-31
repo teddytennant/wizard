@@ -181,24 +181,24 @@ pub fn command(args: &str) -> Result<String, String> {
     let args = args.trim();
     match args {
         "" => Ok(match configured() {
-            None => "no advisor is set. /advisor <model> names one (a provider name, \
-                     <provider>/<model>, or a model tag); the agent can then call the `advisor` \
-                     tool for a second opinion. It makes one plain completion with the summary the \
-                     agent writes; for a standing panel see /fusion and /ultra."
+            None => "Advisor: off. Usage: /advisor <model>|off, where the model is a provider name, \
+                     <provider>/<model>, or a model tag. The agent can then call the `advisor` \
+                     tool for a second opinion: one plain completion over the summary the agent \
+                     writes. For a standing panel see /fusion and /ultra."
                 .to_string(),
             Some(spec) => match target(&spec) {
                 Ok(t) => format!(
-                    "advisor: {spec} ({}: {}). /advisor off clears it.",
+                    "Advisor: {spec} ({}: {}). /advisor off clears it.",
                     t.label(),
                     t.how
                 ),
-                Err(err) => format!("advisor: {spec} (not resolvable now: {err})"),
+                Err(err) => format!("Advisor: {spec} (not resolvable now: {err})"),
             },
         }),
         "off" | "none" | "unset" | "clear" => {
             let path = crate::usersettings::set(SETTING, None)?;
             Ok(format!(
-                "advisor off ({SETTING} removed from {}).{}",
+                "Advisor disabled. ({SETTING} removed from {}.){}",
                 path.display(),
                 if std::env::var_os(ENV).is_some() {
                     format!(" {ENV} is still set in this environment and wins.")
@@ -211,8 +211,8 @@ pub fn command(args: &str) -> Result<String, String> {
             let t = target(spec)?;
             let path = crate::usersettings::set(SETTING, Some(Value::String(spec.to_string())))?;
             Ok(format!(
-                "advisor set to {spec}: {} ({}). Saved as {SETTING} in {}; the agent sees the \
-                 `advisor` tool from the next turn.",
+                "Advisor set to {spec}: {} ({}). Saved as {SETTING} in {}; the agent can call the \
+                 `advisor` tool from now on.",
                 t.label(),
                 t.how,
                 path.display()

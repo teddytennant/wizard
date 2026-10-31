@@ -84,10 +84,14 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// This binary, or the program `WIZARD_TRIGGER_PROGRAM` names (how the
+    /// integration tests keep a fired run from starting a real model session).
     pub fn current() -> Self {
-        Self {
-            program: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("wizard")),
-        }
+        let program = std::env::var_os("WIZARD_TRIGGER_PROGRAM")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_exe().ok())
+            .unwrap_or_else(|| PathBuf::from("wizard"));
+        Self { program }
     }
 
     pub fn with_program(program: impl Into<PathBuf>) -> Self {

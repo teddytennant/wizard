@@ -21,6 +21,7 @@
 mod acp;
 mod claude_settings;
 mod claude_subcommands;
+mod cloud_equivalents;
 mod cli;
 mod headless_shapes;
 #[cfg(feature = "mesh")]

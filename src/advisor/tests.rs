@@ -113,3 +113,20 @@ async fn an_empty_answer_is_an_error_not_silence() {
     let err = consult(client, "m", "q", "", None).await.unwrap_err();
     assert!(err.contains("nothing"), "{err}");
 }
+
+static SETTING_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn the_command_sets_reports_and_clears_the_setting_in_claude_codes_words() {
+    let _turn = SETTING_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    if std::env::var_os(ENV).is_some() {
+        return;
+    }
+    assert!(command("").unwrap().starts_with("Advisor: off."));
+    let set = command("some-model").unwrap();
+    assert!(set.starts_with("Advisor set to some-model"), "{set}");
+    assert_eq!(configured().as_deref(), Some("some-model"));
+    assert!(command("").unwrap().starts_with("Advisor: some-model"));
+    assert!(command("off").unwrap().starts_with("Advisor disabled."));
+    assert_eq!(configured(), None);
+}

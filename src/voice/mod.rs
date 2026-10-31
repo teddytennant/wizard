@@ -319,7 +319,8 @@ impl Found {
         let mut needs = Vec::new();
         if self.recorder.is_none() {
             needs.push(
-                "a recorder: `arecord` (package alsa-utils), `ffmpeg`, or `sox`; or set \
+                "a recorder: `arecord` (package alsa-utils), `ffmpeg`, or `sox` (brew install sox, \
+                 sudo apt-get install sox, sudo dnf install sox, sudo pacman -S sox); or set \
                  `recorder = \"cmd --out {out} --secs {seconds}\"` under [voice] to write a 16 kHz mono WAV to {out}"
                     .to_string(),
             );

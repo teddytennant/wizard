@@ -64,8 +64,8 @@ impl Tool for ArtifactTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["publish", "list", "read", "delete", "open", "pin", "unpin", "quickstart"],
-                    "description": "One of publish (default), list, read, delete, open, pin, unpin, quickstart."
+                    "enum": ["publish", "list", "read", "delete", "open", "pin", "unpin", "quickstart", "list_files", "list_assets", "list_types", "describe_type", "read_file", "read_asset", "delete_asset", "upload_asset", "copy_from", "watch", "unwatch", "status"],
+                    "description": "One of publish (default), list, read, delete, open, pin, unpin, quickstart. Claude Code 2.1.314's names list_files, list_assets, read_file, read_asset, delete_asset, upload_asset and copy_from are accepted as the matching scope or asset form; list_types and describe_type say there are no types; watch, unwatch and status say there is nothing to watch."
                 },
                 "after": text("list with scope assets only: continuation token. Local listings are never paged."),
                 "asset": flag("publish with url: true uploads file_path (or each of file_paths) to the artifact's assets instead of publishing a page, or with from_url and asset_ids copies assets from another local artifact."),

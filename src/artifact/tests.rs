@@ -389,3 +389,40 @@ fn the_static_server_serves_pages_and_refuses_the_rest() {
     post.method = "POST".into();
     assert_eq!(serve::route(&store, &post).0, 405);
 }
+
+#[test]
+fn claude_code_2_1_314s_action_names_mean_the_scope_and_asset_forms() {
+    let (tmp, store) = store();
+    let file = page(tmp.path(), "a.html", HTML);
+    let slug = slug_in(&store.call(&json!({"file_path": file}), tmp.path()).unwrap());
+    let files = store
+        .call(&json!({"action": "list_files", "url": slug}), tmp.path())
+        .unwrap();
+    assert!(files.contains("index.html"), "{files}");
+    let page = store
+        .call(
+            &json!({"action": "read_file", "url": slug, "path": "index.html"}),
+            tmp.path(),
+        )
+        .unwrap();
+    assert!(page.contains("<p>hi</p>"), "{page}");
+    std::fs::write(tmp.path().join("i.png"), [1u8, 2]).unwrap();
+    let image = tmp.path().join("i.png").display().to_string();
+    let up = store
+        .call(
+            &json!({"action": "upload_asset", "url": slug, "file_path": image}),
+            tmp.path(),
+        )
+        .unwrap();
+    assert!(up.contains("url assets/"), "{up}");
+    let assets = store
+        .call(&json!({"action": "list_assets", "url": slug}), tmp.path())
+        .unwrap();
+    assert!(assets.contains("2 bytes"), "{assets}");
+    let types = store.call(&json!({"action": "list_types"}), tmp.path()).unwrap();
+    assert!(types.contains("No artifact types"), "{types}");
+    let watch = store
+        .call(&json!({"action": "watch", "url": slug}), tmp.path())
+        .unwrap();
+    assert!(watch.contains("Nothing to watch"), "{watch}");
+}

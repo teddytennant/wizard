@@ -176,6 +176,40 @@ impl Artifacts {
             .get("action")
             .and_then(Value::as_str)
             .unwrap_or("publish");
+        // Claude Code 2.1.314 also spells some calls as their own actions.
+        // They mean what the scope and `asset` forms mean.
+        let mapped;
+        let (action, input) = match action {
+            "list_files" | "list_assets" | "list_types" | "describe_type" => {
+                let scope = match action {
+                    "list_files" => "files",
+                    "list_assets" => "assets",
+                    _ => "types",
+                };
+                mapped = with(input, &[("action", "list"), ("scope", scope)]);
+                ("list", &mapped)
+            }
+            "read_file" | "read_asset" => {
+                mapped = with(input, &[("action", "read")]);
+                ("read", &mapped)
+            }
+            "delete_asset" => {
+                mapped = with(input, &[("action", "delete")]);
+                ("delete", &mapped)
+            }
+            "upload_asset" | "copy_from" => {
+                mapped = with(input, &[("action", "publish")]);
+                let mut mapped = mapped;
+                mapped["asset"] = Value::Bool(true);
+                return publish::publish(self, &mapped, cwd);
+            }
+            "watch" | "unwatch" | "status" => {
+                return Ok("Nothing to watch: a local artifact is a file on this machine. Read it again \
+                           with action \"read\" to see changes."
+                    .to_string());
+            }
+            other => (other, input),
+        };
         match action {
             "publish" => publish::publish(self, input, cwd),
             "list" => self.list(input),
@@ -363,6 +397,16 @@ impl Artifacts {
             meta.slug
         ))
     }
+}
+
+fn with(input: &Value, set: &[(&str, &str)]) -> Value {
+    let mut out = input.clone();
+    if let Some(map) = out.as_object_mut() {
+        for (k, v) in set {
+            map.insert((*k).to_string(), Value::String((*v).to_string()));
+        }
+    }
+    out
 }
 
 fn url_of(input: &Value) -> Result<&str, String> {
