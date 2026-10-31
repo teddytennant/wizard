@@ -11,6 +11,9 @@
 //! `PermissionRequest` hook first and then by whoever is at the surface. See
 //! `docs/permissions.md`.
 
+pub mod judge;
+#[cfg(test)]
+pub(crate) mod judge_tests;
 mod persist;
 mod prompt;
 mod rule;
@@ -48,8 +51,8 @@ pub enum PermissionMode {
     /// Nothing is checked except deny and ask rules.
     #[serde(rename = "bypassPermissions")]
     BypassPermissions,
-    /// Claude Code's classifier mode. Wizard has no classifier, so this is
-    /// `default`.
+    /// Every call `default` would ask about is judged by a short model call
+    /// instead (see [`judge`]); a judge that cannot answer asks.
     #[serde(rename = "auto")]
     Auto,
 }
@@ -109,6 +112,9 @@ pub enum Decision {
     /// Needs an approver. With nobody to ask, this is a refusal; a
     /// `PermissionRequest` hook is the approver.
     Ask(String),
+    /// `auto` mode: the judge decides. The text is what asking would say if
+    /// the judge cannot answer.
+    Judge(String),
 }
 
 /// The rules and mode in force for a session.
@@ -144,7 +150,7 @@ impl Policy {
             && self.deny.is_empty()
             && self.ask.is_empty()
             && !self.claude_defaults
-            && matches!(self.mode, PermissionMode::Default | PermissionMode::Auto)
+            && self.mode == PermissionMode::Default
     }
 
     /// Decide one call. `access` is the tool's own claim about what it
@@ -172,8 +178,13 @@ impl Policy {
                     Decision::Ask(format!("{name}{what} needs approval."))
                 }
             }
-            PermissionMode::Default | PermissionMode::Auto | PermissionMode::BypassPermissions => {
-                Decision::Allow
+            PermissionMode::Default | PermissionMode::BypassPermissions => Decision::Allow,
+            PermissionMode::Auto => {
+                if read_only || !prompt::asks_in_claude(tool) || self.allowed(tool, args) {
+                    Decision::Allow
+                } else {
+                    Decision::Judge(format!("{name}{what} needs approval in auto mode."))
+                }
             }
             PermissionMode::Plan => {
                 if read_only {
@@ -329,6 +340,9 @@ impl Policy {
         if self.claude_defaults && self.mode == PermissionMode::Default {
             out.push_str("asks before file edits, commands, the web and MCP tools\n");
         }
+        if self.mode == PermissionMode::Auto {
+            out.push_str("a model call judges file edits, commands, the web and MCP tools\n");
+        }
         for (label, rules) in [
             ("deny", &self.deny),
             ("ask", &self.ask),
@@ -434,9 +448,12 @@ pub fn build(
         other => other,
     };
     let mode = named.unwrap_or_default();
-    // Naming a mode is what turns Claude's prompts on. `auto` stays Wizard's
-    // own default: it is Claude's classifier mode and there is no classifier.
-    policy.claude_defaults = matches!(named, Some(PermissionMode::Default | PermissionMode::Plan));
+    // Naming a mode is what turns Claude's prompts on. In `auto` they are what
+    // a judge that cannot answer falls back to.
+    policy.claude_defaults = matches!(
+        named,
+        Some(PermissionMode::Default | PermissionMode::Plan | PermissionMode::Auto)
+    );
     // Plan mode is the session's own loop (`config.plan_first`, `exit_plan`);
     // a rule-level plan mode would keep refusing writes after the plan is
     // approved.

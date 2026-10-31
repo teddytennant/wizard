@@ -42,9 +42,11 @@ impl SessionBackend {
     }
 }
 
-#[async_trait]
-impl HookBackend for SessionBackend {
-    async fn ask_model(&self, prompt: &str, _model: Option<&str>) -> Result<String, String> {
+impl SessionBackend {
+    /// One streamed model call. With a cap, the stream is dropped once the
+    /// answer passes `max_tokens` (about four characters each), which ends the
+    /// request.
+    async fn chat_once(&self, prompt: &str, max_tokens: Option<u32>) -> Result<String, String> {
         let request = ChatRequest {
             model: self.model.clone(),
             messages: vec![ChatMessage::user(prompt.to_string())],
@@ -56,6 +58,7 @@ impl HookBackend for SessionBackend {
                 reasoning_effort: None,
             }),
         };
+        let limit = max_tokens.map(|tokens| tokens as usize * 4);
         let mut stream = self
             .client
             .chat_stream(request)
@@ -69,11 +72,22 @@ impl HookBackend for SessionBackend {
             {
                 answer.push_str(&message.text());
             }
-            if chunk.done {
+            if chunk.done || limit.is_some_and(|limit| answer.len() >= limit) {
                 break;
             }
         }
         Ok(answer)
+    }
+}
+
+#[async_trait]
+impl HookBackend for SessionBackend {
+    async fn ask_model(&self, prompt: &str, _model: Option<&str>) -> Result<String, String> {
+        self.chat_once(prompt, None).await
+    }
+
+    async fn ask_model_capped(&self, prompt: &str, max_tokens: u32) -> Result<String, String> {
+        self.chat_once(prompt, Some(max_tokens)).await
     }
 
     /// Wizard runs an `agent` hook as a prompt hook: one model call with no
