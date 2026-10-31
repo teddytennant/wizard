@@ -156,7 +156,9 @@ def head(ref, cwd, size, auto=False):
     current = next((n for n, _, cur in ms if cur), ms[0][0] if ms else 'model')
     slug = lambda n: 'claude-' + re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')
     opts = [{'id': slug(n), 'name': n, 'provider': d} for n, d, _ in ms]
-    opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(3)]
+    # the picker's `… +3 models` line counts the models its window never reaches
+    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models', l)] if m), 0)
+    opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(hidden)]
     config = {
         'model': slug(current), 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
         'mode': 'manual', 'modes': ['manual', 'accept edits'] + (['auto'] if auto else []), 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
@@ -283,6 +285,30 @@ def turn2(ref, cwd, size):
     ]
 
 
+def statusline(head):
+    """One short answer, for the scenes that show the status line after a turn."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    return head + [
+        wait('prompt'), ev('TurnStart'), sleep(300), ev({'TextDelta': '4'}), ev({'TurnEnd': 'end_turn'}),
+    ]
+
+
+def todos(head, rows, hold):
+    """A turn that sets a task list part way through and holds its answer for `hold` ms, long
+    enough for the running view to be captured; `rows` is [(text, status)]."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    tasks = [{'text': t, 'status': st} for t, st in rows]
+    items = [{'content': t, 'status': st} for t, st in rows]
+    return head + [
+        wait('prompt'), ev('TurnStart'), sleep(300),
+        tool('td1', 'other', 'todo', {'items': items}, 'completed', None, name='todo'),
+        ev({'Todos': tasks}), sleep(hold),
+        ev({'TextDelta': 'done'}), ev({'TurnEnd': 'end_turn'}),
+    ]
+
+
 def think(head):
     """A reply with a thinking block and then its answer, for the `think` scenes."""
     wait = lambda what: json.dumps({'await': what})
@@ -365,6 +391,22 @@ def turn3(ref, cwd, size):
     ]
 
 
+def plan2(ref, cwd, size):
+    """A plan put up for approval and approved: wizard ends plan mode and the turn goes on."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    plan = plan_text(ref, size)
+    return [
+        wait('prompt'), ev('TurnStart'), sleep(1500),
+        tool('x1', 'other', 'exit_plan', {'plan': plan}, 'running', name='exit_plan'),
+        ev({'Permission': {'id': 'plan1', 'tool': 'exit_plan', 'kind': 'other', 'title': 'Ready to code?',
+                           'input': {'plan': plan}, 'diff': None, 'rule': ''}}),
+        wait('decide'),
+        tool('x1', 'other', 'exit_plan', {'plan': plan}, 'completed', 'approved', name='exit_plan'),
+        ev({'TextDelta': 'The plan was not approved.'}), ev({'TurnEnd': 'end_turn'}),
+    ]
+
+
 def plan_text(ref, size):
     """The plan the reference showed between its dashed rules, back as markdown: a bold row
     was a heading, a run in the code colour was `code`."""
@@ -440,7 +482,14 @@ def main():
         ha = head(ref, cwd, size, auto=True)
         open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + turn3(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'plan2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + plan2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'think-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(think(h)) + '\n')
+        open(os.path.join(out, 'statusline-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(statusline(h)) + '\n')
+        short = [('Read main.rs', 'completed'), ('Change hello to hi', 'in_progress'), ('Run the tests', 'pending')]
+        open(os.path.join(out, 'todo-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, short, 6000)) + '\n')
+        many = [('Step %d of the long job, with a name long enough to need cutting at narrow widths' % n,
+                 'completed' if n < 4 else 'in_progress' if n == 4 else 'pending') for n in range(1, 15)]
+        open(os.path.join(out, 'todo-many-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, many, 6000)) + '\n')
         open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')
 

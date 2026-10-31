@@ -1,0 +1,24 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.314[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · API Usage Billing
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/…/scratchpad/look-claude/proj[39m
+
+
+
+
+
+
+
+
+
+
+
+  [38;5;246m  + src/[39m
+  [38;5;246m  * statusline-setup (agent) – Use this agent to configure the user's Claud…[39m
+  [38;5;246m  * general-purpose (agent) – General-purpose agent for researching complex…[39m
+  [38;5;246m  + src/lib.rs[39m
+  [38;5;246m  + main.rs[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ @s[7m [0m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on[39m

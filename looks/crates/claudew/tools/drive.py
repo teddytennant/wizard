@@ -20,7 +20,7 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 
 # (scene name, steps). A step is ('type', text), ('keys', k1, k2, ...), ('wait', seconds),
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
-# (no waiting after), ('quit',) (ctrl+c until the alternate screen closes)
+# (no waiting after), ('restore',) (the size the program started at), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
 # reference only.
 STATIC = [
@@ -30,10 +30,6 @@ STATIC = [
     ('ctrlc', [('fast_keys', 'C-c'), ('raw_snap', '-hint'), ('wait', 2.5), ('snap', '-after')]),
     ('bash-mode', [('type', '!'), ('snap', ''), ('type', 'ls'), ('snap', '-typed'),
                    ('keys', 'BSpace', 'BSpace', 'BSpace')]),
-    # the reference has a fourth mode (auto) the backend does not; one more press brings it round
-    ('modes', [('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
-               ('snap', '-4')]),
     ('mention', [('type', '@'), ('wait', 0.8), ('snap', ''), ('type', 's'), ('snap', '-query'),
                  ('keys', 'Down'), ('snap', '-selected'), ('keys', 'C-c')]),
     ('slash', [('type', '/'), ('snap', ''), ('keys', 'Down', 'Down'), ('snap', '-down'),
@@ -56,6 +52,12 @@ STATIC = [
     ('escape', [('type', 'abc'), ('fast_keys', 'Escape'), ('raw_snap', '-hint'), ('wait', 1.5),
                 ('keys', 'Escape', 'Escape'), ('snap', '-cleared')]),
     ('resize', [('resize', 100, 30), ('wait', 1.0), ('snap', '')]),
+    # last but one, at the size it started: the reference prints a long explanation of auto mode
+    # in the transcript the first time shift+tab reaches it, which every scene after would carry
+    # at 80x24. It has a fourth mode (auto) the backend does not; one more press brings it round
+    ('modes', [('restore',), ('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
+               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
+               ('snap', '-4')]),
     ('exit', [('quit',), ('wait', 0.5), ('snap', '')]),
 ]
 
@@ -355,9 +357,47 @@ THINK = [
                ('keys', 'C-o'), ('wait', 0.4)]),
 ]
 
+# Claude Code's statusLine: a command that prints rows under the prompt (compare.sh writes the
+# settings and the command). The rows go away under the shortcuts table (checked by hand and in
+# wave3.rs: with the table open the aligned comparison of the two tables is noise), and the mode
+# line loses its `? for shortcuts`.
+STATUSLINE = [
+    ('sl-home', [('wait', 1.5), ('snap', '')]),
+    ('sl-typed', [('since', 13), ('type', 'hello'), ('snap', ''), ('keys', 'BSpace', 'BSpace', 'BSpace', 'BSpace', 'BSpace')]),
+    ('sl-slash', [('type', '/'), ('snap', ''), ('keys', 'C-c'), ('wait', 2.5)]),
+    ('sl-modes', [('keys', 'BTab'), ('snap', '')]),
+    ('sl-turn', [('type', 'what is 2+2'), ('keys', 'Enter'), ('until', r'done \d+:\d\d [AP]M', 30), ('wait', 1.5),
+                 ('snap', '')]),
+]
+# Three rows indented by `padding`, one of them longer than the screen, another with wide characters.
+STATUSLINE_PAD = [
+    ('slp-home', [('wait', 1.5), ('snap', '')]),
+]
+
+# Claude Code's task list: under the spinner while a turn runs, above the prompt after it, ctrl+t
+# hides it. The turn holds its answer for a few seconds so the running view can be captured.
+TODO = [
+    ('todo', [('type', 'Make a task list'), ('keys', 'Enter'), ('until', r'Change hello to hi…', 30),
+              ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', ''),
+              ('keys', 'C-t'), ('wait', 0.6), ('snap', '-hidden'), ('keys', 'C-t'), ('wait', 0.6),
+              ('snap', '-shown')]),
+]
+TODO_MANY = [
+    ('todo-many', [('type', 'Make many tasks'), ('keys', 'Enter'), ('until', r'◼ Step 4 of the long job', 30),
+                   ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', '')]),
+]
+
+# A plan approved: the reference offers three ways out and the look two; Down picks the
+# reference's "manually approve edits", Enter alone approves in the look.
+PLAN2 = [
+    ('plan-approve', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                      ('until', r'Ready to code', 120), ('wait', 2.0), ('ref_keys', 'Down'), ('keys', 'Enter'),
+                      ('idle',), ('wait', 1.5), ('snap', '')]),
+]
+
 HOME = [('home', [('snap', '')])]
 
-GROUPS = {'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
+GROUPS = {'plan2': PLAN2, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
           'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
@@ -389,6 +429,8 @@ def tmux(*args, check=True):
 class Pane:
     def __init__(self, name, w, h, cwd, cmd):
         self.name = name
+        self.size = (w, h)
+        self.t0 = time.time()
         tmux('kill-session', '-t', name, check=False)
         tmux('-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', str(w), '-y', str(h), '-c', cwd,
              'env', '-i', 'HOME=' + os.environ['HOME'], 'PATH=' + os.environ['PATH'],
@@ -507,10 +549,16 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
                         time.sleep(0.25)
                     if tmux('display', '-p', '-t', pane.name, '#{alternate_on}').strip() != '1':
                         break
+            elif op == 'restore':
+                tmux('resize-window', '-t', pane.name, '-x', str(pane.size[0]), '-y', str(pane.size[1]))
             elif op == 'resize':
                 tmux('resize-window', '-t', pane.name, '-x', str(step[1]), '-y', str(step[2]))
             elif op == 'wait':
                 time.sleep(step[1])
+            elif op == 'since':
+                # until this many seconds after the program started: the effort notice is gone
+                # ten seconds in, and the look is quicker than the reference to get here
+                time.sleep(max(0.0, pane.t0 + step[1] - time.time()))
             elif op == 'idle':
                 pane.idle()
             elif op == 'until':

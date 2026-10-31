@@ -8,7 +8,7 @@ CLAUDE_CONFIG_DIR of their own (see claude-isolated.sh). The scenes in drive.py 
 prompts; the prompt picks a script of tool calls, and once the script runs out the answer is
 "done". Anything else gets "ok". Every request is logged as one JSON line.
 """
-import json, re, sys, time
+import json, os, re, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18998
@@ -17,10 +17,10 @@ LOG = open(sys.argv[2] if len(sys.argv) > 2 else '/dev/null', 'a')
 MD = ('| file | lines |\n|------|-------|\n| a.rs | 3 |\n| b.rs | 120 |\n\n**`src/`**\n\n'
       '[Docs](https://example.com/docs)\n\n```rust\nfn main() { println!("hi"); }\n```')
 PLAN = '1. Add the comment `// entry point` as the first line of main.rs.\n2. Check the file still compiles.'
-TODOS = [
-    {'content': 'Read main.rs', 'status': 'completed', 'activeForm': 'Reading main.rs'},
-    {'content': 'Change hello to hi', 'status': 'in_progress', 'activeForm': 'Changing hello to hi'},
-    {'content': 'Run the tests', 'status': 'pending', 'activeForm': 'Running the tests'},
+TASKS = [
+    {'subject': 'Read main.rs', 'description': 'Read the file', 'activeForm': 'Read main.rs'},
+    {'subject': 'Change hello to hi', 'description': 'Edit the string', 'activeForm': 'Change hello to hi'},
+    {'subject': 'Run the tests', 'description': 'Run cargo test', 'activeForm': 'Run the tests'},
 ]
 SUMMARY = ('<analysis>The user asked for small edits.</analysis>\n<summary>\n1. Primary Request: small '
            'edits to main.rs.\n2. Files: main.rs.\n</summary>')
@@ -42,8 +42,28 @@ def scripts(cwd, plan_file):
         ('Count from 1 to 3000', [], '\n'.join(str(i) for i in range(1, 3001))),
         ('what is 2+2', [], '4'),
         ('Think it over', [], 'The answer is 4.', 'Two plus two is four, so the answer is 4.'),
-        ('Make a todo list', [('ToolSearch', {'query': 'select:TodoWrite', 'max_results': 1}),
-                              ('TodoWrite', {'todos': TODOS})], 'done'),
+        ('Probe task tools', [('ToolSearch', {'query': 'e', 'max_results': 30})], 'done'),
+        ('Probe paths', [
+            ('Read', {'file_path': cwd + '/src/lib.rs'}),
+            ('Read', {'file_path': cwd + '/../outside.txt'}),
+            ('Read', {'file_path': '/etc/hostname'}),
+            ('Write', {'file_path': cwd + '/src/new.txt', 'content': 'x\n'})], 'done'),
+        ('Make many tasks', [('ToolSearch', {'query': 'select:TaskCreate,TaskGet,TaskUpdate', 'max_results': 3})] +
+            [('TaskCreate', {'subject': 'Step %d of the long job, with a name long enough to need cutting at narrow widths' % n,
+                             'description': 'step', 'activeForm': 'Step %d of the long job, with a name long enough to need cutting at narrow widths' % n}) for n in range(1, 15)] +
+            [('TaskUpdate', {'taskId': str(n), 'status': 'completed'}) for n in range(1, 4)] +
+            [('TaskUpdate', {'taskId': '4', 'status': 'in_progress'})], 'done'),
+        ('Make long progress', [('ToolSearch', {'query': 'select:TaskCreate,TaskGet,TaskUpdate', 'max_results': 3})] +
+            [('TaskCreate', {'subject': 'Step %d' % n, 'description': 'step', 'activeForm': 'Step %d' % n})
+             for n in range(1, 13)] +
+            [('TaskUpdate', {'taskId': str(n), 'status': 'completed'}) for n in range(1, 9)] +
+            [('TaskUpdate', {'taskId': '9', 'status': 'in_progress'})], 'done'),
+        ('Finish the tasks', [('TaskUpdate', {'taskId': str(n), 'status': 'completed'}) for n in range(1, 4)], 'done'),
+        ('Make a task list', [
+            ('ToolSearch', {'query': 'select:TaskCreate,TaskGet,TaskUpdate', 'max_results': 3}),
+            ('TaskCreate', TASKS[0]), ('TaskCreate', TASKS[1]), ('TaskCreate', TASKS[2]),
+            ('TaskUpdate', {'taskId': '1', 'status': 'completed'}),
+            ('TaskUpdate', {'taskId': '2', 'status': 'in_progress'})], 'done'),
     ]
 
 
@@ -71,6 +91,14 @@ def plan_for(body):
                 b.get('type') == 'tool_result' for b in msg['content'])
             if t.strip() and not carries_result:
                 prompt, tool_uses = t, 0
+            elif carries_result:
+                # a prompt typed after a refused call arrives in the refusal's own message
+                refused = any(b.get('type') == 'tool_result' and "doesn't want to proceed" in json.dumps(b.get('content'))
+                              for b in msg['content'])
+                typed = [b['text'] for b in msg['content'] if b.get('type') == 'text'
+                         and not b['text'].lstrip().startswith(('<system-reminder>', '[Request interrupted'))]
+                if refused and typed:
+                    prompt, tool_uses = typed[-1], 0
         elif isinstance(msg['content'], list):
             tool_uses += sum(1 for b in msg['content'] if b.get('type') == 'tool_use')
     last = text_of(msgs[-1]['content']) if msgs else ''
@@ -79,7 +107,7 @@ def plan_for(body):
     for key, calls, final, *think in scripts(cwd, plan_file):
         if key in prompt:
             offered = {t.get('name') for t in body.get('tools', [])}
-            if tool_uses < len(calls) and (calls[tool_uses][0] in offered or calls[tool_uses][0] in ('ExitPlanMode', 'TodoWrite')):
+            if tool_uses < len(calls) and (calls[tool_uses][0] in offered or calls[tool_uses][0] == 'ExitPlanMode'):
                 return calls[tool_uses], None, None
             return None, final, (think[0] if think and not tool_uses else None)
     return None, 'ok', None
@@ -109,6 +137,14 @@ class H(BaseHTTPRequestHandler):
         if not self.path.split('?')[0].endswith('/messages'):
             return self.reply_json({})
         call, text, thought = plan_for(body)
+        if os.environ.get('FAKE_DUMP'):
+            open(os.environ['FAKE_DUMP'], 'a').write(json.dumps(body.get('messages', [])) + '\n')
+        if call is None and text == 'done' and '"TaskUpdate"' in json.dumps(body.get('messages', [])):
+            # hold the last answer so the list can be captured while the turn is still running
+            time.sleep(float(os.environ.get('FAKE_TASK_PAUSE', '8')))
+        if os.environ.get('FAKE_SCHEMA'):
+            open(os.environ['FAKE_SCHEMA'], 'a').write(json.dumps(
+                [t for t in body.get('tools', []) if t.get('name', '').startswith('Task')]) + '\n')
         LOG.write(json.dumps({'model': body.get('model'), 'tools': [t.get('name') for t in body.get('tools', [])],
                               'call': call and call[0], 'text': text and text[:40]}) + '\n')
         LOG.flush()

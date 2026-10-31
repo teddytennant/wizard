@@ -29,6 +29,9 @@ NORMALISE = [
     (r'^[·✢*✳✶✻✽](?= \S+…)', '*'),
     (r'(?<=^\* )[A-Z][a-zé]+(?=…)', 'Verb'),
     (r'(?<=^\* Verb… \()\d+[hms]( \d+[ms])*(?= · )', 'Ns'),
+    # a task in progress takes the verb's place in the spinner
+    (r'^[·✢*✳✶✻✽](?= (Change hello to hi|Step \d+ of the long job[^…]*)…)', '*'),
+    (r'(?<=\()\d+[hms]( \d+[ms])*(?= · [↓↑] [0-9.]+k? tokens\)\s*$)', 'Ns'),
     (r'(?<= · [↓↑] )[0-9.]+k?(?= tokens)', 'N'),
     (r'^✻ \S+ for (\d+[hms] ?)+ · done \d+:\d\d [AP]M', '✻ Worked for Ns · done H:MM XM'),
     (r'\d\d:\d\d [AP]M (\S+)(\s*)$', r'HH:MM XM \1\2'),
@@ -124,6 +127,16 @@ def compare(ref_path, look_path, scene, extra):
             if top is None:
                 continue
             ref = [[BLANK] * w for _ in range(n)] + ref[:top - n] + ref[top:]
+            for y in range(n):
+                masked[y] = [reason] * w
+    # scroll-look: `N`, the screen is too short for the footer: the reference keeps its transcript
+    # where it was and loses its last N rows, the look scrolls the transcript up by N instead.
+    # The look's rows move back down and its last N rows, which the reference lost, are cut; the
+    # N rows at the top, which scrolled out of the look's screen, are masked.
+    for glob_, side, pat, reason in extra:
+        if side == 'scroll-look' and applies(glob_):
+            n = int(pat)
+            look = [[BLANK] * w for _ in range(n)] + look[:h - n]
             for y in range(n):
                 masked[y] = [reason] * w
     for glob_, side, pat, reason in extra:
@@ -250,7 +263,7 @@ def compare(ref_path, look_path, scene, extra):
                 for x in range(n.start(), min(n.end(), w)):
                     masked[y][x] = reason
     for glob_, side, pat, reason in EXPLAINED + extra:
-        if side in ('drop', 'drop-up', 'drop-pair', 'drop-look', 'pair', 'cut', 'cursor', 'norm', 'scroll-ref') or side.startswith(('squeeze-', 'shape')) or not applies(glob_):
+        if side in ('drop', 'drop-up', 'drop-pair', 'drop-look', 'pair', 'cut', 'cursor', 'norm', 'scroll-ref', 'scroll-look') or side.startswith(('squeeze-', 'shape')) or not applies(glob_):
             continue
         if side == 'block':
             # block: `start@@end`, every row from one matching start to the next matching end

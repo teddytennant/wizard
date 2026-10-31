@@ -174,3 +174,145 @@ fn thinking_is_one_line_until_the_transcript_is_opened() {
         assert_matches(&mut hn, &format!("think-detail-{s}"), &[]);
     }
 }
+
+const SL_A: [&str; 2] = [
+    "\x1b[36mproj\x1b[0m on \x1b[32mmain\x1b[0m \x1b[2m+2 -1\x1b[0m",
+    "plain row",
+];
+
+fn status_line(hn: &mut Harness, lines: &[&str], padding: usize) {
+    hn.app.status_line.cfg = Some(claudew::statusline_run::Cfg {
+        command: "true".into(),
+        padding,
+        refresh: None,
+    });
+    hn.app.status_line.lines = lines.iter().map(ToString::to_string).collect();
+}
+
+/// The status line against 2.1.314 (`tests/fixtures/ref-2.1.314`, a test command run by the real
+/// program): at the start, with text typed, under the slash menu and after a turn.
+#[test]
+fn status_line_rows_and_the_mode_line_without_its_hint() {
+    each(|w, h, s| {
+        let mut hn = Harness::new(&format!("statusline-{s}.jsonl"), w, h);
+        status_line(&mut hn, &SL_A, 0);
+        assert_matches(&mut hn, &format!("sl-home-{s}"), &[]);
+        hn.advance(12_000);
+        hn.type_str("hello");
+        assert_matches(&mut hn, &format!("sl-typed-{s}"), &[]);
+        for _ in 0..5 {
+            hn.press(KeyCode::Backspace);
+        }
+        hn.type_str("/");
+        assert_matches(
+            &mut hn,
+            &format!("sl-slash-{s}"),
+            &[r"\((?:Claude|Wizard), Anthropic"],
+        );
+        hn.ctrl('c');
+        hn.advance(2_500);
+        hn.type_str("what is 2+2");
+        hn.press(KeyCode::Enter);
+        hn.play();
+        // the reference had been put in accept edits mode by an earlier scene
+        assert_matches(
+            &mut hn,
+            &format!("sl-turn-{s}"),
+            &[r"^  (?:⏵⏵ accept edits on \(shift\+tab to cycle\)|⏸ manual mode on)"],
+        );
+    });
+}
+
+/// `padding` indents both sides; a row past the margin ends in an ellipsis; wide characters count
+/// two columns.
+#[test]
+fn status_line_padding_and_the_cut() {
+    each(|w, h, s| {
+        let mut hn = Harness::new(&format!("static-{s}.jsonl"), w, h);
+        let long = format!("\x1b[31mred\x1b[0m {}", "x".repeat(150));
+        status_line(&mut hn, &["first row", &long, "wide 世界世界 end"], 2);
+        // the reference's cells after a wide character are blanks; the look's are its second half
+        assert_matches(&mut hn, &format!("slp-home-{s}"), &[r"^\s+wide .*$"]);
+    });
+}
+
+fn task(text: &str, status: agent_core::TodoStatus) -> agent_core::Todo {
+    agent_core::Todo {
+        text: text.into(),
+        status,
+    }
+}
+
+/// The task list against 2.1.314: under the spinner while the turn runs, above the prompt after
+/// it, hidden and shown with ctrl+t.
+#[test]
+fn the_task_list_running_idle_hidden_and_shown() {
+    use agent_core::{Event, StopReason, TodoStatus::*};
+    let spinner = r"^[·✢*✳✶✻✽] .*$";
+    each(|w, h, s| {
+        let mut hn = Harness::new(&format!("static-{s}.jsonl"), w, h);
+        hn.type_str("Make a task list");
+        hn.press(KeyCode::Enter);
+        hn.event(Event::TurnStart);
+        hn.event(Event::Todos(vec![
+            task("Read main.rs", Completed),
+            task("Change hello to hi", InProgress),
+            task("Run the tests", Pending),
+        ]));
+        hn.advance(2_000);
+        assert_matches(
+            &mut hn,
+            &format!("todo-running-{s}"),
+            &[spinner, r" · ← for agents"],
+        );
+        hn.event(Event::TextDelta("done".into()));
+        hn.event(Event::TurnEnd(StopReason::EndTurn));
+        hn.advance(12_000);
+        assert_matches(&mut hn, &format!("todo-{s}"), &[]);
+        hn.ctrl('t');
+        assert_matches(&mut hn, &format!("todo-hidden-{s}"), &[]);
+        hn.ctrl('t');
+        assert_matches(&mut hn, &format!("todo-shown-{s}"), &[]);
+    });
+}
+
+#[test]
+fn a_long_task_list_shows_five_and_counts_the_rest() {
+    use agent_core::{Event, StopReason, TodoStatus::*};
+    let spinner = r"^[·✢*✳✶✻✽] .*$";
+    each(|w, h, s| {
+        let mut hn = Harness::new(&format!("static-{s}.jsonl"), w, h);
+        hn.type_str("Make many tasks");
+        hn.press(KeyCode::Enter);
+        hn.event(Event::TurnStart);
+        let many = (1..=14)
+            .map(|n| {
+                task(
+                    &format!(
+                        "Step {n} of the long job, with a name long enough to need cutting at narrow widths"
+                    ),
+                    match n {
+                        1..=3 => Completed,
+                        4 => InProgress,
+                        _ => Pending,
+                    },
+                )
+            })
+            .collect();
+        hn.event(Event::Todos(many));
+        hn.advance(2_000);
+        assert_matches(
+            &mut hn,
+            &format!("todo-many-running-{s}"),
+            &[spinner, r" · ← for agents"],
+        );
+        hn.event(Event::TextDelta("done".into()));
+        hn.event(Event::TurnEnd(StopReason::EndTurn));
+        hn.advance(12_000);
+        // at 24 rows the footer does not fit: 2.1.314 loses its mode line off the bottom and the
+        // look scrolls instead (compare.py's `scroll-look`), so only the taller screens are cells
+        if h > 24 {
+            assert_matches(&mut hn, &format!("todo-many-{s}"), &[]);
+        }
+    });
+}

@@ -944,14 +944,31 @@ and the other contexts of screens Wizard does not have.
 ### Status line
 
 `statusLine` in the same settings files: `{ "type": "command", "command": "...", "padding": 0,
-"refreshInterval": 5 }`. In the house UI the command runs with Claude Code's JSON on stdin (`session_id`,
-`transcript_path`, `model`, `workspace`, `cwd`, `version`, `output_style`, `cost`, `context_window`,
-`exceeds_200k_tokens`, and `vim.mode` when vim mode is on), `COLUMNS`, `LINES` and `CLAUDE_CODE_CHILD_SESSION=1`
-in its environment, and its lines (up to four, ANSI colour kept) are drawn under the composer, above the status
-bar. It runs on start, after each turn, on a vim mode change and on the timer, debounced to 300 ms, in a thread
+"refreshInterval": 5 }`. Both UIs run it through one file, `src/statusline_run.rs` (the claude look compiles it
+with `#[path]`, as it does `vim.rs`), so the payload, the environment and the colours cannot drift apart. The
+command runs with Claude Code's JSON on stdin (`session_id`, `transcript_path`, `cwd`, `effort.level`, `model`,
+`workspace` with `added_dirs`, `version`, `output_style`, `cost`, `context_window` with `current_usage`,
+`exceeds_200k_tokens`, `fast_mode`, `thinking`, and `vim.mode` when vim mode is on), and `COLUMNS`, `LINES`,
+`CLAUDE_CODE_CHILD_SESSION=1`, `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` in its environment. It runs on
+start, after each turn, on a mode, model or vim mode change and on the timer, debounced to 300 ms, in a thread
 with a five second limit. `/statusline <command>` sets it, `/statusline off` removes it, `/statusline` says what
-is set. Not in the payload: `cost.total_cost_usd` is 0, no rate limits, no `prompt_cache`, no PR or worktree
-fields. The claude look does not run it yet.
+is set; in the look the command is wizard's, and the look reads the settings again when the turn ends.
+
+Compared with 2.1.314 (`sl-*` and `slp-*` scenes, a test command, a real pixel layout):
+
+- The rows sit between the lower rule of the prompt and the mode line, in the subtle grey, with the command's own
+  colours on top. Blank lines are dropped and trailing space trimmed.
+- The text starts two columns in plus `padding`, and ends two columns plus `padding` short of the right edge; a
+  longer line ends in `…`.
+- There is no cap of four rows: 2.1.314 draws every row the command prints and lets the screen cut the footer.
+  The house UI keeps its four.
+- A status line takes `? for shortcuts` off the mode line. A command that fails, times out or prints nothing
+  leaves one blank row. A command that exits non-zero shows nothing even if it printed first.
+- The shortcut table replaces the rows; the slash menu leaves them; a picker or a permission prompt covers them.
+
+Not in the payload: `cost.total_cost_usd` is the running cost in the look when the backend reports one and 0 in the
+house UI, no rate limits,
+no `prompt_cache`, no PR or worktree fields, no `prompt_id`.
 
 ### Footer, cursor, placeholder
 
@@ -959,3 +976,58 @@ fields. The claude look does not run it yet.
 and an inverse cell is painted where it is, as 2.1.314 does. The `Try "..."` example is kept: 2.1.314 fills it from
 a cache that only a signed-in account refreshes, so a capture with a made-up key shows none and the one in
 `tests/fixtures/ref` (a subscription) shows it.
+
+The effort notice (`◐ medium · /effort`, above the prompt on the right) is up for the first ten seconds of a
+session and for as long as a turn runs; it does not come back when the turn ends. The look used to keep it 30
+seconds after each turn, which was how 2.1.300 behaved.
+
+### Task list
+
+Wizard's `todo` tool fills the look's task list the way 2.1.314 draws its Task tools: a panel above the prompt,
+not rows in the transcript (the `todo` call itself leaves no row either). `ctrl+t` hides and shows it, and the
+mode line says which: `ctrl+t to hide tasks` / `ctrl+t to show tasks`, in place of `? for shortcuts`.
+
+- While a turn runs the list hangs under the spinner: `  ⎿  ✔ done`, then the first five tasks in order
+  (`✔` green, struck through and subtle; `◼` in the brand colour and bold; `◻` plain), then
+  `      … +1 in progress, 3 pending, 3 completed` for the rest.
+- Between turns it has two blank rows and a heading, `14 tasks (3 done, 1 in progress, 10 open)`, with the counts
+  bold. Up to five tasks show in order; past five, unfinished ones come first (in progress, pending, completed)
+  and the rest is counted: `   … +6 pending, 3 completed`.
+- A finished list (every task completed) goes away when the turn ends. A task's text is cut with `…` at
+  `width - 15`.
+- With a task in progress the spinner names it instead of a verb. 2.1.314 shows the task's `activeForm`
+  ("Changing hello to hi"); Wizard's `todo` has no such field, so the look shows the task's own text.
+
+Driving 2.1.314 to show it needs `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: the Task tools are on for models it knows,
+and the fake server's `claude-haiku-5-5` is not one. The model also has to ask for them first
+(`ToolSearch select:TaskCreate,TaskGet,TaskUpdate`); `fake_anthropic.py` scripts that for the `Make a task list`,
+`Make many tasks`, `Make long progress` and `Finish the tasks` prompts. `TodoWrite` stays off in the
+interactive 2.1.314 in that setup; only the Task tools show.
+
+### Detailed transcript
+
+`ctrl+o` writes paths from the working directory with a `./` (`Read(./src/lib.rs)`, `Read(./../outside.txt)`) when
+that is shorter than the absolute path, and the absolute path otherwise (`Read(/etc/hostname)`). The usual view
+drops the directory and the `./` (`Update(main.rs)`). 2.1.300 wrapped the file name in an OSC 8 `file://` link;
+2.1.314 does not, in any view, even where it links Markdown (checked with the program's raw output in a tmux that
+reports hyperlinks), so the look no longer does either.
+
+### Plan mode
+
+Compared state by state with 2.1.314: `⏸ plan mode on (shift+tab to cycle)` in the footer, the plan and its
+approval dialog (`plan`, `plan-down`, `x-planesc`), and what follows approval (`plan-approve`). Where they differ:
+
+- 2.1.314 offers three ways out of the dialog (use auto mode, manually approve edits, tell it what to change,
+  with `shift+tab to approve with this feedback`); Wizard offers approve and keep planning.
+- An approved plan prints `User approved Claude's plan` with a plan-coloured bullet, the plan file
+  (`~/.claude/plans/<slug>.md · /plan to edit`) and the plan. Wizard keeps its plan in `.wizard/plan.md`.
+- After approval 2.1.314 is in the mode its option named; Wizard goes back to the mode the plan was entered from.
+
+### Welcome screen model line
+
+2.1.314 prints `Haiku 5.5 · API Usage Billing` (or the plan name for a subscription). The look prints
+`<model> · <provider>` from what wizard reports, for example `grok-4.7 · xai-oauth`: the same form, with the real
+model and the real way it is paid for, and nothing renamed to look like Claude. The long price string seen in
+`tools/compare.sh` runs is the replay's: a Claude model picker row carries its description in the same field
+wizard uses for the provider, so the replayed header reads `Haiku · Haiku 5.5 · Fastest for quick answers ...`. The
+comparison masks the words of that row (`explained.tsv`, `norm`), not its colours or its place.

@@ -1,0 +1,40 @@
+[48;5;237m  [1m[38;5;153msrc/[0m[38;5;231m[48;5;237m in bold, then [Docs](https://example.com/docs), then a fenced rust block containing: fn main() { [39m
+  [38;5;231mprintln!("hi"); }[39m
+
+[38;5;231m[49m●[39m ┌──────┬───────┐
+  │ file │ lines │
+  ├──────┼───────┤
+  │ a.rs │ 3     │
+  ├──────┼───────┤
+  │ b.rs │ 120   │
+  └──────┴───────┘
+
+  [1m[38;5;153msrc/[0m
+
+  [94m]8;id=lztw4c;https://example.com/docs\Docs[39m]8;;\
+
+  [34mfn[39m [33mmain[39m() { [36mprintln![39m([31m"hi"[39m); }
+
+[38;5;246m✻[39m [38;5;246mBrewed for 0s · done 8:27 PM
+[39m
+[38;5;246m[48;5;237m❯ [38;5;231mRun this exact bash command with the Bash tool: git init -q && echo ok. Then reply with exactly: done[39m
+[49m
+[38;5;246m●[39m Init a repo
+[38;5;246m  ⎿  $ git init -q && echo ok[39m
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m [1m[38;5;153mBash command[0m
+ [1mTip: auto mode handles these prompts for you — choose "switch to auto mode" below[0m
+ [38;5;246mInit a repo[39m
+[38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+[39m git init -q && echo ok
+[38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+[39m This command requires approval
+
+ Do you want to proceed?
+ [38;5;153m❯[39m [38;5;246m1. [38;5;153mYes[39m
+   [38;5;246m2. [39mYes, and don’t ask again for: git init *
+   [38;5;246m3. [39mYes, and switch to auto mode[38;5;246m · auto mode handles these prompts for you[39m
+   [38;5;246m4. [39mNo
+
+ [38;5;246mEsc to cancel · Tab to amend[39m

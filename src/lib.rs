@@ -47,6 +47,7 @@ pub mod permissions;
 pub mod pi_plugins;
 pub mod platform;
 pub mod starter;
+pub mod statusline_run;
 pub mod turing;
 // Compiled-in plugins and the process kernel they load into. The one module
 // core is allowed to name, because it is the table rather than a plugin.

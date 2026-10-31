@@ -2,7 +2,7 @@
 //! blank row before each. Finished reads, searches and commands fold into one summary row; the
 //! detailed view (ctrl+o) shows every call with its output.
 
-use agent_core::{NoticeLevel, TodoStatus, ToolCall, ToolKind, ToolStatus};
+use agent_core::{NoticeLevel, ToolCall, ToolKind, ToolStatus};
 use ratatui::style::{Modifier, Style};
 
 use crate::app::{clock_text, App, Block, DONE_VERBS};
@@ -103,6 +103,8 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                     );
                 }
             }
+            // the task tools leave no row: the list is in the panel above the prompt
+            Block::Tool(t) if is_task_call(t) => {}
             Block::Tool(_) => {
                 let mut j = i;
                 let mut group: Vec<&ToolCall> = Vec::new();
@@ -123,27 +125,6 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                     out.push(Row::new());
                     out.extend(folded(&th, &group, w));
                     i = j - 1;
-                }
-            }
-            Block::Todos(todos) => {
-                if app.show_todos && !todos.is_empty() {
-                    out.push(Row::new());
-                    out.push(Row::of("● ", th.fg(th.success)).with("Update Todos", th.bold()));
-                    for (n, t) in todos.iter().enumerate() {
-                        let lead = if n == 0 { ELBOW } else { "     " };
-                        let (mark, st) = match t.status {
-                            TodoStatus::Completed => {
-                                ("☒ ", th.dim().add_modifier(Modifier::CROSSED_OUT))
-                            }
-                            TodoStatus::InProgress => ("☐ ", th.bold()),
-                            TodoStatus::Pending => ("☐ ", Style::new()),
-                        };
-                        out.push(
-                            Row::of(lead, th.dim())
-                                .with(mark, Style::new())
-                                .with(t.text.clone(), st),
-                        );
-                    }
                 }
             }
             Block::TurnEnd { verb, secs, time } => {
@@ -376,7 +357,13 @@ fn folds(t: &ToolCall) -> bool {
         && t.kind != ToolKind::Edit
         && t.diff.is_none()
         && !is_plan_call(t)
+        && !is_task_call(t)
         && bucket(t).0 != "used"
+}
+
+/// Wizard's `todo` tool, the Task tools of Claude Code.
+pub fn is_task_call(t: &ToolCall) -> bool {
+    t.name == "todo"
 }
 
 pub fn is_plan_call(t: &ToolCall) -> bool {
@@ -472,7 +459,12 @@ fn plan_rows(app: &App, t: &ToolCall, w: usize) -> Vec<Row> {
     match t.status {
         ToolStatus::Completed => {
             out.push(Row::new());
-            out.push(bullet("User approved Wizard's plan", th.success));
+            // 2.1.314 draws this bullet in the plan colour and does not embolden the words
+            out.push(
+                Row::of("●", th.fg(th.plan))
+                    .with(" ", Style::new())
+                    .with("User approved Wizard's plan", Style::new()),
+            );
             out.push(Row::of(ELBOW, th.dim()).with("Plan saved to: .wizard/plan.md", th.dim()));
             for r in markdown::render(&th, plan, w.saturating_sub(5), &mut links) {
                 let mut row = Row::of("     ", Style::new());
@@ -514,11 +506,27 @@ fn input_str<'a>(t: &'a ToolCall, keys: &[&str]) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-/// The tool's display name and argument, as in `Bash(echo hi)`.
+/// A path as the detailed transcript writes it: from the working directory with a leading
+/// `./` (`./src/lib.rs`, `./../other.txt`) when that is shorter than the whole path.
+fn detail_path(cwd: &std::path::Path, p: &str) -> String {
+    if !std::path::Path::new(p).is_absolute() {
+        return p.to_string();
+    }
+    let near = format!("./{}", relative(cwd, p));
+    if near.len() < p.len() {
+        near
+    } else {
+        p.to_string()
+    }
+}
+
+/// The tool's display name and argument, as in `Bash(echo hi)`. `absolute` is the detailed
+/// transcript, which writes paths from the working directory with a `./`; the usual one drops
+/// the working directory and the `./`.
 pub fn call_label(app: &App, t: &ToolCall, absolute: bool) -> (String, String) {
     let path = |p: &str| -> String {
         if absolute {
-            return p.to_string();
+            return detail_path(&app.opts.cwd, p);
         }
         let cwd = app.opts.cwd.to_string_lossy();
         p.strip_prefix(&format!("{cwd}/")).unwrap_or(p).to_string()
@@ -605,29 +613,6 @@ fn tool(app: &App, t: &ToolCall, w: usize, detail: bool) -> Vec<Row> {
     } else {
         wrap_str(&format!("({arg})"), Style::new(), w.saturating_sub(col))
     };
-    // the file an edit or write touched opens from its row, as an OSC 8 file:// link
-    if matches!(name.as_str(), "Update" | "Write" | "Read")
-        && !arg.is_empty()
-        && markdown::hyperlinks()
-    {
-        let path = t
-            .diff
-            .as_ref()
-            .map(|d| d.path.clone())
-            .or_else(|| {
-                input_str(t, &["path", "file_path", "file", "filePath"]).map(str::to_string)
-            })
-            .unwrap_or_default();
-        let abs = if std::path::Path::new(&path).is_absolute() {
-            std::path::PathBuf::from(&path)
-        } else {
-            app.opts.cwd.join(&path)
-        };
-        app.links.borrow_mut().push((
-            format!("{name}(\0{arg}"),
-            format!("file://{}", abs.display()),
-        ));
-    }
     let mut first = Row::of("●", th.fg(dot))
         .with(" ", Style::new())
         .with(name.clone(), th.bold());

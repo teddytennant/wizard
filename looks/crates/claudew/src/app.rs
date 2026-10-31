@@ -21,6 +21,7 @@ use crate::vim::VimState;
 
 mod modal;
 pub use modal::editor_mode_is_vim;
+mod statusline;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The Claude Code release this look reproduces.
@@ -68,9 +69,11 @@ const HISTORY_TRIM_BYTES: u64 = 512 * 1024;
 const MODE_RETRY: Duration = Duration::from_millis(400);
 const MODE_RETRIES: u32 = 15;
 const HINT_TTL: Duration = Duration::from_millis(800);
-/// How long the effort notice stays up after start and after a turn.
-/// How long the effort notice stays once the session is up, a turn ends or a model is picked.
+/// How long the effort notice stays after a model is picked.
 const NOTICE_TTL: Duration = Duration::from_secs(30);
+/// How long the effort notice stays after the session opens (2.1.314 drops it ten seconds in,
+/// shows it again for as long as a turn runs, and does not put it back when the turn ends).
+const START_NOTICE: Duration = Duration::from_secs(10);
 const DOUBLE_PRESS: Duration = Duration::from_millis(800);
 const FRAME: Duration = Duration::from_millis(120);
 
@@ -160,7 +163,6 @@ pub enum Block {
         secs: u64,
     },
     Tool(ToolCall),
-    Todos(Vec<Todo>),
     TurnEnd {
         verb: usize,
         secs: u64,
@@ -394,6 +396,9 @@ pub struct App {
     pub vim: VimState,
     /// The bindings from `keybindings.json`.
     pub keymap: Keymap,
+    /// Claude Code's `statusLine`: the command, its rows and when it runs next.
+    pub status_line: crate::statusline_run::State,
+    sl_seen: statusline::Seen,
 }
 
 impl App {
@@ -474,6 +479,8 @@ impl App {
             opened_at: Duration::ZERO,
             vim: VimState::default(),
             keymap: Keymap::new(),
+            status_line: Default::default(),
+            sl_seen: Default::default(),
             mode_steps: Default::default(),
             mode_waiting: None,
             mode_target: None,
@@ -806,7 +813,7 @@ impl App {
                 if first {
                     self.ready = true;
                     self.notice = self.effort_notice();
-                    self.notice_until = Some(self.clock.elapsed() + NOTICE_TTL);
+                    self.notice_until = Some(self.clock.elapsed() + START_NOTICE);
                 }
                 // a model switch rebuilds wizard's agent, so it goes before mode and plan
                 let model = model.map(|m| self.model_id(&m));
@@ -945,16 +952,17 @@ impl App {
                 });
                 match at {
                     Some(i) => self.blocks[i] = Block::Tool(call),
-                    None => self.blocks.push(Block::Tool(call)),
+                    None => {
+                        // what the model wrote into the call counts as tokens in the spinner
+                        if let Some(b) = &mut self.busy {
+                            b.chars += call.input.to_string().len();
+                        }
+                        self.blocks.push(Block::Tool(call));
+                    }
                 }
             }
-            Event::Todos(t) => {
-                self.todos = t.clone();
-                match self.blocks.last_mut() {
-                    Some(Block::Todos(old)) => *old = t,
-                    _ => self.blocks.push(Block::Todos(t)),
-                }
-            }
+            // the tasks sit in a panel above the prompt, not in the transcript
+            Event::Todos(t) => self.todos = t,
             Event::Usage(u) => self.usage = u,
             // the side question's turn: it never ends the user's turn, and nothing was sent
             // behind it, so a held prompt or a mode change goes next
@@ -1152,7 +1160,8 @@ impl App {
             return;
         }
         let Some(busy) = self.busy.take() else { return };
-        self.notice_until = Some(self.clock.elapsed() + NOTICE_TTL);
+        let now = self.clock.elapsed();
+        self.notice_until = Some((self.opened_at + START_NOTICE).max(now));
         let secs = (self.clock.elapsed().saturating_sub(busy.since)).as_secs();
         // a slash line wizard ran as a command; one it handed to the model gets the done line
         let since: Vec<&Block> = self
@@ -2818,6 +2827,7 @@ impl App {
         if self.busy.is_some() && self.dialog.is_none() {
             self.dirty = true;
         }
+        self.statusline_tick();
     }
 
     pub fn next_wake(&self, now: Instant) -> Option<Instant> {
@@ -2826,11 +2836,15 @@ impl App {
         }
         let elapsed = self.clock.elapsed();
         let hint = self.hint.map(|(_, at)| at + HINT_TTL);
-        [hint, self.notice_until, self.mode_retry]
+        let timed = [hint, self.notice_until, self.mode_retry]
             .into_iter()
             .flatten()
             .min()
-            .map(|at| now + at.saturating_sub(elapsed).max(Duration::from_millis(10)))
+            .map(|at| now + at.saturating_sub(elapsed).max(Duration::from_millis(10)));
+        [timed, self.statusline_due(now)]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// What is printed to the normal screen after the UI is gone.

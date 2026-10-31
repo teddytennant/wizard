@@ -7,6 +7,8 @@ pub mod app;
 #[path = "../../../../src/keybindings.rs"]
 pub mod keybindings;
 pub mod replay;
+#[path = "../../../../src/statusline_run.rs"]
+pub mod statusline_run;
 pub mod term;
 pub mod text;
 pub mod theme;

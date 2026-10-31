@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::{App, Hint, Menu, SPINNER_FRAMES, VERBS};
 use crate::text::{blit, commas, put, truncate, width, wrap_str, Row};
+use crate::ui::tasks;
 
 const MENU_ROWS: usize = 5;
 
@@ -16,7 +17,11 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
     let footer = if app.shortcuts {
         shortcut_rows(app, w as usize)
     } else {
-        vec![footer_row(app)]
+        // the command's rows sit between the prompt and the mode line, and its presence
+        // takes the `? for shortcuts` hint off the mode line
+        let mut rows = app.statusline_rows();
+        rows.push(footer_row(app));
+        rows
     };
     let input_w = w.saturating_sub(3).max(1);
     let layout = app.editor.layout(input_w as usize);
@@ -24,9 +29,23 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
     let n = layout.len().clamp(1, max_input);
     let menu = menu_rows(app, w as usize);
     let above = menu.as_ref().map_or(1, |m| m.len().max(1));
-    let tip = tip(app);
-    let spinner = if app.busy.is_some() && menu.is_none() && !app.streaming() {
-        2 + usize::from(tip.is_some())
+    let spinning = app.busy.is_some() && menu.is_none() && !app.streaming();
+    // the task list hangs under the spinner of a running turn, in place of the tip, and sits
+    // above the prompt otherwise
+    let listed = tasks::visible(app);
+    let under = if spinning && listed {
+        tasks::running_rows(app, w as usize)
+    } else {
+        Vec::new()
+    };
+    let between = if !spinning && listed {
+        tasks::idle_rows(app, w as usize)
+    } else {
+        Vec::new()
+    };
+    let tip = if under.is_empty() { tip(app) } else { None };
+    let spinner = if spinning {
+        2 + under.len() + usize::from(tip.is_some())
     } else {
         0
     };
@@ -35,7 +54,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
     } else {
         h as usize
     };
-    let fixed = n + 2 + above + spinner;
+    let fixed = n + 2 + above + spinner + between.len();
     let footer_h = footer.len().min(cap.saturating_sub(fixed).max(1));
     let total = (fixed + footer_h).min(h as usize);
     let top = h - total as u16;
@@ -46,7 +65,14 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
         if let Some(t) = &tip {
             blit(buf, 0, y + 2, t);
         }
+        for (i, row) in under.iter().enumerate() {
+            blit(buf, 0, y + 2 + i as u16, row);
+        }
         y += spinner as u16;
+    }
+    for row in &between {
+        blit(buf, 0, y, row);
+        y += 1;
     }
     match &menu {
         Some(rows) => {
@@ -261,10 +287,21 @@ fn footer_row(app: &App) -> Row {
         }
     };
     // typing during a turn takes the hint away; Esc would clear the text first
+    let tasks_hint = tasks::exists(app).then_some(if app.show_todos { "hide" } else { "show" });
     if app.busy.is_some() && app.editor.is_empty() {
         row.push(" · esc to interrupt", th.dim());
+        if let Some(h) = tasks_hint {
+            row.push(format!(" · ctrl+t to {h} tasks"), th.dim());
+        }
+        if app.clock.elapsed().saturating_sub(app.opened_at) < crate::app::AGENTS_HINT_FOR {
+            row.push(" · \u{2190} for agents", th.dim());
+        }
     } else if first && app.editor.is_empty() && app.menu == Menu::None {
-        row.push(" · ? for shortcuts", th.dim());
+        if let Some(h) = tasks_hint {
+            row.push(format!(" · ctrl+t to {h} tasks"), th.dim());
+        } else if !app.status_line.on() {
+            row.push(" · ? for shortcuts", th.dim());
+        }
         if app.clock.elapsed().saturating_sub(app.opened_at) < crate::app::AGENTS_HINT_FOR {
             row.push(" · \u{2190} for agents", th.dim());
         }
@@ -387,7 +424,11 @@ fn spinner_row(app: &App) -> Row {
         let i = (ms / 120) % (2 * n - 2);
         SPINNER_FRAMES[if i < n { i } else { 2 * n - 2 - i }]
     };
-    let verb = format!("{}…", VERBS[busy.verb % VERBS.len()]);
+    // with a task in progress the spinner names it, in place of the verb
+    let verb = match tasks::current(app) {
+        Some(task) if tasks::exists(app) => format!("{task}…"),
+        _ => format!("{}…", VERBS[busy.verb % VERBS.len()]),
+    };
     let glow = (ms / 100) % (verb.chars().count() + 12);
     let mut row = Row::of(format!("{frame} "), th.fg(th.brand));
     for (i, ch) in verb.chars().enumerate() {
