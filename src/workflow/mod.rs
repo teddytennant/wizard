@@ -9,7 +9,7 @@
 //! - [`live`]: runs this process is executing, and how to stop them
 //! - `vm` (feature `plugin-js`): the QuickJS side, `agent()`, `parallel()` and the rest
 //! - `launch`, `runner`, `structured`: the `Workflow` tool, wired to real subagents
-//! - [`command`]: `/workflows`
+//! - [`command`](mod@command): `/workflows`
 //!
 //! Everything except `vm` and what builds on it compiles without `plugin-js`, so
 //! `/workflows` can still list and show runs. Without the feature there is no

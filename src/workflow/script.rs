@@ -182,8 +182,8 @@ impl<'a> Reader<'a> {
             self.pos += rest.len() - trimmed.len();
             if trimmed.starts_with("//") {
                 self.pos += trimmed.find('\n').unwrap_or(trimmed.len());
-            } else if trimmed.starts_with("/*") {
-                match trimmed[2..].find("*/") {
+            } else if let Some(inner) = trimmed.strip_prefix("/*") {
+                match inner.find("*/") {
                     Some(end) => self.pos += end + 4,
                     None => self.pos = self.src.len(),
                 }

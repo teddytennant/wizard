@@ -237,7 +237,7 @@ pub fn list() -> Vec<RunRecord> {
         .filter_map(|e| std::fs::read_to_string(e.path().join("run.json")).ok())
         .filter_map(|raw| serde_json::from_str(&raw).ok())
         .collect();
-    runs.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+    runs.sort_by_key(|run| std::cmp::Reverse(run.started_ms));
     runs
 }
 
