@@ -119,6 +119,10 @@ pub struct ClaudeSettings {
     pub include_git_instructions: Option<bool>,
     /// `disableWorkflows`.
     pub disable_workflows: Option<bool>,
+    /// `enableWorkflows`: the /config toggle; `false` takes the tool away.
+    pub enable_workflows: Option<bool>,
+    /// `workflowSizeGuideline`: `unrestricted`, `small`, `medium` or `large`.
+    pub workflow_size_guideline: Option<String>,
     /// `companyAnnouncements`.
     pub company_announcements: Vec<String>,
     /// `viewMode`: `default`, `verbose` or `focus`.
@@ -435,6 +439,10 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     out.auto_memory_enabled = flag("autoMemoryEnabled").or(out.auto_memory_enabled);
     out.include_git_instructions = flag("includeGitInstructions").or(out.include_git_instructions);
     out.disable_workflows = flag("disableWorkflows").or(out.disable_workflows);
+    out.enable_workflows = flag("enableWorkflows").or(out.enable_workflows);
+    out.workflow_size_guideline = text("workflowSizeGuideline")
+        .filter(|v| matches!(v.as_str(), "unrestricted" | "small" | "medium" | "large"))
+        .or(out.workflow_size_guideline.take());
     out.agent = text("agent").or(out.agent.take());
     out.thinking_tokens = ["maxThinkingTokens", "thinkingBudget"]
         .iter()
@@ -767,6 +775,24 @@ mod tests {
         );
         let s = run(&d, Trust::Approved(&Surface::default()));
         assert_eq!(s.disable_workflows, Some(false));
+    }
+
+    #[test]
+    fn enable_workflows_and_the_size_guideline_are_read() {
+        let d = dirs();
+        write(
+            d.user.join("settings.json"),
+            r#"{"enableWorkflows":false,"workflowSizeGuideline":"large"}"#,
+        );
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert_eq!(s.enable_workflows, Some(false));
+        assert_eq!(s.workflow_size_guideline.as_deref(), Some("large"));
+        write(
+            d.project.join(".claude/settings.json"),
+            r#"{"workflowSizeGuideline":"huge"}"#,
+        );
+        let s = run(&d, Trust::Approved(&Surface::default()));
+        assert_eq!(s.workflow_size_guideline.as_deref(), Some("large"));
     }
 
     #[test]

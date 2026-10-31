@@ -24,6 +24,7 @@ pub fn asks_in_claude(tool: &str) -> bool {
         ToolClass::Other => matches!(
             toolmap::claude_name(tool).as_str(),
             "Monitor"
+                | "Workflow"
                 | "run_code"
                 | "generate_image"
                 | "CronCreate"
@@ -111,12 +112,30 @@ pub fn offer(tool: &str, args: &Value, cwd: &Path) -> Option<Offer> {
                 scope: Scope::Project,
             })
         }
+        // A script no one named has nothing a rule could say about it.
+        ToolClass::Other if name == "Workflow" => saved_workflow(args).map(|workflow| Offer {
+            label: format!("Yes, and don't ask again for workflow {workflow}"),
+            rules: vec![format!("Workflow({workflow})")],
+            scope: Scope::Project,
+        }),
         _ => Some(Offer {
             label: format!("Yes, and don't ask again for {name}"),
             rules: vec![name],
             scope: Scope::Project,
         }),
     }
+}
+
+/// The saved workflow a `Workflow` call names, when it runs one by name. A
+/// call with a `scriptPath` runs that file whatever `name` says, so a rule on
+/// the name would approve something else.
+pub fn saved_workflow(args: &Value) -> Option<&str> {
+    if args.get("scriptPath").and_then(Value::as_str).is_some() {
+        return None;
+    }
+    args.get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
 }
 
 /// The part of one command a "don't ask again" rule should cover: the

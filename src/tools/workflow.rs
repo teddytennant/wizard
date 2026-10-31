@@ -38,6 +38,33 @@ pub struct WorkflowTool {
     registry: Arc<ToolRegistry>,
     hooks: Arc<HookEngine>,
     binding: SharedActiveModel,
+    description: String,
+}
+
+/// The size guideline Claude Code tells the model about, from the
+/// `workflowSizeGuideline` setting. `unrestricted` sends none; unset is
+/// `medium`.
+pub fn size_guideline(setting: Option<&str>) -> Option<String> {
+    let (name, limit) = match setting {
+        Some("unrestricted") => return None,
+        Some("small") => ("small", 5),
+        Some("large") => ("large", 50),
+        Some("medium") => ("medium", 10),
+        _ => ("medium", 10),
+    };
+    let lead = if setting.is_some() {
+        "A workflow size guideline is configured for this session"
+    } else {
+        "This session has the default workflow size guideline"
+    };
+    let change = if setting.is_some() {
+        ""
+    } else {
+        " Set workflowSizeGuideline in settings to raise or remove it."
+    };
+    Some(format!(
+        "{lead}: {name}, keep workflows under {limit} agents. This is a guideline, not a hard limit; follow it unless the user's prompt calls for a different scale.{change}"
+    ))
 }
 
 impl WorkflowTool {
@@ -54,7 +81,16 @@ impl WorkflowTool {
             registry,
             hooks,
             binding,
+            description: DESCRIPTION.to_string(),
         }
+    }
+
+    /// Add the size guideline to what the model reads about the tool.
+    pub fn with_size_guideline(mut self, guideline: Option<String>) -> Self {
+        if let Some(text) = guideline {
+            self.description = format!("{DESCRIPTION}\n\n{text}");
+        }
+        self
     }
 }
 
@@ -77,7 +113,7 @@ impl Tool for WorkflowTool {
     }
 
     fn description(&self) -> &str {
-        DESCRIPTION
+        &self.description
     }
 
     fn parameters(&self) -> Value {

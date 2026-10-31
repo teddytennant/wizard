@@ -2462,13 +2462,16 @@ pub async fn build_tool_registry(
         && !crate::tools::workflow::disabled_by_env(&|name| std::env::var(name).ok())
         && !workflows_disabled_in_settings()
     {
-        registry.register(Arc::new(crate::tools::workflow::WorkflowTool::new(
-            workflow_configs,
-            Arc::clone(client),
-            Arc::clone(&base),
-            Arc::clone(hooks),
-            Arc::clone(&subagent_model),
-        )));
+        registry.register(Arc::new(
+            crate::tools::workflow::WorkflowTool::new(
+                workflow_configs,
+                Arc::clone(client),
+                Arc::clone(&base),
+                Arc::clone(hooks),
+                Arc::clone(&subagent_model),
+            )
+            .with_size_guideline(workflow_size_guideline()),
+        ));
     }
     registry.register(Arc::new(crate::tools::evolve::EvolveTool::new(
         config.clone(),
@@ -2691,14 +2694,28 @@ async fn build_headless_agent_inner(
     Ok(agent)
 }
 
-/// `disableWorkflows` in a settings file. Any file may turn them off, trusted
-/// project or not, because that only takes a tool away.
+/// `disableWorkflows: true` or `enableWorkflows: false` in a settings file.
+/// Any file may turn them off, trusted project or not, because that only takes
+/// a tool away.
 #[cfg(feature = "plugin-js")]
 fn workflows_disabled_in_settings() -> bool {
     std::env::current_dir().is_ok_and(|root| {
-        crate::config::claude::load(&root, crate::config::claude::Trust::Refused).disable_workflows
-            == Some(true)
+        let settings = crate::config::claude::load(&root, crate::config::claude::Trust::Refused);
+        settings.disable_workflows == Some(true) || settings.enable_workflows == Some(false)
     })
+}
+
+/// The guideline `workflowSizeGuideline` asks the model to keep to. Read from
+/// the same layers as the rest of the settings; a project's own file counts
+/// because it can only make the model more careful or less so, not run
+/// anything.
+#[cfg(feature = "plugin-js")]
+fn workflow_size_guideline() -> Option<String> {
+    let setting = std::env::current_dir().ok().and_then(|root| {
+        crate::config::claude::load(&root, crate::config::claude::Trust::Refused)
+            .workflow_size_guideline
+    });
+    crate::tools::workflow::size_guideline(setting.as_deref())
 }
 
 #[cfg(test)]
