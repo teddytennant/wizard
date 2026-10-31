@@ -346,7 +346,8 @@ fn todo_read_output_is_parsed() {
         todos[1],
         Todo {
             text: "b".into(),
-            status: TodoStatus::InProgress
+            status: TodoStatus::InProgress,
+            active: None
         }
     );
 }

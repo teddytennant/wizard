@@ -603,14 +603,17 @@ mod tests {
             Todo {
                 text: "Rename greet to hello in util.py".into(),
                 status: TodoStatus::Completed,
+                active: None,
             },
             Todo {
                 text: "Write notes.md with heading and 2x2 table".into(),
                 status: TodoStatus::Completed,
+                active: None,
             },
             Todo {
                 text: "List project files with ls".into(),
                 status: TodoStatus::InProgress,
+                active: None,
             },
         ]));
     }

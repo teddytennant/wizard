@@ -115,8 +115,8 @@ def sessions(ref, cwd, now, size):
                 'id': (title if is_id else '%08x' % (zlib.crc32(key.encode()) & 0xffffffff)) + '-0000-4000-8000-000000000000',
                 'title': '' if is_id else title,
                 'cwd': cwd,
-                # seconds before the replay lists it, so the age is the same when the panel opens
-                'updated': -int(m.group(1)) * unit[m.group(2)] - 2,
+                # seconds before the replay lists it, which is when the panel opens and counts the ages
+                'updated': -int(m.group(1)) * unit[m.group(2)],
                 'bytes': size_of(lines[i + 1]),
             })
     # the rest of the reference's list, which its window never reaches, so the count shows
@@ -153,15 +153,18 @@ def head(ref, cwd, size, auto=False):
             desc = re.sub(r'\bClaude\b(?! Code| API|/| mobile|\.ai)', 'Wizard', desc)
             cmds.append({'name': name, 'description': desc, 'input_hint': HINTS.get(name, '')})
     ms = models(ref)
-    current = next((n for n, _, cur in ms if cur), ms[0][0] if ms else 'model')
     slug = lambda n: 'claude-' + re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')
-    opts = [{'id': slug(n), 'name': n, 'provider': d} for n, d, _ in ms]
+    # the model's id carries its version, which the reference prints at the start of the
+    # description: `Haiku 5.5 · Fastest for quick answers` is claude-haiku-5-5
+    ident = lambda n, d: slug(d.split(' · ')[0]) if d.startswith(n + ' ') else slug(n)
+    current = next((ident(n, d) for n, d, cur in ms if cur), ident(ms[0][0], ms[0][1]) if ms else 'model')
+    opts = [{'id': ident(n, d), 'name': n, 'provider': d} for n, d, _ in ms]
     # the picker's `… +3 models` line counts the models its window never reaches
-    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models', l)] if m), 0)
+    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models?', l)] if m), 0)
     opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(hidden)]
     config = {
-        'model': slug(current), 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
-        'mode': 'manual', 'modes': ['manual', 'accept edits'] + (['auto'] if auto else []), 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
+        'model': current, 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
+        'mode': 'manual', 'modes': ['manual'] + (['auto'] if auto else []) + ['accept edits'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
     }
     return [
         ev({'Ready': {'session_id': '0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44', 'config': config}}),
@@ -210,10 +213,12 @@ def turn(cwd, found):
     sleep = lambda ms: json.dumps({'sleep': ms})
     end = ev({'TurnEnd': 'end_turn'})
     return [
-        wait('prompt'), ev('TurnStart'), sleep(5000),
-        tool('t1', 'execute', 'Printing hi', {'command': 'echo hi'}, 'running'), sleep(300),
+        # the fake server holds its answer after the command for three seconds, so the
+        # spinner scene finds the command run and the turn still going
+        wait('prompt'), ev('TurnStart'), sleep(100),
+        tool('t1', 'execute', 'Printing hi', {'command': 'echo hi'}, 'running'), sleep(100),
         tool('t1', 'execute', 'Printing hi', {'command': 'echo hi'}, 'completed', 'hi\n'),
-        ev({'TextDelta': 'done'}), end,
+        sleep(3000), ev({'TextDelta': 'done'}), end,
         wait('prompt'), ev('TurnStart'), sleep(300),
     ] + ([] if find is None else [
         tool('t2', 'execute', 'Finding main.rs', {'command': find}, 'completed', find_out)]) + [
@@ -296,11 +301,11 @@ def statusline(head):
 
 def todos(head, rows, hold):
     """A turn that sets a task list part way through and holds its answer for `hold` ms, long
-    enough for the running view to be captured; `rows` is [(text, status)]."""
+    enough for the running view to be captured; `rows` is [(text, status, active form)]."""
     wait = lambda what: json.dumps({'await': what})
     sleep = lambda ms: json.dumps({'sleep': ms})
-    tasks = [{'text': t, 'status': st} for t, st in rows]
-    items = [{'content': t, 'status': st} for t, st in rows]
+    tasks = [{'text': t, 'status': st, 'active': a} for t, st, a in rows]
+    items = [{'content': t, 'status': st, 'active_form': a} for t, st, a in rows]
     return head + [
         wait('prompt'), ev('TurnStart'), sleep(300),
         tool('td1', 'other', 'todo', {'items': items}, 'completed', None, name='todo'),
@@ -378,10 +383,10 @@ def turn3(ref, cwd, size):
         wait('cancel'),
         wait('prompt'), ev('TurnStart'), sleep(800), ev({'TextDelta': counted(ref, 'queue', size)}),
         wait('cancel'),
-        # the queued prompt's own turn has not answered yet when the reference is captured;
-        # at some sizes it was already thinking
+        # the queued prompt's own turn: where the reference was captured still thinking, it has
+        # not answered yet; otherwise it answered within the second and a half after Esc
         wait('prompt'), ev('TurnStart')] + ([ev({'ThoughtDelta': 'Counting.'})] if thinking(ref, size) else []) + [
-        sleep(4000), ev({'TextDelta': 'ok'}), end,
+        sleep(4000 if thinking(ref, size) else 400), ev({'TextDelta': 'ok'}), end,
         wait('prompt'), ev('TurnStart'), sleep(1500),
         tool('x1', 'other', 'exit_plan', {'plan': plan}, 'running', name='exit_plan'),
         ev({'Permission': {'id': 'plan1', 'tool': 'exit_plan', 'kind': 'other', 'title': 'Ready to code?',
@@ -403,6 +408,23 @@ def plan2(ref, cwd, size):
                            'input': {'plan': plan}, 'diff': None, 'rule': ''}}),
         wait('decide'),
         tool('x1', 'other', 'exit_plan', {'plan': plan}, 'completed', 'approved', name='exit_plan'),
+        ev({'TextDelta': 'The plan was not approved.'}), ev({'TurnEnd': 'end_turn'}),
+    ]
+
+
+def plan3(ref, cwd, size):
+    """A plan put up for approval and turned down with what the user typed: wizard stays in plan
+    mode and the model answers that the plan was not approved."""
+    wait = lambda what: json.dumps({'await': what})
+    sleep = lambda ms: json.dumps({'sleep': ms})
+    plan = plan_text(ref, size)
+    return [
+        wait('prompt'), ev('TurnStart'), sleep(1500),
+        tool('x1', 'other', 'exit_plan', {'plan': plan}, 'running', name='exit_plan'),
+        ev({'Permission': {'id': 'plan1', 'tool': 'exit_plan', 'kind': 'other', 'title': 'Ready to code?',
+                           'input': {'plan': plan}, 'diff': None, 'rule': ''}}),
+        wait('decide'),
+        tool('x1', 'other', 'exit_plan', {'plan': plan}, 'failed', 'plan rejected', name='exit_plan'),
         ev({'TextDelta': 'The plan was not approved.'}), ev({'TurnEnd': 'end_turn'}),
     ]
 
@@ -481,14 +503,19 @@ def main():
         # the permission prompts offer "switch to auto mode" when the backend has a mode to go to
         ha = head(ref, cwd, size, auto=True)
         open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
-        open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + turn3(ref, cwd, size)) + '\n')
-        open(os.path.join(out, 'plan2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h + plan2(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn3(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'plan2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + plan2(ref, cwd, size)) + '\n')
+        open(os.path.join(out, 'plan3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + plan3(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'think-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(think(h)) + '\n')
         open(os.path.join(out, 'statusline-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(statusline(h)) + '\n')
-        short = [('Read main.rs', 'completed'), ('Change hello to hi', 'in_progress'), ('Run the tests', 'pending')]
+        short = [('Read main.rs', 'completed', 'Reading main.rs'),
+                 ('Change hello to hi', 'in_progress', 'Changing hello to hi'),
+                 ('Run the tests', 'pending', 'Running the tests')]
         open(os.path.join(out, 'todo-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, short, 6000)) + '\n')
         many = [('Step %d of the long job, with a name long enough to need cutting at narrow widths' % n,
-                 'completed' if n < 4 else 'in_progress' if n == 4 else 'pending') for n in range(1, 15)]
+                 'completed' if n < 4 else 'in_progress' if n == 4 else 'pending',
+                 'Doing step %d of the long job, with a name long enough to need cutting at narrow widths' % n)
+                for n in range(1, 15)]
         open(os.path.join(out, 'todo-many-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, many, 6000)) + '\n')
         open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')

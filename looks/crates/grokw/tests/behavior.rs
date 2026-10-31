@@ -267,6 +267,7 @@ fn tiny_and_odd_sizes_never_panic() {
         hn.event(Event::Todos(vec![agent_core::Todo {
             text: "one".into(),
             status: agent_core::TodoStatus::Pending,
+            active: None,
         }]));
         hn.ctrl('t');
         hn.text();

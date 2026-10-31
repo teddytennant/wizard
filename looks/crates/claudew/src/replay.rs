@@ -62,7 +62,10 @@ impl Player {
                 Got::Other
             }
             Request::Prompt(_) | Request::PromptWith { .. } | Request::Steer(_) => Got::Prompt,
-            Request::Decide { allow: false, .. } => Got::Cancel,
+            // a refusal stops the turn; one with a word of feedback goes back to the model
+            Request::Decide {
+                allow: false, note, ..
+            } if note.is_empty() => Got::Cancel,
             Request::Decide { .. } | Request::Answer { .. } => Got::Decide,
             Request::Cancel => Got::Cancel,
             Request::Shutdown => Got::Quit,

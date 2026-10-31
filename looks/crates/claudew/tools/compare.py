@@ -30,7 +30,7 @@ NORMALISE = [
     (r'(?<=^\* )[A-Z][a-zé]+(?=…)', 'Verb'),
     (r'(?<=^\* Verb… \()\d+[hms]( \d+[ms])*(?= · )', 'Ns'),
     # a task in progress takes the verb's place in the spinner
-    (r'^[·✢*✳✶✻✽](?= (Change hello to hi|Step \d+ of the long job[^…]*)…)', '*'),
+    (r'^[·✢*✳✶✻✽](?= (Changing hello to hi|Doing step \d+ of the long job[^…]*)…)', '*'),
     (r'(?<=\()\d+[hms]( \d+[ms])*(?= · [↓↑] [0-9.]+k? tokens\)\s*$)', 'Ns'),
     (r'(?<= · [↓↑] )[0-9.]+k?(?= tokens)', 'N'),
     (r'^✻ \S+ for (\d+[hms] ?)+ · done \d+:\d\d [AP]M', '✻ Worked for Ns · done H:MM XM'),

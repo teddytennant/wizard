@@ -1,0 +1,24 @@
+
+[38;5;246m  ⎿  /plan to preview[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+[39m  [38;5;73m────────────────────────────────────────────────────────────────────────────[39m
+   [1m[38;5;153mReady to code?[0m
+
+   Here is Claude's plan:
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+   1. Add the comment [38;5;153m// entry point[39m as the first line of main.rs.
+   2. Check the file still compiles.
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+
+  [38;5;73m────────────────────────────────────────────────────────────────────────────[39m
+   [38;5;246mClaude has written up a plan and is ready to execute. Would you like to [39m
+   [38;5;246mproceed?[39m
+
+     [38;5;246m1. [39mYes, and use auto mode
+     [38;5;246m2. [39mYes, manually approve edits
+   [38;5;153m❯[39m [38;5;246m3. [7m[39mT[0;2mell Claude what to change[0m
+        [38;5;246mshift+tab to approve with this feedback[39m
+
+   [38;5;246mctrl+g to edit in Nvim · [39m
+   [38;5;246m~/.claude/plans/plan-adding-the-comment-dreamy-pascal.md[39m

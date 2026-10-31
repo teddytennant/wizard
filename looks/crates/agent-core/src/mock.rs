@@ -973,14 +973,17 @@ async fn scenario(
             Todo {
                 text: "Read the code".into(),
                 status: TodoStatus::Completed,
+                active: None,
             },
             Todo {
                 text: "Fix greeting".into(),
                 status: TodoStatus::InProgress,
+                active: None,
             },
             Todo {
                 text: "Add tests".into(),
                 status: TodoStatus::Pending,
+                active: None,
             },
         ]));
         pause(200).await;

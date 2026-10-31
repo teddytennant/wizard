@@ -394,6 +394,33 @@ fn todo_status(s: &str) -> TodoStatus {
     }
 }
 
+fn active_of(v: &Value, key: &str) -> Option<String> {
+    Some(str_of(v, key).to_string()).filter(|f| !f.is_empty())
+}
+
+/// The list an ACP `plan` update carries: entries with a status, and the present-tense phrasing
+/// in `_meta.active_form` when the task has one.
+pub fn todos_of_plan(update: &Value) -> Vec<Todo> {
+    update
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|e| Todo {
+                    text: str_of(e, "content").to_string(),
+                    status: todo_status(str_of(e, "status")),
+                    active: e
+                        .pointer("/_meta/active_form")
+                        .and_then(Value::as_str)
+                        .filter(|f| !f.is_empty())
+                        .map(str::to_string),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The list a finished `todo` call leaves behind: its `items` argument on a
 /// write, the glyph lines of its output on a read.
 pub fn todos_of(call: &ToolCall) -> Option<Vec<Todo>> {
@@ -407,6 +434,7 @@ pub fn todos_of(call: &ToolCall) -> Option<Vec<Todo>> {
                 .map(|i| Todo {
                     text: str_of(i, "content").to_string(),
                     status: todo_status(str_of(i, "status")),
+                    active: active_of(i, "active_form"),
                 })
                 .collect(),
         );
@@ -437,6 +465,7 @@ pub fn parse_todo_lines(text: &str) -> Vec<Todo> {
             Some(Todo {
                 text: ch.as_str().trim().to_string(),
                 status,
+                active: None,
             })
         })
         .collect()

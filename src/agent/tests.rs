@@ -3349,6 +3349,7 @@ async fn clear_kills_background_work_and_resets_todos() {
         .push(crate::tools::todo::TodoItem {
             content: "stale item".to_string(),
             status: crate::tools::todo::TodoStatus::Pending,
+            active_form: None,
         });
     agent.ctx.subagents.spawn("worker", "slow", async {
         tokio::time::sleep(Duration::from_secs(30)).await;

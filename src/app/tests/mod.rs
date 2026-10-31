@@ -1729,6 +1729,7 @@ fn todo_update_mirrors_the_list_and_auto_shows_the_overlay_once() {
     let items = vec![TodoItem {
         content: "first".to_string(),
         status: TodoStatus::InProgress,
+        active_form: None,
     }];
     app.handle_agent_event(AgentEvent::TodoUpdated(items.clone()));
     assert_eq!(app.todos, items);
@@ -4185,14 +4186,17 @@ fn themed_fixture() -> App {
         TodoItem {
             content: "done item".to_string(),
             status: TodoStatus::Completed,
+            active_form: None,
         },
         TodoItem {
             content: "current item".to_string(),
             status: TodoStatus::InProgress,
+            active_form: None,
         },
         TodoItem {
             content: "later item".to_string(),
             status: TodoStatus::Pending,
+            active_form: None,
         },
     ];
 

@@ -241,7 +241,8 @@ fn task_create_and_update_build_the_todo_list() {
         lists[0],
         &vec![Todo {
             text: "Read notes.txt".into(),
-            status: TodoStatus::Pending
+            status: TodoStatus::Pending,
+            active: None
         }]
     );
     let last = lists.last().unwrap();

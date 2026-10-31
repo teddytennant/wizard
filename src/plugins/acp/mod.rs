@@ -45,11 +45,12 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
     LoadSessionRequest, LoadSessionResponse, Meta, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionConfigOption,
-    SessionId, SessionInfo, SessionListCapabilities, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, ToolCall,
-    ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    SessionCapabilities, SessionConfigOption, SessionId, SessionInfo, SessionListCapabilities,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, ToolCall, ToolCallContent, ToolCallId,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{
     self as acp, Agent as AcpRole, Client, ConnectionTo, Responder, Stdio,
@@ -1104,6 +1105,23 @@ enum Outgoing {
 const ALLOW_ONCE: &str = "allow";
 const ALLOW_ALWAYS: &str = "allow-always";
 const REJECT_ONCE: &str = "reject";
+/// One todo item as an ACP plan entry.
+fn plan_entry(item: crate::tools::todo::TodoItem) -> PlanEntry {
+    use crate::tools::todo::TodoStatus;
+    let status = match item.status {
+        TodoStatus::Pending => PlanEntryStatus::Pending,
+        TodoStatus::InProgress => PlanEntryStatus::InProgress,
+        TodoStatus::Completed => PlanEntryStatus::Completed,
+    };
+    let mut entry = PlanEntry::new(item.content, PlanEntryPriority::Medium, status);
+    if let Some(form) = item.active_form {
+        let mut meta = Meta::new();
+        meta.insert("active_form".to_string(), Value::String(form));
+        entry = entry.meta(meta);
+    }
+    entry
+}
+
 const APPROVE_PLAN: &str = "approve";
 const KEEP_PLANNING: &str = "keep-planning";
 
@@ -1113,17 +1131,32 @@ fn plan_verdict(
     answer: Result<agent_client_protocol::schema::v1::RequestPermissionResponse, acp::Error>,
 ) -> PlanVerdict {
     match answer {
-        Ok(response) => match response.outcome {
-            RequestPermissionOutcome::Selected(picked)
-                if picked.option_id.0.as_ref() == APPROVE_PLAN =>
-            {
-                PlanVerdict::approve()
+        Ok(response) => {
+            // The client may attach what the user typed, as `_meta.feedback`. On a turned down
+            // plan it is the reason; on an approved one it rides along with the approval.
+            let typed = response
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("feedback"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|f| !f.is_empty())
+                .map(str::to_string);
+            match response.outcome {
+                RequestPermissionOutcome::Selected(picked)
+                    if picked.option_id.0.as_ref() == APPROVE_PLAN =>
+                {
+                    PlanVerdict {
+                        approved: true,
+                        feedback: typed.unwrap_or_default(),
+                    }
+                }
+                RequestPermissionOutcome::Selected(_) => PlanVerdict::reject(
+                    typed.unwrap_or_else(|| "the user wants to keep planning".to_string()),
+                ),
+                _ => PlanVerdict::reject("the review was cancelled"),
             }
-            RequestPermissionOutcome::Selected(_) => {
-                PlanVerdict::reject("the user wants to keep planning")
-            }
-            _ => PlanVerdict::reject("the review was cancelled"),
-        },
+        }
         Err(_) => PlanVerdict::approve(),
     }
 }
@@ -1184,7 +1217,10 @@ impl Translator {
             ToolCallUpdateFields::new()
                 .title("Ready to code?".to_string())
                 .kind(ToolKind::SwitchMode)
-                .raw_input(serde_json::json!({ "plan": plan })),
+                .raw_input(serde_json::json!({
+                    "plan": plan,
+                    "plan_file": crate::tools::plan::PLAN_FILE,
+                })),
         );
         let options = vec![
             PermissionOption::new(
@@ -1337,6 +1373,11 @@ impl Translator {
             // `/plan` turns plan mode on over ACP too, and a finished plan waits
             // for a verdict: the client is asked. The interview tool has no
             // ACP shape, so it is declined and the turn cannot wedge on it.
+            // The todo list goes out as an ACP plan: every update replaces the whole list. The
+            // present-tense phrasing rides in `_meta.active_form`, for a client that shows it.
+            AgentEvent::TodoUpdated(items) => self.send(SessionUpdate::Plan(Plan::new(
+                items.into_iter().map(plan_entry).collect(),
+            ))),
             AgentEvent::PlanReady { plan, gate } if self.ask => self.ask_about_plan(plan, gate),
             AgentEvent::PlanReady { gate, .. } => {
                 gate.answer(PlanVerdict::approve());
@@ -1363,7 +1404,6 @@ impl Translator {
             | AgentEvent::Usage { .. }
             | AgentEvent::ContextSize { .. }
             | AgentEvent::UltraGuidance { .. }
-            | AgentEvent::TodoUpdated(_)
             | AgentEvent::TaskStarted { .. }
             | AgentEvent::TaskFinished { .. }
             | AgentEvent::SubagentStarted { .. }
@@ -1678,6 +1718,51 @@ mod tests {
         assert!(!verdict.try_recv().expect("the verdict").approved);
     }
 
+    /// The todo list goes out as an ACP plan, the in-progress phrasing in `_meta.active_form`.
+    #[test]
+    fn a_todo_update_is_sent_as_a_plan() {
+        use crate::tools::todo::{TodoItem, TodoStatus};
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        let mut translator = Translator {
+            session_id: SessionId::new("session-1"),
+            updates,
+            next_call_id: Arc::new(AtomicU64::new(1)),
+            open_calls: HashMap::new(),
+            ask: true,
+            asked: HashMap::new(),
+        };
+        let item = |content: &str, status, form: Option<&str>| TodoItem {
+            content: content.to_string(),
+            status,
+            active_form: form.map(str::to_string),
+        };
+        translator.handle(AgentEvent::TodoUpdated(vec![
+            item(
+                "Run the tests",
+                TodoStatus::InProgress,
+                Some("Running the tests"),
+            ),
+            item("Ship it", TodoStatus::Pending, None),
+        ]));
+        let Ok(Outgoing::Update(n)) = rx.try_recv() else {
+            panic!("a plan update");
+        };
+        let SessionUpdate::Plan(plan) = n.update else {
+            panic!("expected a plan");
+        };
+        assert_eq!(plan.entries.len(), 2);
+        assert_eq!(plan.entries[0].status, PlanEntryStatus::InProgress);
+        let form = |i: usize| {
+            plan.entries[i]
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("active_form"))
+                .and_then(Value::as_str)
+        };
+        assert_eq!(form(0), Some("Running the tests"));
+        assert_eq!(form(1), None);
+    }
+
     /// Leaving plan mode through exit_plan is announced like `/plan off`; a plan that was
     /// sent back leaves plan mode on and says nothing.
     #[test]
@@ -1731,6 +1816,20 @@ mod tests {
         };
         assert!(plan_verdict(pick(APPROVE_PLAN)).approved);
         assert!(!plan_verdict(pick(KEEP_PLANNING)).approved);
+        let mut typed = pick(KEEP_PLANNING).unwrap();
+        let mut meta = Meta::new();
+        meta.insert("feedback".to_string(), json!(" use tabs "));
+        typed.meta = Some(meta);
+        let verdict = plan_verdict(Ok(typed));
+        assert!(!verdict.approved);
+        assert_eq!(verdict.feedback, "use tabs");
+        let mut approved = pick(APPROVE_PLAN).unwrap();
+        let mut meta = Meta::new();
+        meta.insert("feedback".to_string(), json!("mind the tests"));
+        approved.meta = Some(meta);
+        let verdict = plan_verdict(Ok(approved));
+        assert!(verdict.approved);
+        assert_eq!(verdict.feedback, "mind the tests");
         assert!(
             !plan_verdict(Ok(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Cancelled

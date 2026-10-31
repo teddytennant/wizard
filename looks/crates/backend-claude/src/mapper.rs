@@ -490,6 +490,7 @@ impl Mapper {
                                         Todo {
                                             text: s(t, "content").unwrap_or("").to_string(),
                                             status: todo_status(s(t, "status").unwrap_or("")),
+                                            active: s(t, "activeForm").map(str::to_string),
                                         },
                                     )
                                 })
@@ -578,6 +579,7 @@ impl Mapper {
                             Todo {
                                 text: subject,
                                 status: TodoStatus::Pending,
+                                active: s(&call.input, "activeForm").map(str::to_string),
                             },
                         ));
                         out.push(self.todos_event());

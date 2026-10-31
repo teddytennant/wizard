@@ -116,6 +116,7 @@ fn todo_toggle_collapses_the_list_and_a_short_list_has_no_toggle() {
     let todo = |t: &str, s| Todo {
         text: t.into(),
         status: s,
+        active: None,
     };
     h.event(Event::Todos(vec![
         todo("one", TodoStatus::Completed),
@@ -164,6 +165,7 @@ fn an_overflowing_sidebar_gets_a_scrollbar_and_scrolls_with_the_wheel() {
     let todo = |t: &str| Todo {
         text: t.into(),
         status: TodoStatus::Pending,
+        active: None,
     };
     h.event(Event::Todos(
         (0..8).map(|i| todo(&format!("item {i}"))).collect(),
@@ -271,6 +273,7 @@ fn sidebar_with_todos_and_modified_files_at_170x45() {
     let todo = |t: &str, s| Todo {
         text: t.into(),
         status: s,
+        active: None,
     };
     h.event(Event::Todos(vec![
         todo("Read the code", TodoStatus::Completed),

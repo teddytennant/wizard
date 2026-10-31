@@ -315,6 +315,12 @@ fn has_command(app: &App, name: &str) -> bool {
 
 /// The three columns `?` opens under the prompt. Each column wraps on its own.
 pub fn shortcut_columns(app: &App) -> [Vec<&'static str>; 3] {
+    shortcut_entries(app, app.backslash_used)
+}
+
+/// The columns' entries; `short` is the newline entry as it reads once backslash and Enter has
+/// been used. Claude Code sizes the columns on the short one and wraps the long one inside.
+fn shortcut_entries(app: &App, short: bool) -> [Vec<&'static str>; 3] {
     let mut a = vec!["! for shell mode", "/ for commands", "@ for file paths"];
     if has_command(app, "btw") {
         a.push("/btw for side question");
@@ -324,7 +330,11 @@ pub fn shortcut_columns(app: &App) -> [Vec<&'static str>; 3] {
         "shift + tab to cycle agent modes",
         "ctrl + o for verbose output",
         "ctrl + t to toggle tasks",
-        "\\⏎ for newline",
+        if short {
+            "\\⏎ for newline"
+        } else {
+            "backslash (\\) + return (⏎) for newline"
+        },
     ];
     let c = vec![
         "ctrl + shift + _ to undo",
@@ -380,7 +390,7 @@ pub fn shortcut_layout(cols: &[Vec<&str>; 3], w: usize, panel: bool) -> [(usize,
 
 pub fn shortcut_table(app: &App, w: usize, panel: bool, style: Style) -> Vec<Row> {
     let cols = shortcut_columns(app);
-    let layout = shortcut_layout(&cols, w, panel);
+    let layout = shortcut_layout(&shortcut_entries(app, true), w, panel);
     let mut cells: Vec<Vec<String>> = Vec::new();
     for (i, col) in cols.iter().enumerate() {
         let mut lines = Vec::new();
