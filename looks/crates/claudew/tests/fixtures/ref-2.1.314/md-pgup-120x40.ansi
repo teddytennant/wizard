@@ -8,9 +8,7 @@
   [1m[38;5;153msrc/[0m[38;5;231m[48;5;237m in bold, then [Docs](https://example.com/docs), then a fenced rust block containing: fn main() { [39m
   [38;5;231mprintln!("hi"); }[39m
 
-[38;5;231m[49m●[39m Here is the summary.
-
-  ┌──────┬───────┐
+[38;5;231m[49m●[39m ┌──────┬───────┐
   │ file │ lines │
   ├──────┼───────┤
   │ a.rs │ 3     │
@@ -18,11 +16,13 @@
   │ b.rs │ 120   │
   └──────┴───────┘
 
-  Use [38;5;153mcargo build[39m to build [1m[38;5;153msrc/[0m, see [94m]8;id=lztw4c;https://example.com/docs\Docs[39m]8;;\.
+  [1m[38;5;153msrc/[0m
+
+  [94m]8;id=lztw4c;https://example.com/docs\Docs[39m]8;;\
 
   [34mfn[39m [33mmain[39m() { [36mprintln![39m([31m"hi"[39m); }
 
-[38;5;246m✻[39m [38;5;246mBaked for 0s · done 3:58 PM[39m
+[38;5;246m✻[39m [38;5;246mBrewed for 0s · done 8:27 PM
 
 
 
@@ -31,7 +31,7 @@
 
 
 
-
+[39m
 
 
 [38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -91,6 +91,14 @@ def plan_for(body):
                 b.get('type') == 'tool_result' for b in msg['content'])
             if t.strip() and not carries_result:
                 prompt, tool_uses = t, 0
+            elif carries_result:
+                # a prompt typed after a refused call arrives in the refusal's own message
+                refused = any(b.get('type') == 'tool_result' and "doesn't want to proceed" in json.dumps(b.get('content'))
+                              for b in msg['content'])
+                typed = [b['text'] for b in msg['content'] if b.get('type') == 'text'
+                         and not b['text'].lstrip().startswith(('<system-reminder>', '[Request interrupted'))]
+                if refused and typed:
+                    prompt, tool_uses = typed[-1], 0
         elif isinstance(msg['content'], list):
             tool_uses += sum(1 for b in msg['content'] if b.get('type') == 'tool_use')
     last = text_of(msgs[-1]['content']) if msgs else ''
@@ -129,6 +137,8 @@ class H(BaseHTTPRequestHandler):
         if not self.path.split('?')[0].endswith('/messages'):
             return self.reply_json({})
         call, text, thought = plan_for(body)
+        if os.environ.get('FAKE_DUMP'):
+            open(os.environ['FAKE_DUMP'], 'a').write(json.dumps(body.get('messages', [])) + '\n')
         if call is None and text == 'done' and '"TaskUpdate"' in json.dumps(body.get('messages', [])):
             # hold the last answer so the list can be captured while the turn is still running
             time.sleep(float(os.environ.get('FAKE_TASK_PAUSE', '8')))

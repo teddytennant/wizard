@@ -4,6 +4,13 @@
 [38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/…/scratchpad/look-claude/proj[39m
 
 
+[38;5;246m[48;5;237m❯ [38;5;231mThink it over: add two and two[39m
+
+[49m  [38;5;246mThought for [1m1s[0m[38;5;246m [39m
+
+[38;5;231m●[39m The answer is 4.
+
+[38;5;246m✻[39m [38;5;246mCooked for 0s · done 8:29 PM[39m
 
 
 
@@ -14,11 +21,4 @@
 [38;5;244m────────────────────────────────────────────────────────────────────────────────
 [39m❯ [7m [0m
 [38;5;244m────────────────────────────────────────────────────────────────────────────────
-[39m  [38;5;246m! for shell mode[39m     [38;5;246mdouble tap esc to clear input[39m  [38;5;246mctrl + shift + _ to undo[39m
-  [38;5;246m/ for commands[39m       [38;5;246mshift + tab to auto-accept [39m    [38;5;246mctrl + z to suspend[39m
-  [38;5;246m@ for file paths[39m     [38;5;246medits[39m                          [38;5;246mctrl + v to paste images[39m
-  [38;5;246m/btw for side [39m       [38;5;246mctrl + o for verbose output[39m    [38;5;246malt + p to switch model[39m
-  [38;5;246mquestion[39m             [38;5;246mctrl + t to toggle tasks[39m       [38;5;246mctrl + s to stash prompt[39m
-                       [38;5;246mbackslash (\) + return (⏎) for ctrl + g to edit in [39m
-                       [38;5;246mnewline[39m                        [38;5;246m$EDITOR[39m
-                                                      [38;5;246m/keybindings to [39m
+[39m  [38;5;246m⏸ manual mode on · ? for shortcuts · ← for agents[39m

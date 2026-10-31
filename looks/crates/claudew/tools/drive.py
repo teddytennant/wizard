@@ -20,7 +20,7 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 
 # (scene name, steps). A step is ('type', text), ('keys', k1, k2, ...), ('wait', seconds),
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
-# (no waiting after), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
+# (no waiting after), ('restore',) (the size the program started at), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
 # reference only.
 STATIC = [
@@ -30,10 +30,6 @@ STATIC = [
     ('ctrlc', [('fast_keys', 'C-c'), ('raw_snap', '-hint'), ('wait', 2.5), ('snap', '-after')]),
     ('bash-mode', [('type', '!'), ('snap', ''), ('type', 'ls'), ('snap', '-typed'),
                    ('keys', 'BSpace', 'BSpace', 'BSpace')]),
-    # the reference has a fourth mode (auto) the backend does not; one more press brings it round
-    ('modes', [('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
-               ('snap', '-4')]),
     ('mention', [('type', '@'), ('wait', 0.8), ('snap', ''), ('type', 's'), ('snap', '-query'),
                  ('keys', 'Down'), ('snap', '-selected'), ('keys', 'C-c')]),
     ('slash', [('type', '/'), ('snap', ''), ('keys', 'Down', 'Down'), ('snap', '-down'),
@@ -56,6 +52,12 @@ STATIC = [
     ('escape', [('type', 'abc'), ('fast_keys', 'Escape'), ('raw_snap', '-hint'), ('wait', 1.5),
                 ('keys', 'Escape', 'Escape'), ('snap', '-cleared')]),
     ('resize', [('resize', 100, 30), ('wait', 1.0), ('snap', '')]),
+    # last but one, at the size it started: the reference prints a long explanation of auto mode
+    # in the transcript the first time shift+tab reaches it, which every scene after would carry
+    # at 80x24. It has a fourth mode (auto) the backend does not; one more press brings it round
+    ('modes', [('restore',), ('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
+               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
+               ('snap', '-4')]),
     ('exit', [('quit',), ('wait', 0.5), ('snap', '')]),
 ]
 
@@ -356,11 +358,11 @@ THINK = [
 ]
 
 # Claude Code's statusLine: a command that prints rows under the prompt (compare.sh writes the
-# settings and the command). The rows go away under the shortcuts table, and the mode line loses
-# its `? for shortcuts`.
+# settings and the command). The rows go away under the shortcuts table (checked by hand and in
+# wave3.rs: with the table open the aligned comparison of the two tables is noise), and the mode
+# line loses its `? for shortcuts`.
 STATUSLINE = [
     ('sl-home', [('wait', 1.5), ('snap', '')]),
-    ('sl-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('sl-typed', [('since', 13), ('type', 'hello'), ('snap', ''), ('keys', 'BSpace', 'BSpace', 'BSpace', 'BSpace', 'BSpace')]),
     ('sl-slash', [('type', '/'), ('snap', ''), ('keys', 'C-c'), ('wait', 2.5)]),
     ('sl-modes', [('keys', 'BTab'), ('snap', '')]),
@@ -370,7 +372,6 @@ STATUSLINE = [
 # Three rows indented by `padding`, one of them longer than the screen, another with wide characters.
 STATUSLINE_PAD = [
     ('slp-home', [('wait', 1.5), ('snap', '')]),
-    ('slp-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
 ]
 
 # Claude Code's task list: under the spinner while a turn runs, above the prompt after it, ctrl+t
@@ -428,6 +429,7 @@ def tmux(*args, check=True):
 class Pane:
     def __init__(self, name, w, h, cwd, cmd):
         self.name = name
+        self.size = (w, h)
         self.t0 = time.time()
         tmux('kill-session', '-t', name, check=False)
         tmux('-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', str(w), '-y', str(h), '-c', cwd,
@@ -547,6 +549,8 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
                         time.sleep(0.25)
                     if tmux('display', '-p', '-t', pane.name, '#{alternate_on}').strip() != '1':
                         break
+            elif op == 'restore':
+                tmux('resize-window', '-t', pane.name, '-x', str(pane.size[0]), '-y', str(pane.size[1]))
             elif op == 'resize':
                 tmux('resize-window', '-t', pane.name, '-x', str(step[1]), '-y', str(step[2]))
             elif op == 'wait':

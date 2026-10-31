@@ -156,7 +156,9 @@ def head(ref, cwd, size, auto=False):
     current = next((n for n, _, cur in ms if cur), ms[0][0] if ms else 'model')
     slug = lambda n: 'claude-' + re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')
     opts = [{'id': slug(n), 'name': n, 'provider': d} for n, d, _ in ms]
-    opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(3)]
+    # the picker's `… +3 models` line counts the models its window never reaches
+    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models', l)] if m), 0)
+    opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(hidden)]
     config = {
         'model': slug(current), 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
         'mode': 'manual', 'modes': ['manual', 'accept edits'] + (['auto'] if auto else []), 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
