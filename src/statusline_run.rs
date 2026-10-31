@@ -22,7 +22,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use ratatui::style::{Color, Modifier, Style};
@@ -86,7 +86,7 @@ pub fn parse(v: &serde_json::Value) -> Option<Cfg> {
 pub struct State {
     pub cfg: Option<Cfg>,
     pub lines: Vec<String>,
-    rx: Option<Receiver<Vec<String>>>,
+    rx: Option<mpsc::Receiver<Vec<String>>>,
     /// A trigger is waiting out the debounce since this moment.
     wanted_at: Option<Instant>,
     last_run: Option<Instant>,
@@ -151,7 +151,7 @@ impl State {
             self.last_run = Some(Instant::now());
             let payload = payload();
             let run_in = run_in.clone();
-            let (tx, rx) = channel();
+            let (tx, rx) = mpsc::channel();
             self.rx = Some(rx);
             std::thread::spawn(move || {
                 tx.send(run(&cfg.command, &payload, &run_in, max_rows)).ok();
