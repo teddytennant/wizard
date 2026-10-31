@@ -300,8 +300,17 @@ pub fn mismatches(look: &Buffer, reference: &Buffer, masks: &[&str]) -> Vec<Stri
                 }
             }
         }
+        // the captures in tests/fixtures/ref were taken without tmux's `-N`, which dropped the
+        // blank cells at the end of a row, background and all: past the reference's text only
+        // the look's characters are compared (tools/compare.sh keeps them, and compares them)
+        let ref_end = (0..w)
+            .rev()
+            .find(|&x| reference[(x, y)].symbol() != " ")
+            .map_or(0, |x| x + 1);
         for x in 0..w {
-            if !masked[x as usize] && shown(look, x, y) != shown(reference, x, y) {
+            let (l, r) = (shown(look, x, y), shown(reference, x, y));
+            let differs = if x >= ref_end { l.0 != r.0 } else { l != r };
+            if !masked[x as usize] && differs {
                 out.push(format!(
                     "{y}:{x} ref={:?} look={:?}\n  ref  |{}\n  look |{}",
                     shown(reference, x, y),

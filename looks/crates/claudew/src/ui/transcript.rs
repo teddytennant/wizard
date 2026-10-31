@@ -195,6 +195,7 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
         for (i, r) in wrap_str(q, st, w.saturating_sub(4)).into_iter().enumerate() {
             let mut row = Row::of(if i == 0 { "❯ " } else { "  " }, st);
             row.extend(r);
+            fill(&mut row, w, st);
             out.push(row);
         }
         // only a turn can be cut short for them; a mode change or a side question cannot
@@ -263,6 +264,15 @@ pub fn short_cwd(cwd: &str, w: usize) -> String {
     format!("/…/{}", parts.last().copied().unwrap_or(""))
 }
 
+/// Paint the rest of the row, out to the right edge, in `style`: a message's band runs the whole
+/// width of the screen, not only as far as its text.
+fn fill(row: &mut Row, w: usize, style: Style) {
+    let width = row.width();
+    if width < w {
+        row.push(" ".repeat(w - width), style);
+    }
+}
+
 fn user(th: &Theme, text: &str, bash: bool, w: usize) -> Vec<Row> {
     let bg = Style::new().bg(if bash { th.bash_bg } else { th.user_bg });
     let body = bg.fg(th.user_fg);
@@ -292,6 +302,10 @@ fn user(th: &Theme, text: &str, bash: bool, w: usize) -> Vec<Row> {
             let full = w.saturating_sub(if i == 0 { 1 } else { 2 });
             if i < last && row.width() < full {
                 row.push(" ", bg);
+            }
+            // a command's echo (`❯ /model`) is only as wide as its text
+            if bash || !text.starts_with('/') {
+                fill(&mut row, w, bg);
             }
             row
         })
