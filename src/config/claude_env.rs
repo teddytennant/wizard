@@ -225,6 +225,9 @@ pub fn publish(get: Get) -> Vec<(&'static str, String)> {
     if let Some(dirs) = value(get, "CLAUDE_CODE_PLUGIN_DIRS") {
         out.push((crate::cli_claude::env::PLUGIN_DIRS, dirs));
     }
+    if truthy(get, "DISABLE_COLORS") {
+        out.push(("NO_COLOR", "1".to_string()));
+    }
     if let Some(tmp) = value(get, "CLAUDE_CODE_TMPDIR").or_else(|| value(get, "CLAUDE_TMPDIR")) {
         out.push(("TMPDIR", tmp));
     }
@@ -255,6 +258,13 @@ mod tests {
             active_provider: Some("claude".into()),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn disable_colors_publishes_no_color() {
+        let published = publish(&env(&[("DISABLE_COLORS", "1")]));
+        assert!(published.contains(&("NO_COLOR", "1".to_string())));
+        assert!(publish(&env(&[("DISABLE_COLORS", "0")])).is_empty());
     }
 
     #[test]

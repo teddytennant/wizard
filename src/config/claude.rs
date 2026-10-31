@@ -119,6 +119,10 @@ pub struct ClaudeSettings {
     pub include_git_instructions: Option<bool>,
     /// `companyAnnouncements`.
     pub company_announcements: Vec<String>,
+    /// `viewMode`: `default`, `verbose` or `focus`.
+    pub view_mode: Option<String>,
+    /// `prefersReducedMotion`.
+    pub reduced_motion: Option<bool>,
     /// `fastMode`.
     pub fast_mode: Option<bool>,
     /// `fastModePerSessionOptIn`.
@@ -421,6 +425,8 @@ fn merge_data_keys(out: &mut ClaudeSettings, value: &Value, managed: bool, proje
     out.include_co_authored_by = flag("includeCoAuthoredBy").or(out.include_co_authored_by);
     out.verbose = flag("verbose").or(out.verbose);
     out.fast_mode = flag("fastMode").or(out.fast_mode);
+    out.reduced_motion = flag("prefersReducedMotion").or(out.reduced_motion);
+    out.view_mode = text("viewMode").or(out.view_mode.take());
     out.fast_mode_per_session_opt_in =
         flag("fastModePerSessionOptIn").unwrap_or(out.fast_mode_per_session_opt_in);
     out.always_thinking = flag("alwaysThinkingEnabled").or(out.always_thinking);
@@ -628,7 +634,11 @@ impl ClaudeSettings {
             )),
             None => {}
         }
-        if self.include_git_instructions == Some(false) {
+        let git_off = super::claude_env::truthy(
+            &|name: &str| std::env::var(name).ok(),
+            "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS",
+        );
+        if self.include_git_instructions == Some(false) || git_off {
             lines.push(
                 "Do not commit, push or open pull requests unless the user asks you to."
                     .to_string(),

@@ -468,11 +468,15 @@ impl ClaudeFlags {
                 set(name, value.into());
             }
         }
-        let verbose_setting = std::env::current_dir().ok().is_some_and(|root| {
-            crate::config::claude::load(&root, crate::config::claude::Trust::Refused).verbose
-                == Some(true)
-        });
-        if self.verbose || verbose_setting || self.debug.is_some() {
+        let from_settings = std::env::current_dir()
+            .map(|root| crate::config::claude::load(&root, crate::config::claude::Trust::Refused))
+            .unwrap_or_default();
+        if from_settings.reduced_motion == Some(true)
+            && std::env::var_os("WIZARD_REDUCED_MOTION").is_none()
+        {
+            set("WIZARD_REDUCED_MOTION", "1".into());
+        }
+        if self.verbose || from_settings.verbose == Some(true) || self.debug.is_some() {
             let filter = match &self.debug {
                 Some(Some(filter)) => format!("wizard={filter}"),
                 Some(None) => "debug".to_string(),
@@ -511,6 +515,11 @@ impl ClaudeFlags {
             .or(settings.thinking_effort());
         if let Some(effort) = effort.and_then(parse_effort) {
             config.reasoning_effort = Some(effort);
+        }
+        match settings.view_mode.as_deref() {
+            Some("verbose") => config.ui.compact = false,
+            Some("focus") => config.ui.compact = true,
+            _ => {}
         }
         if let Some(verbs) = settings.spinner_verb_list(&config.ui.spinner_verbs) {
             config.ui.spinner_verbs = verbs;

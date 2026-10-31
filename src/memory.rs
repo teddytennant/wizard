@@ -126,8 +126,14 @@ impl MemoryStore {
     pub fn open_auto(project_root: &Path) -> Result<Self> {
         let settings =
             crate::config::claude::load(project_root, crate::config::claude::Trust::Refused);
-        if settings.auto_memory_enabled == Some(false) {
-            bail!("memory is turned off by autoMemoryEnabled: false in settings");
+        let env_off = crate::config::claude_env::truthy(
+            &|name: &str| std::env::var(name).ok(),
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+        );
+        if settings.auto_memory_enabled == Some(false) || env_off {
+            bail!(
+                "memory is turned off by autoMemoryEnabled: false or CLAUDE_CODE_DISABLE_AUTO_MEMORY"
+            );
         }
         Self::open_with(project_root, settings.auto_memory_dir.as_deref())
     }
