@@ -88,6 +88,7 @@ pub fn install_all(registry: &mut ToolRegistry, plan_mode: Arc<AtomicBool>) {
     tools.extend(session::tools(registry));
     tools.extend(super::artifact::tools());
     tools.extend(super::advisor::tools());
+    tools.extend(super::trigger::tools());
     for tool in tools {
         if registry.get(tool.name()).is_none() {
             registry.register(tool);

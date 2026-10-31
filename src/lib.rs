@@ -14,6 +14,7 @@ pub mod claude_dir;
 pub mod claude_resume;
 pub mod claude_session;
 pub mod claude_stream;
+pub mod cloudroute;
 pub mod cli;
 pub mod cli_claude;
 pub mod cli_compat;
@@ -66,17 +67,20 @@ pub mod skills;
 pub mod skin;
 pub mod subscription_usage;
 pub mod sync;
+pub mod teleport;
 pub(crate) mod text;
 pub mod theme;
 pub mod token_profile;
 pub mod tools;
 pub mod transcript;
+pub mod trigger;
 pub mod trust;
 pub mod ui;
 pub mod update;
 pub mod usage;
 pub mod usersettings;
 pub mod vim;
+pub mod voice;
 pub mod workflow;
 
 use std::io::IsTerminal;
@@ -337,6 +341,20 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
             std::env::set_current_dir(dir)?;
         }
         return artifact::serve::run(cmd.clone()).await;
+    }
+    // Teleport copies a session file between machines; no model.
+    if let Some(cli::Command::Teleport { cmd }) = &cli.command {
+        if let Some(dir) = &cli.cwd {
+            std::env::set_current_dir(dir)?;
+        }
+        return teleport::run(cmd.clone()).await;
+    }
+    // Triggers are schedule entries and a token-guarded listener; no model.
+    if let Some(cli::Command::Trigger { cmd }) = &cli.command {
+        if let Some(dir) = &cli.cwd {
+            std::env::set_current_dir(dir)?;
+        }
+        return trigger::serve::run(cmd.clone()).await;
     }
     // `wizard scheduler` bare is still the foreground daemon; with a
     // subcommand it manages that daemon as a background service. Both are

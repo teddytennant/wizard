@@ -41,6 +41,7 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("routines", "schedule", ""),
     ("theme", "ui", ""),
     ("focus", "view", ""),
+    ("rc", "remote-control", ""),
 ];
 
 /// The commands [`run`] implements. Every name has a row in the table.
@@ -84,6 +85,9 @@ pub const COMPAT: &[&str] = &[
     "restart",
     "setup-bedrock",
     "setup-vertex",
+    "artifacts",
+    "remote-control",
+    "desktop",
     "autofix-pr",
     "chrome",
     "design",
@@ -122,9 +126,7 @@ const READ_ONLY: &[&str] = &[
     "schedule",
     "ide",
     "fast",
-    "advisor",
     "color",
-    "voice",
     "usage-credits",
     "passes",
     "upgrade",
@@ -133,8 +135,6 @@ const READ_ONLY: &[&str] = &[
     "heapdump",
     "insights",
     "restart",
-    "setup-bedrock",
-    "setup-vertex",
     "autofix-pr",
     "chrome",
     "design",
@@ -145,12 +145,12 @@ const READ_ONLY: &[&str] = &[
     "install-github-app",
     "install-slack-app",
     "mobile",
+    "artifacts",
     "powerup",
     "radio",
     "remote-env",
     "sandbox",
     "stickers",
-    "teleport",
     "tui",
     "web-setup",
     "batch",
@@ -311,6 +311,7 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
         "fast" => reply(surface, super::misc::fast(args)),
         "sandbox" => surface.notice(super::misc::sandbox(&root)),
         "privacy-settings" => surface.notice(super::misc::privacy()),
+        other if super::cloud::handles(other) => super::cloud::run(other, args, surface).await,
         other if super::misc::not_available(other).is_some() => {
             surface.notice(
                 super::misc::not_available(other)

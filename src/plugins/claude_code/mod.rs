@@ -292,7 +292,12 @@ impl LlmProvider for ClaudeCodeProvider {
 
 /// An exported API key would outrank the subscription sign-in inside Claude
 /// Code and bill the turn to it instead.
+///
+/// The Bedrock, Vertex and Foundry variables the shell exported pass through
+/// untouched, and the ones `/setup-bedrock` and `/setup-vertex` saved to
+/// `~/.wizard/settings.json` are added (see [`crate::cloudroute`]).
 fn without_api_keys(command: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    crate::cloudroute::apply(command);
     command
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")

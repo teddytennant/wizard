@@ -107,18 +107,22 @@ pub fn merge_env_at(
 
 /// The names in the `env` block with their values.
 pub fn env_block() -> Vec<(String, String)> {
-    let Ok((_, value)) = load() else {
-        return Vec::new();
-    };
-    value
-        .get("env")
-        .and_then(Value::as_object)
-        .map(|env| {
-            env.iter()
-                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
-                .collect()
-        })
+    load()
+        .ok()
+        .and_then(|(_, value)| env_of(&value))
         .unwrap_or_default()
+}
+
+/// The `env` block of an already loaded settings value.
+pub fn env_of(value: &Value) -> Option<Vec<(String, String)>> {
+    Some(
+        value
+            .get("env")?
+            .as_object()?
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

@@ -778,6 +778,34 @@ async fn check_claude_code() -> Check {
     }
 }
 
+/// The Bedrock, Vertex or Foundry route the Claude Code provider will take,
+/// and what it still lacks. Nothing is called: it reads the environment, the
+/// `env` block of `~/.wizard/settings.json` and the credential files' presence.
+fn check_cloud_route() -> Check {
+    match crate::cloudroute::current_route() {
+        None => Check::skip(
+            "cloud route",
+            "none set; Claude Code uses its own sign-in (/setup-bedrock or /setup-vertex routes it through AWS or Google)",
+        ),
+        Some(route) if route.missing.is_empty() => Check::pass(
+            "cloud route",
+            format!(
+                "{} through the Claude Code provider ({})",
+                route.cloud.name(),
+                route.found.join(", ")
+            ),
+        ),
+        Some(route) => Check::fail(
+            "cloud route",
+            format!(
+                "{} is on but needs {}",
+                route.cloud.name(),
+                route.missing.join("; ")
+            ),
+        ),
+    }
+}
+
 /// Every `[[server]]` in `mcp.toml` completes the MCP handshake, at the same
 /// budget a session connects under — so a server that works in the app never
 /// fails doctor on startup time alone.
@@ -839,6 +867,12 @@ pub async fn run_checks(project_root: &Path) -> Vec<Check> {
                 .any(|p| p.kind == crate::llm::registry::ProviderKind::CLAUDE_CODE)
             {
                 checks.push(check_claude_code().await);
+            }
+            let claude_configured = providers
+                .iter()
+                .any(|p| p.kind == crate::llm::registry::ProviderKind::CLAUDE_CODE);
+            if claude_configured || crate::cloudroute::current_route().is_some() {
+                checks.push(check_cloud_route());
             }
             checks.extend(check_gateway(&config));
             checks.push(check_system_prompt(config.mode));

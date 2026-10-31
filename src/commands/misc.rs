@@ -1,4 +1,4 @@
-//! Smaller Claude Code commands: `/statusline`, `/autocompact`, `/voice`, and
+//! Smaller Claude Code commands: `/statusline`, `/autocompact`, and
 //! the ones that name an Anthropic feature Wizard has no counterpart for. The
 //! last kind answer with what to use here instead, so a script or a habit
 //! gets a sentence rather than "unknown command".
@@ -10,16 +10,8 @@ use crate::config::Config;
 /// `(command, what to say)` for the commands with no Wizard counterpart.
 pub const NOT_AVAILABLE: &[(&str, &str)] = &[
     (
-        "advisor",
-        "the advisor pairs Claude models. /fusion has several providers debate and /ultra fans one model out over lenses.",
-    ),
-    (
         "color",
         "the prompt bar colour is not a setting here. Colours come from the interface skin: /ui lists them.",
-    ),
-    (
-        "voice",
-        "voice dictation is not available: Wizard has no audio input stack. Dictate through your OS and paste.",
     ),
     (
         "usage-credits",
@@ -48,14 +40,6 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
     (
         "restart",
         "start Wizard again; /resume brings the conversation back.",
-    ),
-    (
-        "setup-bedrock",
-        "Bedrock is not a provider here. /provider adds one that is.",
-    ),
-    (
-        "setup-vertex",
-        "Vertex is not a provider here. /provider adds one that is.",
     ),
     (
         "autofix-pr",
@@ -94,10 +78,6 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
         "the Claude Slack app is Anthropic's. `wizard --gateway` runs the same agent behind a Telegram bot.",
     ),
     (
-        "mobile",
-        "there is no Claude mobile app link. The Android app is a separate project in android/.",
-    ),
-    (
         "powerup",
         "/help lists the commands, and docs/getting-started.md walks through them.",
     ),
@@ -105,15 +85,7 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
         "radio",
         "Claude FM is a Claude Code extra with no counterpart here.",
     ),
-    (
-        "remote-env",
-        "cloud agents and their environments are Anthropic's. `wizard fleet` and /background run work in parallel on this machine.",
-    ),
     ("stickers", "stickers are Anthropic merchandise."),
-    (
-        "teleport",
-        "cloud sessions are Anthropic's. /resume continues a local conversation, and `wizard sync` moves config between machines.",
-    ),
     (
         "tui",
         "there is one terminal UI. /ui switches skins and /view flips the compact transcript.",
@@ -385,7 +357,8 @@ mod tests {
             assert!(text.len() > 20, "/{name} says too little");
             assert!(!text.contains('\u{2014}'), "/{name}: no em dashes");
         }
-        assert!(not_available("voice").is_some());
+        assert!(not_available("stickers").is_some());
+        assert!(not_available("voice").is_none(), "/voice is a real command");
         assert!(not_available("fast").is_none(), "/fast is a real command");
         assert!(not_available("nope").is_none());
     }

@@ -171,6 +171,12 @@ pub struct ClaudeFlags {
     #[arg(long, hide = true)]
     pub replay_user_messages: bool,
 
+    /// The model the agent may ask for a second opinion through the
+    /// `advisor` tool: a provider name, `provider/model`, or a model tag. Same
+    /// as `advisorModel` in settings, for this run.
+    #[arg(long, value_name = "MODEL")]
+    pub advisor: Option<String>,
+
     /// Use this session id (letters, digits, `-`, `_`, `.`) for a new session.
     /// With `--resume` or `--continue` it needs `--fork-session`.
     #[arg(long, value_name = "ID")]
@@ -454,6 +460,9 @@ impl ClaudeFlags {
         if !self.betas.is_empty() {
             set(env::BETAS, self.betas.join(",").into());
         }
+        if let Some(model) = &self.advisor {
+            set(crate::advisor::ENV, model.into());
+        }
         if let Some(tool) = &self.permission_prompt_tool {
             set(env::PERMISSION_PROMPT_TOOL, tool.into());
         }
@@ -705,20 +714,20 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
     ("--remote", Takes::Nothing, "no cloud sessions"),
     ("--environment", Takes::One, "no cloud sessions"),
     ("--ref", Takes::One, "no cloud sessions"),
-    ("--remote-control", Takes::Optional, "no remote control"),
-    ("--rc", Takes::Optional, "no remote control"),
+    ("--remote-control", Takes::Optional, "no Anthropic relay; /remote-control says how to attach directly"),
+    ("--rc", Takes::Optional, "no Anthropic relay; /remote-control says how to attach directly"),
     (
         "--remote-control-session-name-prefix",
         Takes::One,
         "no remote control",
     ),
-    ("--teleport", Takes::Optional, "no cloud sessions"),
+    ("--teleport", Takes::Optional, "no cloud sessions; wizard teleport pull moves a session between your machines"),
     (
         "--background",
         Takes::Nothing,
         "start background sessions from wizard agents",
     ),
-    ("--desktop", Takes::Nothing, "use wizard gui"),
+    ("--desktop", Takes::Nothing, "no session handoff; wizard gui opens the desktop app"),
     (
         "--tmux",
         Takes::Optional,
@@ -743,7 +752,6 @@ const UNSUPPORTED: &[(&str, Takes, &str)] = &[
         Takes::One,
         "headless runs never wait for a prompt",
     ),
-    ("--advisor", Takes::One, "see /fusion and /ultra"),
     (
         "--prompt-suggestions",
         Takes::Optional,

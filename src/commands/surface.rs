@@ -522,6 +522,13 @@ pub trait CommandSurface {
         let _ = text;
         false
     }
+
+    /// A channel into the composer and the transcript, for work that
+    /// finishes after the command returns (`/voice` dictation). `None` on a
+    /// surface with no composer.
+    fn composer(&self) -> Option<tokio::sync::mpsc::Sender<crate::event::Event>> {
+        None
+    }
 }
 
 /* ---------------------------------------------------------------------- */

@@ -46,6 +46,7 @@ use crate::config::{Config, Mode, ProviderKind, ReasoningEffort, UltraConfig};
 use crate::import_claude::ImportSelection;
 
 pub mod claude;
+mod cloud;
 mod loop_cmd;
 mod misc;
 pub mod plugin;
@@ -1564,8 +1565,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     ),
     compat_row!(
         "advisor",
-        "",
-        "advisor model (not available here)",
+        "[model|off]",
+        "set the model the agent can ask for a second opinion",
         everywhere
     ),
     compat_row!(
@@ -1576,9 +1577,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     ),
     compat_row!(
         "voice",
-        "",
-        "voice dictation (not available here)",
-        everywhere
+        "[seconds|stop|status]",
+        "dictate into the composer (local recorder and speech-to-text)",
+        local
     ),
     compat_row!(
         "usage-credits",
@@ -1620,14 +1621,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     compat_row!("restart", "", "restart (not available here)", everywhere),
     compat_row!(
         "setup-bedrock",
-        "",
-        "Bedrock setup (not available here)",
+        "[region|off]",
+        "route the Claude Code provider through AWS Bedrock",
         everywhere
     ),
     compat_row!(
         "setup-vertex",
-        "",
-        "Vertex setup (not available here)",
+        "[project|off]",
+        "route the Claude Code provider through Google Vertex",
         everywhere
     ),
     compat_row!(
@@ -1684,13 +1685,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         "Slack app (not available here)",
         everywhere
     ),
-    compat_row!("mobile", "", "mobile app (not available here)", everywhere),
+    compat_row!("mobile", "", "the Android app and how to connect it", everywhere),
     compat_row!("powerup", "", "lessons (not available here)", everywhere),
     compat_row!("radio", "", "radio (not available here)", everywhere),
     compat_row!(
         "remote-env",
         "",
-        "cloud environments (not available here)",
+        "where triggers run on this machine",
         everywhere
     ),
     compat_row!(
@@ -1702,8 +1703,26 @@ pub const COMMANDS: &[CommandSpec] = &[
     compat_row!("stickers", "", "stickers (not available here)", everywhere),
     compat_row!(
         "teleport",
-        "",
-        "cloud sessions (not available here)",
+        "[pack|user@host|file]",
+        "continue a session from another of your machines",
+        everywhere
+    ),
+    compat_row!(
+        "artifacts",
+        "[open|delete|pin <slug>|serve]",
+        "list the local pages the Artifact tool wrote",
+        everywhere
+    ),
+    compat_row!(
+        "remote-control",
+        "[on|off]",
+        "how to attach to this machine, and an HTTP trigger token",
+        local
+    ),
+    compat_row!(
+        "desktop",
+        "[open]",
+        "open Wizard GUI, the desktop app",
         everywhere
     ),
     compat_row!("tui", "", "renderer (not available here)", everywhere),

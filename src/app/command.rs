@@ -2107,6 +2107,10 @@ impl CommandSurface for CommandContext<'_> {
     fn copy_to_clipboard(&mut self, text: &str) -> bool {
         super::term::copy_to_clipboard(text).is_ok()
     }
+
+    fn composer(&self) -> Option<mpsc::Sender<Event>> {
+        Some(self.events.sender())
+    }
 }
 
 /// [`crate::progress::Progress`] adapter for the TUI's `/server start`: relays

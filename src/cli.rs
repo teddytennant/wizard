@@ -305,6 +305,22 @@ pub enum Command {
         cmd: crate::artifact::serve::ArtifactCmd,
     },
 
+    /// Continue a session on another of your machines: `pack` one into a
+    /// file, or `pull` one from a file, URL or ssh host. Self-contained: no
+    /// model. See docs/cloud-equivalents.md.
+    Teleport {
+        #[command(subcommand)]
+        cmd: crate::teleport::TeleportCmd,
+    },
+
+    /// Local triggers: prompts that run headlessly on a schedule or on an
+    /// authenticated HTTP call (`wizard trigger serve`). Self-contained: no
+    /// config, no model of its own. See docs/cloud-equivalents.md.
+    Trigger {
+        #[command(subcommand)]
+        cmd: crate::trigger::serve::TriggerCmd,
+    },
+
     /// Run the scheduler daemon in the foreground: reload
     /// ~/.wizard/schedule.toml each pass and fire due entries as headless
     /// wizard child processes. With a subcommand, manage that daemon as a

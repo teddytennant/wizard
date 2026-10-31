@@ -36,6 +36,7 @@ pub mod subagent_tasks;
 pub mod tasks;
 pub mod todo;
 pub mod tool_search;
+pub mod trigger;
 pub mod turing;
 /// Claude Code's `Workflow` tool: a JavaScript script that fans subagents out.
 #[cfg(feature = "plugin-js")]
