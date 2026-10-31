@@ -169,7 +169,14 @@ impl Tool for ExitPlanTool {
         Ok(match verdict {
             Some(verdict) if verdict.approved => {
                 self.plan_mode.store(false, Ordering::SeqCst);
-                ToolOutput::ok("Plan approved — proceed to execute it.")
+                if verdict.feedback.trim().is_empty() {
+                    ToolOutput::ok("Plan approved — proceed to execute it.")
+                } else {
+                    ToolOutput::ok(format!(
+                        "Plan approved — proceed to execute it. The reviewer added: {}",
+                        verdict.feedback.trim()
+                    ))
+                }
             }
             Some(verdict) => {
                 let feedback = if verdict.feedback.trim().is_empty() {
@@ -267,6 +274,34 @@ mod tests {
         assert!(!plan_mode.load(Ordering::SeqCst), "plan mode cleared");
         let saved = std::fs::read_to_string(tmp.0.join(PLAN_FILE)).expect("plan persisted");
         assert_eq!(saved, "# the plan");
+    }
+
+    #[tokio::test]
+    async fn approval_passes_the_reviewers_word_on() {
+        let tmp = TempDir::new();
+        let tool = ExitPlanTool::new(flag(true), flag(false));
+        let (tx, mut rx) = mpsc::channel(8);
+        let ctx = ToolContext::new(&tmp.0).with_events(tx);
+
+        let reviewer = async {
+            let Some(AgentEvent::PlanReady { gate, .. }) = rx.recv().await else {
+                panic!("expected PlanReady");
+            };
+            let verdict = PlanVerdict {
+                approved: true,
+                feedback: " mind the tests ".to_string(),
+            };
+            assert!(gate.answer(verdict), "verdict sent");
+        };
+        let (out, ()) = tokio::join!(tool.execute(json!({ "plan": "# p" }), &ctx), reviewer);
+        let out = out.expect("executes");
+
+        assert!(!out.is_error, "{}", out.content);
+        assert!(
+            out.content.ends_with("The reviewer added: mind the tests"),
+            "{}",
+            out.content
+        );
     }
 
     #[tokio::test]
