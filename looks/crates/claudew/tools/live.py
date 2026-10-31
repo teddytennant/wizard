@@ -398,7 +398,8 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-carry-model'), footer_mode(text(p('live-carry-model'))) == 'plan',
           'the footer still says plan')
     ran_in_plan(fails, tag('live-carry-model'), log, 'first write', 'fake-other')
-    check(fails, tag('live-carry-model'), re.search(r'● Write\(w\.txt\)', t) and 'while in plan mode' in t,
+    # the reason wraps wherever the project path happens to end the row
+    check(fails, tag('live-carry-model'), re.search(r'● Write\(w\.txt\)', t) and 'while in plan mode' in ' '.join(t.split()),
           'a write plan mode blocked is drawn with its name and the reason')
     for scene, prompt in (('live-carry-rewind', 'rewound write'), ('live-carry-resume', 'resumed write')):
         check(fails, tag(scene), footer_mode(text(p(scene))) == 'plan', 'the footer still says plan')

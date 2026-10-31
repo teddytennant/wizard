@@ -3,7 +3,7 @@
 *	ref	(?<=^.{11})\S+ [0-9.]+( with \w+ effort)? · Wizard \w+\s*$	model line: the reference names its model and plan, Wizard its model and provider
 modes-3	ref	⏵⏵ auto mode on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode cycle: the reference's third stop is auto mode; the replay gives the look two modes, so its third press is back at the first (wz-modes compares Wizard's own four)
 *shortcuts	drop	^\s{40,}[○◐●◉] \w+ · /effort\s*$|^─+$@@^\s{45,}\S.*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
-*shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
+*shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	look	(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	cursor		paste images and /keybindings: the table is two rows shorter, so the prompt sits two rows lower
 *shortcuts	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
@@ -104,3 +104,4 @@ wz-model*	shape	^     … \+\d+ models?\s*$	model panel: the recorded wizard lis
 wz-model*	shape	^\s*$	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
 wz-model*	shape	^   [❯↓↑ ] ?\d+\.\s*\S	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
 plan-feedback	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
+x-ctrlr	norm	\d+[smhd] ago +(?=\S)@@N ago   	history ages: the two programs sent their prompts at different speeds, so how long ago each was differs
