@@ -28,6 +28,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, Mode, ProviderConfig, ReasoningEffort};
+use crate::permissions::PermissionMode;
 
 /// Config option id for the model select (category `model`).
 pub(super) const MODEL_OPTION: &str = "model";
@@ -37,6 +38,10 @@ pub(super) const EFFORT_OPTION: &str = "thought_level";
 /// category `mode`: ACP clients read that one as a permission mode, and
 /// Wizard never asks for permission in either.
 pub(super) const MODE_OPTION: &str = "wizard_mode";
+/// Config option id for the permission mode, advertised only while permissions
+/// are on (a mode, rule or sandbox was asked for; Wizard asks nothing
+/// otherwise). Category `mode`, the one ACP clients read as a permission mode.
+pub(super) const PERMISSION_OPTION: &str = "permission_mode";
 /// Config option id for the `web_search` backend.
 pub(super) const SEARCH_OPTION: &str = "search_backend";
 
@@ -75,6 +80,9 @@ pub(super) struct Selection {
     /// `[web] search_backend` for this session, as chosen (`auto` stays
     /// `auto`; what it resolves to is shown in the option's description).
     pub search_backend: String,
+    /// The permission mode in force, `None` while permissions are off. Set
+    /// from the session's own policy once its agent is built.
+    pub permission: Option<PermissionMode>,
 }
 
 impl Selection {
@@ -88,6 +96,7 @@ impl Selection {
             mode: config.mode,
             search_backend: parse_search_backend(&config.web.search_backend)
                 .unwrap_or_else(|| config.web.search_backend.trim().to_ascii_lowercase()),
+            permission: None,
         }
     }
 
@@ -157,6 +166,45 @@ pub(super) fn parse_effort(value: &str) -> Option<Option<ReasoningEffort>> {
 /// Parse a mode select value.
 pub(super) fn parse_mode(value: &str) -> Option<Mode> {
     Mode::parse(value)
+}
+
+/// The permission modes a client may pick between, in the order Shift+Tab
+/// walks them. `plan` is left out: Wizard's plan mode is its own switch
+/// (`/plan`), not a permission mode.
+pub(super) const PERMISSION_CHOICES: [(PermissionMode, &str, &str); 5] = [
+    (
+        PermissionMode::Default,
+        "Default",
+        "Asks before edits, commands, the web and MCP tools",
+    ),
+    (
+        PermissionMode::AcceptEdits,
+        "Accept edits",
+        "File edits in the project run; other side effects ask",
+    ),
+    (
+        PermissionMode::Auto,
+        "Auto",
+        "A short model call judges each edit, command and web call against your request",
+    ),
+    (
+        PermissionMode::DontAsk,
+        "Don't ask",
+        "Read-only calls and calls an allow rule names; everything else is refused",
+    ),
+    (
+        PermissionMode::BypassPermissions,
+        "Bypass permissions",
+        "Nothing is checked except deny and ask rules",
+    ),
+];
+
+/// Parse a `permission_mode` value.
+pub(super) fn parse_permission(value: &str) -> Option<PermissionMode> {
+    PERMISSION_CHOICES
+        .iter()
+        .map(|(mode, _, _)| *mode)
+        .find(|mode| mode.as_str() == value)
 }
 
 fn mode_value(mode: Mode) -> &'static str {
@@ -476,7 +524,19 @@ pub(super) fn config_options(
         SessionConfigSelectOption::new("chat", "Chat")
             .description("Conversation with web search; no file, shell or edit tools".to_string()),
     ];
-    vec![
+    let permission = selection.permission.map(|current| {
+        let choices = PERMISSION_CHOICES
+            .iter()
+            .map(|(mode, name, description)| {
+                SessionConfigSelectOption::new(mode.as_str(), *name)
+                    .description((*description).to_string())
+            })
+            .collect::<Vec<_>>();
+        SessionConfigOption::select(PERMISSION_OPTION, "Permissions", current.as_str(), choices)
+            .category(SessionConfigOptionCategory::Mode)
+            .description("How tool calls are checked".to_string())
+    });
+    let mut options = vec![
         SessionConfigOption::select(MODEL_OPTION, "Model", selection.model_id(), models)
             .category(SessionConfigOptionCategory::Model)
             .description("Provider and model this session runs".to_string()),
@@ -501,7 +561,9 @@ pub(super) fn config_options(
             search_choices(selection, crate::config::xai_search_credentials()),
         )
         .description("Backend the web_search tool uses".to_string()),
-    ]
+    ];
+    options.extend(permission);
+    options
 }
 
 #[cfg(test)]
@@ -774,5 +836,40 @@ mod tests {
         assert_eq!(options[3]["id"], SEARCH_OPTION);
         assert!(options[3].get("category").is_none());
         assert_eq!(options[3]["currentValue"], "auto");
+        assert_eq!(
+            options.as_array().unwrap().len(),
+            4,
+            "no permissions, no option"
+        );
+    }
+
+    #[test]
+    fn permissions_on_add_a_mode_option_with_auto_in_it() {
+        let config = config(vec![provider("xai", "xaioauth", "grok-4.6")], None);
+        let mut selection = Selection::from_config(&config);
+        selection.permission = Some(PermissionMode::Auto);
+        let options =
+            serde_json::to_value(config_options(&config, &Catalog::default(), &selection)).unwrap();
+        assert_eq!(options[4]["id"], PERMISSION_OPTION);
+        assert_eq!(options[4]["category"], "mode");
+        assert_eq!(options[4]["currentValue"], "auto");
+        let modes: Vec<&str> = options[4]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["value"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                "default",
+                "acceptEdits",
+                "auto",
+                "dontAsk",
+                "bypassPermissions"
+            ]
+        );
+        assert_eq!(parse_permission("auto"), Some(PermissionMode::Auto));
+        assert_eq!(parse_permission("plan"), None);
     }
 }
