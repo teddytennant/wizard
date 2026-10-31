@@ -58,8 +58,13 @@ struct Activity {
     quiescent: bool,
 }
 
+/// Marks an error the server itself returned, so `request_within` can word it.
+const FAILED: &str = "\u{1}";
+
 /// A running language server.
 pub struct Server {
+    /// The server's name in `.lsp.json` or the built-in list, for error messages.
+    name: String,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Pending,
     next_id: AtomicI64,
@@ -130,13 +135,21 @@ impl Server {
         }
         let pending: Pending = Arc::default();
         let activity: Arc<std::sync::Mutex<Activity>> = Arc::default();
+        let root_uri = path_to_uri(root);
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "root".to_string());
+        let folders = json!([{ "uri": root_uri, "name": name }]);
         tokio::spawn(read_loop(
             BufReader::new(stdout),
             Arc::clone(&stdin),
             Arc::clone(&pending),
             Arc::clone(&activity),
+            folders.clone(),
         ));
         let server = Arc::new(Server {
+            name: spec.name.clone(),
             stdin,
             pending,
             next_id: AtomicI64::new(1),
@@ -147,17 +160,12 @@ impl Server {
             stderr: stderr_tail,
             _child: child,
         });
-        let root_uri = path_to_uri(root);
-        let name = root
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "root".to_string());
         let params = json!({
             "processId": std::process::id(),
             "clientInfo": { "name": "wizard" },
             "rootUri": root_uri,
             "rootPath": root.to_string_lossy(),
-            "workspaceFolders": [{ "uri": root_uri, "name": name }],
+            "workspaceFolders": folders,
             "capabilities": {
                 "general": { "positionEncodings": ["utf-16"] },
                 "textDocument": {
@@ -169,8 +177,11 @@ impl Server {
                     "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                     "callHierarchy": {},
                 },
+                // `workspaceFolders` is left out on purpose: pyright, told the client
+                // handles folder changes, never starts analysing the folders it was
+                // given in `initialize`, so every request after it hangs. The folders go
+                // in the init params, and nothing here changes them afterwards.
                 "workspace": {
-                    "workspaceFolders": true,
                     "configuration": true,
                     "symbol": {},
                 },
@@ -225,7 +236,14 @@ impl Server {
             return Err(err);
         }
         match tokio::time::timeout(limit, rx).await {
-            Ok(Ok(answer)) => answer,
+            Ok(Ok(answer)) => answer.map_err(|message| match message.strip_prefix(FAILED) {
+                // Claude Code's wording for a request the server turned down
+                Some(why) => format!(
+                    "LSP request '{method}' failed for server '{}': {why}",
+                    self.name
+                ),
+                None => message,
+            }),
             Ok(Err(_)) => {
                 // Let the stderr reader catch up with whatever it said last.
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -375,6 +393,7 @@ async fn read_loop<R: AsyncBufReadExt + Unpin>(
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Pending,
     activity: Arc<std::sync::Mutex<Activity>>,
+    folders: Value,
 ) {
     while let Some(message) = read_message(&mut reader).await {
         let method = message.get("method").and_then(Value::as_str);
@@ -389,7 +408,9 @@ async fn read_loop<R: AsyncBufReadExt + Unpin>(
                             .map_or(0, Vec::len);
                         Value::Array(vec![Value::Null; count])
                     }
-                    "workspace/workspaceFolders" => Value::Null,
+                    // pyright waits for this answer before it analyses anything, so an
+                    // empty reply leaves every request after it unanswered
+                    "workspace/workspaceFolders" => folders.clone(),
                     _ => Value::Null,
                 };
                 let _ = write_message(
@@ -404,11 +425,13 @@ async fn read_loop<R: AsyncBufReadExt + Unpin>(
                 let waiter = pending.lock().unwrap().remove(&id);
                 if let Some(waiter) = waiter {
                     let answer = match message.get("error") {
-                        Some(error) => Err(error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("language server error")
-                            .to_string()),
+                        Some(error) => Err(format!(
+                            "{FAILED}{}",
+                            error
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("language server error")
+                        )),
                         None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     let _ = waiter.send(answer);
