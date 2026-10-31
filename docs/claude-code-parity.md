@@ -525,9 +525,9 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `fastMode` | aliased | Starts the session in fast mode: with the `anthropic` provider on an Opus model, requests carry `speed: fast`. Other providers have no tier. `/fast` switches it. |
 | `fastModePerSessionOptIn` | present | `true` starts each session with fast mode off. |
 | `advisorModel` | accepted-with-warning | Anthropic's server-side advisor tool needs a response block Wizard does not decode, and `spawn_subagent` takes no model; `/fusion` and `/ultra` are the multi-model forms. |
-| `autoMode` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
-| `useAutoModeDuringPlan` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
-| `disableAutoMode` | accepted-with-warning | There is no auto mode to disable. |
+| `autoMode` | accepted-with-warning | Read and ignored: Wizard's auto mode (`--permission-mode auto`, [permissions.md](permissions.md#auto-mode)) is judged by the session's own model and takes no classifier rules. |
+| `useAutoModeDuringPlan` | accepted-with-warning | Read and ignored: plan mode stays read-only. |
+| `disableAutoMode` | accepted-with-warning | Read and ignored: auto mode is only on when you name it. |
 | `workflows` | accepted-with-warning | Read and ignored: the tool is on whenever the `plugin-js` feature is, and `CLAUDE_CODE_DISABLE_WORKFLOWS=1` turns it off |
 | `disableWorkflows` | present | `true` removes the `Workflow` tool, as `CLAUDE_CODE_DISABLE_WORKFLOWS=1` does |
 | `skillOverrides` | aliased | `off` and `user-invocable-only` keep a skill out of the prompt, `name-only` drops its description. `/name` still runs it. |
