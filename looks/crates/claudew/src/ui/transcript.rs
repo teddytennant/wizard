@@ -112,7 +112,7 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                 let mut j = i;
                 let mut group: Vec<&ToolCall> = Vec::new();
                 while let Some(Block::Tool(t)) = blocks.get(j) {
-                    if detail || !folds(t) || (live && j + 1 == blocks.len()) {
+                    if detail || !folds(t) || (live && j + 1 == blocks.len() && done_ok(t)) {
                         break;
                     }
                     group.push(t);
@@ -123,7 +123,7 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
                         unreachable!()
                     };
                     out.push(Row::new());
-                    if live && i + 1 == blocks.len() && folds(t) {
+                    if live && i + 1 == blocks.len() && done_ok(t) {
                         let mut running = t.clone();
                         running.status = ToolStatus::Running;
                         out.extend(tool(app, &running, w, detail));
@@ -357,6 +357,11 @@ fn output(th: &Theme, text: &str, accent: &str, dim: bool, muted: bool, w: usize
             row
         })
         .collect()
+}
+
+/// A call that finished without trouble and would fold: a failed one keeps showing why.
+fn done_ok(t: &ToolCall) -> bool {
+    t.status == ToolStatus::Completed && folds(t)
 }
 
 /// Reads, searches, shell commands and fetches fold into one summary row once done, as the

@@ -65,10 +65,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App, dialog: &Dialog) -> u16 {
     let notice = match dialog {
         Dialog::Model { .. } => crate::app::effort_notice_text(&app.cfg.effort),
         // the side question's panel carries no notice on its edge
-        Dialog::Btw { .. }
-        | Dialog::Search { .. }
-        | Dialog::Rewind { .. }
-        | Dialog::RewindConfirm { .. } => None,
+        Dialog::Btw { .. } | Dialog::Search { .. } | Dialog::RewindConfirm { .. } => None,
         _ => app.notice.clone(),
     };
     if let Some(n) = &notice {
@@ -1198,7 +1195,9 @@ fn search(app: &App, query: &str, sel: usize, w: usize) -> Panel {
     let mut field = Row::of("  │", accent).with(" ", Style::new());
     if query.is_empty() {
         field.push("⌕ ", Style::new());
-        field.push("Filter history…", th.dim());
+        // the cursor sits on the first letter, which is not dim
+        field.push("F", Style::new());
+        field.push("ilter history…", th.dim());
     } else {
         field.push(format!("⌕ {query}"), Style::new());
     }
