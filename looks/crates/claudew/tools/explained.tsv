@@ -3,7 +3,7 @@
 *	ref	(?<=^.{11})\S+ [0-9.]+( with \w+ effort)? · Wizard \w+\s*$	model line: the reference names its model and plan, Wizard its model and provider
 modes-3	ref	⏵⏵ auto mode on \(shift\+tab to cycle\)( · ← \d+ agents?)?\s*$	mode cycle: the reference's third stop is auto mode; the replay gives the look two modes, so its third press is back at the first (wz-modes compares Wizard's own four)
 *shortcuts	drop	^\s{40,}[○◐●◉] \w+ · /effort\s*$|^─+$@@^\s{45,}\S.*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
-*shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
+*shortcuts	ref	(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	look	(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in( \$EDITOR)?|\$EDITOR)\s*$	paste images and /keybindings: Wizard's ACP takes text only (image: false) and its keys are fixed, so the table is two rows shorter
 *shortcuts	cursor		paste images and /keybindings: the table is two rows shorter, so the prompt sits two rows lower
 *shortcuts	both	shift \+ tab to (auto-accept|cycle agent)( edits| modes)?	shift+tab cycles Wizard's modes; it has no accept-edits mode
@@ -20,8 +20,8 @@ compact	ref	^  ⎿\s+Read main\.rs \(4 lines\)\s*$	compact: Wizard's answer does
 compact-80x24	drop	^@@^  ⎿\s+Read main\.rs \(4 lines\)\s*$	compact: Wizard's answer does not list the files it keeps in context
 exit*	look	^\$\s*$	exit: the reference is still shutting down when the capture is taken
 exit*	cursor		exit: the reference is still shutting down when the capture is taken
-md-*	both	^[● ] (?=Initialize)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
-bash-*	both	^[● ] (?=Initialize)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
+md-*	both	^[● ] (?=Init)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
+bash-*	both	^[● ] (?=Init)	the bullet of a call waiting on a permission blinks; the captures catch it in different phases
 help-200x50	drop	^▔@@^   (New here\?|Something else\?).*$	powerup tip and /feedback line: Wizard has neither command
 help-commands*-200x50	look	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
 help-commands*-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
@@ -32,10 +32,6 @@ help-80x24	look	(?<=^.{55})(alt \+ p to switch|model|ctrl \+ s to stash|prompt|c
 help-[12]*	ref	(?<=^.{66})(ctrl \+ v to paste images|alt \+ p to switch model|ctrl \+ s to stash prompt)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
 help-[12]*	look	(?<=^.{66})(alt \+ p to switch model|ctrl \+ s to stash prompt|ctrl \+ g to edit in \$EDITOR)\s*$	paste images: the reference's third column has it third and stops after five entries, so Wizard's shows one more of its own
 *	pair	You've used \d+% of your weekly limit.*\S@@[○◐●◉] \w+ · /effort	account notice: the reference's account was near its weekly limit while capturing; its notice takes the row where the look shows the effort notice
-plan*	drop	>^  ─{20,}\s*$@@^     3\. Tell Wizard what to change\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
-plan*	drop	>^  ─{20,}\s*$@@^        shift\+tab to approve with this feedback\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
-plan*	drop	>^  ─{20,}\s*$@@^   (ctrl\+g to edit in \S+ ·|~/\.claude/plans/).*$	plan file: Wizard keeps the plan in its session, not in a file to open in an editor
-plan*	norm	(?<=^   [❯ ] [12]\. )\S.*\S@@Option	plan approval: Wizard's options are proceed and keep planning; the reference's are its two ways to proceed
 plan*	ref	^  ⎿  /plan to preview\s*$	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
 plan*	look	^● Updated plan\s*$	plan preview: Wizard's /plan toggles plan mode, so the plan's tool row has no line under it and sits a row lower
 wz-*	shape	^▔+( [○◐●◉] \w+ · /effort ▔)?\s*$	effort notice on the panel's edge: the recorded wizard's effort is its unnamed default, which has no notice
@@ -51,19 +47,12 @@ light-model*	look	 [○◐●◉] \w+ · /effort ▔?\s*$	effort notice on the p
 queue-esc	both	^  \d+\s*$	the count: on the reference it kept streaming between the queue capture and Esc, and the replay cannot land text in that gap, so the numbers on screen differ
 wz-help-commands-200x50	drop	^@@^   Something else\?.*$	/feedback line: Wizard has no such command
 help-80x24	both	(?<=^.{25})(edits|modes)(?=\s)	shift+tab cycles Wizard's modes; it has no accept-edits mode
-plan*-80x24	ref	↓\s*$	plan cut: the reference's three options and plan-file line leave too little room for its plan, so it is cut with ↓; Wizard's two options leave room for all of it
 wz-help-commands-200x50	shape	^   Esc to cancel\s*$	/feedback line: on the reference it pushes Esc to cancel below the screen
 queue-esc	both	(?<=^\* Verb…) \(.*\)\s*$	timing: how far the queued prompt's turn has got when the capture lands (thinking, tokens) differs from run to run
-resume*-[18]*	scroll-ref	1@@^▔	resume picker keys: the reference's longer key line needs a second row it has no room for, which scrolls its transcript up a row; Wizard's shorter line fits
 clear-120x40	both	[○◐●◉] \w+ · /effort\s*$	effort notice after /clear: whether it is still up depends on how long the compact before it took; the reference shows it at 120x40 only
 wz-model	shape	^   ❯ \d+\.	model rows: ❯ marks the current model, first in the recorded wizard and fifth in the reference
 queue-esc*	drop-look	^@@^  ⎿\s+Tip: 	timing: the tip under the spinner had not come up on the reference when it was captured
 queue-esc*	look	[○◐●◉] \w+ · /effort\s*$	timing: the reference's notice row was empty at that moment, between its weekly-limit notice and its effort notice
-x-plan*	drop	>^  ─{20,}\s*$@@^     3\. Tell Wizard what to change\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
-x-plan*	drop	>^  ─{20,}\s*$@@^        shift\+tab to approve with this feedback\s*$	plan approval: Wizard's answer has no note and no auto mode, so it offers two options where the reference offers three
-x-plan*	drop	>^  ─{20,}\s*$@@^   (ctrl\+g to edit in \S+ ·|~/\.claude/plans/).*$	plan file: Wizard keeps the plan in its session, not in a file to open in an editor
-x-plan*	norm	(?<=^   [❯ ] [12]\. )\S.*\S@@Option	plan approval: Wizard's options are proceed and keep planning; the reference's are its two ways to proceed
-x-plan*-80x24	ref	↓\s*$	plan cut: the reference's three options and plan-file line leave too little room for its plan, so it is cut with ↓; Wizard's two options leave room for all of it
 x-*	norm	(?<=^  ⏸ )(manual|genie)(?= mode on)@@MODE	modes: the reference starts in manual mode, Wizard in genie, its first mode; the mark and colour are the same
 x-btw	both	(?<=↑/↓ to scroll ).*$$	copy and fork: the look has no clipboard path, and wizard cannot fork a session
 x-*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to
@@ -97,3 +86,21 @@ plan-approve*	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've u
 plan-approve*	both	(?<=Plan saved to: ).*$	plan file: Wizard keeps the plan in .wizard/plan.md; Claude Code writes a generated file under ~/.claude/plans and points at /plan to edit it
 plan-approve*	both	^  \S+ (manual|accept edits) mode on.*$|^  ⏵⏵ accept edits on.*$	mode after an approved plan: the reference's option 2 is manual approval, so it lands in manual mode; Wizard has one way to approve and goes back to the mode the plan was entered from
 todo-many-80x24	scroll-look	1	the screen is too short for the footer: 2.1.314 keeps its transcript where it was and loses the mode line at the bottom; the look scrolls the transcript up a row and keeps the mode line
+plan*	both	(?<=ctrl\+g to edit in Nvim · )\S+	plan file: Wizard keeps the plan in .wizard/plan.md; Claude Code writes a generated file under ~/.claude/plans
+x-plan*	both	(?<=ctrl\+g to edit in Nvim · )\S+	plan file: Wizard keeps the plan in .wizard/plan.md; Claude Code writes a generated file under ~/.claude/plans
+modes-[34]	scroll-ref	1@@^● Auto mode lets	auto mode explanation: 2.1.314 prints it the first time shift+tab reaches auto mode, and it describes Claude's classifier, which Wizard's modes have none of; the reference's transcript is a row higher for it
+modes-[34]	block	^● Auto mode lets@@Shift\+Tab to change mode\.\s*$	auto mode explanation: 2.1.314 prints it the first time shift+tab reaches auto mode, and it describes Claude's classifier, which Wizard's modes have none of
+slash-filter	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the reference ranks matches with a fuzzy scorer over names and descriptions (/mo lists /update-config fifth); Wizard's menu ranks exact, prefix, name-contains and description-contains, so its fifth row is /cd
+light-slash	pair	^    /update-config\s.*$@@^    /cd\s.*$	command search: the reference ranks matches with a fuzzy scorer over names and descriptions (/mo lists /update-config fifth); Wizard's menu ranks exact, prefix, name-contains and description-contains, so its fifth row is /cd
+help-typed	drop	^  ❯ /help@@^    /debug\s	command search: the reference's scorer also finds /debug for /help; Wizard's menu ranks exact, prefix, name-contains and description-contains, and /debug has no /help in its name or description
+turn-spinner	look	^[·✢*✳✶✻✽] .*$	spinner colours: the shimmer sweeps across the words, and where it is when the capture lands depends on the clock
+plan*-80x24	drop	>^  ─{20,}\s*$@@^   ~/\.claude/plans/\S+\s*$	plan file: the reference's longer path no longer fits the row after `ctrl+g to edit in Nvim ·`, so it takes a row of its own
+plan-approve*	drop-up	^     /plan to edit\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan file: the reference's longer path pushes `· /plan to edit` onto a row of its own; Wizard's note has no such tail
+turn-spinner	both	^[● ] (?=Printing)	the bullet of a call still out blinks; the captures catch it in different phases
+wz-modes-*	shape-ref	^(● Auto mode lets|  (checks each tool|executing\. Actions|actions \S+ identifies|different approach|slightly more|commands to run|environments\. Shift)).*$	auto mode explanation: 2.1.314 prints it the first time shift+tab reaches auto mode, and it describes Claude's classifier, which Wizard's modes have none of
+wz-model*	shape	^   (Select model|Switch between|specify with|other/previous|/model <name>)	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
+wz-model*	shape	^\s{20,}\S	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
+wz-model*	shape	^     … \+\d+ models?\s*$	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
+wz-model*	shape	^\s*$	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
+wz-model*	shape	^   [❯↓↑ ] ?\d+\.\s*\S	model panel: the recorded wizard lists thirteen models and the reference five, with the reference's descriptions wrapped under their names; the two panels differ in height, so their rows in between do not line up
+plan-feedback	drop-up	^  ⎿\s\s/plan to preview\s*$@@^\s{40,}\S.*$|^\s+You've used|^─{20,}\s*$|^▔{20,}	plan preview: Wizard's /plan toggles plan mode; there is no preview of the plan to point to

@@ -18,9 +18,9 @@ MD = ('| file | lines |\n|------|-------|\n| a.rs | 3 |\n| b.rs | 120 |\n\n**`sr
       '[Docs](https://example.com/docs)\n\n```rust\nfn main() { println!("hi"); }\n```')
 PLAN = '1. Add the comment `// entry point` as the first line of main.rs.\n2. Check the file still compiles.'
 TASKS = [
-    {'subject': 'Read main.rs', 'description': 'Read the file', 'activeForm': 'Read main.rs'},
-    {'subject': 'Change hello to hi', 'description': 'Edit the string', 'activeForm': 'Change hello to hi'},
-    {'subject': 'Run the tests', 'description': 'Run cargo test', 'activeForm': 'Run the tests'},
+    {'subject': 'Read main.rs', 'description': 'Read the file', 'activeForm': 'Reading main.rs'},
+    {'subject': 'Change hello to hi', 'description': 'Edit the string', 'activeForm': 'Changing hello to hi'},
+    {'subject': 'Run the tests', 'description': 'Run cargo test', 'activeForm': 'Running the tests'},
 ]
 SUMMARY = ('<analysis>The user asked for small edits.</analysis>\n<summary>\n1. Primary Request: small '
            'edits to main.rs.\n2. Files: main.rs.\n</summary>')
@@ -50,7 +50,7 @@ def scripts(cwd, plan_file):
             ('Write', {'file_path': cwd + '/src/new.txt', 'content': 'x\n'})], 'done'),
         ('Make many tasks', [('ToolSearch', {'query': 'select:TaskCreate,TaskGet,TaskUpdate', 'max_results': 3})] +
             [('TaskCreate', {'subject': 'Step %d of the long job, with a name long enough to need cutting at narrow widths' % n,
-                             'description': 'step', 'activeForm': 'Step %d of the long job, with a name long enough to need cutting at narrow widths' % n}) for n in range(1, 15)] +
+                             'description': 'step', 'activeForm': 'Doing step %d of the long job, with a name long enough to need cutting at narrow widths' % n}) for n in range(1, 15)] +
             [('TaskUpdate', {'taskId': str(n), 'status': 'completed'}) for n in range(1, 4)] +
             [('TaskUpdate', {'taskId': '4', 'status': 'in_progress'})], 'done'),
         ('Make long progress', [('ToolSearch', {'query': 'select:TaskCreate,TaskGet,TaskUpdate', 'max_results': 3})] +
@@ -142,6 +142,10 @@ class H(BaseHTTPRequestHandler):
         if call is None and text == 'done' and '"TaskUpdate"' in json.dumps(body.get('messages', [])):
             # hold the last answer so the list can be captured while the turn is still running
             time.sleep(float(os.environ.get('FAKE_TASK_PAUSE', '8')))
+        if call is None and text == 'done' and '"echo hi"' in json.dumps(body.get('messages', [])):
+            # hold the answer after the shell command so the turn-spinner scene finds the turn
+            # running when it is captured, half a second after Enter
+            time.sleep(float(os.environ.get('FAKE_BASH_PAUSE', '3')))
         if os.environ.get('FAKE_SCHEMA'):
             open(os.environ['FAKE_SCHEMA'], 'a').write(json.dumps(
                 [t for t in body.get('tools', []) if t.get('name', '').startswith('Task')]) + '\n')

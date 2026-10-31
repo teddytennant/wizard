@@ -94,12 +94,21 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
     claude=${CLAUDE_BIN:-claude}
     cmd="$claude --setting-sources project --strict-mcp-config --permission-mode default --model haiku"
     group static && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group static --sizes "$sizes"
+    # 2.1.314 remembers a backslash newline in its config, which the static scenes type; the light
+    # scenes are captured as if none had been
+    python3 - "$fakehome/.claude.json" <<'PY' 2>/dev/null || true
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.pop('hasUsedBackslashReturn', None)
+json.dump(d, open(p, 'w'))
+PY
     group light && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\",\"theme\":\"light\"}'" --cwd "$cwd" --out "$ref" --group light --sizes "$sizes"
     group turn && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn --sizes "$sizes" \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
     group turn2 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn2 --sizes 80x24,120x40 \
         --before "rm -rf w.txt .git"
-    group turn3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes 80x24,120x40 \
+    group turn3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group turn3 --sizes "$sizes" \
         --before "printf 'fn main() {\n    println!(\"hello\");\n}\n' > main.rs"
     group think && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group think --sizes 80x24,120x40
     # the scenes live wizard is compared with cell by cell, and a session resuming them
@@ -114,6 +123,7 @@ if [ "${REF:-}" = live ] || [ "${REF:-}" = fake ]; then
         fi
     done
     group plan2 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group plan2 --sizes "$sizes"
+    group plan3 && refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group plan3 --sizes "$sizes"
     for g in todo todo-many; do
         group $g && EXTRA_REF_ENV=CLAUDE_CODE_ENABLE_TODO_TOOLS=1 refrun python3 "$here/drive.py" --target ref --cmd "$cmd --settings '{\"tui\":\"fullscreen\"}'" --cwd "$cwd" --out "$ref" --group $g --sizes "$sizes"
     done
@@ -157,20 +167,25 @@ mkdir -p "$work/claude-home/.wizard/sessions"
 while IFS="$(printf '\t')" read -r id bytes; do
     head -c "$bytes" /dev/zero | tr '\0' ' ' > "$work/claude-home/.wizard/sessions/$id.jsonl"
 done < "$work/replay/session-files.tsv"
+cp -r "$work/claude-home" "$work/claude-home-light"
 for size in $(echo "$sizes" | tr , ' '); do
-    for group in static turn light turn2 turn3 think wizard statusline statusline-pad todo todo-many plan2; do
+    for group in static turn light turn2 turn3 think wizard statusline statusline-pad todo todo-many plan2 plan3; do
         # LOOK_GROUPS="todo todo-many" runs only those
         [ -z "${LOOK_GROUPS:-}" ] || case " $LOOK_GROUPS " in *" $group "*) ;; *) continue ;; esac
         script="$work/replay/$group-$size.jsonl" theme=dark home="$work/claude-home"
         [ "$group" = statusline-pad ] && script="$work/replay/static-$size.jsonl"
         [ "$group" = wizard ] && home="$work/wizard-home"
         [ "$group" = light ] && script="$work/replay/static-$size.jsonl" theme=light
+        # the light reference never typed a backslash newline, so its shortcuts table still explains it:
+        # the light scenes run in a home the static scenes have not touched
+        [ "$group" = light ] && home="$work/claude-home-light"
         [ -f "$ref/md-$size.ansi" ] || [ "$group" != turn2 ] || continue
         [ -f "$ref/plan-$size.ansi" ] || [ "$group" != turn3 ] || continue
         [ -f "$ref/think-done-$size.ansi" ] || [ "$group" != think ] || continue
         [ -f "$ref/sl-home-$size.ansi" ] || [ "$group" != statusline ] || continue
         [ -f "$ref/slp-home-$size.ansi" ] || [ "$group" != statusline-pad ] || continue
         [ -f "$ref/plan-approve-$size.ansi" ] || [ "$group" != plan2 ] || continue
+        [ -f "$ref/plan-feedback-$size.ansi" ] || [ "$group" != plan3 ] || continue
         [ -f "$ref/todo-$size.ansi" ] || [ "$group" != todo ] || continue
         [ -f "$ref/todo-many-$size.ansi" ] || [ "$group" != todo-many ] || continue
         reset

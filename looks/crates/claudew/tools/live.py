@@ -334,9 +334,17 @@ def checks(out, size, version, log, cwd, history):
     check(fails, tag('live-plan-keep'), 'Ready to code?' in t and 'Would you like to' in t,
           'a finished plan asks for approval')
     check(fails, tag('live-plan-keep'), '// entry point' in t, 'the plan text is shown')
-    check(fails, tag('live-plan-keep'), '❯ 2. No, keep planning' in text(p('live-plan-keep-down')),
-          'Down moves to keep planning')
-    for scene in ('live-plan-keep', 'live-plan-esc'):
+    down = text(p('live-plan-keep-down'))
+    check(fails, tag('live-plan-keep'), '❯ 3. Tell Wizard what to change' in down and '1. Yes, and use auto mode' in down
+          and '2. Yes, manually approve edits' in down, 'the plan offers three answers and Down Down picks the third')
+    check(fails, tag('live-plan-keep'), 'ctrl+g to edit in' in down and '.wizard/plan.md' in down
+          and 'shift+tab to approve with this feedback' in down, 'the plan file and the feedback hint show')
+    typed = text(p('live-plan-feedback-typed'))
+    check(fails, tag('live-plan-feedback'), '❯ 3. use tabs' in typed, 'what is typed goes on the third line')
+    told = [e for e in map(json.loads, open(log))
+            if e.get('last_role') == 'tool' and 'plan rejected: use tabs' in e.get('last', '')]
+    check(fails, tag('live-plan-feedback'), told, 'the model got the typed words back as the reason the plan was rejected')
+    for scene in ('live-plan-keep', 'live-plan-esc', 'live-plan-feedback'):
         t = text(p(scene)).split('please plan')[-1]
         check(fails, tag(scene), 'Ready to code?' not in t and 'plan mode on' in t,
               'the answer closes the pane and plan mode stays on')

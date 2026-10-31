@@ -22,11 +22,11 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
 # (no waiting after), ('restore',) (the size the program started at), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
-# reference only.
+# reference only, ('look_keys', ...) to the look only (its replay cycles through auto mode on the way to plan).
 STATIC = [
     ('home', [('snap', '')]),
     ('shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
-    ('multiline', [('type', 'line one\\'), ('keys', 'Enter'), ('type', 'line two'), ('snap', '')]),
+    ('multiline', [('since', 13), ('type', 'line one\\'), ('keys', 'Enter'), ('type', 'line two'), ('snap', '')]),
     ('ctrlc', [('fast_keys', 'C-c'), ('raw_snap', '-hint'), ('wait', 2.5), ('snap', '-after')]),
     ('bash-mode', [('type', '!'), ('snap', ''), ('type', 'ls'), ('snap', '-typed'),
                    ('keys', 'BSpace', 'BSpace', 'BSpace')]),
@@ -49,13 +49,14 @@ STATIC = [
     ('tab', [('type', '/mo'), ('keys', 'Tab'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
     ('wrap', [('type', LONG), ('snap', ''), ('keys', 'C-c')]),
     # a double press is two within 800 ms; the hint snap takes longer than that
-    ('escape', [('type', 'abc'), ('fast_keys', 'Escape'), ('raw_snap', '-hint'), ('wait', 1.5),
+    ('escape', [('wait', 11.0), ('type', 'abc'), ('fast_keys', 'Escape'), ('raw_snap', '-hint'), ('wait', 1.5),
                 ('keys', 'Escape', 'Escape'), ('snap', '-cleared')]),
     ('resize', [('resize', 100, 30), ('wait', 1.0), ('snap', '')]),
     # last but one, at the size it started: the reference prints a long explanation of auto mode
     # in the transcript the first time shift+tab reaches it, which every scene after would carry
     # at 80x24. It has a fourth mode (auto) the backend does not; one more press brings it round
-    ('modes', [('restore',), ('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
+    ('modes', [('restore',), ('type', '/help'), ('keys', 'Enter'), ('until', r'For more help', 15), ('wait', 1.5),
+               ('keys', 'Escape'), ('wait', 0.3), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
                ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
                ('snap', '-4')]),
     ('exit', [('quit',), ('wait', 0.5), ('snap', '')]),
@@ -72,7 +73,7 @@ TURN = [
               ('snap', '-detail'), ('keys', 'C-o'), ('wait', 0.4)]),
     ('history', [('keys', 'Up'), ('snap', '-1'), ('keys', 'Up'), ('snap', '-2'),
                  ('keys', 'Down', 'Down'), ('snap', '-back')]),
-    ('compact', [('type', '/compact'), ('keys', 'Enter'), ('wait', 2), ('idle',), ('snap', '')]),
+    ('compact', [('wait', 11.0), ('type', '/compact'), ('keys', 'Enter'), ('wait', 2), ('idle',), ('snap', '')]),
     ('clear', [('type', '/clear'), ('keys', 'Enter'), ('wait', 1.5), ('snap', '')]),
     ('exit-summary', [('quit',), ('wait', 0.5), ('snap', '')]),
 ]
@@ -117,7 +118,7 @@ TURN3 = [
                ('fast_keys', 'Enter'), ('wait', 0.8), ('raw_snap', ''), ('fast_keys', 'Escape'),
                ('wait', 1.5), ('raw_snap', '-esc'), ('idle',)]),
     # manual, accept edits, plan
-    ('plan', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
               ('until', r'Ready to code', 120), ('wait', 2.0), ('snap', ''),
               ('keys', 'Down'), ('snap', '-down'), ('keys', 'Escape'), ('idle',)]),
 ]
@@ -139,12 +140,13 @@ LIVE = [
     ('live-queue', [('type', 'please slow'), ('keys', 'Enter'), ('wait', 1.5), ('type', 'queued one'),
                     ('fast_keys', 'Enter'), ('wait', 1.0), ('raw_snap', ''), ('fast_keys', 'Escape'),
                     ('wait', 1.0), ('idle',), ('snap', '-esc')]),
-    # the three answers to a plan, in plan mode reached with /plan: keep planning and Esc stay
+    # the answers to a plan, in plan mode reached with /plan: keep planning, Esc and feedback stay
     # in plan mode, approving leaves it
     ('live-plan-on', [('type', '/plan'), ('keys', 'Enter'), ('wait', 1.5)]),
-    plan_round('live-plan-keep', [('keys', 'Down'), ('snap', '-down'), ('keys', 'Enter')]),
+    plan_round('live-plan-keep', [('keys', 'Down', 'Down'), ('snap', '-down'), ('keys', 'Enter')]),
     plan_round('live-plan-esc', [('fast_keys', 'Escape')]),
-    plan_round('live-plan-approve', [('keys', 'Enter')]),
+    plan_round('live-plan-feedback', [('keys', 'Down', 'Down'), ('type', 'use tabs'), ('snap', '-typed'), ('keys', 'Enter')]),
+    plan_round('live-plan-approve', [('keys', 'Down'), ('keys', 'Enter')]),
     # plan reached by shift+tab: genie, sovereign, chat, then plan on genie
     ('live-plan-tab', [('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'),
                        ('wait', 2.0), ('snap', '-footer'), ('type', 'please plan'), ('keys', 'Enter'),
@@ -296,7 +298,7 @@ LIVE_FAIL = [
 LIGHT = [
     ('light-home', [('snap', '')]),
     ('light-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
-    ('light-modes', [('wait', 1.0), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
+    ('light-modes', [('since', 20), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
                      ('keys', 'BTab'), ('ref_keys', 'BTab'), ('wait', 1.0)]),
     ('light-slash', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
     ('light-bash', [('type', '!'), ('snap', ''), ('keys', 'BSpace'), ('wait', 0.5)]),
@@ -328,13 +330,15 @@ WIZARD = [
     ('wz-home', [('snap', '')]),
     ('wz-slash', [('type', '/'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
     ('wz-slash-filter', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
-    ('wz-modes', [('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-                  ('keys', 'BTab'), ('snap', '-3'), ('keys', 'BTab'), ('snap', '-4')]),
     # the reference opened help before the model picker, so its transcript had no /model yet
     ('wz-help', [('type', '/help'), ('keys', 'Enter'), ('wait', 0.5), ('keys', 'Tab'),
                  ('snap', '-commands'), ('keys', 'Escape'), ('wait', 0.5)]),
     ('wz-model', [('type', '/model'), ('keys', 'Enter'), ('wait', 0.5), ('snap', ''),
                   ('keys', 'Escape'), ('wait', 0.5)]),
+    # the mode scenes come after /model and /resume in the reference, and its transcript shows both
+    ('wz-resume', [('type', '/resume'), ('keys', 'Enter'), ('wait', 1.0), ('keys', 'Escape'), ('wait', 0.5)]),
+    ('wz-modes', [('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
+                  ('keys', 'BTab'), ('snap', '-3'), ('keys', 'BTab'), ('snap', '-4')]),
 ]
 
 # Vim mode (`editorMode: "vim"` in the settings) and a keybindings.json that binds alt+j to
@@ -377,7 +381,7 @@ STATUSLINE_PAD = [
 # Claude Code's task list: under the spinner while a turn runs, above the prompt after it, ctrl+t
 # hides it. The turn holds its answer for a few seconds so the running view can be captured.
 TODO = [
-    ('todo', [('type', 'Make a task list'), ('keys', 'Enter'), ('until', r'Change hello to hi…', 30),
+    ('todo', [('type', 'Make a task list'), ('keys', 'Enter'), ('until', r'Changing hello to hi…', 30),
               ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', ''),
               ('keys', 'C-t'), ('wait', 0.6), ('snap', '-hidden'), ('keys', 'C-t'), ('wait', 0.6),
               ('snap', '-shown')]),
@@ -387,17 +391,106 @@ TODO_MANY = [
                    ('wait', 0.6), ('raw_snap', '-running'), ('idle',), ('since', 13), ('snap', '')]),
 ]
 
-# A plan approved: the reference offers three ways out and the look two; Down picks the
-# reference's "manually approve edits", Enter alone approves in the look.
+# A plan approved: Down picks "manually approve edits", the second of three ways out.
 PLAN2 = [
-    ('plan-approve', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
-                      ('until', r'Ready to code', 120), ('wait', 2.0), ('ref_keys', 'Down'), ('keys', 'Enter'),
+    ('plan-approve', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                      ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down'), ('keys', 'Enter'),
                       ('idle',), ('wait', 1.5), ('snap', '')]),
+]
+
+# The third way out of a plan, "Tell Claude what to change": Down twice picks it and the line
+# takes text, Enter sends it back as the reason the plan was not approved.
+PLAN3 = [
+    ('plan-feedback', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                       ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down', 'Down'), ('snap', '-pick'),
+                       ('type', 'use tabs'), ('snap', '-typed'), ('keys', 'Enter'),
+                       ('idle',), ('wait', 1.5), ('snap', '')]),
+]
+
+PLAN4 = [
+    ('plan-explore', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                      ('until', r'Ready to code', 120), ('wait', 2.0),
+                      ('keys', 'Down', 'Down'), ('type', '1 ab'), ('snap', '-digit'), ('keys', 'Up'), ('snap', '-up'),
+                      ('keys', 'Down'), ('snap', '-back'), ('type', ' cd'), ('snap', '-more'),
+                      ('keys', 'BSpace', 'BSpace', 'BSpace', 'BSpace'), ('snap', '-bs'),
+                      ('keys', 'C-g'), ('wait', 2.5), ('snap', '-ctrlg'),
+                      ('keys', ':q', 'Enter'), ('wait', 1.5), ('snap', '-after'),
+                      ('keys', 'Escape'), ('wait', 1.0), ('snap', '-esc')]),
+]
+
+PLAN5 = [
+    ('plan-digit', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+                    ('until', r'Ready to code', 120), ('wait', 2.0),
+                    ('type', '3'), ('snap', '-three'), ('type', 'x'), ('snap', '-typed'),
+                    ('keys', 'Left', 'Left'), ('type', 'Q'), ('snap', '-left'),
+                    ('keys', 'Home'), ('type', 'H'), ('snap', '-home'),
+                    ('keys', 'C-a'), ('type', 'A'), ('snap', '-ctrla'),
+                    ('keys', 'BTab'), ('wait', 1.5), ('snap', '-btab')]),
+]
+
+TTL = [
+    ('ttl', [('type', '/model'), ('keys', 'Enter'), ('until', r'Select model', 15), ('wait', 0.5),
+             ('keys', 'Escape'), ('raw_snap', '-00'), ('wait', 1.0), ('raw_snap', '-01'), ('wait', 1.0), ('raw_snap', '-02'), ('wait', 1.0), ('raw_snap', '-03'), ('wait', 1.0), ('raw_snap', '-04'), ('wait', 1.0), ('raw_snap', '-05'), ('wait', 1.0), ('raw_snap', '-06'), ('wait', 1.0), ('raw_snap', '-07'), ('wait', 1.0), ('raw_snap', '-08'), ('wait', 1.0), ('raw_snap', '-09'), ('wait', 1.0), ('raw_snap', '-10'), ('wait', 1.0), ('raw_snap', '-11'), ('wait', 1.0), ('raw_snap', '-12'), ('wait', 1.0), ('raw_snap', '-13'), ('wait', 1.0), ('raw_snap', '-14'), ]),
+]
+
+SLASHQ = [
+    ('slashall', [('type', '/'), ('wait', 0.8), ('snap', '-all00'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all01'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all02'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all03'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all04'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all05'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all06'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all07'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all08'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all09'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all10'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all11'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all12'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all13'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all14'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('snap', '-all15'), ('keys', 'Down', 'Down', 'Down', 'Down', 'Down'), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq00', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq01', [('type', '/he'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq02', [('type', '/co'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq03', [('type', '/re'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq04', [('type', '/pl'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq05', [('type', '/in'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq06', [('type', '/sk'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq07', [('type', '/ab'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq08', [('type', '/me'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq09', [('type', '/cl'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq10', [('type', '/mod'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+    ('slashq11', [('type', '/hel'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
+]
+
+TTL2 = [
+    ('ttl2', [('wait', 12.0), ('raw_snap', '-start'), ('type', '/resume'), ('keys', 'Enter'), ('until', r'Resume session', 15),
+              ('wait', 1.0), ('raw_snap', '-open'), ('keys', 'Escape'), ('raw_snap', '-00'), ('wait', 1.0), ('raw_snap', '-01'), ('wait', 1.0), ('raw_snap', '-02'), ('wait', 1.0), ('raw_snap', '-03'), ('wait', 1.0), ('raw_snap', '-04'), ('wait', 1.0), ('raw_snap', '-05'), ('wait', 1.0), ('raw_snap', '-06'), ('wait', 1.0), ('raw_snap', '-07'), ('wait', 1.0), ('raw_snap', '-08'), ('wait', 1.0), ('raw_snap', '-09'), ('wait', 1.0), ('raw_snap', '-10'), ('wait', 1.0), ('raw_snap', '-11'), ('wait', 1.0), ('raw_snap', '-12'), ('wait', 1.0), ('raw_snap', '-13'), ]),
+]
+
+TTL3 = [
+    ('ttl3', [('wait', 12.0), ('raw_snap', '-esc2-before'), ('type', 'abc'), ('fast_keys', 'Escape'), ('wait', 0.3), ('fast_keys', 'Escape'), ('wait', 0.5), ('raw_snap', '-esc2-after'), ('wait', 5.0), ('raw_snap', '-esc2-later'), ('wait', 12.0), ('raw_snap', '-ctrlc-before'), ('fast_keys', 'C-c'), ('wait', 0.5), ('raw_snap', '-ctrlc-after'), ('wait', 5.0), ('raw_snap', '-ctrlc-later'), ('wait', 12.0), ('raw_snap', '-btab-before'), ('keys', 'BTab'), ('wait', 0.5), ('raw_snap', '-btab-after'), ('wait', 5.0), ('raw_snap', '-btab-later'), ('wait', 12.0), ('raw_snap', '-btab2-before'), ('keys', 'BTab'), ('wait', 0.5), ('raw_snap', '-btab2-after'), ('wait', 5.0), ('raw_snap', '-btab2-later'), ('wait', 12.0), ('raw_snap', '-bang-before'), ('type', '!'), ('wait', 0.5), ('raw_snap', '-bang-after'), ('wait', 5.0), ('raw_snap', '-bang-later'), ('wait', 12.0), ('raw_snap', '-bangout-before'), ('keys', 'BSpace'), ('wait', 0.5), ('raw_snap', '-bangout-after'), ('wait', 5.0), ('raw_snap', '-bangout-later'), ('wait', 12.0), ('raw_snap', '-quest-before'), ('type', '?'), ('wait', 0.5), ('raw_snap', '-quest-after'), ('wait', 5.0), ('raw_snap', '-quest-later'), ('wait', 12.0), ('raw_snap', '-questout-before'), ('keys', 'BSpace'), ('wait', 0.5), ('raw_snap', '-questout-after'), ('wait', 5.0), ('raw_snap', '-questout-later'), ('wait', 12.0), ('raw_snap', '-at-before'), ('type', '@'), ('wait', 0.5), ('raw_snap', '-at-after'), ('wait', 5.0), ('raw_snap', '-at-later'), ('wait', 12.0), ('raw_snap', '-atout-before'), ('keys', 'BSpace'), ('wait', 0.5), ('raw_snap', '-atout-after'), ('wait', 5.0), ('raw_snap', '-atout-later'), ('wait', 12.0), ('raw_snap', '-slash-before'), ('type', '/'), ('wait', 0.5), ('raw_snap', '-slash-after'), ('wait', 5.0), ('raw_snap', '-slash-later'), ('wait', 12.0), ('raw_snap', '-slashout-before'), ('keys', 'BSpace'), ('wait', 0.5), ('raw_snap', '-slashout-after'), ('wait', 5.0), ('raw_snap', '-slashout-later'), ('wait', 12.0), ('raw_snap', '-typed-before'), ('type', 'hello'), ('wait', 0.5), ('raw_snap', '-typed-after'), ('wait', 5.0), ('raw_snap', '-typed-later'), ('wait', 12.0), ('raw_snap', '-typedout-before'), ('keys', 'C-c'), ('wait', 0.5), ('raw_snap', '-typedout-after'), ('wait', 5.0), ('raw_snap', '-typedout-later')]),
+]
+
+TTL4 = [
+    ('ttl4', [('wait', 13.0), ('raw_snap', '-idle'),
+              ('type', '/help'), ('keys', 'Enter'), ('until', r'For more help', 15), ('wait', 3.0), ('keys', 'Escape'), ('wait', 0.5), ('raw_snap', '-help-after'),
+              ('wait', 12.0), ('raw_snap', '-help-later'),
+              ('type', 'abc'), ('fast_keys', 'Escape'), ('wait', 1.5), ('keys', 'Escape', 'Escape'), ('wait', 0.5), ('raw_snap', '-clear-after'),
+              ('wait', 5.0), ('raw_snap', '-clear-5'), ('wait', 6.0), ('raw_snap', '-clear-11'),
+              ('wait', 8.0), ('raw_snap', '-clear-19')]),
+]
+
+TTL5 = [
+    ('ttl5', [('wait', 13.0), ('raw_snap', '-idle'),
+              ('resize', 100, 30), ('wait', 0.5), ('raw_snap', '-rs-after'), ('wait', 6.0), ('raw_snap', '-rs-6'), ('wait', 6.0), ('raw_snap', '-rs-12'),
+              ('restore',), ('wait', 0.5), ('raw_snap', '-back-after'), ('wait', 6.0), ('raw_snap', '-back-6'), ('wait', 6.0), ('raw_snap', '-back-12')]),
+]
+
+TTL6 = [
+    ('ttl6', [('wait', 13.0), ('raw_snap', '-idle'),
+              ('type', '/mo'), ('keys', 'Tab'), ('raw_snap', '-tab-typed'), ('keys', 'C-c'), ('wait', 1.0), ('raw_snap', '-tab-after'),
+              ('wait', 6.0), ('raw_snap', '-tab-6'), ('wait', 6.0), ('raw_snap', '-tab-12'),
+              ('type', 'this is a long line of input that keeps going so that it has to wrap at the right edge of the prompt box more than once at eighty columns and at least once at one hundred and twenty'),
+              ('raw_snap', '-wrap-typed'), ('keys', 'C-c'), ('wait', 0.5), ('raw_snap', '-wrap-after'),
+              ('wait', 6.0), ('raw_snap', '-wrap-6'), ('wait', 6.0), ('raw_snap', '-wrap-12')]),
+]
+
+TTL7 = [
+    ('ttl7', [('type', '/help'), ('keys', 'Enter'), ('until', r'For more help', 15), ('wait', 3.0), ('keys', 'Escape'), ('wait', 0.5),
+              ('keys', 'BTab'), ('raw_snap', '-m1'), ('keys', 'BTab'), ('raw_snap', '-m2'), ('keys', 'BTab'), ('raw_snap', '-m3'),
+              ('wait', 2.0), ('raw_snap', '-m3b'), ('wait', 8.0), ('raw_snap', '-m3c')]),
 ]
 
 HOME = [('home', [('snap', '')])]
 
-GROUPS = {'plan2': PLAN2, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
+GROUPS = {'plan2': PLAN2, 'plan3': PLAN3, 'ttl7': TTL7, 'ttl6': TTL6, 'ttl5': TTL5, 'ttl4': TTL4, 'ttl3': TTL3, 'ttl2': TTL2, 'slashq': SLASHQ, 'ttl': TTL, 'model': [s for s in STATIC if s[0] == 'model'], 'shortcuts': [s for s in STATIC if s[0] == 'shortcuts'], 'plan4': PLAN4, 'plan5': PLAN5, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
           'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
@@ -509,6 +602,9 @@ class Pane:
         with open(path + '.meta', 'w') as f:
             f.write(tmux('display', '-p', '-t', self.name,
                          'cursor=#{cursor_x},#{cursor_y} visible=#{cursor_flag} alt=#{alternate_on}'))
+        if os.environ.get('LOOK_TIMES'):
+            with open(path + '.t', 'w') as f:
+                f.write('%.1f\n' % (time.time() - self.t0))
 
     def kill(self):
         tmux('kill-session', '-t', self.name, check=False)
@@ -522,6 +618,11 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
         pane.keys('Down', 'Enter')
         pane.wait_for(r'^❯', 40)
     time.sleep(4.0 if target == 'ref' else 0.5)
+    # the effort notice and `← for agents` leave ten seconds after the session opens, and claude
+    # takes up to eight seconds to open. The look opens faster, so these groups start after both
+    # are gone.
+    if group in ('turn', 'turn2', 'turn3', 'think', 'plan2', 'plan3'):
+        time.sleep(max(0.0, pane.t0 + 20.0 - time.time()))
     for scene, steps in GROUPS[group]:
         for step in steps:
             op = step[0]
@@ -534,7 +635,7 @@ def run(target, cmd, cwd, size, group, out, prefix=''):
             elif op == 'fast_keys':
                 for k in step[1:]:
                     tmux('send-keys', '-t', pane.name, k)
-            elif op == 'keys' or (op == 'ref_keys' and target == 'ref'):
+            elif op == 'keys' or (op == 'ref_keys' and target == 'ref') or (op == 'look_keys' and target == 'look'):
                 pane.keys(*step[1:])
                 time.sleep(0.3)
             elif op == 'quit':
