@@ -135,14 +135,6 @@ pub const NOT_AVAILABLE: &[(&str, &str)] = &[
         "cloud sessions with a GitHub account are Anthropic's service.",
     ),
     (
-        "workflows",
-        "the Workflow runtime is not built. /loop, /fork and `wizard fleet` cover repeated and parallel work.",
-    ),
-    (
-        "workflow-authoring",
-        "there is no Workflow runtime, so nothing to author.",
-    ),
-    (
         "batch",
         "no cloud batch of PR agents. `wizard fleet run -n N` splits a mission over parallel worktrees and merges them back.",
     ),

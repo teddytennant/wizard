@@ -103,7 +103,6 @@ pub const COMPAT: &[&str] = &[
     "tui",
     "web-setup",
     "workflows",
-    "workflow-authoring",
     "batch",
     "claude-api",
     "dataviz",
@@ -154,8 +153,6 @@ const READ_ONLY: &[&str] = &[
     "teleport",
     "tui",
     "web-setup",
-    "workflows",
-    "workflow-authoring",
     "batch",
     "claude-api",
     "dataviz",
@@ -247,7 +244,7 @@ const BUNDLED: &[(&str, &str)] = &[
 
 /// The prompt commands that ship in the binary.
 pub fn bundled() -> Vec<CustomCommand> {
-    BUNDLED
+    let mut commands: Vec<CustomCommand> = BUNDLED
         .iter()
         .map(|(name, raw)| {
             let (meta, body) = crate::skills::split_frontmatter(raw);
@@ -259,7 +256,16 @@ pub fn bundled() -> Vec<CustomCommand> {
                 pi_syntax: false,
             }
         })
-        .collect()
+        .collect();
+    // The reference lives next to the runtime it describes.
+    commands.push(CustomCommand {
+        name: "workflow-authoring".to_string(),
+        description: Some("load the reference for writing Workflow tool scripts".to_string()),
+        template: crate::workflow::AUTHORING.to_string(),
+        path: std::path::PathBuf::from("bundled/workflow-authoring.md"),
+        pi_syntax: false,
+    });
+    commands
 }
 
 /* ---------------------------------------------------------------------- */
@@ -299,6 +305,7 @@ pub async fn run<S: CommandSurface + Send + ?Sized>(name: &str, args: &str, surf
             super::session_cmds::background(surface.snapshot().session.as_deref(), args, &root),
         ),
         "stop" => reply(surface, super::session_cmds::stop(args)),
+        "workflows" => reply(surface, crate::workflow::command::run(args, &root)),
         "statusline" => reply(surface, super::misc::statusline(args, &root)),
         "autocompact" => reply(surface, super::misc::autocompact(args)),
         other if super::misc::not_available(other).is_some() => {
@@ -763,6 +770,7 @@ mod tests {
             "simplify",
             "recap",
             "add-dir",
+            "workflow-authoring",
         ] {
             let command = all.iter().find(|c| c.name == name).expect(name);
             assert!(command.description.is_some(), "/{name} has a description");

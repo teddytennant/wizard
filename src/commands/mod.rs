@@ -1705,14 +1705,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     ),
     compat_row!(
         "workflows",
-        "",
-        "workflows (not available here)",
-        everywhere
-    ),
-    compat_row!(
-        "workflow-authoring",
-        "",
-        "workflow authoring (not available here)",
+        "[stop] [run id]",
+        "list workflow runs, show one, stop one",
         everywhere
     ),
     compat_row!(
