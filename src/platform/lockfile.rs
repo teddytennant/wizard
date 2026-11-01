@@ -182,9 +182,11 @@ mod tests {
         );
 
         // Release is the descriptor closing, so nothing has to be cleaned up.
+        // Still a wait: a process another test is spawning holds a copy of the
+        // descriptor, and so the lock, until it reaches `exec`.
         drop(held);
         assert!(
-            try_exclusive(&path).is_some(),
+            exclusive(&path, Duration::from_secs(5)).is_some(),
             "dropping the guard must release the lock"
         );
     }
