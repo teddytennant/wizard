@@ -1,6 +1,8 @@
 # Changelog
 
-Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+Versions are `YEAR.MONTH.N`, where N counts the releases in that month: `2026.11.1` is the first release of November 2026, and `2026.12.1` is the first of December. The month is not zero-padded, because Cargo refuses `2026.01.1`. The number says when a release shipped and not what it broke, so breaking changes are called out here. Releases through 3.12.0 followed [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 

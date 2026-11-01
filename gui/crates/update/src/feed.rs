@@ -507,6 +507,7 @@ mod tests {
         assert!(is_newer("3.6.2", "3.6.1"));
         assert!(is_newer("3.10.0", "3.9.9"));
         assert!(is_newer("v4.0.0", "3.99.0"));
+        assert!(is_newer("v2026.11.1", "3.12.0"));
         assert!(is_newer("3.7.0", "3.7.0-rc.1"));
         assert!(!is_newer("3.7.0-rc.1", "3.7.0"));
         assert!(!is_newer("3.6.1", "3.6.1"));
