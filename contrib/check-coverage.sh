@@ -139,7 +139,13 @@ if [ -z "$report" ]; then
     # one number and the file is otherwise tens of megabytes. --locked matches the
     # rest of CI so a Cargo.lock drift fails here too instead of silently
     # re-resolving and measuring a different dependency tree.
-    cargo llvm-cov --locked --summary-only --json --output-path "$report" "$@"
+    #
+    # --failure-mode=all because one unreadable profile otherwise fails the
+    # whole measurement. CI started producing those on 2026-10-30, one to three
+    # a run with every test green, and the cause was never pinned down. The
+    # skipped files are named in the log and all of them being bad still fails.
+    LLVM_PROFDATA_FLAGS=--failure-mode=all \
+        cargo llvm-cov --locked --summary-only --json --output-path "$report" "$@"
 
     # Keep the measurement, when the caller asked for it. The report is
     # otherwise a mktemp that this script deletes on the way out, so the only
