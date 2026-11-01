@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, oneshot, watch};
 
 /// How long `initialize` may take.
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,6 +26,8 @@ const SETTLE_LIMIT: Duration = Duration::from_secs(45);
 const SETTLE_QUIET: Duration = Duration::from_millis(1500);
 /// How long one request may take once the server is ready.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a failure waits for the reader to finish the server's stderr.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
 
 /// A server to run for some file extensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,8 @@ pub struct Server {
     ready: Mutex<bool>,
     /// The end of what the server wrote to stderr, for saying why it died.
     stderr: Arc<std::sync::Mutex<String>>,
+    /// Closes once the reader has everything the server wrote to stderr.
+    stderr_read: watch::Receiver<()>,
     _child: Child,
 }
 
@@ -130,8 +134,9 @@ impl Server {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stdin = Arc::new(Mutex::new(stdin));
         let stderr_tail: Arc<std::sync::Mutex<String>> = Arc::default();
+        let (stderr_open, stderr_read) = watch::channel(());
         if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_tail)));
+            tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_tail), stderr_open));
         }
         let pending: Pending = Arc::default();
         let activity: Arc<std::sync::Mutex<Activity>> = Arc::default();
@@ -158,6 +163,7 @@ impl Server {
             started: Instant::now(),
             ready: Mutex::new(false),
             stderr: stderr_tail,
+            stderr_read,
             _child: child,
         });
         let params = json!({
@@ -189,19 +195,25 @@ impl Server {
                 "experimental": { "serverStatusNotification": true },
             },
         });
-        server
+        if let Err(err) = server
             .request_within("initialize", params, INIT_TIMEOUT)
             .await
-            .map_err(|err| server.explain(err))?;
+        {
+            return Err(server.explain(err).await);
+        }
         server.notify("initialized", json!({})).await?;
         Ok(server)
     }
 
     /// `err`, with the last of the server's stderr when it has said anything.
-    fn explain(&self, err: String) -> String {
+    /// A dead server's stdin fails before its stderr has been read, so this
+    /// waits for the reader rather than reporting the failure without the why.
+    async fn explain(&self, err: String) -> String {
+        let mut stderr_read = self.stderr_read.clone();
+        let _ = tokio::time::timeout(STDERR_GRACE, stderr_read.changed()).await;
         let tail = self.stderr.lock().unwrap_or_else(|e| e.into_inner());
         let tail = tail.trim();
-        if tail.is_empty() {
+        if tail.is_empty() || err.contains(tail) {
             err
         } else {
             format!("{err} (server said: {tail})")
@@ -209,9 +221,11 @@ impl Server {
     }
 
     async fn send(&self, message: &Value) -> Result<(), String> {
-        write_message(&self.stdin, message)
-            .await
-            .map_err(|err| format!("language server closed its input: {err}"))
+        if let Err(err) = write_message(&self.stdin, message).await {
+            let err = format!("language server closed its input: {err}");
+            return Err(self.explain(err).await);
+        }
+        Ok(())
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -244,11 +258,7 @@ impl Server {
                 ),
                 None => message,
             }),
-            Ok(Err(_)) => {
-                // Let the stderr reader catch up with whatever it said last.
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                Err(self.explain("the language server exited".to_string()))
-            }
+            Ok(Err(_)) => Err(self.explain("the language server exited".to_string()).await),
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
                 Err(format!(
@@ -334,7 +344,11 @@ impl Server {
 }
 
 /// Keep the last few hundred bytes of the server's stderr.
-async fn drain_stderr(stderr: tokio::process::ChildStderr, tail: Arc<std::sync::Mutex<String>>) {
+async fn drain_stderr(
+    stderr: tokio::process::ChildStderr,
+    tail: Arc<std::sync::Mutex<String>>,
+    _open: watch::Sender<()>,
+) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());

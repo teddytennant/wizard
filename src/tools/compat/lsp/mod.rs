@@ -547,6 +547,46 @@ while True:
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lsp_waits_for_the_words_of_a_server_that_closed_its_input_first() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.zz"), "x").unwrap();
+        let script = dir.path().join("closes_stdin.sh");
+        let body = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#;
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf 'Content-Length: {}\\r\\n\\r\\n%s' '{body}'\n\
+                 exec 0<&-\nsleep 0.3\necho no toolchain >&2\nexit 1\n",
+                body.len()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let spec = ServerSpec {
+            name: "closing".to_string(),
+            command: script.display().to_string(),
+            args: Vec::new(),
+            languages: vec![(".zz".to_string(), "zz".to_string())],
+        };
+        let out = LspTool::with_servers(vec![spec])
+            .execute(
+                json!({ "operation": "hover", "filePath": "a.zz", "line": 1, "character": 1 }),
+                &ToolContext::new(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            out.content.matches("server said: no toolchain").count(),
+            1,
+            "{}",
+            out.content
+        );
+    }
+
     #[tokio::test]
     async fn enter_plan_mode_sets_the_shared_flag_once() {
         let flag = Arc::new(AtomicBool::new(false));
