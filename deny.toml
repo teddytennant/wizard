@@ -43,18 +43,8 @@ yanked = "deny"
 #     matches at a new version, the version in the reason is stale and the
 #     reasoning behind it is what has to be re-read, not just the number.
 ignore = [
-    # Reviewed 2026-08-01. Unsound `Error::downcast_mut` after `Error::context`
-    # (undefined behaviour, not a vulnerability). Wizard never calls
-    # `downcast_mut`: the whole tree downcasts by value or by shared reference
-    # (`downcast_ref`, e.g. the `RetryAfter` lookup in src/agent/turn.rs).
-    # Fixed in anyhow 1.0.103 and the manifest already allows it (`anyhow =
-    # "1"`), so this is a lockfile-only bump: run `cargo update -p anyhow`,
-    # then delete this entry. It is here rather than done because the lockfile
-    # is not this change's to move.
-    { id = "RUSTSEC-2026-0190", reason = "anyhow 1.0.102 unsound downcast_mut; wizard never calls it; fixed by `cargo update -p anyhow` (>= 1.0.103), which is a lockfile change" },
-
     # Reviewed 2026-08-01. Unmaintained, no patched release exists for any of
-    # these four, so the only way off them is dropping the crate that pulls
+    # these three, so the only way off them is dropping the crate that pulls
     # them in.
     #
     # bincode 1.3.3 <- syntect: syntect decodes its compiled-in syntax and
@@ -66,11 +56,6 @@ ignore = [
     # number_prefix 0.4.0 <- indicatif: formats "1.2 MiB" in the download
     # progress bar. Unmaintained only, no known defect.
     { id = "RUSTSEC-2025-0119", reason = "number_prefix 0.4.0 unmaintained, no patch; reached only through indicatif's progress-bar byte formatting" },
-    # paste 1.0.15 <- ratatui 0.29: a proc macro, so it runs in the compiler
-    # and contributes no code to the shipped binary. Cargo.toml explains why
-    # the tree is held at ratatui 0.29 (ratatui-image would otherwise link a
-    # second copy); moving off it is that bump, not this file.
-    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 unmaintained, no patch; a build-time proc macro reached through ratatui 0.29, contributing no code to the binary" },
     # yaml-rust 0.4.5 <- syntect: only syntect's `.sublime-syntax` YAML loader
     # uses it, and wizard loads its syntaxes from the compiled dump instead
     # (src/ui/mod.rs `syntect_assets`). No YAML from any source reaches it.
