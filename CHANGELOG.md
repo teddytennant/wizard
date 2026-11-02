@@ -8,6 +8,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [2026.11.1] - 2026-11-02
+
 ### Changed
 
 - Permissions are opt-in. Nothing is checked, prompted or refused by default, as if every run had `--dangerously-skip-permissions`. A `permissions` block in a Claude Code settings file (`~/.claude`, `.claude/settings.json`) no longer turns prompts or rules on by itself; a flag, `[permissions]` in `config.toml`, or a block in `~/.wizard/settings.json`, `.wizard/settings.json`, `--settings` or managed settings does.
