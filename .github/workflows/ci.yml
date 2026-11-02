@@ -862,7 +862,8 @@ jobs:
             contrib/check-coverage.sh \
             contrib/install-in-container.sh \
             contrib/aur/bump.sh \
-            contrib/homebrew/formula.sh
+            contrib/homebrew/formula.sh \
+            contrib/nightly.sh
 
   # shellcheck for the workflow files. The two failure modes it exists for are
   # the ones nobody reviews for: an expression like `github.event.*`

@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # How contrib/nightly.sh starts a release, against the tag it pushed. Run on
+  # a branch this stops at the `version` job, because a branch is not a tag.
+  workflow_dispatch:
 
 # Read at the top, write on exactly two jobs. Ten of the thirteen jobs here only
 # compile and upload build artifacts (artifact storage is a separate scope and

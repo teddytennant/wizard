@@ -1,0 +1,43 @@
+name: Nightly
+
+# 02:17 Eastern in winter, off the hour because scheduled runs on the hour are
+# the ones GitHub delays. contrib/nightly.sh decides whether anything ships.
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Stop before anything is pushed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: Release what landed today
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # `contents` for the release commit and its tag, `actions` to start
+    # release.yml.
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: contrib/nightly.sh
