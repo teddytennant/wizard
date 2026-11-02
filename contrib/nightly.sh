@@ -75,6 +75,7 @@ fi
 git push --atomic "https://x-access-token:${GH_TOKEN}@github.com/$repo" HEAD:main "refs/tags/v$version"
 
 # A tag pushed with GITHUB_TOKEN does not start release.yml, a dispatch does.
+dispatched="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 gh workflow run release.yml --repo "$repo" --ref "v$version"
 
 # Then wait on it, so a release that fails fails this run too. This is the run
@@ -82,7 +83,8 @@ gh workflow run release.yml --repo "$repo" --ref "v$version"
 release=""
 for _ in $(seq 30); do
   release="$(gh run list --repo "$repo" --workflow release.yml --event workflow_dispatch --limit 10 \
-    --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"v$version\")][0].databaseId // empty")"
+    --json databaseId,headBranch,createdAt \
+    --jq "[.[] | select(.headBranch == \"v$version\" and .createdAt >= \"$dispatched\")][0].databaseId // empty")"
   [ -n "$release" ] && break
   sleep 10
 done
