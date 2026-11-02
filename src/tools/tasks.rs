@@ -539,7 +539,16 @@ async fn kill_tree(child: &mut tokio::process::Child) {
     if let Some(pid) = child.id() {
         crate::platform::process::kill_group(pid);
     }
-    let _ = child.kill().await;
+    let _ = child.start_kill();
+    // Reaped by polling rather than `wait`: off Linux, `wait` needs a SIGCHLD
+    // wakeup, and on macOS one went missing and left the task running over a
+    // zombie. SIGKILL cannot be refused, so this ends quickly.
+    for _ in 0..200 {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// Stream a monitor's stdout into its tail buffer and its event queue.
