@@ -19,7 +19,8 @@ jobs:
   nightly:
     name: Release what landed today
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Up to a CI run, then the whole release, which takes about half an hour.
+    timeout-minutes: 90
     # `contents` for the release commit and its tag, `actions` to start
     # release.yml.
     permissions:

@@ -76,4 +76,19 @@ git push --atomic "https://x-access-token:${GH_TOKEN}@github.com/$repo" HEAD:mai
 
 # A tag pushed with GITHUB_TOKEN does not start release.yml, a dispatch does.
 gh workflow run release.yml --repo "$repo" --ref "v$version"
-echo "Started the release of v$version." | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+# Then wait on it, so a release that fails fails this run too. This is the run
+# GitHub emails about; the dispatched one belongs to the bot.
+release=""
+for _ in $(seq 30); do
+  release="$(gh run list --repo "$repo" --workflow release.yml --event workflow_dispatch --limit 10 \
+    --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"v$version\")][0].databaseId // empty")"
+  [ -n "$release" ] && break
+  sleep 10
+done
+if [ -z "$release" ]; then
+  echo "::error::started the release of v$version but cannot find its run" >&2
+  exit 1
+fi
+echo "Releasing v$version: https://github.com/$repo/actions/runs/$release" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+gh run watch "$release" --repo "$repo" --interval 60 --exit-status >/dev/null
