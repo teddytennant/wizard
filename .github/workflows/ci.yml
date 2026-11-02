@@ -507,8 +507,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Blocking since 2026-11-02. release.yml's macOS test gate always
+          # was, and three tests red here behind a green check let the
+          # nightly tag a release that could not publish.
           - runner: macos-15
-            experimental: true
+            experimental: false
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
