@@ -460,7 +460,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
-        let wt = dir.path().join(".wizard/worktrees/probe");
+        // Git reports the resolved path, and on macOS the temp dir is behind a
+        // symlink (/var -> /private/var).
+        let wt = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(".wizard/worktrees/probe");
         assert!(wt.join("a.txt").exists());
         assert_eq!(ctx.in_session_worktree().cwd, wt);
 
@@ -499,7 +505,11 @@ mod tests {
             .execute(json!({ "name": "w" }), &ctx)
             .await
             .unwrap();
-        let wt = dir.path().join(".wizard/worktrees/w");
+        let wt = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(".wizard/worktrees/w");
         std::fs::write(wt.join("new.txt"), "x").unwrap();
 
         let refused = ExitWorktreeTool
