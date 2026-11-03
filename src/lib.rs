@@ -223,8 +223,10 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
     }
 
     // Usage rollup: reads ~/.wizard/usage.jsonl only. `--subscriptions` asks
-    // the signed-in accounts instead; it reads their token files, never the
-    // config, which is what lets the desktop app run it beside a live session.
+    // the signed-in accounts instead: it reads their token files, and the
+    // config file only for the list of provider kinds, which says whether
+    // Claude and Cursor were added. It never loads a session's config, which
+    // is what lets the desktop app run it beside a live one.
     if let Some(cli::Command::Usage {
         since,
         subscriptions,

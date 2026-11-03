@@ -34,7 +34,7 @@ inline hints.
 | `/diff` | Toggle the git diff sidebar |
 | `/todos` | Toggle the todo list above the input |
 | `/cost` | Session token usage, with cost estimates when per-provider rates are configured |
-| `/usage` | Plan limits for every signed-in subscription, whichever provider is active: xAI's weekly percent with its reset and the build/chat/voice split, ChatGPT's 5-hour and weekly windows with their resets. On an API-key provider the session's token rollup follows. See [Subscription limits](#subscription-limits) |
+| `/usage` | Plan limits for every signed-in subscription, whichever provider is active: xAI's weekly percent with its reset and the build/chat/voice split, ChatGPT's 5-hour and weekly windows with their resets, and, once added as providers, Claude's two windows and Cursor's billing cycle. On an API-key provider the session's token rollup follows. See [Subscription limits](#subscription-limits) |
 | `/memory [read\|forget <name>]` | List the saved project memories, show one, or forget one ([memory.md](memory.md)) |
 | `/status` | Session status: model, provider, mode, effort, session id, usage, todo progress, background tasks, plan/omakase, ultra (GUI also prints current context tokens) |
 | `/doctor` | Environment diagnostics, same checks as `wizard doctor` ([doctor.md](doctor.md)) |
@@ -561,6 +561,13 @@ xAI (SuperGrok Heavy, active)
 ChatGPT (Plus)
   5h: 12.5% used, resets 2026-09-27 23:10 UTC
   weekly: 41% used, resets 2026-10-03 00:00 UTC
+Claude (Max)
+  5h: 37% used, resets 2026-11-03 19:00 UTC
+  weekly: 100% used, resets 2026-11-05 16:00 UTC
+  Claude Code 94%, Chats 6%, Cowork 0%, Other 0%
+Cursor (Ultra)
+  monthly: 6.2% used, resets 2026-11-11 18:52 UTC
+  auto 5.9%, API 15.2%
 ```
 
 - **xAI** comes from the Grok CLI proxy (`cli-chat-proxy.grok.com`), which
@@ -572,6 +579,25 @@ ChatGPT (Plus)
   answer, marked "as of the last reply". The usage call never refreshes the
   sign-in, since a second process spending the refresh token would sign the
   running one out. A token about to expire skips the call.
+- **Claude** and **Cursor** are reported only once you have added them with
+  `/provider`. Their sign-ins belong to `claude` and `cursor-agent`, which you
+  may have on the machine for reasons that have nothing to do with Wizard, so
+  reading another tool's credential follows you asking for it rather than the
+  file being there.
+- **Claude** comes from `api.anthropic.com/api/oauth/usage` with the token in
+  `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`), the same numbers
+  Claude Code's own `/usage` shows: the 5-hour and weekly windows, a third for
+  Opus on plans that meter one, and the week split across Claude Code, chats
+  and the rest. On macOS the sign-in can be in the Keychain instead, which
+  Wizard does not open; the block says so.
+- **Cursor** comes from `cursor.com/api/usage-summary` with the session in
+  `~/.config/cursor/auth.json`: the billing cycle's included usage, and the
+  auto and API meters behind the two sentences the dashboard prints. The
+  percents are Cursor's own, not a ratio of the dollar figures beside them. A
+  plan with no metered limit, and on-demand usage being on, each say so.
+- Neither read refreshes the sign-in it borrows. Claude Code's refresh token
+  is single-use, so spending it here would sign out the `claude` you work in;
+  an expired token is a note instead.
 - A subscription that is signed in but has no reading says so rather than
   showing 0%: `no request yet this session; limits show after the first reply`.
 

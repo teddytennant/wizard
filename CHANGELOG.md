@@ -8,6 +8,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Added
+
+- `/usage` and `wizard usage --subscriptions` report Claude and Cursor subscriptions once you add them as providers: Claude's 5-hour and weekly windows with the week split across Claude Code, chats and the rest, and Cursor's billing cycle with its auto and API meters. Both read the sign-in `claude` and `cursor-agent` already wrote and ask the account, so the numbers match what those tools show and cost no tokens. Neither refreshes the borrowed sign-in. Because the credentials belong to another tool, nothing is read until the provider is in your config ([docs/usage.md](docs/usage.md#subscription-limits)).
+
 ## [2026.11.1] - 2026-11-02
 
 ### Changed

@@ -5,8 +5,9 @@
 //! this provider never holds a credential and never opens a connection. Each
 //! model call spawns the user's own `claude -p` and reads its `stream-json`
 //! events; signing in is `claude auth login`, and whether that happened is
-//! whatever `claude auth status` says. Nothing here reads Claude Code's
-//! files.
+//! whatever `claude auth status` says. Nothing on that path reads Claude
+//! Code's files; [`limits`] reads the sign-in to ask Anthropic what the plan
+//! has left, and is the only thing here that does.
 //!
 //! Wizard keeps its own prompt and tools. The child runs with `--tools ""`
 //! and Wizard's system prompt. A call that offers tools gets them as native
@@ -20,6 +21,7 @@
 //! instead: see [`encode`].
 
 mod bridge;
+pub mod limits;
 mod session;
 pub mod setup;
 

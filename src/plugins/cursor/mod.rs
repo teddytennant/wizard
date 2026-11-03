@@ -5,7 +5,9 @@
 //! provider never holds a credential and never opens a connection. Each model
 //! call spawns the user's own `cursor-agent -p` and reads its `stream-json`
 //! events; signing in is `cursor-agent login`, and whether that happened is
-//! whatever `cursor-agent status` says. Nothing here reads Cursor's files.
+//! whatever `cursor-agent status` says. Nothing on that path reads Cursor's
+//! files; [`limits`] reads the sign-in to ask Cursor what the cycle has left,
+//! and is the only thing here that does.
 //!
 //! Wizard keeps its own prompt and tools. `cursor-agent` has no flag for
 //! either, so the child runs in a throwaway workspace that carries them: the
@@ -20,6 +22,7 @@
 //! replayed as one labelled transcript: see [`prompt`].
 
 mod bridge;
+pub mod limits;
 pub mod setup;
 
 use std::collections::HashMap;

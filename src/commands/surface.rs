@@ -650,7 +650,11 @@ pub async fn dispatch<S: CommandSurface + Send + ?Sized>(command: SlashCommand, 
         }
         SlashCommand::Usage => {
             let session = surface.snapshot();
-            let subscriptions = crate::subscription_usage::collect().await;
+            // The providers as the file has them, not as this session loaded
+            // them: a Claude or Cursor subscription added with /provider this
+            // session should show in the next /usage without a restart.
+            let added = crate::config::Config::provider_kinds_on_disk();
+            let subscriptions = crate::subscription_usage::collect(&added).await;
             surface.notice(usage_report(&session, &subscriptions));
         }
         SlashCommand::Computer => {

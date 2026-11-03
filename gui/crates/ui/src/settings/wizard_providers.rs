@@ -848,7 +848,8 @@ impl WizardProvidersPage {
             }
             Loadable::Ready(usage) if usage.subscriptions.is_empty() => quiet(
                 "Wizard isn't signed in to a subscription on this device. Sign in to xAI or \
-                 ChatGPT below to see its plan limits here."
+                 ChatGPT below to see its plan limits here. A Claude or Cursor subscription \
+                 shows once that provider is added."
                     .into(),
             ),
             Loadable::Ready(usage) => {

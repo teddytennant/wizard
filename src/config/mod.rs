@@ -2076,6 +2076,34 @@ impl Config {
             .map(|only| only.computer)
     }
 
+    /// The `kind` of every `[[providers]]` row on disk now, empty when there
+    /// is no config file or it does not parse.
+    ///
+    /// `/usage` asks it which subscriptions to report, and `wizard usage
+    /// --subscriptions` runs in its own process beside a live session, so
+    /// neither can go through [`load`](Self::load): that applies env
+    /// overrides and makes directories for a session this is not.
+    pub fn provider_kinds_on_disk() -> Vec<ProviderKind> {
+        #[derive(Deserialize)]
+        struct OnlyProviders {
+            #[serde(default)]
+            providers: Vec<OnlyKind>,
+        }
+        #[derive(Deserialize)]
+        struct OnlyKind {
+            kind: ProviderKind,
+        }
+        let Some(raw) = Self::path()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+        else {
+            return Vec::new();
+        };
+        toml::from_str::<OnlyProviders>(&raw)
+            .map(|only| only.providers.into_iter().map(|row| row.kind).collect())
+            .unwrap_or_default()
+    }
+
     /// Apply CLI flag overrides on top of file/env config for this run.
     /// CLI mode wins; sovereign mode raises a capped `max_steps` to its floor
     /// (an unlimited budget stays unlimited).

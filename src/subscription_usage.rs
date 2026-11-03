@@ -8,6 +8,15 @@
 //! provider is active, since the limits belong to the account and not to the
 //! chat that asks.
 //!
+//! Claude and Cursor are subscriptions Wizard never signs in to: their
+//! sign-ins belong to `claude` and `cursor-agent`, which the user may have on
+//! the machine for reasons that have nothing to do with Wizard. So those two
+//! are reported only once the provider has been added (`/provider`), and
+//! reading another tool's credential follows the user asking for it rather
+//! than the file being there. Claude reports a 5-hour and a weekly window
+//! with the week split across Claude Code, chats and the rest; Cursor the
+//! billing cycle with its auto and API meters.
+//!
 //! The numbers never come from the local token ledger. When an account did
 //! not report a number the block says so instead of filling the gap.
 
@@ -42,9 +51,9 @@ impl Report {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {
-    /// `xai` or `chatgpt`.
+    /// `xai`, `chatgpt`, `claude` or `cursor`.
     pub id: String,
-    /// `xAI` or `ChatGPT`.
+    /// `xAI`, `ChatGPT`, `Claude` or `Cursor`.
     pub name: String,
     /// The plan as the account names it ("SuperGrok Heavy", "Pro").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,7 +61,10 @@ pub struct Subscription {
     /// The metered windows, short one first. Empty when there is no reading.
     #[serde(default)]
     pub windows: Vec<LimitWindow>,
-    /// How the usage splits across products (xAI's build, chat, voice).
+    /// The labelled meters beside the windows: xAI's split across build, chat
+    /// and voice, Claude's week split across Claude Code and chats, Cursor's
+    /// auto and API percents. A split in the first two cases, two meters over
+    /// one cycle in Cursor's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub products: Vec<ProductShare>,
     /// Where the windows came from, when there are any.
@@ -91,7 +103,8 @@ pub struct LimitWindow {
     pub resets_at: Option<DateTime<Utc>>,
 }
 
-/// A product's part of the usage.
+/// One labelled meter beside a window: a product's part of the usage, or a
+/// second percent over the same period.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductShare {
@@ -109,12 +122,35 @@ pub enum Source {
     LastReply,
 }
 
-/// Every subscription this machine is signed in to, read live.
+/// Every subscription to report, read live.
 ///
-/// The two are asked at once; the slower one decides how long `/usage` takes.
-pub async fn collect() -> Vec<Subscription> {
-    let (xai, chatgpt) = tokio::join!(crate::llm::xai_oauth::subscription(), chatgpt());
-    [xai, chatgpt].into_iter().flatten().collect()
+/// `added` is the `kind` of every provider in the config file. Wizard's own
+/// sign-ins are asked whether or not they are among them; Claude and Cursor
+/// only when they are, since their credentials belong to another tool.
+///
+/// They are asked at once; the slowest decides how long `/usage` takes.
+pub async fn collect(added: &[crate::config::ProviderKind]) -> Vec<Subscription> {
+    use crate::config::ProviderKind;
+    let has = |kind: &ProviderKind| added.contains(kind);
+    let (xai, chatgpt, claude, cursor) = tokio::join!(
+        crate::llm::xai_oauth::subscription(),
+        chatgpt(),
+        optional(has(&ProviderKind::CLAUDE_CODE), claude()),
+        optional(has(&ProviderKind::CURSOR), cursor()),
+    );
+    [xai, chatgpt, claude, cursor]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Run `ask` only when `wanted`. The future is still built either way, so
+/// the four reads can go into one `join!`.
+async fn optional(
+    wanted: bool,
+    ask: impl std::future::Future<Output = Option<Subscription>>,
+) -> Option<Subscription> {
+    if wanted { ask.await } else { None }
 }
 
 #[cfg(feature = "provider-chatgpt")]
@@ -127,10 +163,30 @@ async fn chatgpt() -> Option<Subscription> {
     None
 }
 
+#[cfg(feature = "provider-claude-code")]
+async fn claude() -> Option<Subscription> {
+    crate::plugins::claude_code::limits::subscription().await
+}
+
+#[cfg(not(feature = "provider-claude-code"))]
+async fn claude() -> Option<Subscription> {
+    None
+}
+
+#[cfg(feature = "provider-cursor")]
+async fn cursor() -> Option<Subscription> {
+    crate::plugins::cursor::limits::subscription().await
+}
+
+#[cfg(not(feature = "provider-cursor"))]
+async fn cursor() -> Option<Subscription> {
+    None
+}
+
 /// `wizard usage --subscriptions [--json]`. Exits 0 whatever the accounts
 /// said: a failed read is a note in the output, not a failed command.
 pub async fn run_cli(json: bool) -> anyhow::Result<i32> {
-    let subscriptions = collect().await;
+    let subscriptions = collect(&crate::config::Config::provider_kinds_on_disk()).await;
     if json {
         println!("{}", serde_json::to_string(&Report::new(subscriptions))?);
     } else {
@@ -146,6 +202,10 @@ pub fn active_id(kind: &crate::config::ProviderKind) -> Option<&'static str> {
         Some("xai")
     } else if *kind == ProviderKind::CHATGPT_OAUTH {
         Some("chatgpt")
+    } else if *kind == ProviderKind::CLAUDE_CODE {
+        Some("claude")
+    } else if *kind == ProviderKind::CURSOR {
+        Some("cursor")
     } else {
         None
     }
@@ -155,7 +215,8 @@ pub fn active_id(kind: &crate::config::ProviderKind) -> Option<&'static str> {
 pub fn render(subscriptions: &[Subscription], active: Option<&str>) -> String {
     if subscriptions.is_empty() {
         return "no subscription signed in. /usage shows plan limits for account \
-                sign-ins: /login xai, or `wizard --login chatgpt`"
+                sign-ins: /login xai, or `wizard --login chatgpt`. A Claude or \
+                Cursor subscription shows once you add it with /provider"
             .to_string();
     }
     let mut text = String::new();
