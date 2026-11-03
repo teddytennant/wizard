@@ -1088,6 +1088,7 @@ fn resume_picker_selection_becomes_a_resume_command() {
             current: false,
         }],
         selected: 0,
+        filter: String::new(),
     });
     let action = press(&mut app, KeyCode::Enter);
     assert!(matches!(
@@ -1109,6 +1110,7 @@ fn a_claude_row_in_the_resume_picker_becomes_a_resume_claude_command() {
             current: false,
         }],
         selected: 0,
+        filter: String::new(),
     });
     let action = press(&mut app, KeyCode::Enter);
     assert!(matches!(
@@ -1149,6 +1151,7 @@ fn resume_claude_picker_selection_becomes_a_resume_claude_command() {
             current: false,
         }],
         selected: 0,
+        filter: String::new(),
     });
     let action = press(&mut app, KeyCode::Enter);
     assert!(
@@ -1545,6 +1548,7 @@ fn rewind_picker_selection_becomes_a_rewind_command() {
             },
         ],
         selected: 0,
+        filter: String::new(),
     });
     press(&mut app, KeyCode::Down);
     let action = press(&mut app, KeyCode::Enter);
@@ -1567,6 +1571,7 @@ fn rewind_picker_esc_cancels() {
             current: false,
         }],
         selected: 0,
+        filter: String::new(),
     });
     let action = press(&mut app, KeyCode::Esc);
     assert!(action.is_none());
@@ -1609,6 +1614,7 @@ fn subagent_picker_selection_prefills_a_delegation_request() {
             },
         ],
         selected: 0,
+        filter: String::new(),
     });
     press(&mut app, KeyCode::Down);
     let action = press(&mut app, KeyCode::Enter);
@@ -2453,6 +2459,7 @@ fn backtab_in_a_picker_still_navigates() {
             },
         ],
         selected: 0,
+        filter: String::new(),
     });
     let action = press(&mut app, KeyCode::BackTab);
     assert!(action.is_none(), "the picker captured the key");
@@ -2744,6 +2751,7 @@ fn picker_navigation_wraps_and_enter_selects() {
             },
         ],
         selected: 0,
+        filter: String::new(),
     });
 
     press(&mut app, KeyCode::Up);
@@ -2770,9 +2778,103 @@ fn picker_escape_cancels() {
             current: true,
         }],
         selected: 0,
+        filter: String::new(),
     });
     press(&mut app, KeyCode::Esc);
     assert!(app.picker.is_none());
+}
+
+fn model_picker_with(items: Vec<(&str, &str)>) -> Picker {
+    Picker {
+        kind: PickerKind::Model,
+        title: " select model ".to_string(),
+        items: items
+            .into_iter()
+            .enumerate()
+            .map(|(i, (value, detail))| PickerItem {
+                value: value.to_string(),
+                detail: detail.to_string(),
+                current: i == 0,
+            })
+            .collect(),
+        selected: 0,
+        filter: String::new(),
+    }
+}
+
+#[test]
+fn picker_model_type_to_filter_narrows_and_enter_selects() {
+    let mut app = app();
+    app.picker = Some(model_picker_with(vec![
+        ("qwen3.6:27b", "local"),
+        ("llama4:8b", "local"),
+        ("claude-opus", "anthropic"),
+    ]));
+
+    type_str(&mut app, "opus");
+    let picker = app.picker.as_ref().expect("still open");
+    assert_eq!(picker.filter, "opus");
+    assert_eq!(picker.visible_items().count(), 1);
+    assert_eq!(picker.selected, 0);
+
+    let action = press(&mut app, KeyCode::Enter);
+    match action {
+        Some(AppAction::Command(SlashCommand::Model(Some(tag)))) => {
+            assert_eq!(tag, "claude-opus");
+        }
+        other => panic!("expected filtered model, got {other:?}"),
+    }
+    assert!(app.picker.is_none());
+}
+
+#[test]
+fn picker_model_backspace_widens_filter() {
+    let mut app = app();
+    app.picker = Some(model_picker_with(vec![
+        ("qwen3.6:27b", ""),
+        ("llama4:8b", ""),
+        ("claude-opus", ""),
+    ]));
+
+    type_str(&mut app, "llama");
+    assert_eq!(
+        app.picker.as_ref().expect("open").visible_items().count(),
+        1
+    );
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Backspace);
+    let picker = app.picker.as_ref().expect("open");
+    // "llama" minus two chars is "lla".
+    assert_eq!(picker.filter, "lla");
+    assert_eq!(picker.visible_items().count(), 1);
+    while !app.picker.as_ref().expect("open").filter.is_empty() {
+        press(&mut app, KeyCode::Backspace);
+    }
+    assert_eq!(
+        app.picker.as_ref().expect("open").visible_items().count(),
+        3
+    );
+}
+
+#[test]
+fn picker_model_jk_type_into_filter_not_navigate() {
+    let mut app = app();
+    app.picker = Some(model_picker_with(vec![
+        ("alpha", ""),
+        ("bravo", ""),
+        ("charlie", ""),
+    ]));
+
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('k'));
+    let picker = app.picker.as_ref().expect("open");
+    assert_eq!(picker.filter, "jk");
+    assert_eq!(picker.selected, 0, "typing resets selection to first visible");
+    // No row contains "jk", so the list is empty and Enter is a no-op.
+    assert_eq!(picker.visible_items().count(), 0);
+    let action = press(&mut app, KeyCode::Enter);
+    assert!(action.is_none());
+    assert!(app.picker.is_some(), "empty filter result keeps picker open");
 }
 
 #[test]

@@ -140,15 +140,60 @@ pub struct Picker {
     pub kind: PickerKind,
     pub title: String,
     pub items: Vec<PickerItem>,
+    /// Index into [`Self::visible_items`], not the raw `items` vec.
     pub selected: usize,
+    /// Type-to-filter query. Only consulted when [`Self::filterable`].
+    pub filter: String,
 }
 
 impl Picker {
+    /// True when typing narrows the list. Model only: Mode/Effort/multi-select
+    /// keep their existing key bindings unchanged.
+    pub fn filterable(&self) -> bool {
+        matches!(self.kind, PickerKind::Model)
+    }
+
+    /// Empty filter matches everything; otherwise case-insensitive substring
+    /// on `value` or `detail`.
+    pub fn item_matches(item: &PickerItem, filter: &str) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        let needle = filter.to_ascii_lowercase();
+        item.value.to_ascii_lowercase().contains(&needle)
+            || item.detail.to_ascii_lowercase().contains(&needle)
+    }
+
+    /// Rows the user can see and navigate: all items when not filterable,
+    /// otherwise those matching [`Self::filter`]. Yields `(original index,
+    /// item)`.
+    pub fn visible_items(&self) -> impl Iterator<Item = (usize, &PickerItem)> {
+        let filterable = self.filterable();
+        let filter = self.filter.as_str();
+        self.items
+            .iter()
+            .enumerate()
+            .filter(move |(_, item)| !filterable || Self::item_matches(item, filter))
+    }
+
+    /// Keep `selected` inside the visible list after the filter changes.
+    pub fn clamp_selected(&mut self) {
+        let len = self.visible_items().count();
+        if len == 0 {
+            self.selected = 0;
+        } else if self.selected >= len {
+            self.selected = len - 1;
+        }
+    }
+
     /// Footer hint shown along the modal's bottom border. The Claude-import
     /// picker is a multi-select (Space toggles, Enter runs), so it needs a
     /// different hint than the Enter-to-select pickers.
     pub fn footer_hint(&self) -> &'static str {
         match self.kind {
+            PickerKind::Model => {
+                " type to filter · ↑↓ move · enter select · esc cancel "
+            }
             PickerKind::ClaudeImport => " ↑↓ move · space toggles · enter runs · esc cancel ",
             PickerKind::FusionPanel | PickerKind::UltraLenses => {
                 " ↑↓ move · space toggles · enter saves · esc cancel "
@@ -184,6 +229,7 @@ pub(super) fn plugin_target_picker(spec: &str, pi_available: bool) -> Option<Pic
             row(Target::Pi, "runs pi install"),
         ],
         selected: 0,
+        filter: String::new(),
     })
 }
 
@@ -204,6 +250,7 @@ pub(super) fn plugin_remove_picker(name: &str, pi_available: bool) -> Picker {
         title: format!(" remove {name} "),
         items,
         selected: 0,
+        filter: String::new(),
     }
 }
 

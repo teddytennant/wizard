@@ -2831,10 +2831,14 @@ pub(super) fn draw_picker(frame: &mut Frame, app: &App) {
     // it is the one place that knows, so ask it instead of guessing.
     let body = regions(app, frame_area).body;
     let width = (body.width.saturating_sub(8)).clamp(24, 56);
+    let visible: Vec<&crate::app::PickerItem> = picker
+        .visible_items()
+        .map(|(_, item)| item)
+        .collect();
     // Two rows for the border. One more so a full-height picker does not sit
     // flush against the transcript's edges.
     let max_rows = body.height.saturating_sub(3).max(1) as usize;
-    let height = picker.items.len().min(max_rows) as u16 + 2;
+    let height = visible.len().min(max_rows).max(1) as u16 + 2;
     let area = Rect {
         x: body.x + (body.width.saturating_sub(width)) / 2,
         y: body.y + (body.height.saturating_sub(height)) / 2,
@@ -2857,8 +2861,7 @@ pub(super) fn draw_picker(frame: &mut Frame, app: &App) {
     };
     let inner_width = area.width.saturating_sub(2) as usize;
 
-    let lines: Vec<Line<'static>> = picker
-        .items
+    let lines: Vec<Line<'static>> = visible
         .iter()
         .enumerate()
         .skip(start)
@@ -2897,6 +2900,11 @@ pub(super) fn draw_picker(frame: &mut Frame, app: &App) {
         })
         .collect();
 
+    let title = if picker.filter.is_empty() {
+        format!(" {} ", picker.title)
+    } else {
+        format!(" {} · {} ", picker.title.trim(), picker.filter)
+    };
     let block = Block::bordered()
         .border_type(theme::border_type())
         .border_style(theme::style(Token::Border))
@@ -2907,10 +2915,7 @@ pub(super) fn draw_picker(frame: &mut Frame, app: &App) {
         // bug rather than a title too long for its box. Two columns for the
         // corners, two more so the title never touches them.
         .title(Line::from(vec![Span::styled(
-            truncate_width(
-                &format!(" {} ", picker.title),
-                area.width.saturating_sub(4) as usize,
-            ),
+            truncate_width(&title, area.width.saturating_sub(4) as usize),
             muted(),
         )]))
         .title_bottom(

@@ -1565,6 +1565,7 @@ fn no_overlay_panics_at_any_terminal_size() {
                     })
                     .collect(),
                 selected: 0,
+                filter: String::new(),
             });
         }),
         ("plan review", |app, nasty| {

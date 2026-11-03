@@ -392,6 +392,7 @@ impl CommandContext<'_> {
                     title: " select model ".to_string(),
                     items,
                     selected,
+                    filter: String::new(),
                 });
             }
             Ok(_) => self
@@ -482,6 +483,7 @@ impl CommandContext<'_> {
             title: " select mode ".to_string(),
             items,
             selected,
+            filter: String::new(),
         });
     }
 
@@ -515,6 +517,7 @@ impl CommandContext<'_> {
             title: " delegate to subagent ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -596,6 +599,7 @@ impl CommandContext<'_> {
             title: " rewind to before turn ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -913,6 +917,7 @@ impl CommandContext<'_> {
             title: " reasoning effort ".to_string(),
             items,
             selected,
+            filter: String::new(),
         });
     }
 
@@ -1737,6 +1742,7 @@ impl CommandContext<'_> {
                         .to_string(),
                     items,
                     selected: 0,
+                    filter: String::new(),
                 });
             }
             PluginsAction::List => {
@@ -1769,6 +1775,7 @@ impl CommandContext<'_> {
                     title: " Pi plugins installed for Wizard \u{b7} enter to remove ".to_string(),
                     items,
                     selected: 0,
+                    filter: String::new(),
                 });
             }
             PluginsAction::Install { spec, target } => {

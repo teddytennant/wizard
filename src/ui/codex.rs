@@ -2457,9 +2457,13 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect) {
         return;
     };
     let width = body.width.saturating_sub(8).clamp(24, 72);
+    let visible: Vec<&crate::app::PickerItem> = picker
+        .visible_items()
+        .map(|(_, item)| item)
+        .collect();
     // Title, blank, rows, blank, hint — plus the surface's own two rows.
     let max_rows = body.height.saturating_sub(7).max(1) as usize;
-    let rows = picker.items.len().min(max_rows);
+    let rows = visible.len().min(max_rows).max(1);
     let height = rows as u16 + 4 + MENU_SURFACE_INSET_V * 2;
     let inner = menu_surface(frame, centred(body, width, height));
     if inner.width < 4 || inner.height < 3 {
@@ -2468,8 +2472,7 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect) {
     let content_width = inner.width as usize;
 
     let start = picker.selected.saturating_sub(rows.saturating_sub(1));
-    let label_col = picker
-        .items
+    let label_col = visible
         .iter()
         .skip(start)
         .take(rows)
@@ -2479,11 +2482,16 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect) {
         .min(content_width / 2)
         + 2;
 
+    let title = if picker.filter.is_empty() {
+        picker.title.clone()
+    } else {
+        format!("{} · {}", picker.title.trim(), picker.filter)
+    };
     let mut lines = vec![
-        Line::from(Span::styled(picker.title.clone(), text_style().bold())),
+        Line::from(Span::styled(title, text_style().bold())),
         Line::from(""),
     ];
-    for (index, item) in picker.items.iter().enumerate().skip(start).take(rows) {
+    for (index, item) in visible.iter().enumerate().skip(start).take(rows) {
         let label = if item.current {
             format!("{} ●", item.value)
         } else {

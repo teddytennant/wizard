@@ -946,6 +946,7 @@ impl App {
             title: " settings · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1066,6 +1067,7 @@ impl App {
             title: " import from claude code · space toggles · enter runs ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1097,6 +1099,7 @@ impl App {
             title: " fusion panel · space toggles · enter saves ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1133,6 +1136,7 @@ impl App {
             title: " ultra roster · space toggles · enter saves ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1181,6 +1185,7 @@ impl App {
             title: " resume session · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1240,6 +1245,7 @@ impl App {
             title: " continue from claude code · enter imports a copy · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1306,6 +1312,7 @@ impl App {
             title: " providers · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1344,6 +1351,7 @@ impl App {
             title: " add provider · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -1364,6 +1372,7 @@ impl App {
             title: " web search · ↑↓ move · enter select · esc close ".to_string(),
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -3130,22 +3139,49 @@ impl App {
             return Ok(None);
         }
 
-        // An open picker captures navigation keys.
+        // An open picker captures navigation keys (and type-to-filter for models).
         if let Some(picker) = self.picker.as_mut() {
+            let filterable = picker.filterable();
+            let visible_len = picker.visible_items().count();
+            let no_chord = !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
             match key.code {
-                KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                KeyCode::Up | KeyCode::BackTab => {
+                    if visible_len > 0 {
+                        picker.selected = if picker.selected == 0 {
+                            visible_len - 1
+                        } else {
+                            picker.selected - 1
+                        };
+                    }
+                }
+                KeyCode::Char('k') if !filterable => {
                     picker.selected = if picker.selected == 0 {
-                        picker.items.len().saturating_sub(1)
+                        visible_len.saturating_sub(1)
                     } else {
                         picker.selected - 1
                     };
                 }
-                KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
-                    picker.selected = if picker.selected + 1 >= picker.items.len() {
+                KeyCode::Down | KeyCode::Tab => {
+                    if visible_len > 0 {
+                        picker.selected = if picker.selected + 1 >= visible_len {
+                            0
+                        } else {
+                            picker.selected + 1
+                        };
+                    }
+                }
+                KeyCode::Char('j') if !filterable => {
+                    picker.selected = if picker.selected + 1 >= visible_len {
                         0
                     } else {
                         picker.selected + 1
                     };
+                }
+                KeyCode::Backspace if filterable && !picker.filter.is_empty() => {
+                    picker.filter.pop();
+                    picker.clamp_selected();
                 }
                 // Space toggles a checkbox row in a multi-select picker.
                 KeyCode::Char(' ')
@@ -3156,16 +3192,25 @@ impl App {
                             | PickerKind::UltraLenses
                     ) =>
                 {
+                    // Multi-select pickers are not filterable, so `selected`
+                    // indexes the full items list.
                     if let Some(item) = picker.items.get_mut(picker.selected) {
                         item.current = !item.current;
                     }
+                }
+                KeyCode::Char(c) if filterable && no_chord => {
+                    picker.filter.push(c);
+                    picker.selected = 0;
+                    picker.clamp_selected();
                 }
                 KeyCode::Esc => {
                     self.picker = None;
                 }
                 KeyCode::Enter => {
                     let picker = self.picker.take().expect("picker is open");
-                    let Some(item) = picker.items.get(picker.selected) else {
+                    let Some((_, item)) = picker.visible_items().nth(picker.selected) else {
+                        // Empty filter result: keep the picker open.
+                        self.picker = Some(picker);
                         return Ok(None);
                     };
                     let action = match picker.kind {
