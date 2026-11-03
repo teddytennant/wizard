@@ -414,6 +414,9 @@ pub struct App {
     /// Claude Code's `statusLine`: the command, its rows and when it runs next.
     pub status_line: crate::statusline_run::State,
     sl_seen: statusline::Seen,
+    /// Images pasted into the prompt, staged under `~/.wizard/attachments`. Sent as `@path`
+    /// so wizard attaches the file, shown as `[Image #N]`.
+    pub pastes: Vec<std::path::PathBuf>,
 }
 
 impl App {
@@ -522,6 +525,7 @@ impl App {
             reload_after_turn: false,
             search_hint: false,
             submitted: false,
+            pastes: Vec::new(),
         };
         app.load_home();
         app
@@ -1348,7 +1352,9 @@ impl App {
         let local = matches!(name.as_str(), "help" | "resume")
             || (matches!(name.as_str(), "model" | "mode" | "rewind" | "effort") && arg.is_empty());
         if self.busy.is_some() || (self.modes_pending() && !local) {
-            self.queued.push(text);
+            let queued = crate::paste::prompt_with_images(&text, &self.pastes);
+            self.pastes.clear();
+            self.queued.push(queued);
             return;
         }
         // history is what was sent: a queued prompt counts once it goes, not when typed
@@ -1515,16 +1521,19 @@ impl App {
             }
             _ => {}
         }
+        let sent = crate::paste::prompt_with_images(&text, &self.pastes);
+        let shown = crate::paste::shown_with_chips(&text, self.pastes.len());
+        self.pastes.clear();
         self.blocks.push(Block::User {
-            text: text.clone(),
+            text: shown,
             bash: false,
         });
         self.turns += 1;
         // the user's own commands are prompts for the model once wizard expands them
         self.command_turn = !name.is_empty() && !self.custom.contains(&name);
         self.start_busy();
-        self.export.push_user(&text);
-        self.send(Request::Prompt(text));
+        self.export.push_user(&sent);
+        self.send(Request::Prompt(sent));
     }
 
     fn run_shell(&mut self, command: String) {
@@ -1783,6 +1792,10 @@ impl App {
             // the left arrow on an empty prompt opens the agents view, as the footer says
             KeyCode::Left if self.editor.is_empty() && !self.bash_mode && !self.shortcuts => {
                 self.submit("/agents".into())
+            }
+            KeyCode::Backspace if self.editor.is_empty() && !self.pastes.is_empty() => {
+                self.pastes.pop();
+                self.dirty = true;
             }
             KeyCode::Backspace if self.editor.is_empty() && (self.bash_mode || self.shortcuts) => {
                 self.bash_mode = false;
@@ -2973,10 +2986,28 @@ impl App {
         if self.dialog.is_some() || self.detail {
             return;
         }
+        if self.attach_pasted_image(s) {
+            self.shortcuts = false;
+            self.refresh_menu();
+            self.dirty = true;
+            return;
+        }
         self.editor.paste(s);
         self.shortcuts = false;
         self.refresh_menu();
         self.dirty = true;
+    }
+
+    /// A pasted image becomes a chip, not a filename (and not the file's icon).
+    fn attach_pasted_image(&mut self, s: &str) -> bool {
+        let Some(src) = crate::paste::pasted_image(s) else {
+            return false;
+        };
+        let Some(staged) = crate::paste::stage_file(&src) else {
+            return false;
+        };
+        self.pastes.push(staged);
+        true
     }
 
     pub fn on_resize(&mut self, w: u16, h: u16) {

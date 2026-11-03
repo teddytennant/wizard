@@ -41,6 +41,22 @@ pub fn rows(app: &App, w: usize, detail: bool) -> Vec<Row> {
     let blocks = &app.blocks;
     let mut i = 0;
     while i < blocks.len() {
+        // Compact view: a run of thoughts and finished reads, searches and commands is one
+        // count ("Ran 12 shell commands, read 6 files"), not a line per batch and a
+        // "Thought for" between each. ctrl+o still draws every thought and every call.
+        if !detail {
+            if let Some((end, tools, secs)) = quiet_stretch(blocks, i, app.busy.is_some()) {
+                if !tools.is_empty() {
+                    out.push(Row::new());
+                    out.extend(folded(&th, &tools, w));
+                } else if secs > 0 {
+                    out.push(Row::new());
+                    out.push(thought_row(&th, secs));
+                }
+                i = end;
+                continue;
+            }
+        }
         match &blocks[i] {
             Block::User { text, bash } => {
                 out.push(Row::new());
@@ -254,10 +270,15 @@ pub fn short_cwd(cwd: &str, w: usize) -> String {
 fn user(th: &Theme, text: &str, bash: bool, w: usize) -> Vec<Row> {
     let bg = Style::new().bg(if bash { th.bash_bg } else { th.user_bg });
     let body = bg.fg(th.user_fg);
-    let spans = if bash {
-        vec![(text.trim_end().to_string(), body)]
+    let shown = if bash {
+        text.to_string()
     } else {
-        markdown::inline_with(th, text.trim_end(), body, None)
+        crate::paste::chips_in_text(text)
+    };
+    let spans = if bash {
+        vec![(shown.trim_end().to_string(), body)]
+    } else {
+        markdown::inline_with(th, shown.trim_end(), body, None)
     };
     // the first row of what you sent runs one column further than the rest
     let lines = crate::text::wrap_first(&spans, w.saturating_sub(3), w.saturating_sub(4));
@@ -364,8 +385,54 @@ fn done_ok(t: &ToolCall) -> bool {
     t.status == ToolStatus::Completed && folds(t)
 }
 
-/// Reads, searches, shell commands and fetches fold into one summary row once done, as the
-/// reference folds them. Any other tool keeps its own row: there is no "used N tools".
+/// One "Thought for Ns" row. Several thoughts in a stretch add their seconds.
+fn thought_row(th: &Theme, secs: u64) -> Row {
+    Row::of("  Thought for ", th.dim())
+        .with(format!("{secs}s"), th.dim().add_modifier(Modifier::BOLD))
+        .with(" ", th.dim())
+}
+
+/// Compact view groups a thought with the finished reads, searches and commands around it,
+/// so a turn that thinks between every call does not fill the screen with one line each.
+/// The tool a running turn has just finished stays out, drawn as it was while it ran.
+/// `None` when `blocks[start]` is not part of such a stretch.
+fn quiet_stretch(
+    blocks: &[Block],
+    start: usize,
+    running: bool,
+) -> Option<(usize, Vec<&ToolCall>, u64)> {
+    let hold = |j: usize, t: &ToolCall| running && j + 1 == blocks.len() && done_ok(t);
+    let starts = match blocks.get(start)? {
+        Block::Thought { text, secs, .. } => !text.trim().is_empty() || *secs > 0,
+        Block::Tool(t) => folds(t) && !hold(start, t),
+        _ => false,
+    };
+    if !starts {
+        return None;
+    }
+    let mut j = start;
+    let mut tools = Vec::new();
+    let mut secs = 0u64;
+    while j < blocks.len() {
+        match &blocks[j] {
+            Block::Thought { text, secs: s, .. } => {
+                if text.trim().is_empty() && *s == 0 {
+                    j += 1;
+                    continue;
+                }
+                secs += *s;
+                j += 1;
+            }
+            Block::Tool(t) if folds(t) && !hold(j, t) => {
+                tools.push(t);
+                j += 1;
+            }
+            _ => break,
+        }
+    }
+    (j > start).then_some((j, tools, secs))
+}
+
 fn folds(t: &ToolCall) -> bool {
     let done = matches!(t.status, ToolStatus::Completed | ToolStatus::Failed);
     let local = t.input.get("local").is_some();
@@ -792,5 +859,59 @@ mod refusal_tests {
         ));
         assert!(is_refusal("blocked by plan mode: only read-only tools"));
         assert!(!is_refusal("No such file or directory"));
+    }
+}
+
+#[cfg(test)]
+mod collapse_tests {
+    use std::time::Duration;
+
+    use super::{quiet_stretch, Block};
+    use agent_core::{ToolCall, ToolKind, ToolStatus};
+
+    fn tool(kind: ToolKind, name: &str) -> Block {
+        Block::Tool(ToolCall {
+            id: name.into(),
+            name: name.into(),
+            kind,
+            title: String::new(),
+            input: serde_json::json!({}),
+            status: ToolStatus::Completed,
+            output: None,
+            diff: None,
+            parent_id: None,
+        })
+    }
+
+    fn thought(secs: u64) -> Block {
+        Block::Thought {
+            text: String::new(),
+            began: Duration::ZERO,
+            secs,
+        }
+    }
+
+    #[test]
+    fn thoughts_between_commands_are_one_count() {
+        let blocks = vec![
+            tool(ToolKind::Execute, "execute"),
+            thought(1),
+            tool(ToolKind::Read, "read_file"),
+            thought(3),
+            tool(ToolKind::Execute, "execute"),
+        ];
+        let (end, tools, secs) = quiet_stretch(&blocks, 0, false).expect("one stretch");
+        assert_eq!(end, blocks.len());
+        assert_eq!(tools.len(), 3);
+        assert_eq!(secs, 4);
+    }
+
+    #[test]
+    fn a_lone_thought_stays_a_thought() {
+        let blocks = vec![thought(1)];
+        let (end, tools, secs) = quiet_stretch(&blocks, 0, false).expect("thought");
+        assert_eq!(end, 1);
+        assert!(tools.is_empty());
+        assert_eq!(secs, 1);
     }
 }

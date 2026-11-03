@@ -140,10 +140,40 @@ fn linux_clipboard_bytes() -> Option<Vec<u8>> {
     None
 }
 
-/// Read a clipboard image on macOS: `pngpaste` if installed, else AppleScript
-/// writes the clipboard's PNG representation to a temp file we read back.
+/// File URL on the macOS clipboard, when the user copied a file rather than image bytes.
+/// The PNG pasteboard class in that case is the file's icon, not the picture.
+#[cfg(target_os = "macos")]
+fn clipboard_file_url() -> Option<std::path::PathBuf> {
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("try\nPOSIX path of (the clipboard as «class furl»)\nend try")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(path))
+}
+
+/// Read a clipboard image on macOS: the file itself when the clipboard holds a file URL
+/// (the PNG class is only the icon), else `pngpaste`, else AppleScript's PNG bytes.
 #[cfg(target_os = "macos")]
 fn macos_clipboard_bytes() -> Option<Vec<u8>> {
+    if let Some(path) = clipboard_file_url() {
+        if path.is_file() {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if sniff_image_ext(&bytes).is_some() {
+                    return Some(bytes);
+                }
+            }
+        }
+        // A file is on the clipboard. Its PNG representation is the icon, not a picture.
+        return None;
+    }
     if let Some(bytes) = capture("pngpaste", &["-"])
         && sniff_image_ext(&bytes).is_some()
     {

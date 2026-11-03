@@ -54,7 +54,8 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
     } else {
         h as usize
     };
-    let fixed = n + 2 + above + spinner + between.len();
+    let chips = if app.pastes.is_empty() { 0 } else { 1 };
+    let fixed = n + 2 + above + spinner + between.len() + chips;
     let footer_h = footer.len().min(cap.saturating_sub(fixed).max(1));
     let total = (fixed + footer_h).min(h as usize);
     let top = h - total as u16;
@@ -99,6 +100,18 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> u16 {
             }
             y += 1;
         }
+    }
+
+    if !app.pastes.is_empty() {
+        let mut label = String::from("  ");
+        for (i, _) in app.pastes.iter().enumerate() {
+            if i > 0 {
+                label.push(' ');
+            }
+            label.push_str(&format!("[Image #{}]", i + 1));
+        }
+        put(buf, 0, y, &label, th.dim());
+        y += 1;
     }
 
     let edge = if app.bash_mode { th.bash } else { th.border };
