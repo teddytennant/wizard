@@ -2,8 +2,10 @@
 //!
 //! The tick is about 100ms, which is the frame time for a tool or a thought.
 //! Idle waits step more slowly. `WIZARD_REDUCED_MOTION` freezes each glyph on
-//! its first frame. Nothing here paints a background.
+//! its first frame. The determinate bar paints no background. The half-block
+//! wave is the exception: two colors in one cell, on a small swatch.
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::{accent, dim};
@@ -57,52 +59,162 @@ pub(super) fn glyph_at(kind: Kind, tick: u64, reduced: bool) -> String {
     }
 }
 
-/// One-cell cycles for the wizard thinking mark. A turn draws one and holds
-/// it; the next turn draws another, from a shuffled deck, so it is not the
-/// same wheel twice in a row and not the braille spinner.
-pub(crate) const THINKING: &[&[&str]] = &[
-    &["◐", "◓", "◑", "◒"],
-    &["▖", "▘", "▝", "▗"],
-    &[
+/// Glyph cycles, then the gallery. The first [`CORE`] are the original
+/// one-cell deck. A turn draws one and holds it; the next turn draws another,
+/// from a shuffled deck, so it is not the same wheel twice in a row.
+#[derive(Clone, Copy)]
+enum Cycle {
+    Glyphs(&'static [&'static str]),
+    Spark,
+    Wand,
+    Fill,
+    Heart,
+    Breathe,
+    Chase,
+    Scanner,
+    Needle,
+    Sweep,
+    Ring,
+    Wave,
+    Glider,
+}
+
+/// Original one-cell deck. Dashboard rows deal from this prefix so a session
+/// mark stays one cell, and so a session keeps the cycle it had before the
+/// gallery was added.
+const CORE: usize = 14;
+
+const CYCLES: &[Cycle] = &[
+    Cycle::Glyphs(&["◐", "◓", "◑", "◒"]),
+    Cycle::Glyphs(&["▖", "▘", "▝", "▗"]),
+    Cycle::Glyphs(&[
         "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂",
-    ],
-    &["·", "∘", "○", "●", "○", "∘"],
-    &["⌜", "⌝", "⌟", "⌞"],
-    &["◢", "◣", "◤", "◥"],
-    &["░", "▒", "▓", "█", "▓", "▒"],
-    &["◇", "◈", "◆", "◈"],
-    &["┤", "┘", "┴", "└", "├", "┌", "┬", "┐"],
-    &["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
-    &["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"],
-    &["▢", "▣", "■", "▣"],
-    &["╭", "╮", "╯", "╰"],
-    &["⋮", "⋯", "⋰", "⋱"],
+    ]),
+    Cycle::Glyphs(&["·", "∘", "○", "●", "○", "∘"]),
+    Cycle::Glyphs(&["⌜", "⌝", "⌟", "⌞"]),
+    Cycle::Glyphs(&["◢", "◣", "◤", "◥"]),
+    Cycle::Glyphs(&["░", "▒", "▓", "█", "▓", "▒"]),
+    Cycle::Glyphs(&["◇", "◈", "◆", "◈"]),
+    Cycle::Glyphs(&["┤", "┘", "┴", "└", "├", "┌", "┬", "┐"]),
+    Cycle::Glyphs(&["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"]),
+    Cycle::Glyphs(&["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"]),
+    Cycle::Glyphs(&["▢", "▣", "■", "▣"]),
+    Cycle::Glyphs(&["╭", "╮", "╯", "╰"]),
+    Cycle::Glyphs(&["⋮", "⋯", "⋰", "⋱"]),
+    Cycle::Glyphs(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+    Cycle::Glyphs(&["|", "/", "-", "\\"]),
+    Cycle::Glyphs(&["│", "╱", "─", "╲"]),
+    Cycle::Glyphs(&["●", "◉", "○", "◉"]),
+    Cycle::Glyphs(&[".  ", ".. ", "..."]),
+    Cycle::Glyphs(&["◜", "◠", "◝", "◞", "◡", "◟"]),
+    Cycle::Glyphs(&["·", "✢", "✳", "∗", "✳", "✢"]),
+    Cycle::Glyphs(&["·", "✢", "*", "✶", "✻", "✽"]),
+    Cycle::Spark,
+    Cycle::Wand,
+    Cycle::Fill,
+    Cycle::Heart,
+    Cycle::Breathe,
+    Cycle::Chase,
+    Cycle::Scanner,
+    Cycle::Needle,
+    Cycle::Sweep,
+    Cycle::Ring,
+    Cycle::Wave,
+    Cycle::Glider,
 ];
 
 pub(crate) fn thinking_count() -> usize {
-    THINKING.len()
+    CYCLES.len()
 }
 
-/// Frame of cycle `ix`, shifted by `phase` so two turns on the same cycle
-/// do not open on the same glyph. Reduced motion freezes on frame 0.
-pub(crate) fn thinking_frame(ix: usize, phase: u64, tick: u64) -> String {
-    let frames = THINKING[ix % THINKING.len()];
-    if reduced() {
-        return frames[0].to_string();
+fn cycle_at(ix: usize) -> Cycle {
+    CYCLES[ix % CYCLES.len()]
+}
+
+fn frame_index(len: usize, phase: u64, tick: u64) -> usize {
+    if reduced() || len == 0 {
+        0
+    } else {
+        tick.wrapping_add(phase) as usize % len
     }
-    let at = tick.wrapping_add(phase) as usize % frames.len();
-    frames[at].to_string()
 }
 
-/// Stable cycle for a dashboard row: one session keeps its animation, and
-/// two sessions do not share a look.
+/// Plain text of the first line. Tests and the rolled-cycle check use this.
+/// Multi-row cycles return only the top row.
+pub(crate) fn thinking_frame(ix: usize, phase: u64, tick: u64) -> String {
+    thinking_spans(ix, phase, tick, "thinking")
+        .into_iter()
+        .map(|span| span.content.into_owned())
+        .collect()
+}
+
+/// First cell of the cycle. The streaming tail and the dashboard use this so
+/// a three-cell or two-row mark does not land in a paragraph or a session row.
+pub(crate) fn thinking_cell(ix: usize, phase: u64, tick: u64) -> String {
+    if matches!(cycle_at(ix), Cycle::Sweep) {
+        return "·".to_string();
+    }
+    thinking_frame(ix, phase, tick)
+        .chars()
+        .next()
+        .unwrap_or('·')
+        .to_string()
+}
+
+/// True when the cycle is the color sweep, which replaces the waiting word
+/// instead of sitting in front of it.
+pub(crate) fn cycle_sweeps(ix: usize) -> bool {
+    matches!(cycle_at(ix), Cycle::Sweep)
+}
+
+/// Styled first line of the rolled cycle. `word` is the waiting label, used
+/// only by the sweep.
+pub(crate) fn thinking_spans(ix: usize, phase: u64, tick: u64, word: &str) -> Vec<Span<'static>> {
+    let tick = if reduced() { 0 } else { tick };
+    match cycle_at(ix) {
+        Cycle::Glyphs(frames) => {
+            let at = frame_index(frames.len(), phase, tick);
+            vec![Span::styled(frames[at], accent())]
+        }
+        Cycle::Spark => vec![Span::styled(spark(frame_index(8, phase, tick)), accent())],
+        Cycle::Wand => vec![Span::styled(wand(frame_index(8, phase, tick)), accent())],
+        Cycle::Fill => vec![Span::styled(fill(frame_index(16, phase, tick)), accent())],
+        Cycle::Heart => vec![Span::styled(heart(frame_index(6, phase, tick)), accent())],
+        Cycle::Breathe => vec![Span::styled("◆", breathe_style(tick.wrapping_add(phase)))],
+        Cycle::Chase => chase_spans(frame_index(4, phase, tick)),
+        Cycle::Scanner => vec![Span::styled(scanner(frame_index(8, phase, tick)), accent())],
+        Cycle::Needle => vec![Span::styled(needle(frame_index(12, phase, tick)), accent())],
+        Cycle::Sweep => {
+            let word = if word.is_empty() { "thinking" } else { word };
+            crate::skin::motion::shimmer(word, tick.wrapping_add(phase))
+        }
+        Cycle::Ring => braille_spans(&ring_points(frame_index(16, phase, tick)), 4, 0),
+        Cycle::Wave => wave_spans(tick.wrapping_add(phase), 0),
+        Cycle::Glider => braille_spans(&glider_points(life_gen(phase, tick)), 4, 0),
+    }
+}
+
+/// Second row of a two-row cycle. Empty for everything else.
+pub(crate) fn thinking_extra(ix: usize, phase: u64, tick: u64) -> Vec<Line<'static>> {
+    let tick = if reduced() { 0 } else { tick };
+    let spans = match cycle_at(ix) {
+        Cycle::Ring => braille_spans(&ring_points(frame_index(16, phase, tick)), 4, 4),
+        Cycle::Wave => wave_spans(tick.wrapping_add(phase), 2),
+        Cycle::Glider => braille_spans(&glider_points(life_gen(phase, tick)), 4, 4),
+        _ => return Vec::new(),
+    };
+    vec![Line::from(spans)]
+}
+
+/// Stable cycle for a dashboard row. Dealt from the original one-cell deck so
+/// a session keeps its animation and the row stays one cell.
 pub(crate) fn session_cycle(id: &str) -> usize {
     let mut h = 0xcbf29ce484222325u64;
     for b in id.bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x100000001b3);
     }
-    (h as usize) % THINKING.len()
+    (h as usize) % CORE
 }
 
 fn reduced() -> bool {
@@ -110,6 +222,159 @@ fn reduced() -> bool {
         std::env::var("WIZARD_REDUCED_MOTION").as_deref(),
         Ok("1") | Ok("true")
     )
+}
+
+/// Braille bits, left to right and top to bottom. A point outside the cell is
+/// left unset, so a circle can clip a corner without a special case.
+const BRAILLE_BIT: [u8; 8] = [0x01, 0x02, 0x04, 0x40, 0x08, 0x10, 0x20, 0x80];
+
+fn braille_cell(points: &[(i32, i32)], ox: i32, oy: i32) -> char {
+    let mut bits = 0u8;
+    for &(x, y) in points {
+        let dx = x - ox;
+        let dy = y - oy;
+        if (0..2).contains(&dx) && (0..4).contains(&dy) {
+            bits |= BRAILLE_BIT[(dy as usize) * 2 + dx as usize];
+        }
+    }
+    char::from_u32(0x2800 + u32::from(bits)).unwrap_or('⠀')
+}
+
+/// `cols` braille cells, reading `points` from row `row0`.
+fn braille_spans(points: &[(i32, i32)], cols: i32, row0: i32) -> Vec<Span<'static>> {
+    (0..cols)
+        .map(|col| Span::styled(braille_cell(points, col * 2, row0).to_string(), accent()))
+        .collect()
+}
+
+/// Eight sparks. Two of them are the same mark on purpose: that is the beat
+/// where the previous one has gone and the next has not arrived.
+fn spark(frame: usize) -> String {
+    const FRAMES: [&str; 8] = ["·", "✦", "·", "✧", "·", "✶", "·", "✹"];
+    FRAMES[frame % FRAMES.len()].to_string()
+}
+
+/// A two-cell wand. The tip is the only cell that changes.
+fn wand(frame: usize) -> String {
+    const TIPS: [&str; 8] = ["·", "∘", "○", "✺", "✹", "✺", "○", "∘"];
+    format!("╱{}", TIPS[frame % TIPS.len()])
+}
+
+/// A two-cell eighths bar, filling and then emptying.
+fn fill(frame: usize) -> String {
+    const LEFT: [&str; 9] = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█", "█"];
+    const RIGHT: [&str; 9] = [" ", " ", " ", " ", " ", " ", " ", "▏", "█"];
+    let n = frame % 16;
+    let (l, r) = if n < 9 { (n, 0) } else { (8, 16 - n) };
+    format!("{}{}", LEFT[l], RIGHT[r])
+}
+
+/// Two hearts trading weight. The space is the second cell, so the row does
+/// not jump when the mark changes width.
+fn heart(frame: usize) -> String {
+    const FRAMES: [&str; 6] = ["♡ ", "♥ ", "♡ ", "♥♡", "♡♥", " ♡"];
+    FRAMES[frame % FRAMES.len()].to_string()
+}
+
+/// One diamond, brightening and dimming. Truecolor blends toward the
+/// background; without it the glyph steps through dim, plain, and bold.
+fn breathe_style(tick: u64) -> Style {
+    let intensity = 0.5 * (1.0 + (tick as f32 * 0.35).sin());
+    if theme::active().depth() == theme::ColorDepth::TrueColor {
+        if let ratatui::style::Color::Rgb(r, g, b) = theme::color(Token::Accent) {
+            let (r, g, b) = crate::skin::blend::blend((r, g, b), (r / 4, g / 4, b / 4), intensity);
+            return Style::default().fg(ratatui::style::Color::Rgb(r, g, b));
+        }
+    }
+    if intensity < 0.35 {
+        dim()
+    } else if intensity < 0.7 {
+        accent()
+    } else {
+        accent().add_modifier(ratatui::style::Modifier::BOLD)
+    }
+}
+
+/// A three-cell chase: the lit block walks, the other two stay dim.
+fn chase_spans(frame: usize) -> Vec<Span<'static>> {
+    (0..3)
+        .map(|i| {
+            let on = i == frame % 3;
+            Span::styled("■", if on { accent() } else { dim() })
+        })
+        .collect()
+}
+
+/// A three-cell window on a sine. The middle cell is the brightest sample.
+fn scanner(frame: usize) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let at = |shift: usize| {
+        let n = ((frame + shift) as f32 * 0.7).sin().abs();
+        BARS[(n * 7.0).round() as usize]
+    };
+    format!("{}{}{}", at(0), at(2), at(4))
+}
+
+/// A one-cell needle. Twelve marks, so it does not repeat the four-frame line.
+fn needle(frame: usize) -> String {
+    const FRAMES: [&str; 12] = ["│", "╱", "─", "╲", "│", "╱", "─", "╲", "┼", "╳", "┼", "│"];
+    FRAMES[frame % FRAMES.len()].to_string()
+}
+
+/// A 4 by 4 ring, two braille rows. `frame` rotates which dots are lit.
+fn ring_points(frame: usize) -> Vec<(i32, i32)> {
+    const RING: [(i32, i32); 12] = [
+        (1, 0),
+        (2, 0),
+        (3, 0),
+        (4, 0),
+        (5, 1),
+        (6, 2),
+        (6, 3),
+        (5, 4),
+        (4, 5),
+        (3, 6),
+        (2, 6),
+        (1, 5),
+    ];
+    let n = frame % RING.len();
+    (0..4).map(|i| RING[(n + i * 3) % RING.len()]).collect()
+}
+
+/// Four half-block columns. `row` is 0 for the top pair, 2 for the bottom,
+/// so the two rows of the mark share one phase.
+fn wave_spans(tick: u64, row: i32) -> Vec<Span<'static>> {
+    const UPPER: [char; 8] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁'];
+    let mut spans = Vec::with_capacity(4);
+    for col in 0..4 {
+        let phase = tick as f32 * 0.45 + col as f32 * 0.8;
+        let height = 1.0 + phase.sin();
+        let top = height > 1.0;
+        let sample = if row == 0 { top } else { !top };
+        let level = ((height.fract()) * 7.0).round() as usize;
+        let ch = if sample { UPPER[7 - level] } else { ' ' };
+        spans.push(Span::styled(ch.to_string(), accent()));
+    }
+    spans
+}
+
+/// Conway's glider, 8 by 8, one generation per few ticks. The phase picks
+/// which generation the freeze lands on.
+fn life_gen(phase: u64, tick: u64) -> usize {
+    if reduced() {
+        return (phase as usize) % 4;
+    }
+    ((tick.wrapping_add(phase) / 3) as usize) % 4
+}
+
+fn glider_points(generation: usize) -> Vec<(i32, i32)> {
+    const GLIDER: [[(i32, i32); 5]; 4] = [
+        [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)],
+        [(0, 1), (2, 1), (1, 2), (2, 2), (1, 3)],
+        [(2, 1), (0, 2), (2, 2), (1, 3), (2, 3)],
+        [(1, 1), (2, 2), (3, 2), (1, 3), (2, 3)],
+    ];
+    GLIDER[generation % GLIDER.len()].to_vec()
 }
 
 /// `182000` → `182k`. Under a thousand the number is left whole.
@@ -412,19 +677,25 @@ test fold::c ... FAILED
     }
 
     #[test]
-    fn thinking_cycles_are_one_cell_and_not_the_braille_spinner() {
-        let braille = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        assert!(THINKING.len() >= 8);
-        for cycle in THINKING {
-            assert!(cycle.len() >= 2, "{cycle:?}");
-            assert_ne!(cycle[0], cycle[1]);
-            assert_ne!(*cycle, &braille[..], "the generic braille spinner");
-            for glyph in *cycle {
-                assert_eq!(glyph.chars().count(), 1, "{glyph}");
-                assert_eq!(unicode_width::UnicodeWidthStr::width(*glyph), 1, "{glyph}");
-            }
+    fn thinking_cycles_move_and_the_dashboard_stays_one_cell() {
+        assert!(CYCLES.len() > CORE);
+        assert_eq!(thinking_count(), CYCLES.len());
+        // The original deck is still the prefix, and each of those stays one
+        // cell, so a session row dealt from it cannot widen.
+        for ix in 0..CORE {
+            let frame = thinking_frame(ix, 0, 0);
+            assert_eq!(frame.chars().count(), 1, "{ix}: {frame}");
+            assert_eq!(unicode_width::UnicodeWidthStr::width(frame.as_str()), 1, "{frame}");
+            assert_ne!(thinking_frame(ix, 0, 0), thinking_frame(ix, 0, 1), "{ix}");
         }
-        assert_ne!(thinking_frame(0, 0, 0), thinking_frame(0, 0, 1));
+        // A cycle past the deck still moves, and a frozen tick repeats.
+        assert_ne!(thinking_frame(CORE, 0, 0), thinking_frame(CORE, 0, 1));
         assert_eq!(thinking_frame(0, 0, 0), thinking_frame(0, 0, 0));
+        // The two-row marks have a second line; the one-cell deck does not.
+        assert!(thinking_extra(CYCLES.len() - 1, 0, 1).len() == 1);
+        assert!(thinking_extra(0, 0, 1).is_empty());
+        // A dashboard deal stays inside the one-cell prefix.
+        assert!(session_cycle("session-a") < CORE);
+        assert!(session_cycle("session-b") < CORE);
     }
 }

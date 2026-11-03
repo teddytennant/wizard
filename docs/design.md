@@ -161,13 +161,18 @@ was not in the output.
 
 ## Indicators
 
-Each wait has its own glyph, in the dim accent, one cell or three. The tick
-is about 100ms.
+Each wait has its own glyph, in the dim accent. Most are one cell or three.
+The thinking row can be wider, and two of its cycles take a second line.
+The tick is about 100ms.
 
-- **Thinking, and the streaming tail.** One cell. The turn rolls a cycle
-  from a small set (moons, blocks, a bounce, a pulse, corners, and the
-  rest) and holds it until the next turn. The tail uses the same cycle.
-  It is not the braille spinner.
+- **Thinking.** The turn rolls a cycle and holds it until the next turn.
+  The deck is the old one-cell set (moons, blocks, a bounce, a pulse,
+  corners) plus the gallery: sparks, a wand, a fill, hearts, a breath, a
+  chase, a scanner, a needle, a color sweep through the waiting word, and
+  three two-row marks (a braille ring, a half-block wave, a glider). The
+  streaming tail and a dashboard row take one cell of the same cycle, so
+  neither widens a paragraph or a session row. Other house skins keep the
+  braille spinner.
 - **A tool or a shell command.** A thin line, `│╱─╲`.
 - **A subagent on the rail.** A pulsing dot, `● ◉ ○ ◉`, half speed.
 - **Waiting on a connect or a rebuild.** A dim ellipsis, `.  ` `.. ` `...`,

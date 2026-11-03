@@ -115,7 +115,7 @@ fn wizard_skin() -> bool {
 /// own cycle; other skins keep the skin's wheel.
 fn working_spinner(app: &App, session_id: &str) -> String {
     if wizard_skin() {
-        motion::thinking_frame(motion::session_cycle(session_id), 0, app.tick)
+        motion::thinking_cell(motion::session_cycle(session_id), 0, app.tick)
     } else {
         spinner_frame(app.tick).to_string()
     }
@@ -1084,12 +1084,12 @@ pub(super) fn transcript_text(
             .of(BlockKind::Assistant)
             .content_width(width as u16) as usize;
         let mut text = render_markdown_streaming(streaming, content_width);
-        // The same mark the thinking row uses, one cell, so a stream and a
-        // wait read as the same kind of motion. Wizard's is the cycle this
-        // turn rolled; the other house skins keep the braille.
+        // One cell of the same cycle the thinking row is showing, so a stream
+        // and a wait read as the same kind of motion without a two-row mark
+        // landing inside a paragraph. Other house skins keep the braille.
         let tail = if wizard_skin() {
             Span::styled(
-                motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick),
+                motion::thinking_cell(app.spinner_ix, app.spinner_phase, app.tick),
                 dim(),
             )
         } else if house_skin() {
@@ -1111,6 +1111,11 @@ pub(super) fn transcript_text(
             lines.push(Line::raw(""));
         }
         let mut spans = busy_row(app);
+        let extra = if wizard_skin() {
+            motion::thinking_extra(app.spinner_ix, app.spinner_phase, app.tick)
+        } else {
+            Vec::new()
+        };
         // A custom verb list does not say "thinking" on its own. The stock
         // row already names the activity, so this only adds the word then.
         if !app.config.ui.spinner_verbs.is_empty() {
@@ -1120,6 +1125,7 @@ pub(super) fn transcript_text(
             }
         }
         lines.push(Line::from(spans));
+        lines.extend(extra);
     }
 
     tags.resize(lines.len(), RowTag::Text);
@@ -1144,14 +1150,25 @@ fn tool_running(view: &TranscriptView) -> bool {
 /// `[ui] spinner_verbs` list still puts its word after the spinner; the stock
 /// look has none.
 pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
-    let mark = if wizard_skin() {
-        motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick)
+    let mut spans = if wizard_skin() {
+        motion::thinking_spans(app.spinner_ix, app.spinner_phase, app.tick, &waiting_on(app))
     } else if house_skin() {
-        motion::glyph(motion::Kind::Thinking, app.tick)
+        vec![Span::styled(
+            motion::glyph(motion::Kind::Thinking, app.tick),
+            accent(),
+        )]
     } else {
-        spinner_frame(app.tick).to_string()
+        vec![Span::styled(
+            spinner_frame(app.tick).to_string(),
+            accent(),
+        )]
     };
-    let mut spans = vec![Span::styled(mark, accent())];
+    // The color sweep already is the waiting word. A mark sits in front of it,
+    // and a custom verb still follows.
+    if motion::cycle_sweeps(app.spinner_ix) && wizard_skin() && app.config.ui.spinner_verbs.is_empty()
+    {
+        return spans;
+    }
     if !app.config.ui.spinner_verbs.is_empty() {
         spans.push(Span::styled(
             format!(" {}…", app.spinner_verb),

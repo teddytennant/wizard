@@ -2192,7 +2192,7 @@ fn a_streaming_reply_keeps_its_caret_and_the_composer() {
     let (rows, _) = screen_at(&app, 80, 24);
     let screen = rows.join("\n");
     assert!(screen.contains("The parser walks each token"), "{screen}");
-    let caret = motion::thinking_frame(app.spinner_ix, app.spinner_phase, app.tick);
+    let caret = motion::thinking_cell(app.spinner_ix, app.spinner_phase, app.tick);
     assert!(
         rows.iter()
             .any(|row| row.contains("The parser walks each token") && row.contains(&caret)),
