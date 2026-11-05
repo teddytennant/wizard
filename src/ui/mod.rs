@@ -1151,21 +1151,25 @@ fn tool_running(view: &TranscriptView) -> bool {
 /// look has none.
 pub(super) fn busy_row(app: &App) -> Vec<Span<'static>> {
     let mut spans = if wizard_skin() {
-        motion::thinking_spans(app.spinner_ix, app.spinner_phase, app.tick, &waiting_on(app))
+        motion::thinking_spans(
+            app.spinner_ix,
+            app.spinner_phase,
+            app.tick,
+            &waiting_on(app),
+        )
     } else if house_skin() {
         vec![Span::styled(
             motion::glyph(motion::Kind::Thinking, app.tick),
             accent(),
         )]
     } else {
-        vec![Span::styled(
-            spinner_frame(app.tick).to_string(),
-            accent(),
-        )]
+        vec![Span::styled(spinner_frame(app.tick).to_string(), accent())]
     };
     // The color sweep already is the waiting word. A mark sits in front of it,
     // and a custom verb still follows.
-    if motion::cycle_sweeps(app.spinner_ix) && wizard_skin() && app.config.ui.spinner_verbs.is_empty()
+    if motion::cycle_sweeps(app.spinner_ix)
+        && wizard_skin()
+        && app.config.ui.spinner_verbs.is_empty()
     {
         return spans;
     }
@@ -2831,10 +2835,8 @@ pub(super) fn draw_picker(frame: &mut Frame, app: &App) {
     // it is the one place that knows, so ask it instead of guessing.
     let body = regions(app, frame_area).body;
     let width = (body.width.saturating_sub(8)).clamp(24, 56);
-    let visible: Vec<&crate::app::PickerItem> = picker
-        .visible_items()
-        .map(|(_, item)| item)
-        .collect();
+    let visible: Vec<&crate::app::PickerItem> =
+        picker.visible_items().map(|(_, item)| item).collect();
     // Two rows for the border. One more so a full-height picker does not sit
     // flush against the transcript's edges.
     let max_rows = body.height.saturating_sub(3).max(1) as usize;

@@ -685,7 +685,11 @@ test fold::c ... FAILED
         for ix in 0..CORE {
             let frame = thinking_frame(ix, 0, 0);
             assert_eq!(frame.chars().count(), 1, "{ix}: {frame}");
-            assert_eq!(unicode_width::UnicodeWidthStr::width(frame.as_str()), 1, "{frame}");
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(frame.as_str()),
+                1,
+                "{frame}"
+            );
             assert_ne!(thinking_frame(ix, 0, 0), thinking_frame(ix, 0, 1), "{ix}");
         }
         // A cycle past the deck still moves, and a frozen tick repeats.

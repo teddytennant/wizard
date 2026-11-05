@@ -2457,10 +2457,8 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect) {
         return;
     };
     let width = body.width.saturating_sub(8).clamp(24, 72);
-    let visible: Vec<&crate::app::PickerItem> = picker
-        .visible_items()
-        .map(|(_, item)| item)
-        .collect();
+    let visible: Vec<&crate::app::PickerItem> =
+        picker.visible_items().map(|(_, item)| item).collect();
     // Title, blank, rows, blank, hint — plus the surface's own two rows.
     let max_rows = body.height.saturating_sub(7).max(1) as usize;
     let rows = visible.len().min(max_rows).max(1);

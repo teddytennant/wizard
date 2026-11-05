@@ -2869,12 +2869,18 @@ fn picker_model_jk_type_into_filter_not_navigate() {
     press(&mut app, KeyCode::Char('k'));
     let picker = app.picker.as_ref().expect("open");
     assert_eq!(picker.filter, "jk");
-    assert_eq!(picker.selected, 0, "typing resets selection to first visible");
+    assert_eq!(
+        picker.selected, 0,
+        "typing resets selection to first visible"
+    );
     // No row contains "jk", so the list is empty and Enter is a no-op.
     assert_eq!(picker.visible_items().count(), 0);
     let action = press(&mut app, KeyCode::Enter);
     assert!(action.is_none());
-    assert!(app.picker.is_some(), "empty filter result keeps picker open");
+    assert!(
+        app.picker.is_some(),
+        "empty filter result keeps picker open"
+    );
 }
 
 #[test]

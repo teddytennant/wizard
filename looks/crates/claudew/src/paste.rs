@@ -63,10 +63,7 @@ fn name_matches(file: &Path, pasted: &str) -> bool {
 /// reference it as `@path` and wizard attaches the real bytes.
 pub fn stage_file(src: &Path) -> Option<PathBuf> {
     let bytes = std::fs::read(src).ok()?;
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png");
     stage_bytes(&bytes, ext)
 }
 
@@ -79,7 +76,11 @@ pub fn stage_bytes(bytes: &[u8], ext: &str) -> Option<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let name = format!("paste-{ms}-{}.{}", std::process::id(), ext.trim_start_matches('.'));
+    let name = format!(
+        "paste-{ms}-{}.{}",
+        std::process::id(),
+        ext.trim_start_matches('.')
+    );
     let dest = dir.join(name);
     std::fs::write(&dest, bytes).ok()?;
     Some(dest)
@@ -126,9 +127,7 @@ pub fn chips_in_text(text: &str) -> String {
     while let Some(at) = rest.find('@') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
-        let end = after
-            .find(char::is_whitespace)
-            .unwrap_or(after.len());
+        let end = after.find(char::is_whitespace).unwrap_or(after.len());
         let token = &after[..end];
         if image_ext(Path::new(token)) {
             n += 1;
@@ -181,19 +180,13 @@ mod tests {
     #[test]
     fn prompt_keeps_the_path_for_wizard() {
         let p = PathBuf::from("/tmp/paste-1.png");
-        assert_eq!(
-            prompt_with_images("hi", &[p]),
-            "hi @/tmp/paste-1.png"
-        );
+        assert_eq!(prompt_with_images("hi", &[p]), "hi @/tmp/paste-1.png");
     }
 
     #[test]
     fn filename_without_extension_matches_the_file() {
         let file = PathBuf::from("/tmp/Screenshot 2026-11-03 at 11.33.05 AM.png");
-        assert!(name_matches(
-            &file,
-            "Screenshot 2026-11-03 at 11.33.05 AM"
-        ));
+        assert!(name_matches(&file, "Screenshot 2026-11-03 at 11.33.05 AM"));
         assert!(!name_matches(&file, "hello"));
     }
 

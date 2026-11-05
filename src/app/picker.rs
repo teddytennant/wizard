@@ -191,9 +191,7 @@ impl Picker {
     /// different hint than the Enter-to-select pickers.
     pub fn footer_hint(&self) -> &'static str {
         match self.kind {
-            PickerKind::Model => {
-                " type to filter · ↑↓ move · enter select · esc cancel "
-            }
+            PickerKind::Model => " type to filter · ↑↓ move · enter select · esc cancel ",
             PickerKind::ClaudeImport => " ↑↓ move · space toggles · enter runs · esc cancel ",
             PickerKind::FusionPanel | PickerKind::UltraLenses => {
                 " ↑↓ move · space toggles · enter saves · esc cancel "
