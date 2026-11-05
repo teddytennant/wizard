@@ -82,7 +82,7 @@ impl Pty {
                 &mut slave,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut ws,
+                &raw mut ws,
             )
         };
         assert_eq!(rc, 0, "openpty");
