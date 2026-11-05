@@ -164,12 +164,11 @@ fn clipboard_file_url() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 fn macos_clipboard_bytes() -> Option<Vec<u8>> {
     if let Some(path) = clipboard_file_url() {
-        if path.is_file() {
-            if let Ok(bytes) = std::fs::read(&path) {
-                if sniff_image_ext(&bytes).is_some() {
-                    return Some(bytes);
-                }
-            }
+        if path.is_file()
+            && let Ok(bytes) = std::fs::read(&path)
+            && sniff_image_ext(&bytes).is_some()
+        {
+            return Some(bytes);
         }
         // A file is on the clipboard. Its PNG representation is the icon, not a picture.
         return None;

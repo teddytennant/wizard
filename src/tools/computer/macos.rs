@@ -6,6 +6,7 @@
 //! Wizard, under System Settings → Privacy & Security:
 //! - **Accessibility** — lets `CGEvent` posts move the mouse and press keys.
 //! - **Screen Recording** — lets `screencapture` read the screen.
+//!
 //! Without them the OS silently drops the events / returns a blank capture.
 //! `wizard desktop-setup` prints the exact steps.
 //!

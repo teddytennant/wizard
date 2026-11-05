@@ -280,11 +280,11 @@ fn heart(frame: usize) -> String {
 /// background; without it the glyph steps through dim, plain, and bold.
 fn breathe_style(tick: u64) -> Style {
     let intensity = 0.5 * (1.0 + (tick as f32 * 0.35).sin());
-    if theme::active().depth() == theme::ColorDepth::TrueColor {
-        if let ratatui::style::Color::Rgb(r, g, b) = theme::color(Token::Accent) {
-            let (r, g, b) = crate::skin::blend::blend((r, g, b), (r / 4, g / 4, b / 4), intensity);
-            return Style::default().fg(ratatui::style::Color::Rgb(r, g, b));
-        }
+    if theme::active().depth() == theme::ColorDepth::TrueColor
+        && let ratatui::style::Color::Rgb(r, g, b) = theme::color(Token::Accent)
+    {
+        let (r, g, b) = crate::skin::blend::blend((r, g, b), (r / 4, g / 4, b / 4), intensity);
+        return Style::default().fg(ratatui::style::Color::Rgb(r, g, b));
     }
     if intensity < 0.35 {
         dim()

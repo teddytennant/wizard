@@ -17,7 +17,9 @@
 //! claude's status. Started as `openc --guard <bin> <args...>`.
 
 use std::os::fd::RawFd;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};

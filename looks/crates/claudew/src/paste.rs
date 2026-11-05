@@ -159,7 +159,7 @@ fn clipboard_image_file() -> Option<PathBuf> {
             return None;
         }
         let p = PathBuf::from(path);
-        return is_image_file(&p).then_some(p);
+        is_image_file(&p).then_some(p)
     }
     #[cfg(not(target_os = "macos"))]
     {

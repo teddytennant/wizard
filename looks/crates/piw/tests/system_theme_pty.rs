@@ -70,7 +70,7 @@ impl Pty {
     fn spawn(behaviour: Behaviour, args: &[&str]) -> Pty {
         let mut master = -1;
         let mut slave = -1;
-        let ws = libc::winsize {
+        let mut ws = libc::winsize {
             ws_row: 36,
             ws_col: 120,
             ws_xpixel: 0,
@@ -81,8 +81,8 @@ impl Pty {
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                &ws,
+                std::ptr::null_mut(),
+                &mut ws,
             )
         };
         assert_eq!(rc, 0, "openpty");
@@ -102,7 +102,7 @@ impl Pty {
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
-                libc::ioctl(0, libc::TIOCSCTTY, 0);
+                libc::ioctl(0, libc::TIOCSCTTY as _, 0);
                 Ok(())
             });
         }
