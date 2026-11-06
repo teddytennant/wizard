@@ -467,9 +467,12 @@ impl Session {
                     None,
                 )))
             }
-            // The text deltas carry a timestamp; the message that repeats them
-            // whole does not.
-            Some("assistant") if event.get("timestamp_ms").is_some() => {
+            // The text deltas carry a timestamp and nothing else. The message
+            // that repeats them whole has no timestamp at the end of a turn,
+            // and a timestamp plus a `model_call_id` before a tool call.
+            Some("assistant")
+                if event.get("timestamp_ms").is_some() && event.get("model_call_id").is_none() =>
+            {
                 let text = event["message"]["content"][0]["text"]
                     .as_str()
                     .unwrap_or_default();
@@ -742,7 +745,10 @@ mod tests {
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Plinth."}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"Plinth.","usage":{"inputTokens":2,"outputTokens":7,"cacheReadTokens":40,"cacheWriteTokens":717}}
 "#;
+    /// Before a tool call, the repeat carries a timestamp and a
+    /// `model_call_id` (cursor-agent 2026.11.05).
     const CALL_EVENTS: &str = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading."}]},"timestamp_ms":1}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading."}]},"model_call_id":"m-0","timestamp_ms":2}
 "#;
     const CALL: &str = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}"#;
 
