@@ -1,6 +1,6 @@
 pkgbase = wizard-bin
 	pkgdesc = One line. Your sovereign agent. Self-extending. Bring any model
-	pkgver = 2026.11.4
+	pkgver = 2026.11.5
 	pkgrel = 1
 	url = https://github.com/teddytennant/wizard
 	arch = x86_64
@@ -12,11 +12,11 @@ pkgbase = wizard-bin
 	conflicts = wizard
 	options = !debug
 	options = !strip
-	source = LICENSE-MIT-2026.11.4::https://github.com/teddytennant/wizard/raw/v2026.11.4/LICENSE-MIT
+	source = LICENSE-MIT-2026.11.5::https://github.com/teddytennant/wizard/raw/v2026.11.5/LICENSE-MIT
 	sha256sums = 74b073d5ef3b24eb791fccbded9fceffb34bc4dabc37fb0a0e2613fc6b705477
-	source_x86_64 = wizard-bin-2026.11.4-x86_64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v2026.11.4/wizard-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums_x86_64 = e12a70edb932b9e6ba2ae21163a9c6ae6559f7e1cbb264065393318dce807ce1
-	source_aarch64 = wizard-bin-2026.11.4-aarch64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v2026.11.4/wizard-aarch64-unknown-linux-gnu.tar.gz
-	sha256sums_aarch64 = c35cb719b6ac05c1cf557e363f714241478278a39b2b8fc196e1cc1bdc40f481
+	source_x86_64 = wizard-bin-2026.11.5-x86_64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v2026.11.5/wizard-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = a34bf5011028bcd1fd133b3a31f08623244e740f14a2fa4857fd9d47298b6d8d
+	source_aarch64 = wizard-bin-2026.11.5-aarch64.tar.gz::https://github.com/teddytennant/wizard/releases/download/v2026.11.5/wizard-aarch64-unknown-linux-gnu.tar.gz
+	sha256sums_aarch64 = 48c3de73c20dc65502db4aba01726767fd11df0a8d6a0eb1d09491702f547faf
 
 pkgname = wizard-bin
