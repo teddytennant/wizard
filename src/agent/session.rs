@@ -216,7 +216,7 @@ fn summarize(id: &str, path: &Path) -> Option<SessionSummary> {
     let mut marker_prompt: Option<String> = None;
     let mut first_user: Option<String> = None;
     let mut cwd: Option<String> = None;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
+    for line in lossy_lines(file).map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
         }
@@ -516,7 +516,7 @@ impl Session {
         let file = std::fs::File::open(&self.path)
             .with_context(|| format!("opening {}", self.path.display()))?;
         let mut entries = Vec::new();
-        for line in BufReader::new(file).lines() {
+        for line in lossy_lines(file) {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
@@ -537,7 +537,7 @@ impl Session {
         let file = std::fs::File::open(&self.path)
             .with_context(|| format!("opening {}", self.path.display()))?;
         let mut messages = Vec::new();
-        for line in BufReader::new(file).lines() {
+        for line in lossy_lines(file) {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
@@ -560,7 +560,7 @@ impl Session {
         let file = std::fs::File::open(&self.path)
             .with_context(|| format!("opening {}", self.path.display()))?;
         let mut messages = Vec::new();
-        for line in BufReader::new(file).lines() {
+        for line in lossy_lines(file) {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
@@ -594,7 +594,7 @@ impl Session {
         let file = std::fs::File::open(&self.path)
             .with_context(|| format!("opening {}", self.path.display()))?;
         let mut markers = Vec::new();
-        for line in BufReader::new(file).lines() {
+        for line in lossy_lines(file) {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
@@ -611,8 +611,9 @@ impl Session {
     /// in the marker sequence). Old-format files without markers are left
     /// unchanged. Returns true when the file was truncated.
     pub fn truncate_after(&self, turn_id: u64) -> Result<bool> {
-        let raw = std::fs::read_to_string(&self.path)
+        let bytes = std::fs::read(&self.path)
             .with_context(|| format!("reading {}", self.path.display()))?;
+        let raw = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = raw.lines().collect();
         let cut = lines.iter().position(|line| {
             matches!(
@@ -631,6 +632,18 @@ impl Session {
             .with_context(|| format!("rewriting {}", self.path.display()))?;
         Ok(true)
     }
+}
+
+/// The lines of `file`, with bytes that are not UTF-8 replaced rather than
+/// failing the read: a write torn through a multi-byte character leaves one
+/// such line, and it must cost that line, not the whole session.
+fn lossy_lines(file: std::fs::File) -> impl Iterator<Item = std::io::Result<String>> {
+    BufReader::new(file).split(b'\n').map(|line| {
+        line.map(|bytes| {
+            let line = String::from_utf8_lossy(&bytes);
+            line.strip_suffix('\r').unwrap_or(&line).to_string()
+        })
+    })
 }
 
 /// If `file` does not end in a newline, write one.
@@ -919,6 +932,26 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].text(), "first");
         assert_eq!(loaded[1].text(), "second");
+    }
+
+    #[test]
+    fn a_line_torn_inside_a_character_costs_only_that_line() {
+        let tmp = TempDir::new();
+        let session = Session::create(&tmp.0).unwrap();
+        session.append(&ChatMessage::user("first")).unwrap();
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(session.path())
+            .unwrap();
+        file.write_all(b"{\"timestamp\":\"2026-\xe2\x82").unwrap();
+        drop(file);
+        session.append(&ChatMessage::user("second")).unwrap();
+
+        let loaded = session.load_messages().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(session.load_history().unwrap().len(), 2);
+        assert_eq!(session.entries().unwrap().len(), 3);
     }
 
     #[test]
