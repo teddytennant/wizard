@@ -26,9 +26,9 @@ fn interval_seconds(word: &str) -> Option<u64> {
     let count: u64 = word[..word.len() - unit.len_utf8()].parse().ok()?;
     let seconds = match unit {
         's' => count,
-        'm' => count * 60,
-        'h' => count * 3600,
-        'd' => count * 86_400,
+        'm' => count.checked_mul(60)?,
+        'h' => count.checked_mul(3600)?,
+        'd' => count.checked_mul(86_400)?,
         _ => return None,
     };
     (seconds > 0).then_some(seconds)
@@ -214,6 +214,7 @@ mod tests {
         assert_eq!(interval_seconds("0m"), None);
         assert_eq!(interval_seconds("m"), None);
         assert_eq!(interval_seconds("check"), None);
+        assert_eq!(interval_seconds("99999999999999999d"), None);
     }
 
     #[test]
