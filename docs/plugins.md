@@ -361,7 +361,7 @@ them off an installed binary and marks the one it is.
 | `minimal` | `provider-anthropic`, `provider-openai`, `tool-git` | CI containers, second machines: one API key and git |
 | `pi` | `provider-llamacpp`, `provider-ollama`, `tool-git` | Raspberry Pi, small ARM: a local model, no account |
 | `server` | default minus `graph` and `mesh` | headless boxes: every provider and every remote surface, no P2P |
-| `default` | Cargo's `default` list — seventeen | everyone else, and what every release binary is |
+| `default` | Cargo's `default` list — twenty | everyone else, and what every release binary is |
 
 `src/plugins/profile.rs` is the table; the same four are restated in
 `install.sh` because that script is piped from a URL and has no checkout to
