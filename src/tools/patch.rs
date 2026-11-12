@@ -548,10 +548,20 @@ impl ApplyPatchTool {
                 };
                 match move_to {
                     Some(to) => {
-                        write(resolve_path(ctx, to), updated).await?;
-                        tokio::fs::remove_file(&path)
-                            .await
-                            .map_err(|err| format!("failed to remove {shown}: {err}"))?;
+                        let target = resolve_path(ctx, to);
+                        write(target.clone(), updated).await?;
+                        let same = matches!(
+                            (
+                                tokio::fs::canonicalize(&path).await,
+                                tokio::fs::canonicalize(&target).await
+                            ),
+                            (Ok(a), Ok(b)) if a == b
+                        );
+                        if !same {
+                            tokio::fs::remove_file(&path)
+                                .await
+                                .map_err(|err| format!("failed to remove {shown}: {err}"))?;
+                        }
                         Ok(format!("Moved {shown} to {to}: {count} (line {line})"))
                     }
                     None => {
@@ -815,6 +825,28 @@ mod tests {
         assert_eq!(out.content, "Moved b.txt to c.txt: 1 hunk (line 1)");
         assert_eq!(read("c.txt"), "1\ntwo\nthree\n");
         assert!(!dir.join("b.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn moving_a_file_onto_itself_keeps_it() {
+        let dir = std::env::temp_dir().join(format!("wizard-patch-self-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        let ctx = ToolContext::new(dir.clone());
+        let out = ApplyPatchTool
+            .execute(
+                json!({ "patch": "*** Update File: a.txt\n*** Move to: ./a.txt\n-one\n+1\n" }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "1\ntwo\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
