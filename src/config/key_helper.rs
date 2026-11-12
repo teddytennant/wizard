@@ -20,6 +20,11 @@ pub fn run_helper(command: &str, timeout: Duration) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        stdout.read_to_string(&mut out).ok().map(|_| out)
+    });
     let started = Instant::now();
     let status = loop {
         match child.try_wait().ok()? {
@@ -35,8 +40,7 @@ pub fn run_helper(command: &str, timeout: Duration) -> Option<String> {
     if !status.success() {
         return None;
     }
-    let mut out = String::new();
-    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let out = reader.join().ok()??;
     let key = out.trim();
     (!key.is_empty()).then(|| key.to_string())
 }
@@ -85,6 +89,15 @@ mod tests {
     fn a_failing_or_silent_helper_gives_no_key() {
         assert_eq!(run_helper("exit 3", Duration::from_secs(5)), None);
         assert_eq!(run_helper("true", Duration::from_secs(5)), None);
+    }
+
+    #[test]
+    fn a_helper_printing_more_than_a_pipe_buffer_still_answers() {
+        let key = run_helper(
+            "head -c 200000 /dev/zero | tr '\\0' a",
+            Duration::from_secs(5),
+        );
+        assert_eq!(key.map(|k| k.len()), Some(200_000));
     }
 
     #[test]
