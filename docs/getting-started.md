@@ -4,13 +4,13 @@ Wizard installs from one command and launches as a terminal UI agent. The defaul
 
 ## Install
 
-The one-liner is:
+On Linux and macOS alike, install with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
 ```
 
-Homebrew installs the same release tarball, pinned by sha256, on macOS and Linux:
+Wizard releases most nights, and a curl install keeps up with [`wizard update`](#updating), which checks the signature and swaps the binary in place. Homebrew is there if you want it; it installs the same release tarball, pinned by sha256, but then updates come through `brew upgrade wizard` instead:
 
 ```bash
 brew install teddytennant/tap/wizard

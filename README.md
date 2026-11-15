@@ -10,7 +10,7 @@ A 21 second cut. The [full two minutes](demo/wizard-3.5.mp4) has sound.
 curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
 ```
 
-Homebrew (`brew install teddytennant/tap/wizard`), Nix (`nix run github:teddytennant/wizard`), local models, Termux and building from source are in [Getting started](docs/getting-started.md#install).
+That's the install on macOS too. A release goes out most nights, and `wizard update` pulls it in place. Homebrew (`brew install teddytennant/tap/wizard`) works if you'd rather `brew upgrade`. Nix (`nix run github:teddytennant/wizard`), local models, Termux and building from source are in [Getting started](docs/getting-started.md#install).
 
 ## Faster where you wait
 
