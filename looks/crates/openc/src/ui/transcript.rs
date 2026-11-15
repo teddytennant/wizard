@@ -993,8 +993,7 @@ impl Transcript {
                 && !self.blocks[k].is_user()
                 && !self.blocks[k].is_open(detail)
         });
-        for k in start..end {
-            let b = &mut self.blocks[k];
+        for b in &mut self.blocks[start..end] {
             if b.foldable() && !b.is_user() {
                 b.open = Some(any_closed);
                 b.ver += 1;

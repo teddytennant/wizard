@@ -375,10 +375,10 @@ fn matching(d: &Doc, i: usize) -> Option<usize> {
     };
     let mut depth = 0usize;
     if forward {
-        for k in j + 1..d.len() {
-            if d.c[k] == open {
+        for (k, &ch) in d.c.iter().enumerate().skip(j + 1) {
+            if ch == open {
                 depth += 1;
-            } else if d.c[k] == other {
+            } else if ch == other {
                 if depth == 0 {
                     return Some(k);
                 }
@@ -386,10 +386,10 @@ fn matching(d: &Doc, i: usize) -> Option<usize> {
             }
         }
     } else {
-        for k in (0..j).rev() {
-            if d.c[k] == open {
+        for (k, &ch) in d.c[..j].iter().enumerate().rev() {
+            if ch == open {
                 depth += 1;
-            } else if d.c[k] == other {
+            } else if ch == other {
                 if depth == 0 {
                     return Some(k);
                 }
@@ -406,8 +406,8 @@ fn find_char(d: &Doc, from: usize, kind: char, ch: char, count: usize) -> Option
     let mut found = 0;
     match kind {
         'f' | 't' => {
-            for j in from + 1..end {
-                if d.c[j] == ch {
+            for (j, &cj) in d.c[..end].iter().enumerate().skip(from + 1) {
+                if cj == ch {
                     found += 1;
                     if found == count {
                         return Some(if kind == 't' { j - 1 } else { j });
@@ -505,10 +505,10 @@ fn text_object(d: &Doc, at: usize, inner: bool, ch: char) -> Option<(usize, usiz
             let start = start?;
             let mut depth = 0usize;
             let mut end = None;
-            for k in start + 1..d.len() {
-                if d.c[k] == open {
+            for (k, &ch) in d.c.iter().enumerate().skip(start + 1) {
+                if ch == open {
                     depth += 1;
-                } else if d.c[k] == close {
+                } else if ch == close {
                     if depth == 0 {
                         end = Some(k);
                         break;
@@ -1642,9 +1642,9 @@ impl VimState {
                 self.cmd = Cmd::Idle;
                 let (a, b) = self.span(d);
                 self.push_undo(d);
-                for k in a..b {
-                    if d.c[k] != '\n' {
-                        d.c[k] = c;
+                for slot in &mut d.c[a..b] {
+                    if *slot != '\n' {
+                        *slot = c;
                     }
                 }
                 d.cur = a;
@@ -1766,9 +1766,9 @@ impl VimState {
             '~' | 'u' | 'U' => {
                 let (a, b) = self.span(d);
                 self.push_undo(d);
-                for k in a..b {
-                    let ch = d.c[k];
-                    d.c[k] = match c {
+                for slot in &mut d.c[a..b] {
+                    let ch = *slot;
+                    *slot = match c {
                         'u' => ch.to_lowercase().next().unwrap_or(ch),
                         'U' => ch.to_uppercase().next().unwrap_or(ch),
                         _ => {

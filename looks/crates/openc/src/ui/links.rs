@@ -189,8 +189,8 @@ fn apply_with(buf: &mut Buffer, on: bool) {
             }
             // Cells a wide glyph covers belong to it; they carry the marker but are not
             // written, so only clear them.
-            for c in k + 1..(k + width).min(j) {
-                buf.content[c].underline_color = Color::Reset;
+            for cell in &mut buf.content[k + 1..(k + width).min(j)] {
+                cell.underline_color = Color::Reset;
             }
             k += width;
         }
