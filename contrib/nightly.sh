@@ -40,10 +40,11 @@ case "$conclusion" in
     ;;
 esac
 
-year="$(date -u +%Y)"
-month="$(date -u +%-m)"
-n="$(git tag --list "v$year.$month.*" | sed 's/.*\.//' | sort -n | tail -1)"
-version="$year.$month.$((${n:-0} + 1))"
+version="$(date -u +%Y.%-m.%-d)"
+if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+  echo "::error::v$version is already tagged, so today's release has to be cut by hand" >&2
+  exit 1
+fi
 
 sed -i -E "0,/^version = /s/^version = .*/version = \"$version\"/" Cargo.toml gui/Cargo.toml
 cargo update --workspace

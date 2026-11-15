@@ -2,7 +2,7 @@
 
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-Versions are `YEAR.MONTH.N`, where N counts the releases in that month: `2026.11.1` is the first release of November 2026, and `2026.12.1` is the first of December. The month is not zero-padded, because Cargo refuses `2026.01.1`. The number says when a release shipped and not what it broke, so breaking changes are called out here. Releases through 3.12.0 followed [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Versions are `YEAR.MONTH.DAY`, the UTC date the release shipped: `2026.11.15` went out on November 15, 2026. The month and day are not zero-padded, because Cargo refuses `2026.01.01`. Releases `2026.11.1` through `2026.11.5` numbered the month's releases instead of its days. The number says when a release shipped and not what it broke, so breaking changes are called out here. Releases through 3.12.0 followed [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are on their [GitHub release pages](https://github.com/teddytennant/wizard/releases).
 

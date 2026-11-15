@@ -1981,9 +1981,11 @@ mod tests {
         assert!(is_newer("v1.0.0", "v0.9.9"));
         assert!(!is_newer("v0.5.0", "0.5.0"));
         assert!(!is_newer("v0.4.9", "0.5.0"));
-        // The move from semver to YEAR.MONTH.N has to read as an update.
+        // The moves from semver to YEAR.MONTH.N and then YEAR.MONTH.DAY have
+        // to read as updates.
         assert!(is_newer("v2026.11.1", "3.12.0"));
-        assert!(is_newer("v2026.12.1", "2026.11.9"));
+        assert!(is_newer("v2026.11.15", "2026.11.5"));
+        assert!(is_newer("v2026.12.1", "2026.11.30"));
         // Unparseable versions degrade to "no update".
         assert!(!is_newer("latest", "0.5.0"));
         assert!(!is_newer("v0.5.1", "not-a-version"));
