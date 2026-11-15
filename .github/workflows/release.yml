@@ -833,9 +833,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # ort-sys 2.0.0-rc.13 finds target/ by counting up from OUT_DIR, which
+      # Rust 1.100's build-dir layout broke. rc.14 fixes that, but the
+      # parakeet-rs Zeron pins needs rc.13.
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - name: Locate the Windows SDK shader compiler
         run: |
           $fxc = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/fxc.exe" |
