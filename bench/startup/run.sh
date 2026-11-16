@@ -19,7 +19,7 @@
 #   DROP_CACHES=1     sync and drop the host page cache right before each
 #                     agent's container starts, so run 1 is a true cold
 #                     start (needs passwordless sudo)
-#   WIZARD_VERSION=v3.0.1   release tag install.sh downloads for the wizard image
+#   WIZARD_VERSION=vX       release tag install.sh downloads (default: latest)
 #   WIZARD_BINARY=/path     measure this binary instead of a release: it goes
 #                           into the same base image with the repo's loadout/
 #                           laid down the way install.sh does
@@ -86,8 +86,10 @@ build_wizard() {
         log "building wizard from $WIZARD_BINARY"
         docker build -q -t wizard-bench-wizard -f "$here/agents/wizard/Dockerfile.local" "$ctx"
     else
-        log "building wizard from release ${WIZARD_VERSION:-v3.0.1}"
-        docker build -q -t wizard-bench-wizard --build-arg "WIZARD_VERSION=${WIZARD_VERSION:-v3.0.1}" "$here/agents/wizard"
+        local tag=${WIZARD_VERSION:-$(curl -fsSL https://api.github.com/repos/teddytennant/wizard/releases/latest \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')}
+        log "building wizard from release $tag"
+        docker build -q -t wizard-bench-wizard --build-arg "WIZARD_VERSION=$tag" "$here/agents/wizard"
     fi
 }
 

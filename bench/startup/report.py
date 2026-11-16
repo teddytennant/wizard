@@ -39,6 +39,8 @@ def ms(x):
 
 
 def version(d):
+    if d["name"] == "wizard":
+        return "wizard"
     v = d.get("version_output") or []
     return v[0].strip() if v else ""
 

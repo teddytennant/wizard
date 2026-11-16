@@ -6,10 +6,7 @@ image (pinned by digest), installed the way its README says at a pinned version,
 and is started N times under a pty that answers terminal queries the way a
 kitty-graphics terminal would.
 
-The checked-in `results.md` is an older run: wizard 3.0.1, made before the
-phone-home rule, the pinned images, the load guard and the host record existed
-(its host section is empty and its pty left the kitty probe unanswered). It
-stands until 3.1 is measured on an idle host with `run.sh`.
+The checked-in `results.md` is the 2026-09-11 run on an idle host.
 
 ## Run
 
@@ -17,7 +14,7 @@ stands until 3.1 is measured on an idle host with `run.sh`.
     bench/startup/run.sh wizard codex # a subset, written to results-wizard-codex.md
     RUNS=20 bench/startup/run.sh
     WIZARD_BINARY=target/release/wizard bench/startup/run.sh wizard   # a NixOS build is re-pointed at the system loader
-    WIZARD_VERSION=v3.1.0 bench/startup/run.sh
+    WIZARD_VERSION=v2026.11.15 bench/startup/run.sh
 
 Needs Docker, bash, python3 and a network. `run.sh` refuses to measure when the
 1-minute load average is above nproc/4 or less than 8 GB of memory is available

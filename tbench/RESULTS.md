@@ -7,8 +7,8 @@ grant; see `wizard_agent.py` and `WIZARD_TB_BASE_URL`). Run 2026-09-11 on a
 
 | agent | model | resolved of 89 | note |
 | --- | --- | --- | --- |
-| Wizard 3.1.1 | grok-4.6 | 66 (74.2%) | benchmark sources blocked; nothing flagged by the scan |
-| Wizard 3.0.1 | grok-4.6 | 67 (75.3%) | five fetched-answer passes counted as failures |
+| Wizard | grok-4.6 | 66 (74.2%) | benchmark sources blocked; nothing flagged by the scan |
+| Wizard, earlier build | grok-4.6 | 67 (75.3%) | five fetched-answer passes counted as failures |
 | Terminus 2, same box | grok-4.6 | 69 (77.5%) | one fetched-answer pass counted as a failure |
 | Grok Build 1.0.24, same box | grok-4.6 | 69 (77.5%) | two fetched-answer passes counted as failures |
 
@@ -21,12 +21,12 @@ the 35 hardest tasks resolved 46.7% against 34.3% for the single trial on the
 same tasks; substituting the majority verdict into the table would read 72 of
 89, which is why a few points either way means little.
 
-The 3.1.1 run. Every public copy of the benchmark was blocked at the web
+The blocked run. Every public copy of the benchmark was blocked at the web
 tools, in the container's hosts file, and in the prompt, so no pass came from
 reading a task's own tests: the scan flags nothing. Web tool use fell from 164
 fetches and 170 searches across 35 trials to 31 and 16 across 5. Reading
 images now works and shows: the agent attached 97 images across 7 trials where
-3.0.1's 16 attempts all failed as decode errors, and chess-best-move,
+the earlier build's 16 attempts all failed as decode errors, and chess-best-move,
 install-windows-3.11 and gcode-to-text flipped to passes on it. Prompt tokens
 over comparable trials fell from 37.0M to 29.5M after old tool results started
 shrinking.

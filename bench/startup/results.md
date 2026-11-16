@@ -6,7 +6,7 @@ Rule for every agent: installed as its README says, default config, phone-home s
 
 | agent | version | command | install | bundle | warm start (median) | warm p90 | cold start | `--version` | RSS | PSS | peak RSS | CPU at 3 s |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| wizard | wizard 3.1 | `wizard` | 26 MB | 26 MB | 6 ms | 7 ms | 135 ms | 1 ms | 20 MB | 19 MB | 20 MB | 0 ms |
+| wizard | wizard | `wizard` | 26 MB | 26 MB | 6 ms | 7 ms | 135 ms | 1 ms | 20 MB | 19 MB | 20 MB | 0 ms |
 | Claude Code | 2.1.268 (Claude Code) | `claude` | 219 MB | 219 MB | 268 ms | 277 ms | 1035 ms | 8 ms | 241 MB | 240 MB | 256 MB | 600 ms |
 | Codex CLI | codex-cli 0.154.0 | `codex` | 553 MB | 339 MB | 34 ms | 36 ms | 511 ms | 33 ms | 179 MB | 178 MB | 179 MB | 140 ms |
 | OpenCode | 1.18.30 | `opencode` | 185 MB | 185 MB | 2847 ms | 2868 ms | 6230 ms | 506 ms | 786 MB | 785 MB | 961 MB | 6810 ms |
