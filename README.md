@@ -1,10 +1,10 @@
 # Wizard
 
-The fastest agent in your terminal. One Rust binary, any model, a desktop app, and a full harness that still finishes your task before the minimal ones do.
+The fastest agent in your terminal. One Rust binary, any model, a TUI that can look like the agent you already use, and a full harness that still finishes your task before the minimal ones do.
 
-[![Wizard 3.5: the desktop app building Conway's Game of Life, the diff, and the result running in a terminal](demo/wizard-3.5.webp)](demo/wizard-3.5.mp4)
+[![Wizard fixing a failing test, then the same conversation in the codex, grok, opencode, pi, jcode and claude looks](demo/wizard.webp)](demo/wizard.mp4)
 
-A 21 second cut. The [full two minutes](demo/wizard-3.5.mp4) has sound.
+Wizard fixes a failing test, then `/ui` switches the same conversation through the six other looks.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
@@ -19,18 +19,18 @@ pi is about as lean as an agent gets: four tools and a short prompt, which makes
 <!-- BENCH:pi -->
 | agent | passed | wall time per task | prompt tokens | output tokens | est. cost per task |
 |---|---:|---:|---:|---:|---:|
-| **wizard 3.5** | **16/16** | **262 s** | 522k | **12.2k** | $0.54 |
+| **wizard** | **16/16** | **262 s** | 522k | **12.2k** | $0.54 |
 | pi 0.87.1 | 16/16 | 460 s | **377k** | 21.6k | **$0.43** |
 <!-- /BENCH -->
 
-Wall time is what you feel. Wizard was 1.8x faster on average and up to 3x on a single task. pi sends fewer prompt tokens, but most of Wizard's input is cache reads at a quarter of the price and its output is the expensive part it writes less of, so 38% more prompt tokens came out 25% more money on average and less than pi on the two longest tasks. The 8 tasks come from a real project's history: a commit that adds failing tests, then the commit that makes them pass. Two tries each on Grok 4.6, graded on the original tests. Wizard's row predates 3.5 deferring MCP tools, so the shipped default sends less than it shows. [Harness engineering](docs/harness-engineering.md) has how the defaults were found and [Token profiles](docs/token-profiles.md) has `--token-profile min`, whose first request (1,724 tokens) is smaller than pi's (1,817).
+Wall time is what you feel. Wizard was 1.8x faster on average and up to 3x on a single task. pi sends fewer prompt tokens, but most of Wizard's input is cache reads at a quarter of the price and its output is the expensive part it writes less of, so 38% more prompt tokens came out 25% more money on average and less than pi on the two longest tasks. The 8 tasks come from a real project's history: a commit that adds failing tests, then the commit that makes them pass. Two tries each on Grok 4.6, graded on the original tests. Wizard's row was measured before MCP tools were deferred, so the shipped default sends less than it shows. [Harness engineering](docs/harness-engineering.md) has how the defaults were found and [Token profiles](docs/token-profiles.md) has `--token-profile min`, whose first request (1,724 tokens) is smaller than pi's (1,817).
 
 ## Faster to start
 
 <!-- BENCH:startup -->
 | agent | warm start | cold start | RSS at the prompt | install |
 |---|---:|---:|---:|---:|
-| wizard 3.1 | 6 ms | 135 ms | 20 MB | 26 MB |
+| wizard | 6 ms | 135 ms | 20 MB | 26 MB |
 | Codex CLI 0.154.0 | 34 ms | 511 ms | 179 MB | 553 MB |
 | Goose 1.50.0 | 54 ms | 414 ms | 72 MB | 315 MB |
 | Crush 0.93.1 | 80 ms | 445 ms | 81 MB | 96 MB |
@@ -40,6 +40,14 @@ Wall time is what you feel. Wizard was 1.8x faster on average and up to 3x on a 
 <!-- /BENCH -->
 
 Ten pty starts per agent in its own ubuntu:24.04 container, page cache dropped before the first. [How it was measured](bench/startup/results.md).
+
+## Seven looks
+
+`/ui` puts the TUI in another agent's chrome: Wizard's own, `codex`, `grok`, `opencode`, `pi`, `jcode` or `claude`. The conversation, the commands and the model stay Wizard's, so switching mid-task carries the session over. Each full look is its own small binary the installer puts next to `wizard`. [The interface](docs/usage.md#the-interface)
+
+## Coming from Claude Code
+
+Wizard reads what Claude Code left on disk: `CLAUDE.md`, skills, subagents, MCP servers in `~/.claude.json`, hooks and permission rules from Claude-format `settings.json`, and Claude-format plugins. Its tools also answer to Claude's names (`Read`, `Bash`, `Agent`, `TodoWrite`, ...), and `wizard resume --claude` continues a Claude Code conversation. [Claude Code parity](docs/claude-code-parity.md) lists every flag, command and setting with its status.
 
 ## Desktop app
 
@@ -54,7 +62,7 @@ On your phone, open **[wizard-android.apk](https://github.com/teddytennant/wizar
 <!-- BENCH:tbench -->
 | agent | model | resolved of 89 |
 |---|---|---:|
-| wizard 3.1.1 | Grok 4.6 | 66 (74.2%) |
+| wizard | Grok 4.6 | 66 (74.2%) |
 | Terminus 2, same box | Grok 4.6 | 69 (77.5%) |
 | Grok Build 1.0.24, same box | Grok 4.6 | 69 (77.5%) |
 | Terminus 2, public reference (Artificial Analysis, on e2b) | Grok 4.6 | 88.4% |
@@ -64,7 +72,7 @@ One trial per task with every public copy of the benchmark blocked. [Per-task re
 
 ## What else is in the box
 
-Any model (xAI, OpenAI and ChatGPT sign-in, Anthropic, Gemini, DeepSeek, OpenRouter, Ollama, llama.cpp, anything OpenAI-compatible). A TUI, headless `wizard -p`, and `--continuous` missions. `/fusion` and `/ultra` for panels of models. `/evolve` for skills, MCP servers, Lua tools and subagents that go live on `/reload`. MCP in both directions, ACP for Zed, Neovim and Emacs, a Telegram gateway, and plain-markdown memory. Every page is in [docs/README.md](docs/README.md).
+Any model (xAI, OpenAI and ChatGPT sign-in, Anthropic, a Claude subscription through Claude Code, Cursor, Gemini, DeepSeek, OpenRouter, Ollama, llama.cpp, anything OpenAI-compatible). Headless `wizard -p` and `--continuous` missions. `/fusion` and `/ultra` for panels of models. `/evolve` for skills, MCP servers, Lua tools and subagents that go live on `/reload`. MCP in both directions, ACP for Zed, Neovim and Emacs, a Telegram gateway, and plain-markdown memory. Every page is in [docs/README.md](docs/README.md).
 
 ## Limits
 
