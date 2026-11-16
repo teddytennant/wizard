@@ -41,9 +41,8 @@ categories = [
   "api-bindings",
 ]
 # What a `cargo package` tarball does not need. Everything here is media that
-# exists for the README and the GitHub social preview, led by `demo/demo.gif` at
-# 1.2 MB — over half the crate on its own, downloaded by every `cargo install`
-# and never opened by one.
+# exists for the README and the GitHub social preview, led by the demo video,
+# which every `cargo install` would download and none would open.
 #
 # Deliberately narrow, because one thing under `assets/` is compiled *into*
 # the binary and excluding it breaks the build rather than slimming it:
