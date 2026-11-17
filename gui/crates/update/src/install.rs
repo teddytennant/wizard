@@ -247,6 +247,12 @@ fn megabytes(bytes: u64) -> String {
 
 const LINUX_BINARY: &str = "wizard-gui";
 
+/// Written beside the binary by `wizard gui` when it unpacks the copy built
+/// into wizard (`src/desktop_app.rs`, `STAMP`). That copy is wizard's to
+/// replace: `wizard update` brings a new one and the next `wizard gui`
+/// unpacks it.
+const WIZARD_STAMP: &str = "wizard-gui.embedded";
+
 pub fn detect_install() -> InstallKind {
     let Ok(exe) = std::env::current_exe() else {
         return InstallKind::Manual {
@@ -290,6 +296,12 @@ fn manual(reason: impl Into<String>) -> InstallKind {
 }
 
 pub(crate) fn detect(exe: &Path, probe: &Probe<'_>) -> InstallKind {
+    if exe
+        .parent()
+        .is_some_and(|dir| dir.join(WIZARD_STAMP).is_file())
+    {
+        return manual("Wizard GUI came with wizard; `wizard update` updates both.");
+    }
     match probe.os {
         "macos" => detect_mac(exe, probe),
         "linux" => detect_linux(exe, probe),
@@ -900,6 +912,20 @@ mod tests {
             )
             .can_self_update()
         );
+    }
+
+    #[test]
+    fn a_copy_unpacked_by_wizard_is_left_to_wizard_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join(LINUX_BINARY);
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(dir.path().join(WIZARD_STAMP), "aaaa\n").unwrap();
+        for os in ["linux", "macos"] {
+            let InstallKind::Manual { reason } = detect(&exe, &probe(os, &always)) else {
+                panic!("{os}: an unpacked copy must not update itself");
+            };
+            assert!(reason.contains("wizard update"), "{reason}");
+        }
     }
 
     #[test]
