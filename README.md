@@ -4,8 +4,6 @@ The fastest agent in your terminal. One Rust binary, any model, a TUI that can l
 
 [![Wizard fixing a failing test, then the same conversation in the codex, grok, opencode, pi, jcode and claude looks](demo/wizard.webp)](demo/wizard.mp4)
 
-Wizard fixes a failing test, then `/ui` switches the same conversation through the six other looks.
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teddytennant/wizard/main/install.sh | bash
 ```
