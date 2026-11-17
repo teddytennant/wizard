@@ -103,7 +103,9 @@ The flake exposes `packages.default` (and `.wizard`), `apps.default`, `devShells
 
 ### The GUI
 
-The desktop app is Wizard GUI, built from [`gui/`](../gui/README.md) and attached to every release from 3.5.0 on as `wizard-gui-<version>-<platform>` (a Linux tarball, a macOS dmg, a Windows zip). `wizard gui` starts it once it is installed, and says where to download it when it is not. `--native` is still accepted and ignored.
+The desktop app is Wizard GUI, built from [`gui/`](../gui/README.md). The release binaries for Linux (glibc, x86_64 and aarch64) and Apple silicon carry it, and `wizard gui` unpacks it to `~/.wizard/gui/` on first use and starts it from your terminal, with no separate download. `wizard gui --path` prints where it went. Other builds start an installed copy: every release also attaches it as `wizard-gui-<version>-<platform>` (a Linux tarball, a macOS dmg, a Windows zip). `--native` is still accepted and ignored.
+
+To build the app into a wizard of your own, build the GUI (`cargo build --release -p zeron` in `gui/`) and point the wizard build at it: `WIZARD_GUI=gui/target/release/zeron cargo build --release`.
 
 The iced window that `wizard gui` used to open, and the `wizard-native` binary that carried it, were removed in 3.5.
 

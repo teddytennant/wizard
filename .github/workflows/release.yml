@@ -146,9 +146,15 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  # The targets Wizard GUI is built for carry it inside the wizard binary
+  # (`gui` in the matrix names the guibin-* artifact; build.rs, WIZARD_GUI),
+  # so `wizard gui` works with nothing else installed. That is why this waits
+  # on the GUI builds. It does not depend on them succeeding: a GUI build that
+  # breaks ships a wizard without the GUI and a warning, not no release.
   build:
     name: Build (${{ matrix.target }})
-    needs: [test]
+    needs: [test, gui-linux, gui-macos]
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
     strategy:
       # Don't cancel sibling targets when one fails: their artifacts still
       # upload, so re-running only the broken job completes the release
@@ -159,12 +165,14 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             native: true
+            gui: linux-x86_64
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
             native: true
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
             native: true
+            gui: linux-aarch64
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-22.04-arm
             native: true
@@ -180,6 +188,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-15
             native: true
+            gui: macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -217,6 +226,24 @@ jobs:
           done
           musl-gcc --version >/dev/null
           command -v musl-ar musl-strip
+
+      - name: Fetch the GUI to carry
+        if: matrix.gui
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: guibin-${{ matrix.gui }}
+          path: ${{ runner.temp }}/guibin
+
+      - name: Point the build at the GUI
+        if: matrix.gui
+        run: |
+          set -eu
+          if [ -f "$RUNNER_TEMP/guibin/zeron" ]; then
+            echo "WIZARD_GUI=$RUNNER_TEMP/guibin/zeron" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No Wizard GUI build for ${{ matrix.target }}; this wizard ships without it."
+          fi
 
       - name: Build (release)
         env:
@@ -348,6 +375,13 @@ jobs:
           for look in opencode pi grok jcode codex claude; do
             ./smoke/wizard-ui-$look --version | grep -F " ${version}"
           done
+          # The carried GUI unpacks to exactly the bytes it was built from.
+          # Not started: the Linux GUI is built on a newer glibc than this
+          # runner has.
+          if [ -n "${WIZARD_GUI:-}" ]; then
+            gui="$(WIZARD_HOME="$RUNNER_TEMP/gui-smoke" ./smoke/wizard gui --path)"
+            cmp "$gui" "$WIZARD_GUI"
+          fi
           rm -rf smoke
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -713,11 +747,11 @@ jobs:
   # Wizard GUI (gui/), the desktop app
   # ---------------------------------------------------------------------
   #
-  # Built from the same tag and attached to the same release, but kept off
-  # the wizard binary's path: none of these jobs is in `release`'s needs, and
-  # their artifacts are named gui-* so `release` never downloads them. A GUI
-  # build that breaks costs the GUI assets, not the release. They start after
-  # `version` so a mismatched tag builds nothing.
+  # Built from the same tag. Two outputs each: the installer (gui-*, attached
+  # to the release by gui-release, never downloaded by `release`) and the bare
+  # binary (guibin-*, which matches neither pattern) that `build` puts inside
+  # the wizard binary. A GUI build that breaks costs the GUI, not the
+  # release. They start after `version` so a mismatched tag builds nothing.
   #
   # No rust-cache here either, for the reason at the top of this file.
   gui-linux:
@@ -756,6 +790,11 @@ jobs:
         with:
           name: gui-linux-${{ matrix.arch }}
           path: gui/target/package/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: guibin-linux-${{ matrix.arch }}
+          path: gui/target/release/zeron
           if-no-files-found: error
 
   # Signing and notarization are optional. With no MACOS_CERT_P12 the app is
@@ -818,6 +857,24 @@ jobs:
         with:
           name: gui-macos-arm64
           path: gui/target/package/*.dmg
+          if-no-files-found: error
+      # The bare binary wizard carries. package-macos.sh signed its copy inside
+      # the bundle; this one gets the same signature on its own. wizard writes
+      # it to disk itself, so it never carries a quarantine flag, and run from
+      # a terminal it is under that terminal's permissions.
+      - name: Sign the bare binary
+        run: |
+          set -eu
+          if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+            codesign --entitlements dist/macos/Zeron.entitlements --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" target/release/zeron
+          else
+            codesign --force --entitlements dist/macos/Zeron.entitlements --sign - target/release/zeron
+          fi
+          codesign --verify --verbose target/release/zeron
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: guibin-macos-arm64
+          path: gui/target/release/zeron
           if-no-files-found: error
 
   gui-windows:

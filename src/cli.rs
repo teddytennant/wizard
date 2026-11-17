@@ -406,8 +406,12 @@ pub enum Command {
     // The absent text only. See the `Fleet` variant above for why.
     Acp,
 
-    /// Open Wizard GUI, the desktop app (a separate release asset)
+    /// Open Wizard GUI, the desktop app (built into release binaries)
     Gui {
+        /// Print where the app is, unpacking the copy built into this binary
+        /// first, instead of starting it.
+        #[arg(long)]
+        path: bool,
         /// Accepted and ignored. `wizard gui --native` was how you asked for
         /// the window back when a plain `wizard gui` served a browser page
         /// instead; the page is gone, so the flag now names the only thing

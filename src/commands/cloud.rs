@@ -372,21 +372,19 @@ fn remote_env(store: &Triggers) -> Result<String, String> {
 /* ---------------------------------------------------------------------- */
 
 fn desktop(args: &str, root: &Path) -> Result<String, String> {
-    let home = dirs::home_dir();
-    let path = std::env::var_os("PATH");
-    let found = crate::desktop_app::find(std::env::consts::OS, path.as_deref(), home.as_deref());
-    match (args, found) {
-        ("open", Some(_)) => {
+    match (args, crate::desktop_app::available()) {
+        ("open", true) => {
             crate::desktop_app::open(Some(root)).map_err(|e| format!("{e:#}"))?;
             Ok(format!("opened Wizard GUI in {}", root.display()))
         }
-        ("", Some(_)) => Ok(format!(
-            "Wizard GUI is installed. `/desktop open` (or `wizard gui`) opens it in {}. It is a separate app over the \
+        ("", true) => Ok(format!(
+            "Wizard GUI is available. `/desktop open` (or `wizard gui`) opens it in {}. It is a separate app over the \
              same agent: it starts its own session, so use /resume there to continue this one.",
             root.display()
         )),
-        (_, None) => Ok(format!(
-            "Wizard GUI, the desktop app, is not installed. Get it from {}. It is not a handoff of this session: \
+        (_, false) => Ok(format!(
+            "This wizard was built without Wizard GUI, the desktop app, and no installed copy was found. \
+             A release binary carries it; or get the app from {}. It is not a handoff of this session: \
              it starts its own, and /resume there continues this one.",
             crate::desktop_app::RELEASES
         )),

@@ -530,6 +530,12 @@ core-graphics = { version = "0.24", features = ["highsierra"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 
+# build.rs compresses the Wizard GUI binary named by `WIZARD_GUI` into
+# OUT_DIR and names it by digest. Both are already runtime dependencies.
+[build-dependencies]
+flate2 = "1"
+sha2 = "0.10"
+
 [profile.release]
 strip = true
 lto = true

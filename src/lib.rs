@@ -245,9 +245,12 @@ pub async fn run(mut cli: cli::Cli) -> Result<i32> {
         return llm::xai_oauth::print_access_token().await;
     }
 
-    // The desktop app is Wizard GUI, built from gui/ and shipped as its own
-    // release asset; this only starts it.
-    if let Some(cli::Command::Gui { native: _ }) = &cli.command {
+    // The desktop app is Wizard GUI, built from gui/ and carried inside
+    // release binaries; this unpacks it if needed and starts it.
+    if let Some(cli::Command::Gui { path, native: _ }) = &cli.command {
+        if *path {
+            return desktop_app::print_path().map(|()| 0);
+        }
         return desktop_app::open(cli.cwd.as_deref()).map(|()| 0);
     }
 

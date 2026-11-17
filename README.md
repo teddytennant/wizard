@@ -49,7 +49,7 @@ Wizard reads what Claude Code left on disk: `CLAUDE.md`, skills, subagents, MCP 
 
 ## Desktop app
 
-Wizard GUI runs Wizard, Pi and Claude Code side by side across your projects and on machines you reach over SSH. It can reuse a ChatGPT or Grok sign-in it finds on disk. Installers for Linux, macOS and Windows come with every [release](https://github.com/teddytennant/wizard/releases), and `wizard gui` opens it. It is a fork of [Zeron](https://github.com/zeronsh/zeron). [gui/README.md](gui/README.md)
+Wizard GUI runs Wizard, Pi and Claude Code side by side across your projects and on machines you reach over SSH. It can reuse a ChatGPT or Grok sign-in it finds on disk. `wizard gui` opens it: the release binaries for Linux and Apple silicon have it built in. Installers for Linux, macOS and Windows also come with every [release](https://github.com/teddytennant/wizard/releases). It is a fork of [Zeron](https://github.com/zeronsh/zeron). [gui/README.md](gui/README.md)
 
 ## Android
 

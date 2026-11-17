@@ -4,7 +4,7 @@ The desktop app for Wizard. It runs Wizard, Pi and Claude Code side by side acro
 
 Wizard GUI is a fork of [Zeron](https://github.com/zeronsh/zeron), the open-source agent controller built by the Zeron team ([zeron.sh](https://zeron.sh)). Nearly all of it is their work: the engine, sync, transcript, composer and gpui interface. Thank you to Zeron's creators. It stays under their MIT license (see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
-`wizard gui` opens this app once it is installed.
+`wizard gui` opens it. Release builds of wizard for Linux (x86_64, aarch64) and Apple silicon carry the app inside the binary, so there is nothing else to install.
 
 What the fork changes:
 
@@ -49,7 +49,9 @@ Dictation (the on-device Parakeet model) is separate and lives on the same setti
 
 ## Install
 
-Every Wizard release from 3.5.0 on carries the app:
+Run `wizard gui`. On Linux (glibc, x86_64 or aarch64) and Apple silicon the wizard release binary has the app built in: the first run after an install or `wizard update` unpacks it to `~/.wizard/gui/` and starts it from there. It runs as a program started from your terminal, so on macOS there is no disk image, no Gatekeeper prompt, and Screen Recording or Accessibility are whatever your terminal already has. `wizard gui --path` prints where it is, for a launcher entry or `wizard-gui daemon install`. That copy is updated by `wizard update`, not by itself.
+
+The installers are still attached to every release, for opening the app from Finder, the Dock or an app menu, and for builds of wizard without the app (`cargo install`, Nix, the musl and Intel Mac builds), where `wizard gui` opens an installed copy instead:
 
 - Linux: `wizard-gui-<version>-linux-<arch>.tar.gz`. Unpack it and run `./install.sh`, which installs it under `~/.local/share/wizard-gui`, links `wizard-gui` into `~/.local/bin` and adds a Wizard GUI desktop entry.
 - macOS (Apple silicon): `wizard-gui-<version>-macos-arm64.dmg`. It is not signed or notarized unless the release had signing credentials, so the first launch needs right click, Open. Drag `Wizard GUI.app` into Applications; `wizard gui` finds it there.
@@ -69,7 +71,7 @@ What can update itself:
 - Linux: an install from `install.sh`. One from an older `install.sh` (a plain file in `~/.local/bin`) moves to the new layout on its first update.
 - Windows: the unpacked portable zip.
 
-Anything else (a read-only `/Applications`, the app still inside the disk image, an AppImage, a Nix or system package, a source build) shows **Download** with the reason, and gets updated the way it was installed.
+The copy `wizard gui` unpacks is updated by `wizard update`. Anything else (a read-only `/Applications`, the app still inside the disk image, an AppImage, a Nix or system package, a source build) shows **Download** with the reason, and gets updated the way it was installed.
 
 `WIZARD_GUI_RELEASES_URL` points the updater at a mirror laid out like GitHub's releases (`latest/download/…`, `download/v<version>/…`). It has to be HTTPS, and the signature check does not change.
 
