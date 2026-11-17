@@ -234,7 +234,6 @@ impl LlmProvider for CursorProvider {
                 Session::open(cli, &request, &system, key).await?
             }
         };
-        session.seen = request.messages.len();
         session.said.clear();
 
         Ok(Box::pin(stream::try_unfold(
@@ -276,8 +275,6 @@ struct Session {
     child: Child,
     stderr: JoinHandle<String>,
     _workspace: tempfile::TempDir,
-    /// How many messages the request that produced the last reply held.
-    seen: usize,
     /// Tool calls the child is waiting on. Empty once its turn has ended.
     pending: HashMap<String, Call>,
     /// The text of the reply in progress, then of the last one given.
@@ -337,7 +334,6 @@ impl Session {
             child,
             stderr,
             _workspace: workspace,
-            seen: 0,
             pending: HashMap::new(),
             said: String::new(),
             used: Instant::now(),
@@ -350,25 +346,27 @@ impl Session {
         }
     }
 
-    /// The results of every call this session is waiting on, if `messages` is
-    /// its conversation one step on: the reply this session gave, then a
-    /// result for each call. Anything else the loop added rides along with
-    /// the last result, which is where the model reads it from.
+    /// The results of every call this session is waiting on, if `messages`
+    /// carries on from the reply this session gave: that reply, then a result
+    /// for each call. The reply is found as the last assistant turn, not by
+    /// counting messages, since the loop adds notes of its own that come and go
+    /// between requests (a sovereign run ends each one with a fresh one).
+    /// Anything else after the reply rides along with the last result, which
+    /// is where the model reads it from.
     fn continues(&self, messages: &[ChatMessage]) -> Option<Results> {
-        if self.bridge.expired() {
+        if self.bridge.expired() || self.pending.is_empty() {
             return None;
         }
-        let (reply, added) = messages.get(self.seen..)?.split_first()?;
+        let at = messages
+            .iter()
+            .rposition(|message| message.role == Role::Assistant)?;
+        let (reply, added) = (&messages[at], &messages[at + 1..]);
         let said: String = reply
             .content
             .iter()
             .filter_map(ContentBlock::as_text)
             .collect();
-        if self.pending.is_empty()
-            || reply.role != Role::Assistant
-            || said.trim() != self.said.trim()
-            || added.iter().any(|message| message.role == Role::Assistant)
-        {
+        if said.trim() != self.said.trim() {
             return None;
         }
 
@@ -1022,6 +1020,46 @@ mod tests {
             result["result"]["content"],
             json!([{"type": "text", "text": "plinth"}])
         );
+        assert_eq!(fake.read("starts").lines().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_note_the_loop_drops_between_requests_keeps_the_same_child() {
+        if std::process::Command::new("curl")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipped: the fake cursor-agent needs curl to reach the bridge");
+            return;
+        }
+        let fake = FakeCursor::signed_in();
+        fake.write("call-events", CALL_EVENTS);
+        fake.write("call", CALL);
+        fake.write("events", EVENTS);
+        let provider = provider(&fake);
+
+        let mut messages = vec![
+            ChatMessage::system("You are Wizard."),
+            ChatMessage::user("What is in a?"),
+        ];
+        let note = ChatMessage::user("[budget: 2h 59m left]");
+        let (_, last) = reply(&provider, &[messages.clone(), vec![note.clone()]].concat()).await;
+        let calls = last.message.expect("the tool call").take_tool_calls();
+
+        messages.push(ChatMessage::assistant_turn(
+            "Reading.",
+            Vec::new(),
+            calls.clone(),
+        ));
+        messages.push(ChatMessage::tool_result(
+            &calls[0].id,
+            "read_file",
+            "plinth",
+        ));
+        messages.push(note);
+        let (text, _) = reply(&provider, &messages).await;
+        assert_eq!(text, "Plinth.");
         assert_eq!(fake.read("starts").lines().count(), 1);
     }
 
