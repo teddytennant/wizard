@@ -73,6 +73,13 @@ ignore = [
     # both entries when plist ships against quick-xml >= 0.41.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39.4 DoS; no XML is ever parsed (plist's loaders are never called), and plist 1.9 pins quick-xml 0.39 so no lockfile bump reaches the fix" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.39.4 DoS; no XML is ever parsed (plist's loaders are never called), and plist 1.9 pins quick-xml 0.39 so no lockfile bump reaches the fix" },
+
+    # Reviewed 2026-11-19. chrono 0.4.45 marked unmaintained, no known defect
+    # and no patched release. wizard uses it directly (timestamps in about 50
+    # files, plus the gui workspace) and croner 3.0.1 requires it for the
+    # scheduler's cron parsing, so dropping it means porting both to jiff.
+    # Remove this entry when that port lands.
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 unmaintained, no known defect, no patch; used directly and by croner 3.0.1, the way off is a port to jiff" },
 ]
 
 [licenses]
