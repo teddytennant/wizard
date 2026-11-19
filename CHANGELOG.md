@@ -8,6 +8,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [2026.11.19] - 2026-11-19
+
 ### Changed
 
 - `wizard gui` works with nothing else installed. The release binaries for Linux (glibc, x86_64 and aarch64) and Apple silicon carry Wizard GUI inside them; the first run unpacks it to `~/.wizard/gui/` and starts it from the terminal, so on macOS there is no dmg and no separate permission prompts. `wizard update` updates both. `wizard gui --path` prints where the app is. The dmg and the other installers are still on every release.
