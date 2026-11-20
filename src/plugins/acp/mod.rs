@@ -13,8 +13,9 @@
 //! history reaches every Wizard conversation, from any surface, and a client
 //! that restarted this process picks the conversation up where it left off.
 //! Every session advertises `model`, `thought_level`, and `wizard_mode` config
-//! options, and `session/set_config_option` changes them for that session
-//! alone; see [`models`]. It also advertises the slash commands this surface
+//! options, plus `permission_mode` while permissions are on, and
+//! `session/set_config_option` changes them for that session alone; see
+//! [`models`]. It also advertises the slash commands this surface
 //! runs, and a prompt that is one is dispatched rather than sent to the model;
 //! see [`command`].
 //!
@@ -75,6 +76,7 @@ mod auth;
 mod command;
 mod models;
 
+use crate::permissions::PermissionMode;
 use models::{Catalog, Selection};
 
 /// Cap on a tool result's text streamed to the editor, so a huge file read or
@@ -451,7 +453,7 @@ async fn open_session(
     let session = Session::create_in(&sessions_dir, &cwd).map_err(internal)?;
     let session_id = session.id.clone();
     let unused_file = session.path().to_path_buf();
-    let selection = starting_selection(&state.config());
+    let mut selection = starting_selection(&state.config());
 
     let built = build_session_agent(state, &selection, &cwd, session.clone(), None).await;
     let (agent, cancel) = match built {
@@ -463,6 +465,7 @@ async fn open_session(
         }
     };
 
+    selection.permission = permission_of(&*agent.lock().await);
     let options = state.config_options(&selection).await;
     state.sessions.lock().await.insert(
         session_id.clone(),
@@ -522,8 +525,30 @@ async fn build_session_agent(
         agent.set_plan_mode(old.plan_mode());
         agent.set_omakase(old.omakase());
     }
+    // a model switch rebuilds the agent from the config, which would put back
+    // the permission mode the client had changed
+    if let Some(mode) = selection.permission {
+        apply_permission(&agent, mode);
+    }
     let cancel = agent.cancel_handle();
     Ok((Arc::new(Mutex::new(agent)), cancel))
+}
+
+/// The permission mode the agent's policy runs, `None` while permissions are
+/// off and nothing is checked.
+fn permission_of(agent: &Agent) -> Option<PermissionMode> {
+    let policy = agent.hooks().policy();
+    (!policy.is_inert()).then_some(policy.mode)
+}
+
+/// Switch the policy to `mode`. Picking `default` means Claude Code's
+/// `default` (ask before edits and commands), also when the session opted in
+/// with rules alone.
+fn apply_permission(agent: &Agent, mode: PermissionMode) {
+    let mut policy = agent.hooks().policy();
+    policy.mode = mode;
+    policy.claude_defaults = true;
+    agent.hooks().set_policy(policy);
 }
 
 /// `session/set_config_option`: switch this session's model, reasoning
@@ -583,6 +608,14 @@ async fn set_config_option(
             selection.mode = mode;
             agent.set_mode(mode);
         }
+        models::PERMISSION_OPTION => {
+            let mode = models::parse_permission(&value).ok_or_else(acp::Error::invalid_params)?;
+            if selection.permission.is_none() {
+                return Err(acp::Error::invalid_params().data("permissions are off"));
+            }
+            apply_permission(&agent, mode);
+            selection.permission = Some(mode);
+        }
         models::SEARCH_OPTION => {
             let backend = models::parse_search_backend(&value).ok_or_else(|| {
                 acp::Error::invalid_params().data(format!("unknown search backend {value}"))
@@ -636,9 +669,10 @@ async fn load_session(
     // reopens on the config's defaults, or on what the look before this one
     // ran: a model picked over ACP lasts as long as the connection, and the
     // client sets it again.
-    let selection = starting_selection(&state.config());
+    let mut selection = starting_selection(&state.config());
     let (agent, cancel) =
         build_session_agent(state, &selection, &args.cwd, session.clone(), None).await?;
+    selection.permission = permission_of(&*agent.lock().await);
     let options = state.config_options(&selection).await;
     state.sessions.lock().await.insert(
         id,

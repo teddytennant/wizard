@@ -4,6 +4,8 @@
 //! live run of both cell by cell.
 
 pub mod app;
+#[path = "../../../../src/fuse.rs"]
+pub mod fuse;
 #[path = "../../../../src/keybindings.rs"]
 pub mod keybindings;
 pub mod paste;

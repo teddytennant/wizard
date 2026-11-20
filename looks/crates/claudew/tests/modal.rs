@@ -194,7 +194,7 @@ fn the_permission_prompt_offers_auto_mode_and_picking_it_switches_mode() {
     sent.extend(hn.sent());
     assert!(
         sent.iter()
-            .any(|r| matches!(r, Request::SetMode(m) if m == "auto")),
+            .any(|r| matches!(r, Request::SetPermissionMode(m) if m == "auto")),
         "{sent:?}"
     );
 }

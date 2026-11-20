@@ -22,7 +22,8 @@ fn trust_line(root: &Path) -> &'static str {
 /// How a mode reads in the report.
 fn mode_note(mode: PermissionMode) -> &'static str {
     match mode {
-        PermissionMode::Default | PermissionMode::Auto => "no rule objects, every call runs",
+        PermissionMode::Default => "no rule objects, every call runs",
+        PermissionMode::Auto => "a model call judges each edit, command and web call",
         PermissionMode::AcceptEdits => "file edits run, other side effects need an allow rule",
         PermissionMode::Plan => "read-only until a plan is approved",
         PermissionMode::DontAsk => "only read-only calls and calls an allow rule names",

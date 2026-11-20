@@ -1,0 +1,1572 @@
+{
+ "reference": "claude 2.1.314 through tools/fake_anthropic.py, 300x50, fresh HOME",
+ "commands": [
+  {
+   "name": "config",
+   "description": "Open settings",
+   "aliases": [
+    "settings"
+   ]
+  },
+  {
+   "name": "mcp",
+   "description": "Manage MCP servers",
+   "aliases": []
+  },
+  {
+   "name": "output-style",
+   "description": "List output styles or switch to one",
+   "aliases": []
+  },
+  {
+   "name": "release-notes",
+   "description": "View release notes",
+   "aliases": []
+  },
+  {
+   "name": "dataviz",
+   "description": "Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".",
+   "aliases": [],
+   "menu": "Chart and dashboard design guidance"
+  },
+  {
+   "name": "deep-research",
+   "description": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
+   "aliases": []
+  },
+  {
+   "name": "update-config",
+   "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.",
+   "aliases": [],
+   "menu": "Change settings: hooks, permissions, environment variables"
+  },
+  {
+   "name": "code-review",
+   "description": "Review the current diff, or a PR number/branch/path target, for correctness bugs (plus reuse/simplification/efficiency cleanups where the model's recipe covers them) at the effort level given first, before any target (low|medium|high|xhigh|max: from few high-confidence findings to many, some uncertain); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply them to the working tree after the review. Pass --max-findings <n> to report up to n findings, or --max-findings all for every finding. The choice stays until you pass --max-findings default.",
+   "aliases": [
+    "review"
+   ],
+   "menu": "Review the current diff or a PR for bugs and cleanups"
+  },
+  {
+   "name": "batch",
+   "description": "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+   "aliases": [],
+   "menu": "Plan a large change; background agents each open a PR"
+  },
+  {
+   "name": "verify",
+   "description": "Verify that a code change actually does what it's supposed to by exercising it end-to-end and observing behavior — drive the affected flow, not just tests or typecheck. Run before committing nontrivial changes; bootstraps this repo's project verify skill if none exists yet. Don't invoke it on a diff that only touches tests, docs, or other code with no runtime surface to drive (a change to product source always has one) — there's nothing to observe.",
+   "aliases": [],
+   "menu": "Try your change and report if it works"
+  },
+  {
+   "name": "debug",
+   "description": "Enable debug logging for this session and help diagnose issues",
+   "aliases": [],
+   "menu": "Turn on debug logging and investigate problems"
+  },
+  {
+   "name": "fewer-permission-prompts",
+   "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+   "aliases": [],
+   "menu": "Pre-approve safe read-only commands based on your usage"
+  },
+  {
+   "name": "simplify",
+   "description": "Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.",
+   "aliases": [],
+   "menu": "Clean up the changed code without changing behavior"
+  },
+  {
+   "name": "doctor",
+   "description": "Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude doctor` terminal diagnostics cover — from local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent definitions, skills whose frontmatter fails to parse); find unused skills, MCP servers, and plugins versus their context cost and disable dead weight; deduplicate local CLAUDE.md files against checked-in ones; trim checked-in CLAUDE.md files by cutting content a session could derive from the codebase (directory layouts, tech-stack lists, architecture overviews) while keeping gotchas, rationale, and non-standard conventions; migrate always-loaded CLAUDE.md guidance into lazy skills and nested CLAUDE.md files; flag slow hooks and context-heavy extensions; check the installed version is current; make auto mode the default permission mode; and pre-approve frequently denied read-only commands. Use when the user asks for a doctor run, checkup, audit, tune-up, or cleanup of their Claude Code setup or configuration.",
+   "aliases": [
+    "checkup"
+   ],
+   "menu": "Health-check your setup and fix issues: installation, unused extensions, duplicated or bloated memory files, slow hooks, updates, permissions"
+  },
+  {
+   "name": "auto-mode-setup",
+   "description": "Teach auto mode about your environment, plus optional rule tweaks",
+   "aliases": []
+  },
+  {
+   "name": "loop",
+   "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.",
+   "aliases": [
+    "proactive"
+   ],
+   "menu": "Repeat a prompt or command on an interval (e.g. /loop 5m /foo)"
+  },
+  {
+   "name": "claude-api",
+   "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).",
+   "aliases": [],
+   "menu": "Build and debug apps that use the Claude API"
+  },
+  {
+   "name": "workflow-authoring",
+   "description": "Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.",
+   "aliases": [],
+   "menu": "Load the reference for writing Workflow tool scripts"
+  },
+  {
+   "name": "run",
+   "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).",
+   "aliases": [],
+   "menu": "Launch this project’s app to see your change working"
+  },
+  {
+   "name": "run-skill-generator",
+   "description": "Author or improve the run-<unit> skill - a per-project skill that tells agents how to build, launch, and drive this project's app. Use when the user asks to set up the project, get it running, write run instructions, or verify build/run steps work from a clean environment.",
+   "aliases": [],
+   "menu": "Create a skill that knows how to run this project’s app"
+  },
+  {
+   "name": "add-dir",
+   "description": "Add a new working directory",
+   "aliases": []
+  },
+  {
+   "name": "plugin-authoring",
+   "description": "Make a mod: a change to Claude's own interface or behaviour, such as a panel or pane that stays beside the chat and updates, a band, status line, toast, slash command, or hook on tool calls. Use to make, change or debug a mod or its hooks module.",
+   "aliases": [],
+   "menu": "Write a mod: a live pane, view or behaviour change in Claude Code"
+  },
+  {
+   "name": "autocompact",
+   "description": "Set how full the context gets before auto-summarizing",
+   "aliases": []
+  },
+  {
+   "name": "fork",
+   "description": "Copy this conversation into a new background session and keep working here",
+   "aliases": []
+  },
+  {
+   "name": "subtask",
+   "description": "Send a subagent off with your full context; its result comes back here",
+   "aliases": []
+  },
+  {
+   "name": "branch",
+   "description": "Create a branch of the current conversation at this point",
+   "aliases": []
+  },
+  {
+   "name": "btw",
+   "description": "Ask a quick side question without interrupting the main conversation",
+   "aliases": []
+  },
+  {
+   "name": "cd",
+   "description": "Move this session to a new working directory",
+   "aliases": []
+  },
+  {
+   "name": "clear",
+   "description": "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+   "aliases": [
+    "reset",
+    "new"
+   ]
+  },
+  {
+   "name": "color",
+   "description": "Set the prompt bar color for this session",
+   "aliases": []
+  },
+  {
+   "name": "compact",
+   "description": "Free up context by summarizing the conversation so far",
+   "aliases": []
+  },
+  {
+   "name": "context",
+   "description": "Visualize current context usage as a colored grid",
+   "aliases": []
+  },
+  {
+   "name": "copy",
+   "description": "Copy Claude's last response to clipboard (or /copy N for the Nth-latest)",
+   "aliases": []
+  },
+  {
+   "name": "background",
+   "description": "Send this session to the background and free the terminal",
+   "aliases": [
+    "bg"
+   ]
+  },
+  {
+   "name": "effort",
+   "description": "Set effort level for model usage",
+   "aliases": []
+  },
+  {
+   "name": "exit",
+   "description": "Exit the CLI",
+   "aliases": [
+    "quit"
+   ]
+  },
+  {
+   "name": "fast",
+   "description": "Toggle fast mode (Opus 5.5)",
+   "aliases": []
+  },
+  {
+   "name": "focus",
+   "description": "Toggle focus view: just your prompt, summary, and response",
+   "aliases": []
+  },
+  {
+   "name": "help",
+   "description": "Show help and available commands",
+   "aliases": []
+  },
+  {
+   "name": "ide",
+   "description": "Manage IDE integrations and show status",
+   "aliases": []
+  },
+  {
+   "name": "keybindings",
+   "description": "Open your keyboard shortcuts file",
+   "aliases": []
+  },
+  {
+   "name": "theme",
+   "description": "Change the theme",
+   "aliases": []
+  },
+  {
+   "name": "init",
+   "description": "Initialize a new CLAUDE.md file with codebase documentation",
+   "aliases": [],
+   "menu": "Initialize a new CLAUDE.md file with codebase documentation"
+  },
+  {
+   "name": "memory",
+   "description": "Edit CLAUDE.md files and memory settings",
+   "aliases": []
+  },
+  {
+   "name": "mobile",
+   "description": "Show QR code to download the Claude mobile app",
+   "aliases": [
+    "ios",
+    "android"
+   ]
+  },
+  {
+   "name": "model",
+   "description": "Set the AI model for Claude Code (currently Haiku 5.5)",
+   "aliases": []
+  },
+  {
+   "name": "permissions",
+   "description": "Manage allow and deny tool permission rules",
+   "aliases": [
+    "allowed-tools"
+   ]
+  },
+  {
+   "name": "plugin",
+   "description": "Manage Claude Code plugins",
+   "aliases": [
+    "plugins",
+    "marketplace"
+   ]
+  },
+  {
+   "name": "reload-plugins",
+   "description": "Activate pending plugin changes in the current session",
+   "aliases": []
+  },
+  {
+   "name": "reload-skills",
+   "description": "Pick up skills added or changed on disk during this session",
+   "aliases": []
+  },
+  {
+   "name": "rename",
+   "description": "Rename the current conversation",
+   "aliases": [
+    "name"
+   ]
+  },
+  {
+   "name": "status",
+   "description": "Show Claude Code status including version, model, account, API connectivity, and tool statuses",
+   "aliases": []
+  },
+  {
+   "name": "usage",
+   "description": "Show session cost, plan usage, and activity stats",
+   "aliases": [
+    "cost",
+    "stats"
+   ]
+  },
+  {
+   "name": "resume",
+   "description": "Resume a previous conversation",
+   "aliases": [
+    "continue"
+   ]
+  },
+  {
+   "name": "skills",
+   "description": "List available skills",
+   "aliases": []
+  },
+  {
+   "name": "statusline",
+   "description": "Set up Claude Code's status line UI",
+   "aliases": []
+  },
+  {
+   "name": "stickers",
+   "description": "Order Claude Code stickers",
+   "aliases": []
+  },
+  {
+   "name": "bug",
+   "description": "Report a bug or share your conversation",
+   "aliases": [
+    "share"
+   ]
+  },
+  {
+   "name": "tui",
+   "description": "Set the terminal UI renderer (default | fullscreen)",
+   "aliases": []
+  },
+  {
+   "name": "feedback",
+   "description": "Send feedback to Anthropic or report a bug",
+   "aliases": []
+  },
+  {
+   "name": "rewind",
+   "description": "Restore the code and/or conversation to a previous point",
+   "aliases": [
+    "checkpoint",
+    "undo"
+   ]
+  },
+  {
+   "name": "security-review",
+   "description": "Complete a security review of the pending changes on the current branch",
+   "aliases": [],
+   "menu": "Complete a security review of the pending changes on the current branch"
+  },
+  {
+   "name": "terminal-setup",
+   "description": "Install Shift+Enter key binding for newlines",
+   "aliases": []
+  },
+  {
+   "name": "scroll-speed",
+   "description": "Adjust mouse wheel scroll speed",
+   "aliases": []
+  },
+  {
+   "name": "insights",
+   "description": "Generate a report analyzing your Claude Code sessions",
+   "aliases": [],
+   "menu": "Generate a report analyzing your Claude Code sessions"
+  },
+  {
+   "name": "login",
+   "description": "Switch Anthropic accounts",
+   "aliases": []
+  },
+  {
+   "name": "recap",
+   "description": "Generate a one-line session recap now",
+   "aliases": []
+  },
+  {
+   "name": "plan",
+   "description": "Enable plan mode or view the current session plan",
+   "aliases": []
+  },
+  {
+   "name": "powerup",
+   "description": "Discover Claude Code features through quick interactive lessons",
+   "aliases": []
+  },
+  {
+   "name": "goal",
+   "description": "Set a goal Claude checks before stopping",
+   "aliases": []
+  },
+  {
+   "name": "hooks",
+   "description": "View hook configurations for tool events",
+   "aliases": []
+  },
+  {
+   "name": "export",
+   "description": "Export the current conversation to a file or clipboard",
+   "aliases": []
+  },
+  {
+   "name": "list-agents",
+   "description": "List subagents, teammates, and other Claude sessions you can message",
+   "aliases": [
+    "peers"
+   ]
+  },
+  {
+   "name": "logout",
+   "description": "Sign out from your Anthropic account",
+   "aliases": []
+  },
+  {
+   "name": "sandbox",
+   "description": "◯ sandbox disabled (⏎ to configure)",
+   "aliases": []
+  },
+  {
+   "name": "tasks",
+   "description": "View and manage everything running in the background",
+   "aliases": [
+    "bashes"
+   ]
+  },
+  {
+   "name": "diff",
+   "description": "Toggle the diff panel showing uncommitted changes",
+   "aliases": []
+  },
+  {
+   "name": "workflows",
+   "description": "Browse running and completed workflows",
+   "aliases": []
+  },
+  {
+   "name": "team-onboarding",
+   "description": "Help teammates ramp on Claude Code with a guide from your usage",
+   "aliases": [],
+   "menu": "Help teammates ramp on Claude Code with a guide from your usage"
+  },
+  {
+   "name": "radio",
+   "description": "Listen to Claude FM lo-fi radio",
+   "aliases": []
+  }
+ ],
+ "ranks": {
+  "mo": [
+   "/model",
+   "/mobile",
+   "/auto-mode-setup",
+   "/memory",
+   "/update-config",
+   "/code-review",
+   "/plugin-authoring",
+   "/doctor",
+   "/loop",
+   "/claude-api",
+   "/cd",
+   "/effort",
+   "/fast",
+   "/status",
+   "/scroll-speed",
+   "/plan"
+  ],
+  "hel": [
+   "/help",
+   "/debug",
+   "/team-onboarding"
+  ],
+  "cl": [
+   "/clear",
+   "/claude-api",
+   "/doctor",
+   "/copy",
+   "/fewer-permission-prompts",
+   "/plugin-authoring",
+   "/init",
+   "/memory",
+   "/deep-research",
+   "/update-config",
+   "/code-review",
+   "/simplify",
+   "/run",
+   "/run-skill-generator",
+   "/exit",
+   "/mobile",
+   "/model",
+   "/plugin",
+   "/status",
+   "/statusline",
+   "/stickers",
+   "/insights",
+   "/powerup",
+   "/goal",
+   "/export",
+   "/list-agents",
+   "/team-onboarding",
+   "/radio"
+  ],
+  "co": [
+   "/copy",
+   "/color",
+   "/config",
+   "/compact",
+   "/context",
+   "/code-review",
+   "/usage (cost)",
+   "/resume (continue)",
+   "/update-config",
+   "/autocompact",
+   "/doctor",
+   "/dataviz",
+   "/claude-api",
+   "/verify",
+   "/simplify",
+   "/run",
+   "/fork",
+   "/subtask",
+   "/status",
+   "/statusline",
+   "/rewind",
+   "/fewer-permission-prompts",
+   "/loop",
+   "/plugin-authoring",
+   "/branch",
+   "/btw",
+   "/clear",
+   "/help",
+   "/init",
+   "/mobile",
+   "/model",
+   "/plugin",
+   "/rename",
+   "/stickers",
+   "/bug",
+   "/security-review",
+   "/insights",
+   "/powerup",
+   "/hooks",
+   "/export",
+   "/sandbox",
+   "/workflows",
+   "/team-onboarding"
+  ],
+  "pl": [
+   "/plan",
+   "/plugin (plugins)",
+   "/plugin-authoring",
+   "/reload-plugins",
+   "/simplify",
+   "/dataviz",
+   "/code-review",
+   "/batch",
+   "/doctor",
+   "/auto-mode-setup",
+   "/usage"
+  ],
+  "re": [
+   "/recap",
+   "/rename",
+   "/resume",
+   "/rewind",
+   "/release-notes",
+   "/reload-skills",
+   "/reload-plugins",
+   "/clear (reset)",
+   "/code-review (review)",
+   "/deep-research",
+   "/security-review",
+   "/bug",
+   "/dataviz",
+   "/claude-api",
+   "/fewer-permission-prompts",
+   "/verify",
+   "/simplify",
+   "/doctor",
+   "/workflow-authoring",
+   "/update-config",
+   "/batch",
+   "/loop",
+   "/run",
+   "/subtask",
+   "/copy",
+   "/focus",
+   "/tui",
+   "/feedback",
+   "/insights"
+  ],
+  "he": [
+   "/help",
+   "/theme",
+   "/doctor",
+   "/rewind",
+   "/tasks",
+   "/dataviz",
+   "/debug",
+   "/fork",
+   "/subtask",
+   "/team-onboarding"
+  ],
+  "mod": [
+   "/model",
+   "/auto-mode-setup",
+   "/code-review",
+   "/plugin-authoring",
+   "/update-config",
+   "/doctor",
+   "/loop",
+   "/claude-api",
+   "/effort",
+   "/fast",
+   "/status",
+   "/plan"
+  ],
+  "mem": [
+   "/memory",
+   "/update-config",
+   "/claude-api"
+  ],
+  "perm": [
+   "/permissions",
+   "/fewer-permission-prompts",
+   "/terminal-setup",
+   "/update-config",
+   "/doctor"
+  ],
+  "ex": [
+   "/exit",
+   "/export",
+   "/context",
+   "/update-config",
+   "/verify",
+   "/batch",
+   "/doctor",
+   "/claude-api",
+   "/workflow-authoring"
+  ],
+  "sta": [
+   "/status",
+   "/statusline",
+   "/usage (stats)",
+   "/doctor",
+   "/plugin-authoring",
+   "/clear",
+   "/dataviz",
+   "/code-review",
+   "/run",
+   "/ide"
+  ],
+  "doc": [
+   "/doctor",
+   "/dataviz",
+   "/verify",
+   "/init"
+  ],
+  "usa": [
+   "/usage",
+   "/claude-api",
+   "/context",
+   "/effort",
+   "/team-onboarding"
+  ],
+  "i": [
+   "/ide",
+   "/init",
+   "/insights",
+   "/mobile (ios)",
+   "/list-agents",
+   "/plugin-authoring",
+   "/security-review",
+   "/exit",
+   "/code-review",
+   "/add-dir",
+   "/simplify",
+   "/diff",
+   "/rewind",
+   "/config",
+   "/plugin",
+   "/terminal-setup",
+   "/run-skill-generator",
+   "/claude-api",
+   "/reload-skills",
+   "/skills",
+   "/stickers",
+   "/tui",
+   "/fewer-permission-prompts",
+   "/verify",
+   "/login",
+   "/radio",
+   "/update-config",
+   "/reload-plugins",
+   "/keybindings",
+   "/permissions",
+   "/team-onboarding",
+   "/workflow-authoring",
+   "/dataviz",
+   "/statusline",
+   "/resume",
+   "/loop",
+   "/doctor",
+   "/batch",
+   "/debug",
+   "/run",
+   "/fork",
+   "/subtask",
+   "/btw",
+   "/status",
+   "/powerup",
+   "/tasks"
+  ],
+  "a": [
+   "/add-dir",
+   "/autocompact",
+   "/auto-mode-setup",
+   "/mobile (android)",
+   "/permissions (allowed-tools)",
+   "/claude-api",
+   "/team-onboarding",
+   "/tasks",
+   "/list-agents",
+   "/usage",
+   "/plugin-authoring",
+   "/rename",
+   "/workflow-authoring",
+   "/update-config",
+   "/dataviz",
+   "/batch",
+   "/background",
+   "/fast",
+   "/sandbox",
+   "/radio",
+   "/release-notes",
+   "/reload-plugins",
+   "/reload-skills",
+   "/terminal-setup",
+   "/branch",
+   "/status",
+   "/statusline",
+   "/plan",
+   "/goal",
+   "/deep-research",
+   "/clear",
+   "/recap",
+   "/subtask",
+   "/compact",
+   "/run-skill-generator",
+   "/feedback",
+   "/plugin",
+   "/bug",
+   "/loop",
+   "/doctor",
+   "/code-review",
+   "/verify",
+   "/run",
+   "/fewer-permission-prompts",
+   "/simplify",
+   "/rewind",
+   "/fork",
+   "/btw",
+   "/context",
+   "/help",
+   "/insights",
+   "/login",
+   "/logout",
+   "/debug",
+   "/cd",
+   "/focus",
+   "/ide",
+   "/init",
+   "/memory",
+   "/model",
+   "/resume",
+   "/skills",
+   "/security-review",
+   "/scroll-speed",
+   "/export",
+   "/workflows"
+  ],
+  "e": [
+   "/exit",
+   "/effort",
+   "/export",
+   "/code-review",
+   "/deep-research",
+   "/fewer-permission-prompts",
+   "/security-review",
+   "/terminal-setup",
+   "/release-notes",
+   "/clear",
+   "/reload-plugins",
+   "/reload-skills",
+   "/team-onboarding",
+   "/rewind",
+   "/list-agents",
+   "/rename",
+   "/permissions",
+   "/auto-mode-setup",
+   "/resume",
+   "/verify",
+   "/debug",
+   "/help",
+   "/keybindings",
+   "/memory",
+   "/feedback",
+   "/recap",
+   "/update-config",
+   "/claude-api",
+   "/run-skill-generator",
+   "/scroll-speed",
+   "/ide",
+   "/theme",
+   "/model",
+   "/powerup",
+   "/output-style",
+   "/context",
+   "/usage",
+   "/mobile",
+   "/stickers",
+   "/statusline",
+   "/config",
+   "/doctor",
+   "/plugin",
+   "/bug",
+   "/tasks",
+   "/loop",
+   "/batch",
+   "/dataviz",
+   "/simplify",
+   "/workflow-authoring",
+   "/run",
+   "/plan",
+   "/hooks"
+  ],
+  "r": [
+   "/run",
+   "/recap",
+   "/radio",
+   "/rename",
+   "/resume",
+   "/rewind",
+   "/release-notes",
+   "/reload-skills",
+   "/reload-plugins",
+   "/run-skill-generator",
+   "/clear (reset)",
+   "/code-review (review)",
+   "/fewer-permission-prompts",
+   "/security-review",
+   "/workflow-authoring",
+   "/deep-research",
+   "/terminal-setup",
+   "/scroll-speed",
+   "/branch",
+   "/add-dir",
+   "/verify",
+   "/fork",
+   "/permissions",
+   "/workflows",
+   "/team-onboarding",
+   "/plugin-authoring",
+   "/color",
+   "/effort",
+   "/memory",
+   "/powerup",
+   "/export",
+   "/doctor",
+   "/background",
+   "/stickers",
+   "/loop",
+   "/plugin",
+   "/mobile",
+   "/bug",
+   "/list-agents",
+   "/dataviz",
+   "/claude-api",
+   "/simplify",
+   "/update-config",
+   "/batch",
+   "/auto-mode-setup",
+   "/subtask",
+   "/copy",
+   "/focus",
+   "/tui",
+   "/feedback",
+   "/insights",
+   "/tasks"
+  ],
+  "t": [
+   "/tui",
+   "/theme",
+   "/tasks",
+   "/terminal-setup",
+   "/team-onboarding",
+   "/output-style",
+   "/auto-mode-setup",
+   "/list-agents",
+   "/exit",
+   "/btw",
+   "/status",
+   "/statusline",
+   "/stickers",
+   "/update-config",
+   "/plugin-authoring",
+   "/security-review",
+   "/dataviz",
+   "/batch",
+   "/autocompact",
+   "/release-notes",
+   "/workflow-authoring",
+   "/doctor",
+   "/subtask",
+   "/context",
+   "/fast",
+   "/init",
+   "/usage",
+   "/effort",
+   "/export",
+   "/logout",
+   "/run-skill-generator",
+   "/compact",
+   "/insights",
+   "/fewer-permission-prompts",
+   "/config",
+   "/resume",
+   "/clear",
+   "/loop",
+   "/plugin",
+   "/permissions",
+   "/rewind",
+   "/verify",
+   "/claude-api",
+   "/run",
+   "/code-review",
+   "/background",
+   "/simplify",
+   "/branch",
+   "/cd",
+   "/color",
+   "/copy",
+   "/mobile",
+   "/diff",
+   "/debug",
+   "/fork",
+   "/focus",
+   "/model",
+   "/reload-plugins",
+   "/reload-skills",
+   "/rename",
+   "/feedback",
+   "/plan",
+   "/powerup",
+   "/hooks",
+   "/sandbox",
+   "/radio"
+  ],
+  "x": [
+   "/exit",
+   "/export",
+   "/context",
+   "/sandbox",
+   "/update-config",
+   "/code-review"
+  ],
+  "z": [
+   "/dataviz"
+  ],
+  "mcp": [
+   "/mcp",
+   "/fewer-permission-prompts",
+   "/doctor",
+   "/claude-api"
+  ],
+  "con": [
+   "/config",
+   "/context",
+   "/resume (continue)",
+   "/update-config",
+   "/doctor",
+   "/dataviz",
+   "/compact",
+   "/code-review",
+   "/claude-api",
+   "/run",
+   "/autocompact",
+   "/fork",
+   "/subtask",
+   "/branch",
+   "/btw",
+   "/clear",
+   "/rename",
+   "/status",
+   "/bug",
+   "/rewind",
+   "/hooks",
+   "/export",
+   "/sandbox"
+  ],
+  "comp": [
+   "/compact",
+   "/autocompact",
+   "/copy",
+   "/fewer-permission-prompts",
+   "/claude-api",
+   "/security-review",
+   "/workflows"
+  ],
+  "cle": [
+   "/clear",
+   "/code-review",
+   "/simplify",
+   "/doctor",
+   "/run-skill-generator"
+  ],
+  "res": [
+   "/resume",
+   "/clear (reset)",
+   "/deep-research",
+   "/batch",
+   "/workflow-authoring",
+   "/subtask",
+   "/copy",
+   "/focus",
+   "/rewind"
+  ],
+  "rew": [
+   "/rewind",
+   "/claude-api"
+  ],
+  "rwd": [],
+  "plug": [
+   "/plugin (plugins)",
+   "/plugin-authoring",
+   "/reload-plugins",
+   "/doctor"
+  ],
+  "pln": [],
+  "hlp": [],
+  "exi": [
+   "/exit",
+   "/verify"
+  ],
+  "qui": [
+   "/exit (quit)",
+   "/btw",
+   "/powerup"
+  ],
+  "sett": [
+   "/config (settings)",
+   "/auto-mode-setup",
+   "/terminal-setup",
+   "/clear",
+   "/update-config",
+   "/fewer-permission-prompts",
+   "/doctor",
+   "/memory"
+  ],
+  "set": [
+   "/config (settings)",
+   "/terminal-setup",
+   "/auto-mode-setup",
+   "/clear",
+   "/update-config",
+   "/doctor",
+   "/fewer-permission-prompts",
+   "/run-skill-generator",
+   "/autocompact",
+   "/color",
+   "/effort",
+   "/memory",
+   "/model",
+   "/statusline",
+   "/tui",
+   "/goal"
+  ],
+  "cost": [
+   "/usage (cost)",
+   "/context",
+   "/resume",
+   "/doctor"
+  ],
+  "stat": [
+   "/status",
+   "/statusline",
+   "/usage (stats)",
+   "/dataviz",
+   "/plugin-authoring",
+   "/ide"
+  ],
+  "tas": [
+   "/tasks",
+   "/subtask",
+   "/claude-api"
+  ],
+  "ba": [
+   "/batch",
+   "/background",
+   "/tasks (bashes)",
+   "/feedback",
+   "/fewer-permission-prompts",
+   "/run",
+   "/plugin-authoring",
+   "/fork",
+   "/subtask",
+   "/color"
+  ],
+  "bug": [
+   "/bug",
+   "/debug",
+   "/code-review",
+   "/simplify",
+   "/feedback"
+  ],
+  "share": [
+   "/bug (share)",
+   "/dataviz"
+  ],
+  "fork": [
+   "/fork",
+   "/workflow-authoring",
+   "/workflows",
+   "/effort"
+  ],
+  "branch": [
+   "/branch",
+   "/code-review",
+   "/security-review"
+  ],
+  "radio": [
+   "/radio"
+  ],
+  "debug": [
+   "/debug",
+   "/update-config",
+   "/claude-api",
+   "/plugin-authoring"
+  ],
+  "visual": [
+   "/dataviz",
+   "/context"
+  ],
+  "dir": [
+   "/add-dir",
+   "/doctor",
+   "/cd"
+  ],
+  "add": [
+   "/add-dir",
+   "/update-config",
+   "/fewer-permission-prompts",
+   "/reload-skills"
+  ],
+  "thm": [],
+  "th": [
+   "/theme",
+   "/plugin-authoring",
+   "/workflow-authoring",
+   "/update-config",
+   "/verify",
+   "/dataviz",
+   "/simplify",
+   "/run",
+   "/run-skill-generator",
+   "/code-review",
+   "/batch",
+   "/doctor",
+   "/claude-api",
+   "/branch",
+   "/color",
+   "/background",
+   "/debug",
+   "/fewer-permission-prompts",
+   "/loop",
+   "/autocompact",
+   "/fork",
+   "/btw",
+   "/cd",
+   "/compact",
+   "/copy",
+   "/exit",
+   "/mobile",
+   "/model",
+   "/reload-plugins",
+   "/reload-skills",
+   "/rename",
+   "/tui",
+   "/rewind",
+   "/security-review",
+   "/plan",
+   "/powerup",
+   "/export",
+   "/tasks",
+   "/diff"
+  ],
+  "the": [
+   "/theme",
+   "/update-config",
+   "/verify",
+   "/code-review",
+   "/simplify",
+   "/doctor",
+   "/dataviz",
+   "/batch",
+   "/fewer-permission-prompts",
+   "/loop",
+   "/claude-api",
+   "/workflow-authoring",
+   "/run",
+   "/run-skill-generator",
+   "/plugin-authoring",
+   "/autocompact",
+   "/branch",
+   "/btw",
+   "/color",
+   "/compact",
+   "/copy",
+   "/background",
+   "/exit",
+   "/mobile",
+   "/model",
+   "/reload-plugins",
+   "/rename",
+   "/tui",
+   "/rewind",
+   "/security-review",
+   "/plan",
+   "/export",
+   "/tasks",
+   "/diff"
+  ],
+  "ag": [
+   "/list-agents",
+   "/usage",
+   "/claude-api",
+   "/doctor",
+   "/dataviz",
+   "/batch",
+   "/run-skill-generator"
+  ],
+  "agent": [
+   "/list-agents",
+   "/claude-api",
+   "/batch",
+   "/doctor",
+   "/run-skill-generator"
+  ],
+  "skill": [
+   "/skills",
+   "/run-skill-generator",
+   "/reload-skills",
+   "/dataviz",
+   "/update-config",
+   "/verify",
+   "/doctor",
+   "/run"
+  ],
+  "ski": [
+   "/skills",
+   "/run-skill-generator",
+   "/reload-skills",
+   "/dataviz",
+   "/update-config",
+   "/verify",
+   "/doctor",
+   "/claude-api",
+   "/run"
+  ],
+  "sandb": [
+   "/sandbox"
+  ],
+  "out": [
+   "/output-style",
+   "/logout",
+   "/dataviz",
+   "/deep-research"
+  ],
+  "sty": [
+   "/output-style"
+  ],
+  "sl": [
+   "/statusline",
+   "/dataviz",
+   "/doctor",
+   "/loop",
+   "/plugin-authoring"
+  ],
+  "ke": [
+   "/keybindings",
+   "/stickers",
+   "/plugin",
+   "/doctor",
+   "/fork",
+   "/terminal-setup"
+  ],
+  "key": [
+   "/keybindings",
+   "/terminal-setup"
+  ],
+  "ide": [
+   "/ide"
+  ],
+  "mob": [
+   "/mobile"
+  ],
+  "log": [
+   "/login",
+   "/logout",
+   "/debug"
+  ],
+  "login": [
+   "/login",
+   "/plugin-authoring",
+   "/plugin",
+   "/reload-plugins"
+  ],
+  "logout": [
+   "/logout"
+  ],
+  "lo": [
+   "/loop",
+   "/login",
+   "/logout",
+   "/reload-plugins",
+   "/reload-skills",
+   "/workflow-authoring",
+   "/color",
+   "/workflows",
+   "/permissions",
+   "/code-review",
+   "/doctor",
+   "/radio",
+   "/dataviz",
+   "/update-config",
+   "/debug",
+   "/claude-api",
+   "/run"
+  ],
+  "md": [
+   "/dataviz",
+   "/doctor",
+   "/init",
+   "/memory"
+  ],
+  "claude": [
+   "/claude-api",
+   "/fewer-permission-prompts",
+   "/doctor",
+   "/plugin-authoring",
+   "/copy",
+   "/init",
+   "/memory",
+   "/update-config",
+   "/mobile",
+   "/model",
+   "/plugin",
+   "/status",
+   "/statusline",
+   "/stickers",
+   "/insights",
+   "/powerup",
+   "/goal",
+   "/list-agents",
+   "/team-onboarding",
+   "/radio"
+  ],
+  "ctx": [],
+  "cfg": [],
+  "ef": [
+   "/effort",
+   "/code-review",
+   "/simplify"
+  ],
+  "eff": [
+   "/effort",
+   "/code-review",
+   "/simplify"
+  ],
+  "fas": [
+   "/fast"
+  ],
+  "fa": [
+   "/fast",
+   "/deep-research",
+   "/doctor",
+   "/claude-api",
+   "/run",
+   "/compact"
+  ],
+  "go": [
+   "/goal",
+   "/logout",
+   "/doctor",
+   "/claude-api",
+   "/workflow-authoring"
+  ],
+  "goal": [
+   "/goal"
+  ],
+  "ini": [
+   "/init"
+  ],
+  "init": [
+   "/init"
+  ],
+  "rel": [
+   "/release-notes",
+   "/reload-skills",
+   "/reload-plugins"
+  ],
+  "release": [
+   "/release-notes"
+  ],
+  "ver": [
+   "/verify",
+   "/doctor",
+   "/deep-research",
+   "/run-skill-generator",
+   "/status"
+  ],
+  "tui": [
+   "/tui",
+   "/run"
+  ],
+  "pr": [
+   "/loop (proactive)",
+   "/fewer-permission-prompts",
+   "/claude-api",
+   "/verify",
+   "/doctor",
+   "/run",
+   "/run-skill-generator",
+   "/dataviz",
+   "/update-config",
+   "/code-review",
+   "/batch",
+   "/clear",
+   "/color",
+   "/focus",
+   "/resume",
+   "/rewind"
+  ],
+  "rev": [
+   "/code-review (review)",
+   "/security-review",
+   "/simplify"
+  ],
+  "review": [
+   "/code-review (review)",
+   "/security-review",
+   "/simplify"
+  ],
+  "ses": [
+   "/debug",
+   "/doctor",
+   "/fork",
+   "/cd",
+   "/clear",
+   "/color",
+   "/background",
+   "/reload-plugins",
+   "/reload-skills",
+   "/usage",
+   "/insights",
+   "/recap",
+   "/plan",
+   "/list-agents"
+  ],
+  "session": [
+   "/debug",
+   "/doctor",
+   "/fork",
+   "/cd",
+   "/clear",
+   "/color",
+   "/background",
+   "/reload-plugins",
+   "/reload-skills",
+   "/usage",
+   "/insights",
+   "/recap",
+   "/plan",
+   "/list-agents"
+  ],
+  "up": [
+   "/update-config",
+   "/terminal-setup",
+   "/auto-mode-setup",
+   "/powerup",
+   "/doctor",
+   "/dataviz",
+   "/code-review",
+   "/run-skill-generator",
+   "/plugin-authoring",
+   "/compact",
+   "/reload-skills",
+   "/statusline"
+  ],
+  "undo": [
+   "/rewind (undo)"
+  ],
+  "chk": [],
+  "prompt": [
+   "/fewer-permission-prompts",
+   "/loop",
+   "/claude-api",
+   "/color",
+   "/focus"
+  ],
+  "wor": [
+   "/workflows",
+   "/workflow-authoring",
+   "/run",
+   "/code-review",
+   "/batch",
+   "/claude-api",
+   "/run-skill-generator",
+   "/add-dir",
+   "/fork",
+   "/cd"
+  ],
+  "work": [
+   "/workflows",
+   "/workflow-authoring",
+   "/fork",
+   "/run",
+   "/code-review",
+   "/batch",
+   "/claude-api",
+   "/run-skill-generator",
+   "/add-dir",
+   "/cd"
+  ],
+  "hook": [
+   "/hooks",
+   "/update-config",
+   "/plugin-authoring",
+   "/doctor"
+  ],
+  "ho": [
+   "/hooks",
+   "/plugin-authoring",
+   "/workflow-authoring",
+   "/dataviz",
+   "/update-config",
+   "/doctor",
+   "/run-skill-generator",
+   "/autocompact"
+  ],
+  "allowed": [
+   "/permissions (allowed-tools)"
+  ],
+  "proactive": [
+   "/loop (proactive)"
+  ]
+ }
+}

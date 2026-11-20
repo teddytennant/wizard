@@ -304,8 +304,9 @@ fn slash_filters_suggestions_by_prefix() {
     let mut app = app();
     type_str(&mut app, "/mo");
     let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
-    // Prefix matches first, then substring matches ("me*mo*ry").
-    assert_eq!(&names[..2], ["model", "mode"]);
+    // Prefix matches first, the shorter name before the longer (Claude Code's order), then the
+    // rest ("me*mo*ry").
+    assert_eq!(&names[..2], ["mode", "model"]);
     let first_substring = names
         .iter()
         .position(|name| !name.starts_with("mo"))
@@ -414,7 +415,7 @@ fn custom_commands_appear_in_suggestions_after_builtins() {
     )];
     type_str(&mut app, "/mo");
     let names: Vec<&str> = app.suggestions.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(&names[..2], ["model", "mode"]);
+    assert_eq!(&names[..2], ["mode", "model"]);
     let at = names
         .iter()
         .position(|name| *name == "models-report")

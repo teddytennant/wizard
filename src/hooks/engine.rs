@@ -34,6 +34,17 @@ use crate::tools::ToolAccess;
 pub trait HookBackend: Send + Sync {
     /// One model call; returns the reply text.
     async fn ask_model(&self, prompt: &str, model: Option<&str>) -> Result<String, String>;
+    /// [`Self::ask_model`] that stops reading once the reply passes
+    /// `max_tokens`. Auto mode's judge uses it. The default asks without a
+    /// cap and cuts the text afterwards.
+    async fn ask_model_capped(&self, prompt: &str, max_tokens: u32) -> Result<String, String> {
+        let mut text = self.ask_model(prompt, None).await?;
+        let keep = (max_tokens as usize).saturating_mul(4);
+        if let Some((at, _)) = text.char_indices().nth(keep) {
+            text.truncate(at);
+        }
+        Ok(text)
+    }
     /// A read-only subagent run; returns its final report.
     async fn run_agent(&self, prompt: &str, model: Option<&str>) -> Result<String, String>;
     /// Call a tool on an MCP server; returns the text and whether it errored.
@@ -193,6 +204,9 @@ pub struct HookEngine {
     appended: Mutex<HashSet<(&'static str, String)>>,
     backend: Mutex<Option<Arc<dyn HookBackend>>>,
     policy: RwLock<Policy>,
+    /// What the user last asked for, which auto mode's judge measures a call
+    /// against.
+    request: Mutex<String>,
     /// The to-do list as of the last `todo` write, to tell new items from
     /// finished ones.
     todos: Mutex<BTreeMap<String, String>>,
@@ -256,6 +270,7 @@ impl HookEngine {
             session_id: Mutex::new(session_id),
             appended: Mutex::new(HashSet::new()),
             backend: Mutex::new(None),
+            request: Mutex::new(String::new()),
             todos: Mutex::new(BTreeMap::new()),
         }
     }
@@ -296,6 +311,11 @@ impl HookEngine {
     /// Replace the permission policy (settings reload, `/permissions`).
     pub fn set_policy(&self, policy: Policy) {
         *self.policy.write().unwrap() = policy;
+    }
+
+    /// The user's latest request, as auto mode's judge reads it.
+    pub fn request(&self) -> String {
+        self.request.lock().unwrap().clone()
     }
 
     /// A copy of the policy in force.
@@ -459,6 +479,18 @@ impl HookEngine {
                     .unwrap_or_else(|| "a hook asked for approval".to_string()),
             );
         }
+        // Auto mode: a model call decides. No answer from it is a question
+        // for whoever approves, as in `default`. A hook's `ask` skips it and a
+        // hook's `allow` answers it.
+        if let Decision::Judge(message) = &decision {
+            decision = if out.verdict == Some(Verdict::Ask) {
+                Decision::Ask(message.clone())
+            } else if out.verdict == Some(Verdict::Allow) {
+                Decision::Allow
+            } else {
+                self.judge(tool, &args, message).await
+            };
+        }
         // A hook's `allow` answers a prompt the mode raised, as it does in
         // Claude Code, but never one an `ask` rule raised.
         if matches!(decision, Decision::Ask(_))
@@ -473,7 +505,7 @@ impl HookEngine {
                 self.denied(tool, &args, &message, mode, events).await;
                 Before::Blocked(message)
             }
-            Decision::Ask(message) => {
+            Decision::Judge(message) | Decision::Ask(message) => {
                 self.notification("permission_prompt", None, &message, mode, events)
                     .await;
                 let offer = crate::permissions::offer(tool, &args, &policy.cwd);
@@ -558,6 +590,19 @@ impl HookEngine {
                     }
                 }
             }
+        }
+    }
+
+    /// Auto mode: have the model judge one call against the user's request.
+    /// A judge that cannot answer leaves the call to be asked about.
+    async fn judge(&self, tool: &str, args: &Value, asking: &str) -> Decision {
+        use crate::permissions::judge::{self, Verdict as Judged};
+        let backend = self.backend();
+        let verdict = judge::judge(backend.as_deref(), &self.request(), tool, args).await;
+        match verdict {
+            Some(Judged::Allow) => Decision::Allow,
+            Some(Judged::Deny(reason)) => Decision::Deny(judge::refusal(tool, args, &reason)),
+            None => Decision::Ask(asking.to_string()),
         }
     }
 
@@ -790,6 +835,9 @@ impl HookEngine {
         mode: Mode,
         events: Option<&mpsc::Sender<AgentEvent>>,
     ) -> PromptSubmit {
+        if !prompt.trim().is_empty() {
+            *self.request.lock().unwrap() = prompt.to_string();
+        }
         let out = self
             .run_event(
                 Fire::new(HookEvent::UserPromptSubmit, mode, events)

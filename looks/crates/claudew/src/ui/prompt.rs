@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::{App, Hint, Menu, SPINNER_FRAMES, VERBS};
-use crate::text::{blit, commas, put, truncate, width, wrap_str, Row};
+use crate::text::{blit, commas, put, truncate, truncate_front, width, wrap_str, Row};
 use crate::ui::tasks;
 
 const MENU_ROWS: usize = 5;
@@ -243,6 +243,18 @@ fn command_token(app: &App, text: &str) -> usize {
     }
 }
 
+/// A permission mode as the footer words it, the way Claude Code words its own.
+pub fn permission_label(name: &str) -> String {
+    match name {
+        "default" => "manual mode".into(),
+        "acceptEdits" => "accept edits".into(),
+        "auto" => "auto mode".into(),
+        "dontAsk" => "don't ask mode".into(),
+        "bypassPermissions" => "bypass permissions".into(),
+        other => mode_label(other),
+    }
+}
+
 pub fn mode_label(name: &str) -> String {
     if name.is_empty() {
         "default mode".to_string()
@@ -273,9 +285,16 @@ fn footer_row(app: &App) -> Row {
     // the mode pressed for, at once as the reference shows it: nothing is sent until wizard
     // confirms it (prompts wait in the queue), so the footer cannot run ahead of a prompt
     let (shown, plan) = app.shown_mode();
-    if app.cfg.modes.is_empty() && !plan {
+    if app.modes().is_empty() && !plan {
         return row.with("? for shortcuts", th.dim());
     }
+    let label = |m: &str| {
+        if app.permissions() {
+            permission_label(m)
+        } else {
+            mode_label(m)
+        }
+    };
     let first = match app.shown_index() {
         None => {
             row.push("⏸ plan mode on", th.fg(th.plan));
@@ -283,7 +302,7 @@ fn footer_row(app: &App) -> Row {
             false
         }
         Some(0) => {
-            row.push(format!("⏸ {} on", mode_label(&shown)), th.dim());
+            row.push(format!("⏸ {} on", label(&shown)), th.dim());
             true
         }
         // each of wizard's other modes has its own mark: sovereign runs on its own like
@@ -294,7 +313,7 @@ fn footer_row(app: &App) -> Row {
                 "chat" => ("◇", th.accept),
                 _ => ("⏵⏵", th.accept),
             };
-            row.push(format!("{mark} {} on", mode_label(&shown)), th.fg(color));
+            row.push(format!("{mark} {} on", label(&shown)), th.fg(color));
             row.push(cycle, th.dim());
             false
         }
@@ -340,7 +359,12 @@ fn shortcut_entries(app: &App, short: bool) -> [Vec<&'static str>; 3] {
     }
     let b = vec![
         "double tap esc to clear input",
-        "shift + tab to cycle agent modes",
+        // with permissions on the cycle is Claude Code's, and its table words it as 2.1.314 does
+        if app.permissions() {
+            "shift + tab to auto-accept edits"
+        } else {
+            "shift + tab to cycle agent modes"
+        },
         "ctrl + o for verbose output",
         "ctrl + t to toggle tasks",
         if short {
@@ -557,10 +581,25 @@ fn menu_rows(app: &App, w: usize) -> Option<Vec<Row>> {
                     Style::new().add_modifier(Modifier::BOLD)
                 };
                 let mut first = Row::of(if selected { "  ❯ " } else { "    " }, base);
-                let name = truncate(&format!("/{}", cmd.name), name_w.saturating_sub(1));
-                first.push("/", base);
+                let alias = crate::app::slash_alias(&app.commands, items[i], &query)
+                    .map(|a| format!(" ({a})"))
+                    .unwrap_or_default();
+                // an alias makes the name longer than its column; 2.1.314 then cuts it from the front
+                let full = format!("/{}{alias}", cmd.name);
+                let name = if alias.is_empty() {
+                    truncate(&full, name_w.saturating_sub(1))
+                } else {
+                    truncate_front(&full, name_w.saturating_sub(2))
+                };
+                let rest = match name.strip_prefix('/') {
+                    Some(rest) => {
+                        first.push("/", base);
+                        rest
+                    }
+                    None => &name,
+                };
                 first.0.extend(
-                    mark_match(&name[1..], &query, base, hit)
+                    mark_match(rest, &query, base, hit)
                         .into_iter()
                         .filter(|s| !s.0.is_empty()),
                 );

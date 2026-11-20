@@ -418,6 +418,9 @@ fn exit_warning(code: i32, stderr: &str) -> String {
 mod engine_tests;
 
 #[cfg(test)]
+mod auto_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 

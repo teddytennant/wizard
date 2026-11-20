@@ -138,7 +138,7 @@ def ev(e):
     return json.dumps({'event': e}, ensure_ascii=False)
 
 
-def head(ref, cwd, size, auto=False):
+def head(ref, cwd, size):
     seen, cmds = set(), []
     # the two entries after /dataviz are never on screen, but their two-row height decides
     # whether anything is drawn under it
@@ -164,7 +164,8 @@ def head(ref, cwd, size, auto=False):
     opts += [{'id': 'extra-%d' % i, 'name': 'Extra %d' % i, 'provider': ''} for i in range(hidden)]
     config = {
         'model': current, 'models': opts, 'effort': 'medium', 'efforts': ['low', 'medium', 'high'],
-        'mode': 'manual', 'modes': ['manual'] + (['auto'] if auto else []) + ['accept edits'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
+        'mode': 'manual', 'modes': ['manual'], 'permission_mode': 'default',
+        'permission_modes': ['default', 'acceptEdits', 'auto'], 'cwd': cwd, 'backend': 'wizard ' + WIZARD_VERSION,
     }
     return [
         ev({'Ready': {'session_id': '0191b6f0-3c1a-7a52-9a0e-6d3e9b2f1c44', 'config': config}}),
@@ -325,8 +326,17 @@ def think(head):
     ]
 
 
-def wizard_head(cwd):
-    """Wizard's own models, efforts, modes and commands, from a recorded `wizard acp` session."""
+def model_count(ref):
+    """How many models the reference's picker lists, the ones its window shows and the ones its
+    `… +N models` line counts."""
+    hidden = next((int(m.group(1)) for l in rows(ref, 'model') for m in [re.search(r'… \+(\d+) models?', l)] if m), 0)
+    return len(models(ref)) + hidden
+
+
+def wizard_head(cwd, ref):
+    """Wizard's own models, efforts, modes and commands, from a recorded `wizard acp` session. The
+    picker lists as many models as the reference's, so the two panels are as tall; the recorded
+    session has more."""
     options, commands = [], []
     for line in open(RECORDED, encoding='utf-8'):
         msg = json.loads(line)['msg']
@@ -341,7 +351,7 @@ def wizard_head(cwd):
     def values(o):
         return [v['value'] for v in o.get('options', [])]
     models = [{'id': m, 'name': m.split('/', 1)[-1], 'provider': m.split('/', 1)[0] if '/' in m else ''}
-              for m in values(opt('model'))]
+              for m in values(opt('model'))][:model_count(ref) or None]
     config = {
         'model': opt('model').get('currentValue', ''), 'models': models,
         'effort': opt('thought_level').get('currentValue', ''), 'efforts': values(opt('thought_level')),
@@ -500,8 +510,7 @@ def main():
         h = head(ref, cwd, size)
         open(os.path.join(out, 'static-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(h) + '\n')
         script = h + turn(cwd, find_command(ref, cwd, size))
-        # the permission prompts offer "switch to auto mode" when the backend has a mode to go to
-        ha = head(ref, cwd, size, auto=True)
+        ha = h
         open(os.path.join(out, 'turn2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn2(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'turn3-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + turn3(ref, cwd, size)) + '\n')
         open(os.path.join(out, 'plan2-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(ha + plan2(ref, cwd, size)) + '\n')
@@ -517,7 +526,7 @@ def main():
                  'Doing step %d of the long job, with a name long enough to need cutting at narrow widths' % n)
                 for n in range(1, 15)]
         open(os.path.join(out, 'todo-many-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(todos(h, many, 6000)) + '\n')
-        open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd)) + '\n')
+        open(os.path.join(out, 'wizard-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(wizard_head(cwd, ref)) + '\n')
         open(os.path.join(out, 'turn-%s.jsonl' % size), 'w', encoding='utf-8').write('\n'.join(script) + '\n')
 
 

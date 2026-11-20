@@ -3,7 +3,7 @@
 
 Every tmux call goes to the socket `lookclaude` (`tmux -L lookclaude`), never the default
 server. Each scene ends in one or more captures: `<out>/<scene>-<WxH>.ansi` is
-`capture-pane -e -p` (text with SGR), `<out>/<scene>-<WxH>.meta` the cursor cell and whether
+`capture-pane -e -p -N` (text with SGR, trailing cells kept), `<out>/<scene>-<WxH>.meta` the cursor cell and whether
 the cursor and the alternate screen are on.
 """
 import argparse, os, re, subprocess, sys, time
@@ -22,10 +22,11 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 # ('idle',), ('until', regex, timeout), ('raw_snap', suffix) (no settling), ('fast_keys', ...)
 # (no waiting after), ('restore',) (the size the program started at), ('since', N) (wait until N seconds after the program started), ('quit',) (ctrl+c until the alternate screen closes)
 # or ('snap', suffix). ('ref_keys', ...) is sent to the
-# reference only, ('look_keys', ...) to the look only (its replay cycles through auto mode on the way to plan).
+# reference only, ('look_keys', ...) to the look only.
 STATIC = [
     ('home', [('snap', '')]),
-    ('shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+    # after the ten seconds the effort notice and `← for agents` are up, which a slow start would catch
+    ('shortcuts', [('since', 11), ('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('multiline', [('since', 13), ('type', 'line one\\'), ('keys', 'Enter'), ('type', 'line two'), ('snap', '')]),
     ('ctrlc', [('fast_keys', 'C-c'), ('raw_snap', '-hint'), ('wait', 2.5), ('snap', '-after')]),
     ('bash-mode', [('type', '!'), ('snap', ''), ('type', 'ls'), ('snap', '-typed'),
@@ -54,10 +55,10 @@ STATIC = [
     ('resize', [('resize', 100, 30), ('wait', 1.0), ('snap', '')]),
     # last but one, at the size it started: the reference prints a long explanation of auto mode
     # in the transcript the first time shift+tab reaches it, which every scene after would carry
-    # at 80x24. It has a fourth mode (auto) the backend does not; one more press brings it round
+    # at 80x24. The fourth press brings the cycle round
     ('modes', [('restore',), ('type', '/help'), ('keys', 'Enter'), ('until', r'For more help', 15), ('wait', 1.5),
                ('keys', 'Escape'), ('wait', 0.3), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-               ('keys', 'BTab'), ('snap', '-3'), ('ref_keys', 'BTab'), ('wait', 1.0),
+               ('keys', 'BTab'), ('snap', '-3'), ('keys', 'BTab'), ('wait', 1.0),
                ('snap', '-4')]),
     ('exit', [('quit',), ('wait', 0.5), ('snap', '')]),
 ]
@@ -98,8 +99,7 @@ SHARED = [
     ('x-planesc', [('type', P_PLAN), ('keys', 'Enter'), ('until', r'Ready to code', 120), ('wait', 2.0),
                    ('fast_keys', 'Escape'), ('wait', 2.0), ('idle',), ('wait', 1.0), ('snap', '')]),
     ('x-rewind', [('fast_keys', 'Escape'), ('wait', 0.2), ('fast_keys', 'Escape'), ('wait', 2.0), ('snap', ''),
-                  # the reference counts /plan as a rewind point, so it takes one more Up to the edit
-                  ('keys', 'Up'), ('keys', 'Up'), ('ref_keys', 'Up'), ('keys', 'Enter'), ('wait', 1.5),
+                  ('keys', 'Up'), ('keys', 'Up'), ('keys', 'Up'), ('keys', 'Enter'), ('wait', 1.5),
                   ('snap', '-confirm'),
                   ('keys', 'Escape'), ('wait', 1.0), ('keys', 'Escape'), ('wait', 1.0)]),
     ('x-ctrlr', [('keys', 'C-r'), ('wait', 1.5), ('snap', ''), ('keys', 'Escape'), ('wait', 1.0)]),
@@ -118,7 +118,7 @@ TURN3 = [
                ('fast_keys', 'Enter'), ('wait', 0.8), ('raw_snap', ''), ('fast_keys', 'Escape'),
                ('wait', 1.5), ('raw_snap', '-esc'), ('idle',)]),
     # manual, accept edits, plan
-    ('plan', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
               ('until', r'Ready to code', 120), ('wait', 2.0), ('snap', ''),
               ('keys', 'Down'), ('snap', '-down'), ('keys', 'Escape'), ('idle',)]),
 ]
@@ -218,6 +218,16 @@ LIVE_CARRY_RESUME = [
                       ('fast_keys', 'Escape'), ('wait', 1.0), ('idle',)]),
 ]
 
+# Permissions on: shift+tab to auto mode (accept edits, plan, auto), where the model's edit is judged
+# and let through and its write is judged and refused.
+LIVE_AUTO = [
+    ('live-auto-modes', [('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'), ('wait', 1.5), ('keys', 'BTab'),
+                         ('wait', 3.0), ('snap', '')]),
+    ('live-auto-edit', [('type', 'please edit'), ('keys', 'Enter'), ('idle',), ('wait', 1.0), ('snap', '')]),
+    ('live-auto-write', [('type', 'please write'), ('keys', 'Enter'), ('idle',), ('wait', 1.0), ('snap', '')]),
+    ('live-auto-exit', [('quit',), ('wait', 0.5)]),
+]
+
 # A side question in flight in plan mode, closed, Esc once more, and a prompt sent while it is
 # still running: the prompt waits for it, and runs in plan mode.
 LIVE_BTW = [
@@ -297,9 +307,9 @@ LIVE_FAIL = [
 # The light theme, for the scenes that carry the most colour without a model call.
 LIGHT = [
     ('light-home', [('snap', '')]),
-    ('light-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+    ('light-shortcuts', [('since', 11), ('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('light-modes', [('since', 20), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
-                     ('keys', 'BTab'), ('ref_keys', 'BTab'), ('wait', 1.0)]),
+                     ('keys', 'BTab', 'BTab'), ('wait', 1.0)]),
     ('light-slash', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
     ('light-bash', [('type', '!'), ('snap', ''), ('keys', 'BSpace'), ('wait', 0.5)]),
     ('light-model', [('type', '/model'), ('keys', 'Enter'), ('until', r'Select model', 15),
@@ -393,7 +403,7 @@ TODO_MANY = [
 
 # A plan approved: Down picks "manually approve edits", the second of three ways out.
 PLAN2 = [
-    ('plan-approve', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan-approve', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
                       ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down'), ('keys', 'Enter'),
                       ('idle',), ('wait', 1.5), ('snap', '')]),
 ]
@@ -401,7 +411,7 @@ PLAN2 = [
 # The third way out of a plan, "Tell Claude what to change": Down twice picks it and the line
 # takes text, Enter sends it back as the reason the plan was not approved.
 PLAN3 = [
-    ('plan-feedback', [('keys', 'BTab', 'BTab'), ('look_keys', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
+    ('plan-feedback', [('keys', 'BTab', 'BTab'), ('wait', 1.0), ('type', P_PLAN), ('keys', 'Enter'),
                        ('until', r'Ready to code', 120), ('wait', 2.0), ('keys', 'Down', 'Down'), ('snap', '-pick'),
                        ('type', 'use tabs'), ('snap', '-typed'), ('keys', 'Enter'),
                        ('idle',), ('wait', 1.5), ('snap', '')]),
@@ -493,7 +503,7 @@ HOME = [('home', [('snap', '')])]
 GROUPS = {'plan2': PLAN2, 'plan3': PLAN3, 'ttl7': TTL7, 'ttl6': TTL6, 'ttl5': TTL5, 'ttl4': TTL4, 'ttl3': TTL3, 'ttl2': TTL2, 'slashq': SLASHQ, 'ttl': TTL, 'model': [s for s in STATIC if s[0] == 'model'], 'shortcuts': [s for s in STATIC if s[0] == 'shortcuts'], 'plan4': PLAN4, 'plan5': PLAN5, 'statusline': STATUSLINE, 'statusline-pad': STATUSLINE_PAD, 'todo': TODO, 'todo-many': TODO_MANY, 'home': HOME, 'think': THINK, 'vim': VIM, 'keys': KEYS, 'mention': [s for s in STATIC if s[0] == 'mention'], 'static': STATIC, 'turn': TURN, 'light': LIGHT, 'turn2': TURN2, 'turn3': TURN3,
           'wizard': WIZARD, 'live': LIVE, 'live-other': LIVE_OTHER,
           'live-resumed': LIVE_RESUMED, 'live-fail': LIVE_FAIL, 'shared': SHARED,
-          'live-carry': LIVE_CARRY, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
+          'live-carry': LIVE_CARRY, 'live-auto': LIVE_AUTO, 'live-carry-resume': LIVE_CARRY_RESUME, 'live-early': LIVE_EARLY,
           'live-btw': LIVE_BTW, 'live-early-cmd': LIVE_EARLY_CMD, 'live-slash': LIVE_SLASH,
           'shared-resume': SHARED_RESUME}
 
@@ -598,7 +608,7 @@ class Pane:
         else:
             time.sleep(0.15)
         with open(path + '.ansi', 'w', encoding='utf-8') as f:
-            f.write(tmux('capture-pane', '-t', self.name, '-e', '-p'))
+            f.write(tmux('capture-pane', '-t', self.name, '-e', '-p', '-N'))
         with open(path + '.meta', 'w') as f:
             f.write(tmux('display', '-p', '-t', self.name,
                          'cursor=#{cursor_x},#{cursor_y} visible=#{cursor_flag} alt=#{alternate_on}'))

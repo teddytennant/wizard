@@ -3,6 +3,7 @@
 
     fake_openai.py PORT PROJECT_DIR LOG
 
+A message that is auto mode's judge prompt gets ALLOW, or DENY for a call on w.txt.
 The last word of the user's message picks the answer: md, long, slow, bash, git, read, edit,
 badedit, write, refuse, plan, waitN (answers after N seconds); anything else gets "ok". A tool
 result always gets "done". Each request is logged with the tools offered, the model and whether
@@ -121,7 +122,12 @@ class H(BaseHTTPRequestHandler):
             key = 'btw'
         elif 'Plan adding the comment' in u:
             key = 'plan'
-        if last.get('role') == 'tool':
+        if 'permission check of a coding agent' in u:
+            # auto mode's judge: it refuses the call that writes w.txt and allows the rest
+            call = u.split('<call>')[-1]
+            self.text('DENY: it writes a file the request did not name' if 'w.txt' in call else 'ALLOW')
+            fin = 'stop'
+        elif last.get('role') == 'tool':
             self.text(shared('badedit-reply', 'done') if key == 'badedit' else 'done')
             fin = 'stop'
         elif key.startswith('wait') and key[4:].isdigit():

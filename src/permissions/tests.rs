@@ -700,3 +700,75 @@ fn managed_only_rules_ignore_allowed_tools() {
     let narrowed = build(&config, &managed, root);
     assert!(is_deny(&run(&narrowed, "cargo build")));
 }
+
+fn edit(policy: &Policy, path: &str) -> Decision {
+    policy.check("write_file", ToolAccess::Edit, &json!({ "path": path }))
+}
+
+#[test]
+fn auto_judges_what_default_would_ask_about_and_nothing_else() {
+    let auto = policy(PermissionMode::Auto, &["Bash(cargo test:*)"], &[], &[]);
+    assert!(!auto.is_inert(), "auto is a mode someone asked for");
+    assert!(matches!(run(&auto, "make clean"), Decision::Judge(_)));
+    assert!(matches!(edit(&auto, "src/a.rs"), Decision::Judge(_)));
+    let read = auto.check(
+        "read_file",
+        ToolAccess::ReadOnly,
+        &json!({ "path": "src/a.rs" }),
+    );
+    assert_eq!(
+        read,
+        Decision::Allow,
+        "a read-only tool never reaches the judge"
+    );
+    assert_eq!(run(&auto, "ls -la"), Decision::Allow);
+    assert_eq!(run(&auto, "git status && ls"), Decision::Allow);
+    assert_eq!(
+        run(&auto, "cargo test --all"),
+        Decision::Allow,
+        "an allow rule covers it"
+    );
+    assert_eq!(
+        auto.check("todo", ToolAccess::Execute, &json!({})),
+        Decision::Allow,
+        "the to-do list never asks in Claude Code either"
+    );
+}
+
+#[test]
+fn auto_keeps_deny_and_ask_rules_ahead_of_the_judge() {
+    let auto = policy(
+        PermissionMode::Auto,
+        &[],
+        &["Bash(git push:*)"],
+        &["Bash(curl:*)"],
+    );
+    assert!(is_deny(&run(&auto, "curl example.com")));
+    assert!(matches!(
+        run(&auto, "git push origin main"),
+        Decision::Ask(_)
+    ));
+    assert!(matches!(run(&auto, "touch x"), Decision::Judge(_)));
+}
+
+#[test]
+fn naming_auto_turns_on_the_policy_and_claude_s_refusal_text() {
+    let root = Path::new("/proj");
+    let mut config = crate::config::Config::default();
+    config.run_permissions.mode = Some(PermissionMode::Auto);
+    let built = build(
+        &config,
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert_eq!(built.mode, PermissionMode::Auto);
+    assert!(built.claude_defaults);
+    assert!(!built.is_inert());
+    assert!(built.summary().contains("model call judges"));
+    let unnamed = build(
+        &crate::config::Config::default(),
+        &crate::config::claude::ClaudeSettings::default(),
+        root,
+    );
+    assert!(unnamed.is_inert(), "without the opt-in nothing is checked");
+}

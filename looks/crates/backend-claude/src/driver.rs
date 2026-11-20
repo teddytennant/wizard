@@ -210,6 +210,8 @@ impl Driver {
             efforts: self.efforts_for(&self.model),
             mode: self.mode.clone(),
             modes: MODES.iter().map(|s| s.to_string()).collect(),
+            permission_mode: String::new(),
+            permission_modes: Vec::new(),
             cwd: self.opts.cwd.to_string_lossy().into_owned(),
             backend: if self.version.is_empty() {
                 "claude".into()
@@ -777,6 +779,7 @@ impl Driver {
             Request::SetModel(m) => self.set_model(m).await,
             Request::SetEffort(e) => self.set_effort(e).await,
             Request::SetMode(m) => self.set_mode(m).await,
+            Request::SetPermissionMode(_) => {}
             Request::Refresh => self.refresh().await,
             Request::Shutdown => {}
         }

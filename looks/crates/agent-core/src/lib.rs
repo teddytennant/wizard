@@ -215,6 +215,12 @@ pub struct Config {
     /// Agent mode, e.g. `genie`/`sovereign` or `default`/`plan`. Empty if unsupported.
     pub mode: String,
     pub modes: Vec<String>,
+    /// Wizard's permission mode (`default`, `acceptEdits`, `auto`, ...) and the ones it offers.
+    /// Both are empty while permissions are off, which is the default.
+    #[serde(default)]
+    pub permission_mode: String,
+    #[serde(default)]
+    pub permission_modes: Vec<String>,
     pub cwd: String,
     /// Backend name and version for the footer, e.g. `wizard 3.7.1`.
     pub backend: String,
@@ -312,6 +318,8 @@ pub enum Request {
     SetModel(String),
     SetEffort(String),
     SetMode(String),
+    /// Change wizard's permission mode; only offered while permissions are on.
+    SetPermissionMode(String),
     /// Ask for the current commands/config again.
     Refresh,
     Shutdown,

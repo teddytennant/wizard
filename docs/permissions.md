@@ -68,9 +68,27 @@ Set with `--permission-mode`, `permissions.mode` in `config.toml`, or `permissio
 | `plan` | Starts the session in Wizard's plan mode (the same as `--plan`): read-only tools and read-only commands (`ls`, `pwd`) run, writes are refused with `Cannot write to <path> while in plan mode`, and the plan is put to you with `exit_plan`. After you approve it the session carries on in `default` with Claude's prompts on. |
 | `dontAsk` | Read-only tools and calls an `allow` rule names run. Everything else is refused, without asking. |
 | `bypassPermissions` | Nothing is checked except `deny` and `ask` rules. |
-| `auto` | Claude Code's classifier mode. The classifier is a model call that judges each action, and Wizard has none, so `auto` behaves as Wizard's own `default`: everything runs unless a rule objects. |
+| `auto` | Asks about the same calls `default` does, but a short model call answers instead of you. See [Auto mode](#auto-mode). |
 
 Modes accept `acceptEdits`, `accept-edits` and `accept_edits` alike.
+
+### Auto mode
+
+`auto` is opt-in like every mode here: nothing changes until you pass `--permission-mode auto`, set `permissions.mode` in `config.toml` or `permissions.defaultMode` in one of Wizard's own settings files, or pick it from a client's permission selector. A project that is not trusted cannot turn it on.
+
+The rules and hooks come first, as in `default`. `deny` rules refuse, `ask` rules ask, a `PreToolUse` hook that says `ask` asks, and none of those reach the judge. Read-only tools, read-only commands and anything an `allow` rule covers run. The calls `default` would ask about (file edits, other commands, the web, MCP tools, `run_code`, `Monitor`) go to the judge instead of to you.
+
+The judge is one call to the model the session is using, with a cap of 96 tokens on the answer and 30 seconds to give it. It is shown your latest request and the one tool call, quoted as data, and answers `ALLOW` or `DENY: <reason>`. It asks to allow only what plainly serves the request: a call that deletes what you did not name, sends data off the machine, runs unreviewed code, changes credentials or settings, or has nothing to do with the request is denied.
+
+- **Allow** runs the call.
+- **Deny** refuses it. The model reads `Auto mode refused <tool> ...: <reason>. The user has not approved this call.` as the tool result and can take another route.
+- **No answer** falls back to asking, as `default` does: an unreadable reply, a provider error, a timeout, no model client, or no request on record (a hook-only run that never submitted a prompt). With nobody to ask, which is every headless run, subagent and fleet run, that is a refusal in Claude Code's words. The judge never lets a call through by failing.
+
+A `PermissionRequest` hook or `--permission-prompt-tool` sees only the calls the judge could not decide. A hook's `allow` on `PreToolUse` runs the call without the judge.
+
+The judge costs one small request per judged call and sees the same provider, key and model as the session. It is a second opinion on your request, not a sandbox: a command's effects are judged from its text, as the rules are. Put hard limits in `deny` rules and hooks.
+
+ACP clients (the claude look, the GUI, editors) see a `permission_mode` config option, category `mode`, only while permissions are on. Its values are `default`, `acceptEdits`, `auto`, `dontAsk` and `bypassPermissions`. Plan mode stays Wizard's own switch (`/plan`). Setting it applies to that session only, and a model switch keeps it.
 
 Checked against Claude Code 2.1.314 with a mock API (`-p` runs, which cannot ask and so refuse; the refusal texts above are its tool results). Its `default` refused writes, `touch`, `curl` and `WebFetch` and ran `ls` and `Read`. Its `acceptEdits` ran `touch`, `mkdir`, `mv`, `cp`, `rm` and `sed -i` in the project and asked for `touch /tmp/x`, `git commit`, `cd d && touch q` and a write outside the project. Its `dontAsk` refused anything no `allow` rule names, an `ask` rule still asked under `bypassPermissions`, and `plan` answered a write with `Cannot write to <path> while in plan mode.` while `ls` ran. Wizard matches all of that. Two differences stay: in `-p`, Claude's plan mode hands every other command to its classifier, where Wizard refuses it; and Claude's `acceptEdits` also lets a redirection such as `echo hi > z.txt` write inside the project, which Wizard still asks about.
 

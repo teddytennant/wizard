@@ -101,6 +101,10 @@ impl Player {
                 self.config.mode = m;
                 self.changed()
             }
+            Request::SetPermissionMode(m) => {
+                self.config.permission_mode = m;
+                self.changed()
+            }
             _ => Got::Other,
         }
     }

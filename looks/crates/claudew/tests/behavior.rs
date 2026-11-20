@@ -7,8 +7,14 @@ use claudew::app::{Block, Dialog};
 use common::Harness;
 use crossterm::event::KeyCode;
 
+/// The Claude data replay with wizard's own two modes in place of the permission modes it
+/// carries, for the tests of the mode steps themselves. The permission cycle has its own test.
 fn harness() -> Harness {
-    Harness::new("static-120x40.jsonl", 120, 40)
+    let mut hn = Harness::new("static-120x40.jsonl", 120, 40);
+    hn.app.cfg.modes = vec!["manual".into(), "accept edits".into()];
+    hn.app.cfg.permission_mode.clear();
+    hn.app.cfg.permission_modes.clear();
+    hn
 }
 
 fn plan_answer(hn: &mut common::Harness, text: &str) {
@@ -395,7 +401,7 @@ fn ctrl_r_finds_an_earlier_prompt() {
 #[test]
 fn completing_a_command_shows_what_it_takes() {
     let mut hn = Harness::new("wizard-120x40.jsonl", 120, 40);
-    hn.type_str("/mod");
+    hn.type_str("/model");
     hn.press(KeyCode::Tab);
     assert_eq!(hn.app.editor.text(), "/model ");
     let screen = hn.render().plain();
@@ -1032,6 +1038,86 @@ fn a_prompt_sent_before_the_session_waits_for_early_presses() {
     let first = requests.try_recv().ok();
     assert_eq!(first, Some(Request::SetMode("sovereign".into())));
     assert!(requests.try_recv().is_err(), "the prompt still waits");
+}
+
+/// With permissions on, shift+tab steps through the permission modes as Claude Code does:
+/// accept edits, plan, auto, manual. Auto mode is explained once it has been rested on, and
+/// only the first time.
+#[test]
+fn shift_tab_cycles_the_permission_modes_with_plan_after_accept_edits() {
+    let state = std::env::temp_dir().join(format!("claudew-auto-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::env::set_var("CLAUDEW_STATE_DIR", &state);
+    let mut hn = Harness::new("static-120x40.jsonl", 120, 40);
+    assert!(hn.app.permissions());
+    hn.sent();
+    let base = hn.app.cfg.clone();
+    let config = |mode: &str| {
+        let mut c = base.clone();
+        c.permission_mode = mode.into();
+        c
+    };
+    let mut steps = Vec::new();
+    let mut plan_on = false;
+    let mut notes = Vec::new();
+    for _ in 0..4 {
+        hn.press(KeyCode::BackTab);
+        // each step waits for wizard's answer before the next goes out
+        for r in hn.sent() {
+            match &r {
+                Request::SetPermissionMode(m) => {
+                    let c = config(m);
+                    steps.push(r.clone());
+                    hn.event(Event::ConfigChanged(c));
+                }
+                Request::Prompt(p) if p == "/plan" => {
+                    plan_on = !plan_on;
+                    steps.push(r.clone());
+                    plan_answer(
+                        &mut hn,
+                        &format!("plan mode {}", if plan_on { "on" } else { "off" }),
+                    );
+                }
+                _ => steps.push(r.clone()),
+            }
+        }
+        for r in hn.sent() {
+            if let Request::SetPermissionMode(m) = &r {
+                let c = config(m);
+                steps.push(r.clone());
+                hn.event(Event::ConfigChanged(c));
+            }
+        }
+        hn.advance(1_000);
+        notes.push(
+            hn.app
+                .blocks
+                .iter()
+                .filter(|b| matches!(b, claudew::app::Block::Note(_)))
+                .count(),
+        );
+    }
+    let sets: Vec<&Request> = steps
+        .iter()
+        .filter(|r| matches!(r, Request::SetPermissionMode(_)))
+        .collect();
+    assert_eq!(
+        sets,
+        [
+            &Request::SetPermissionMode("acceptEdits".into()),
+            &Request::SetPermissionMode("auto".into()),
+            &Request::SetPermissionMode("default".into()),
+        ],
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&Request::Prompt("/plan".into())),
+        "{steps:?}"
+    );
+    // after accept edits, plan, auto, manual: the explanation came with auto, once
+    assert_eq!(notes, [0, 0, 1, 1]);
+    assert!(state.join("auto-mode-explained").exists());
+    let _ = std::fs::remove_dir_all(&state);
 }
 
 /// `/plan <text>` turns plan mode on and sends the text once wizard is in it.

@@ -89,6 +89,25 @@ pub fn blit(buf: &mut Buffer, x: u16, y: u16, row: &Row) -> u16 {
 }
 
 /// `s` cut to `max` columns, the last one an ellipsis when something was dropped.
+/// `s` cut from the front with a leading `…` when it is wider than `max`.
+pub fn truncate_front(s: &str, max: usize) -> String {
+    if width(s) <= max {
+        return s.to_string();
+    }
+    let mut tail: Vec<&str> = Vec::new();
+    let mut w = 0;
+    for g in s.graphemes(true).rev() {
+        let gw = width(g);
+        if w + gw + 1 > max {
+            break;
+        }
+        tail.push(g);
+        w += gw;
+    }
+    tail.reverse();
+    format!("…{}", tail.concat())
+}
+
 pub fn truncate(s: &str, max: usize) -> String {
     if width(s) <= max {
         return s.to_string();

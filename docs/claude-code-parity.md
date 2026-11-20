@@ -536,9 +536,9 @@ Every key below was checked to exist in 2.1.314's binary. Wizard reads the keys 
 | `fastMode` | aliased | Starts the session in fast mode: with the `anthropic` provider on an Opus model, requests carry `speed: fast`. Other providers have no tier. `/fast` switches it. |
 | `fastModePerSessionOptIn` | present | `true` starts each session with fast mode off. |
 | `advisorModel` | present | Read from `~/.wizard/settings.json` (and `--advisor`, `WIZARD_ADVISOR_MODEL`): a provider name, `provider/model` or a model tag. The `advisor` tool asks it; see `/advisor`. |
-| `autoMode` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
-| `useAutoModeDuringPlan` | accepted-with-warning | Auto mode is Anthropic's permission classifier; Wizard has none. |
-| `disableAutoMode` | accepted-with-warning | There is no auto mode to disable. |
+| `autoMode` | accepted-with-warning | Read and ignored: Wizard's auto mode (`--permission-mode auto`, [permissions.md](permissions.md#auto-mode)) is judged by the session's own model and takes no classifier rules. |
+| `useAutoModeDuringPlan` | accepted-with-warning | Read and ignored: plan mode stays read-only. |
+| `disableAutoMode` | accepted-with-warning | Read and ignored: auto mode is only on when you name it. |
 | `enableWorkflows` | present | `false` removes the `Workflow` tool, like `disableWorkflows: true` (the `/config` toggle in Claude Code). |
 | `disableWorkflows` | present | `true` removes the `Workflow` tool, as `CLAUDE_CODE_DISABLE_WORKFLOWS=1` does. |
 | `workflowSizeGuideline` | present | `unrestricted`, `small`, `medium` (default) or `large`: a sentence added to the `Workflow` tool's description, in Claude Code's words. Advisory. |

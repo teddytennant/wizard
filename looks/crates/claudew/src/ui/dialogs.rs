@@ -276,7 +276,7 @@ fn mode(app: &App, sel: usize, w: usize) -> Panel {
     let (now, _) = app.shown_mode();
     let about = "Switch between Wizard's modes for this session. shift+tab also cycles them, \
                  with plan mode after the last.";
-    choices(app, "Select mode", about, &app.cfg.modes, &now, sel, w)
+    choices(app, "Select mode", about, app.modes(), &now, sel, w)
 }
 
 /// `/effort`: the same list for the model's reasoning efforts.
