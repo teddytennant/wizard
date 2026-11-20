@@ -235,11 +235,8 @@ pub fn render(th: &Theme, d: &FileDiff, indent: usize, w: usize) -> Rendered {
                     }
                 }
             }
-            if ch.tag() != ChangeTag::Equal {
-                // in the transcript the band stops seven columns short of the edge, in a
-                // permission prompt it runs to it
-                let to = if indent > 0 { w.saturating_sub(7) } else { w };
-                let fill = to.saturating_sub(row.width());
+            if ch.tag() != ChangeTag::Equal && indent > 0 {
+                let fill = w.saturating_sub(7).saturating_sub(row.width());
                 let bg = Style::new().bg(if ch.tag() == ChangeTag::Insert {
                     th.added_bg
                 } else {

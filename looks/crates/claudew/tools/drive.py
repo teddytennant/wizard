@@ -3,7 +3,7 @@
 
 Every tmux call goes to the socket `lookclaude` (`tmux -L lookclaude`), never the default
 server. Each scene ends in one or more captures: `<out>/<scene>-<WxH>.ansi` is
-`capture-pane -e -p -N` (text with SGR, trailing cells kept), `<out>/<scene>-<WxH>.meta` the cursor cell and whether
+`capture-pane -e -p` (text with SGR), `<out>/<scene>-<WxH>.meta` the cursor cell and whether
 the cursor and the alternate screen are on.
 """
 import argparse, os, re, subprocess, sys, time
@@ -25,8 +25,7 @@ LONG = ('this is a long line of input that keeps going so that it has to wrap at
 # reference only, ('look_keys', ...) to the look only.
 STATIC = [
     ('home', [('snap', '')]),
-    # after the ten seconds the effort notice and `← for agents` are up, which a slow start would catch
-    ('shortcuts', [('since', 11), ('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+    ('shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('multiline', [('since', 13), ('type', 'line one\\'), ('keys', 'Enter'), ('type', 'line two'), ('snap', '')]),
     ('ctrlc', [('fast_keys', 'C-c'), ('raw_snap', '-hint'), ('wait', 2.5), ('snap', '-after')]),
     ('bash-mode', [('type', '!'), ('snap', ''), ('type', 'ls'), ('snap', '-typed'),
@@ -307,7 +306,7 @@ LIVE_FAIL = [
 # The light theme, for the scenes that carry the most colour without a model call.
 LIGHT = [
     ('light-home', [('snap', '')]),
-    ('light-shortcuts', [('since', 11), ('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
+    ('light-shortcuts', [('type', '?'), ('snap', ''), ('keys', 'BSpace')]),
     ('light-modes', [('since', 20), ('keys', 'BTab'), ('snap', '-1'), ('keys', 'BTab'), ('snap', '-2'),
                      ('keys', 'BTab', 'BTab'), ('wait', 1.0)]),
     ('light-slash', [('type', '/mo'), ('snap', ''), ('keys', 'C-c'), ('wait', 1.0)]),
@@ -608,7 +607,7 @@ class Pane:
         else:
             time.sleep(0.15)
         with open(path + '.ansi', 'w', encoding='utf-8') as f:
-            f.write(tmux('capture-pane', '-t', self.name, '-e', '-p', '-N'))
+            f.write(tmux('capture-pane', '-t', self.name, '-e', '-p'))
         with open(path + '.meta', 'w') as f:
             f.write(tmux('display', '-p', '-t', self.name,
                          'cursor=#{cursor_x},#{cursor_y} visible=#{cursor_flag} alt=#{alternate_on}'))
