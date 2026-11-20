@@ -17,8 +17,6 @@ fn fixture() -> Value {
 struct Cmd {
     name: String,
     description: String,
-    /// What the menu prints when it is not the description searched.
-    menu: Option<String>,
     aliases: Vec<String>,
 }
 
@@ -30,7 +28,6 @@ fn commands(v: &Value) -> Vec<Cmd> {
         .map(|c| Cmd {
             name: c["name"].as_str().unwrap().into(),
             description: c["description"].as_str().unwrap().into(),
-            menu: c["menu"].as_str().map(String::from),
             aliases: c["aliases"]
                 .as_array()
                 .unwrap()
@@ -164,7 +161,6 @@ fn the_alias_table_is_the_fixtures() {
     }
 }
 
-#[allow(dead_code)]
 mod common;
 
 /// The same queries through the look's own screen: the rows the menu shows, in order, are the

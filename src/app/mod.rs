@@ -3149,14 +3149,12 @@ impl App {
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
             match key.code {
-                KeyCode::Up | KeyCode::BackTab => {
-                    if visible_len > 0 {
-                        picker.selected = if picker.selected == 0 {
-                            visible_len - 1
-                        } else {
-                            picker.selected - 1
-                        };
-                    }
+                KeyCode::Up | KeyCode::BackTab if visible_len > 0 => {
+                    picker.selected = if picker.selected == 0 {
+                        visible_len - 1
+                    } else {
+                        picker.selected - 1
+                    };
                 }
                 KeyCode::Char('k') if !filterable => {
                     picker.selected = if picker.selected == 0 {
@@ -3165,14 +3163,12 @@ impl App {
                         picker.selected - 1
                     };
                 }
-                KeyCode::Down | KeyCode::Tab => {
-                    if visible_len > 0 {
-                        picker.selected = if picker.selected + 1 >= visible_len {
-                            0
-                        } else {
-                            picker.selected + 1
-                        };
-                    }
+                KeyCode::Down | KeyCode::Tab if visible_len > 0 => {
+                    picker.selected = if picker.selected + 1 >= visible_len {
+                        0
+                    } else {
+                        picker.selected + 1
+                    };
                 }
                 KeyCode::Char('j') if !filterable => {
                     picker.selected = if picker.selected + 1 >= visible_len {
