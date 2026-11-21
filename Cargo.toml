@@ -329,6 +329,9 @@ provider-xai = []
 anyhow = "1"
 thiserror = "2"
 
+# Dated, source-cited LLM list prices (OpenAI block of src/usage.rs)
+llm-prices = "1.8.0"
+
 # Async runtime + streams
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
