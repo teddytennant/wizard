@@ -628,8 +628,12 @@ impl Session {
         if !kept.is_empty() {
             kept.push('\n');
         }
-        std::fs::write(&self.path, kept)
-            .with_context(|| format!("rewriting {}", self.path.display()))?;
+        // Write beside the file and rename over it: `fs::write` truncates
+        // first, so a kill mid-rewind would leave the whole history cut short.
+        let tmp = self.path.with_extension("jsonl.tmp");
+        std::fs::write(&tmp, kept).with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &self.path)
+            .with_context(|| format!("replacing {}", self.path.display()))?;
         Ok(true)
     }
 }
@@ -1025,6 +1029,32 @@ mod tests {
         session.append_marker(3, "three").unwrap();
         session.append(&ChatMessage::user("three")).unwrap();
         assert_eq!(session.load_messages().unwrap().len(), 3);
+    }
+
+    /// A reader holding the session file must keep the whole history after a
+    /// rewind: the rewrite replaces the file rather than truncating the inode
+    /// a kill could leave half-written.
+    #[test]
+    fn a_reader_holding_the_session_keeps_the_pre_rewind_history() {
+        use std::io::Read;
+
+        let tmp = TempDir::new();
+        let session = Session::create(&tmp.0).unwrap();
+        session.append_marker(1, "one").unwrap();
+        session.append(&ChatMessage::user("one")).unwrap();
+        session.append_marker(2, "two").unwrap();
+        session.append(&ChatMessage::user("two")).unwrap();
+
+        let mut held = std::fs::File::open(session.path()).unwrap();
+        assert!(session.truncate_after(2).unwrap());
+
+        let mut raw = String::new();
+        held.read_to_string(&mut raw).unwrap();
+        assert!(
+            raw.contains("\"two\""),
+            "the inode a reader already had must keep the rewound turn: {raw}"
+        );
+        assert_eq!(session.load_messages().unwrap().len(), 1);
     }
 
     #[test]
