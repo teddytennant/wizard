@@ -1838,3 +1838,17 @@ fn dangerously_skip_permissions_runs_in_bypass_mode_unless_a_mode_is_named() {
     ]));
     assert_eq!(config.run_permissions.mode, Some(PermissionMode::Plan));
 }
+
+#[test]
+fn plugins_table_hands_each_plugin_its_slice() {
+    let raw = "model = \"x\"\n[plugins.todo]\nlimit = 3\n[plugins.web]\nallow_local = true\n";
+    assert_eq!(
+        Config::plugins_table(raw),
+        serde_json::json!({"todo": {"limit": 3}, "web": {"allow_local": true}}),
+    );
+    assert_eq!(
+        Config::plugins_table("model = \"x\""),
+        serde_json::json!({})
+    );
+    assert_eq!(Config::plugins_table("not = [toml"), serde_json::json!({}));
+}

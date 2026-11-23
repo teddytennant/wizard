@@ -2057,6 +2057,29 @@ impl Config {
         Ok(())
     }
 
+    /// The `[plugins]` table as it is on disk now, as JSON: a map from plugin
+    /// name to that plugin's slice, which `ctx:config()` hands back. Empty when
+    /// there is no config file, it does not parse, or it has no `[plugins]`.
+    pub fn plugins_on_disk() -> serde_json::Value {
+        let raw = Self::path()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        Self::plugins_table(&raw)
+    }
+
+    fn plugins_table(raw: &str) -> serde_json::Value {
+        #[derive(Deserialize)]
+        struct OnlyPlugins {
+            #[serde(default)]
+            plugins: toml::Table,
+        }
+        toml::from_str::<OnlyPlugins>(raw)
+            .ok()
+            .and_then(|only| serde_json::to_value(only.plugins).ok())
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()))
+    }
+
     /// The `[computer]` table as it is on disk now, or `None` when there is no
     /// config file or it does not parse.
     ///
