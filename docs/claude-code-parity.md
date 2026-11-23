@@ -225,8 +225,8 @@ not repeated; the flag table here only adds the status of each flag in 2.1.314's
 
 | Claude Code | Status | Notes |
 | :- | :- | :- |
-| `plugin list` | present | `--json` supported; `--available` and `--data-size` are accepted and ignored. |
-| `plugin install \| i` | present | `name@marketplace`, `owner/repo`, a git URL or a directory; `--marketplace <source>` adds it first. `--scope` is treated as user (one store). `--config`, `--registry`, `--accept-command` (npm and command sources) are not read. |
+| `plugin list` | present | `--json` supported; `--available` is accepted and ignored. `--data-size` is not accepted. |
+| `plugin install \| i` | present | `name@marketplace`, `owner/repo`, a git URL or a directory; `--marketplace <source>` adds it first. `--scope` is treated as user (one store). `--config`, `--registry` and `--accept-command` (npm and command sources) are not accepted. |
 | `plugin uninstall \| remove` | present | `--keep-data` is accepted; Wizard keeps no plugin data directory. |
 | `plugin enable, plugin disable [--all]` | present |  |
 | `plugin update` | present | Refreshes the marketplaces and installs again from where the plugin came from. |
