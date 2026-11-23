@@ -260,6 +260,9 @@ impl Cli {
         if self.login.is_some() {
             ignored.push("--login");
         }
+        if self.provider.is_some() {
+            ignored.push("--provider");
+        }
         if self.permission_mode.is_some() {
             ignored.push("--permission-mode");
         }
@@ -2269,5 +2272,8 @@ mod tests {
 
         let cli = parse(&["--output-format", "json", "doctor"]).expect("parses");
         assert_eq!(cli.ignored_top_level_flags(), vec!["--output-format"]);
+
+        let cli = parse(&["--provider", "claude", "doctor"]).expect("parses");
+        assert_eq!(cli.ignored_top_level_flags(), vec!["--provider"]);
     }
 }
