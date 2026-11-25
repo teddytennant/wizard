@@ -1,12 +1,19 @@
 // OWNER: renderer
 //! Startup probe (spec A.3): one batched write of CPR, OSC 10, OSC 11, kitty flags query and
 //! primary DA, answers read with one shared 100 ms deadline before the event reader starts.
+//!
+//! Over a direct SSH session the batch also asks for secondary DA, which tells Terminal.app apart
+//! (Codex 0.174.0-alpha.6 `terminal_capabilities/terminal_probe.rs` `startup`, `query_identity`):
+//! its replies make `tui.alternate_screen = auto` keep the inline screen.
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 pub const PROBE: &[u8] = b"\x1b[6n\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?u\x1b[c";
 pub const PROBE_SKIP_KEYBOARD: &[u8] = b"\x1b[6n\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
+/// Primary DA (the batch ends with it when keyboard is skipped) and secondary DA, the identity
+/// pair `capabilities::requires_inline_screen` reads.
+pub const PROBE_IDENTITY: &[u8] = b"\x1b[c\x1b[>c";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Probe {
@@ -14,6 +21,9 @@ pub struct Probe {
     pub cursor: Option<(u16, u16)>,
     pub fg: Option<(u8, u8, u8)>,
     pub bg: Option<(u8, u8, u8)>,
+    /// The terminal asked for the inline screen (Codex `StartupProbe::prefer_inline_screen`).
+    /// `Some(false)` when identity was not asked for; `None` when its replies did not arrive.
+    pub prefer_inline_screen: Option<bool>,
 }
 
 /// Parse the terminal's replies. Colours need both fg and bg to count.
@@ -86,13 +96,27 @@ pub fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
     Some((comp()?, comp()?, comp()?))
 }
 
+/// The bytes the startup probe writes.
+pub fn query(keyboard: bool, identity: bool) -> Vec<u8> {
+    let mut q = if keyboard { PROBE } else { PROBE_SKIP_KEYBOARD }.to_vec();
+    if identity {
+        if keyboard {
+            // PROBE already ends with primary DA.
+            q.extend_from_slice(b"\x1b[>c");
+        } else {
+            q.extend_from_slice(PROBE_IDENTITY);
+        }
+    }
+    q
+}
+
 /// Run the probe on the real terminal. Raw mode must already be on. Keys typed during the
-/// deadline are lost, as in Codex.
+/// deadline are lost, as in Codex. `identity` adds the Terminal.app question.
 #[cfg(unix)]
-pub fn run(keyboard: bool) -> Probe {
+pub fn run(keyboard: bool, identity: bool) -> Probe {
     use std::os::fd::AsRawFd;
     let mut out = io::stdout();
-    let _ = out.write_all(if keyboard { PROBE } else { PROBE_SKIP_KEYBOARD });
+    let _ = out.write_all(&query(keyboard, identity));
     let _ = out.flush();
     let fd = io::stdin().as_raw_fd();
     let deadline = Instant::now() + Duration::from_millis(100);
@@ -121,11 +145,19 @@ pub fn run(keyboard: bool) -> Probe {
         buf.extend_from_slice(&chunk[..r as usize]);
         let p = parse_replies(&buf);
         let kbd_done = !keyboard || buf.windows(3).any(|w| w == b"\x1b[?") && buf.ends_with(b"c");
-        if p.cursor.is_some() && p.fg.is_some() && kbd_done {
+        let identity_done =
+            !identity || super::capabilities::requires_inline_screen(&buf).is_some();
+        if p.cursor.is_some() && p.fg.is_some() && kbd_done && identity_done {
             break;
         }
     }
-    parse_replies(&buf)
+    let mut p = parse_replies(&buf);
+    p.prefer_inline_screen = if identity {
+        super::capabilities::requires_inline_screen(&buf)
+    } else {
+        Some(false)
+    };
+    p
 }
 
 #[cfg(test)]
@@ -145,6 +177,14 @@ mod tests {
     fn two_digit_components() {
         assert_eq!(parse_color("rgb:1a/1a/1a"), Some((26, 26, 26)));
         assert_eq!(parse_color("nope"), None);
+    }
+
+    #[test]
+    fn identity_is_asked_only_when_wanted() {
+        assert_eq!(query(true, false), PROBE);
+        assert!(query(true, true).ends_with(b"\x1b[c\x1b[>c"));
+        assert!(query(false, true).ends_with(b"\x1b[c\x1b[>c"));
+        assert_eq!(query(false, false), PROBE_SKIP_KEYBOARD);
     }
 
     #[test]

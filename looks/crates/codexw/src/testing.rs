@@ -133,6 +133,10 @@ pub struct Screen {
     pub link_urls: Vec<String>,
     link: u16,
     pub alt_screen_entered: usize,
+    /// Mouse reporting (`?1000`, `?1002`, `?1003`) is on.
+    pub mouse_reporting: bool,
+    /// Kitty keyboard frames pushed (`CSI > n u`) minus popped (`CSI < n u`).
+    pub keyboard_frames: i32,
     pending: Vec<u8>,
     /// How many times a screen or scrollback clear was seen.
     pub scrollback_clears: usize,
@@ -159,6 +163,8 @@ impl Screen {
             link_urls: Vec::new(),
             link: 0,
             alt_screen_entered: 0,
+            mouse_reporting: false,
+            keyboard_frames: 0,
             pending: Vec::new(),
             scrollback_clears: 0,
         }
@@ -462,8 +468,14 @@ impl Screen {
                         }
                     }
                     25 => self.cursor_visible = on,
+                    1000 | 1002 | 1003 => self.mouse_reporting = on,
                     _ => {}
                 }
+            }
+            b'u' if params.starts_with('>') => self.keyboard_frames += 1,
+            b'u' if params.starts_with('<') => {
+                self.keyboard_frames -=
+                    nums.first().copied().filter(|n| *n > 0).unwrap_or(1) as i32;
             }
             _ => {}
         }
@@ -641,6 +653,20 @@ pub fn harness(cols: u16, rows: u16, placeholder: usize) -> Harness {
     )
 }
 
+/// `harness` on the owned alternate screen, Codex 0.174's default: the chat draws its own
+/// scrollable transcript there instead of writing into scrollback.
+pub fn harness_owned(cols: u16, rows: u16, placeholder: usize) -> Harness {
+    harness_with(
+        cols,
+        rows,
+        AppOpts {
+            placeholder: Some(placeholder),
+            owned_screen: true,
+            ..Default::default()
+        },
+    )
+}
+
 pub fn harness_with(cols: u16, rows: u16, mut opts: AppOpts) -> Harness {
     set_palette(dark_palette());
     let (tx, requests) = unbounded_channel();
@@ -708,6 +734,16 @@ impl Harness {
         for ch in s.chars() {
             self.key(crossterm::event::KeyCode::Char(ch));
         }
+    }
+
+    /// A mouse event at a 0-based cell.
+    pub fn mouse(&mut self, kind: crossterm::event::MouseEventKind, column: u16, row: u16) {
+        self.app.on_mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
     }
 
     /// Everything the app asked the backend for since the last call.

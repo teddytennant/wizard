@@ -1,9 +1,10 @@
 // OWNER: renderer
 //! Terminal modes set at start and restored on exit (spec A.2).
 //!
-//! Set: bracketed paste, raw mode, keyboard enhancement, focus reporting. Never mouse capture,
-//! never the alternate screen at startup. A panic hook and the signal thread undo exactly what
-//! was set.
+//! Set: bracketed paste, raw mode, keyboard enhancement, focus reporting. Mouse capture and the
+//! alternate screen belong to `alt_screen`, which the chat enters on its first frame when it owns
+//! the screen. A panic hook and the signal thread undo exactly what was set, the alternate
+//! screen's modes first.
 
 use std::io::{self, Write};
 use std::sync::Once;
@@ -54,6 +55,7 @@ pub fn set_modes(out: &mut impl Write) -> io::Result<()> {
         let prog = std::env::var("TERM_PROGRAM").unwrap_or_default();
         let flags = keyboard_flags(&prog, fmt.as_deref());
         write!(out, "\x1b[>{flags}u")?;
+        super::alt_screen::ALTERNATE_SCREEN.set_keyboard_flags(Some(flags));
         if fmt.as_deref() == Some("csi-u") {
             out.write_all(b"\x1b[>4;2m")?;
         }
@@ -102,6 +104,7 @@ pub fn install_signal_restore() {
     if let Ok(mut sig) = Signals::new([SIGTERM, SIGHUP]) {
         std::thread::spawn(move || {
             if let Some(s) = sig.forever().next() {
+                super::alt_screen::ALTERNATE_SCREEN.emergency_restore(&mut io::stdout());
                 let _ = io::stdout().write_all(b"\x1b[?1007l\x1b[?1049l\x1b[r");
                 restore_after_exit();
                 std::process::exit(128 + s);
@@ -114,7 +117,8 @@ fn install_hooks() {
     HOOKS.call_once(|| {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            // The alt screen may be open when a panic hits an overlay.
+            // The alt screen may be open: the owned chat, or an overlay over the inline one.
+            super::alt_screen::ALTERNATE_SCREEN.emergency_restore(&mut io::stdout());
             let _ = io::stdout().write_all(b"\x1b[?1007l\x1b[?1049l\x1b[r");
             restore_after_exit();
             prev(info);

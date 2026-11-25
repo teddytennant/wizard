@@ -146,6 +146,11 @@ A source install, or a release from before that, builds them when `cargo` is
 available. Switching to a full look quits the TUI and starts it. Inside the
 look, `/ui wizard` saves the choice, and quitting the look brings the TUI back.
 `wizard agents`, `-p`, `--resume`, `--plan` and `--mode` always open the TUI.
+The `codex` full look runs full screen, as current Codex does: the chat takes
+the terminal's alternate screen and scrolls its own transcript (mouse wheel,
+PgUp/PgDn, Esc to return to the bottom). For the inline mode, which leaves the
+conversation in your terminal's scrollback, start it with `--no-alt-screen` or
+put `alternate_screen = "never"` in `~/.config/codexw/config.toml`.
 The full looks all have the same slash commands, Wizard's own; a few add
 display ones such as opencode's `/theme` ([ui-skins.md](ui-skins.md#slash-commands-in-the-full-looks)
 has the list).

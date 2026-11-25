@@ -8,6 +8,10 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+### Changed
+
+- The `codex` full look follows Codex 0.174 and runs full screen by default: the chat owns the alternate screen and scrolls its own transcript, with the mouse wheel, PgUp/PgDn, Ctrl+Home/Ctrl+End and a `↓ Back to bottom` control. `--no-alt-screen` or `alternate_screen = "never"` in `~/.config/codexw/config.toml` keeps the inline mode with the conversation in the terminal's scrollback, and `auto` stays inline for Terminal.app over SSH. Inside tmux, `/copy` goes through tmux's own clipboard, and Ghostty over SSH gets truecolor without `COLORTERM` ([docs/ui-skins.md](docs/ui-skins.md)).
+
 ## [2026.11.19] - 2026-11-19
 
 ### Changed

@@ -129,6 +129,35 @@ Ported from `codex-rs/tui/src/`:
 | `bottom_pane/chat_composer.rs` — the unframed composer, `LIVE_PREFIX_COLS = 2`, the `›` prompt (bold *and* dim) | `ComposerFrame::Bare` |
 | `status_indicator_widget.rs` — `Working (… • esc to interrupt)` and its punctuation | `BusyStyle::Working` |
 
+The codex full look (`looks/crates/codexw`, `wizard-ui-codex`) follows Codex
+**0.174.0-alpha.6** (`openai/codex` commit `06f334aa`); its rows and colours
+are still checked against captures of 0.147.0 where the two did not change.
+Each ported function names its upstream file at the site. The screen layer
+came over from the newer release:
+
+| Upstream (`codex-rs/`) | Here (`looks/crates/codexw/src/`) |
+|---|---|
+| `tui/src/lib.rs` — `determine_alt_screen_mode`; `protocol/src/config_types.rs` — `AltScreenMode`; `tui/src/transcript_mode.rs` | `term/alt_screen.rs` |
+| `tui/src/tui/alternate_screen.rs` — entry and leave order, the screen's own keyboard frame, pointer capture, release for an editor, restore from the panic hook through a static | `term/alt_screen.rs`, `term/inline.rs` (`enter_owned_screen`, `leave_owned_screen`), `term/modes.rs` |
+| `tui/src/tui.rs` — `enter_alt_screen`, `leave_alt_screen` (an overlay closing keeps an owned screen), `leave_alt_screen_for_handoff` | `term/inline.rs`, `app.rs` |
+| `tui/src/transcript_view.rs`, `transcript_view/input.rs`, `transcript_view/follow_control.rs` — anchored reading position, `scroll`, `JumpTarget`, `handle_scroll_key`, wheel accumulation, the `↓ Back to bottom` control and its hover | `ui/transcript_view.rs` |
+| `tui/src/app/owned_transcript.rs` — composer at the bottom, gap row, transcript above; sending returns to the bottom | `app.rs` (`draw_owned`) |
+| `tui/src/terminal_capabilities.rs`, `terminal_capabilities/terminal_identity.rs`, `terminal_capabilities/tmux_clipboard.rs`, `terminal_capabilities/terminal_probe.rs` (`query_identity`) — Terminal.app detection over SSH, clipboard route, OSC 52 targets | `term/capabilities.rs`, `term/probe.rs`, `clipboard.rs` |
+| `terminal-detection/src/color.rs` — `ansi_color_level` (Ghostty over SSH is truecolor without `COLORTERM`) | `term/capabilities.rs`, `style.rs` |
+
+By default the look runs full screen, as Codex now does: the chat owns the
+alternate screen and scrolls its own transcript (wheel, PgUp/PgDn,
+Ctrl+Home/Ctrl+End or Alt+</Alt+>, Esc or the `↓ Back to bottom` control to
+return). `--no-alt-screen`, `alternate_screen = "never"` in
+`~/.config/codexw/config.toml` (also read under `[tui]`, Codex's spelling) or
+`-c tui.alternate_screen=never` keeps the 0.147 inline renderer, with the
+conversation in the terminal's own scrollback; `auto` also stays inline for
+Terminal.app over SSH, and `fullscreen_transcript = false` keeps the chat
+inline but opens overlays on the alternate screen. Not ported: upstream's
+in-transcript selection and copy (hold Shift to select with the terminal
+while the pointer is captured), search, copy mode, collapsed turn details,
+the sidebar, OSC 22 pointer shapes and tmux mouse-policy sampling.
+
 ### xAI Grok Build — <https://github.com/xai-org/grok-build> (Apache-2.0)
 
 Ported from `crates/codegen/`:

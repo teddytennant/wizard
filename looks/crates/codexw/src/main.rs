@@ -1,5 +1,5 @@
 // OWNER: shared (arguments, runtime, terminal setup and teardown)
-//! `codexw`: the OpenAI Codex CLI 0.147.0 terminal UI on the wizard backend.
+//! `codexw`: the OpenAI Codex CLI terminal UI (0.174.0-alpha.6) on the wizard backend.
 
 use std::io::{BufWriter, IsTerminal, Write};
 use std::path::PathBuf;
@@ -10,7 +10,8 @@ use agent_core::Request;
 use anyhow::{Context, Result, bail};
 use codexw::app::{self, App, AppOpts, CODEX_VERSION, Msg, VERSION};
 use codexw::style::{ColorLevel, Palette, set_palette};
-use codexw::term::{modes, probe};
+use codexw::term::alt_screen::{AltScreenMode, TranscriptMode, determine_alt_screen_mode};
+use codexw::term::{capabilities, modes, probe};
 use ratatui::layout::{Position, Size};
 use tokio::sync::mpsc::unbounded_channel;
 use tuikit::input::Input;
@@ -32,7 +33,8 @@ Arguments:
 
 Options:
   -c, --config <key=value>
-          Override a configuration value. Only `model=\"...\"` is read by wizard
+          Override a configuration value. Read: `model=\"...\"`, `tui.status_line=[]`,
+          `tui.alternate_screen=auto|always|never` and `tui.fullscreen_transcript=true|false`
 
   -m, --model <MODEL>
           Model the agent should use, as <provider>/<model>
@@ -56,6 +58,12 @@ Options:
 
   -V, --version
           Print version
+
+Screen:
+  Full screen by default: the chat owns the alternate screen and scrolls its own transcript
+  (wheel, PgUp/PgDn, Ctrl+Home/Ctrl+End, Esc back to the bottom). `--no-alt-screen`, or
+  `alternate_screen = \"never\"` in ~/.config/codexw/config.toml, keeps it inline with the
+  conversation in the terminal's scrollback. `auto` also stays inline for Terminal.app over SSH.
 
 Environment:
   CODEXW_BACKEND=mock      scripted backend, no model calls
@@ -113,6 +121,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
                     o.model = Some(m.trim_matches('"').to_string());
                 } else if kv.replace(' ', "") == "tui.status_line=[]" {
                     o.status_line_off = true;
+                } else if let Some(v) = kv.strip_prefix("tui.alternate_screen=") {
+                    o.alt_screen_mode = Some(AltScreenMode::parse(v).ok_or_else(|| {
+                        format!("invalid value '{v}' for 'tui.alternate_screen': expected auto, always or never")
+                    })?);
+                } else if let Some(v) = kv.strip_prefix("tui.fullscreen_transcript=") {
+                    o.fullscreen_transcript = Some(parse_bool(v).ok_or_else(|| {
+                        format!("invalid value '{v}' for 'tui.fullscreen_transcript': expected true or false")
+                    })?);
                 }
             }
             "-s" | "--sandbox" => {
@@ -168,11 +184,51 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
     Ok(Parsed::Run(Box::new(o)))
 }
 
+fn parse_bool(v: &str) -> Option<bool> {
+    match v.trim().trim_matches('"') {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// The screen setting: `-c` first, then `~/.config/codexw/config.toml` (`alternate_screen`,
+/// `fullscreen_transcript`, read under `[tui]` too, as Codex spells them), then the defaults
+/// (`auto`, owned transcript on).
+fn screen_settings(o: &AppOpts) -> (AltScreenMode, bool) {
+    let file = std::env::var("HOME").ok().map(|h| codexw::config::path(&h));
+    let read = |key: &str| file.as_deref().and_then(|p| codexw::config::get(p, key));
+    let mode = o
+        .alt_screen_mode
+        .or_else(|| read("alternate_screen").and_then(|v| AltScreenMode::parse(&v)))
+        .unwrap_or_default();
+    let fullscreen = o
+        .fullscreen_transcript
+        .or_else(|| read("fullscreen_transcript").and_then(|v| parse_bool(&v)))
+        .unwrap_or(true);
+    (mode, fullscreen)
+}
+
+/// Codex `lib.rs`: the alternate screen per `determine_alt_screen_mode`, the transcript owned per
+/// `TranscriptMode::resolve`. Returns `(alternate screen allowed, transcript owned)`.
+fn resolve_screen(
+    no_alt_screen: bool,
+    mode: AltScreenMode,
+    fullscreen_transcript: bool,
+    prefer_inline_screen: bool,
+) -> (bool, bool) {
+    let use_alt = determine_alt_screen_mode(no_alt_screen, mode, prefer_inline_screen);
+    (
+        use_alt,
+        TranscriptMode::resolve(fullscreen_transcript, use_alt).is_owned(),
+    )
+}
+
 fn flush_stdin() {
     modes::flush_input();
 }
 
-async fn real_main(opts: AppOpts) -> Result<()> {
+async fn real_main(mut opts: AppOpts) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         bail!("stdin is not a terminal");
     }
@@ -191,7 +247,20 @@ async fn real_main(opts: AppOpts) -> Result<()> {
     modes::set_modes(&mut out).context("could not set up the terminal")?;
     modes::install_signal_restore();
     flush_stdin();
-    let pr = probe::run(!modes::keyboard_enhancement_disabled());
+    let (mode, fullscreen) = screen_settings(&opts);
+    // Only `auto` asks who the terminal is, and only over a direct SSH session.
+    let identity = !opts.no_alt_screen
+        && mode == AltScreenMode::Auto
+        && capabilities::should_probe_inline_screen(&capabilities::process_env);
+    let pr = probe::run(!modes::keyboard_enhancement_disabled(), identity);
+    let (use_alt, owned) = resolve_screen(
+        opts.no_alt_screen,
+        mode,
+        fullscreen,
+        pr.prefer_inline_screen.unwrap_or(false),
+    );
+    opts.no_alt_screen = !use_alt;
+    opts.owned_screen = owned;
     set_palette(Palette::new(pr.fg, pr.bg, ColorLevel::from_env()));
     let (w, h) = crossterm::terminal::size().context("could not read the terminal size")?;
     let cursor = pr.cursor.map_or(Position::new(0, 0), |(x, y)| {
@@ -279,6 +348,54 @@ mod tests {
         assert_eq!(o.model.as_deref(), Some("a/b"));
         assert!(o.no_alt_screen);
         assert_eq!(o.prompt.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn screen_overrides_parse() {
+        let Ok(Parsed::Run(o)) = parse_args(args(&[
+            "-c",
+            "tui.alternate_screen=\"never\"",
+            "-c",
+            "tui.fullscreen_transcript=false",
+        ])) else {
+            panic!("did not parse")
+        };
+        assert_eq!(o.alt_screen_mode, Some(AltScreenMode::Never));
+        assert_eq!(o.fullscreen_transcript, Some(false));
+        assert!(parse_args(args(&["-c", "tui.alternate_screen=maybe"])).is_err());
+        assert!(parse_args(args(&["-c", "tui.fullscreen_transcript=1"])).is_err());
+    }
+
+    #[test]
+    fn the_screen_defaults_to_owned_and_flags_take_it_back() {
+        // default: auto, nothing preferring inline
+        assert_eq!(
+            resolve_screen(false, AltScreenMode::Auto, true, false),
+            (true, true)
+        );
+        // --no-alt-screen: inline, overlays included
+        assert_eq!(
+            resolve_screen(true, AltScreenMode::Always, true, false),
+            (false, false)
+        );
+        // Terminal.app over SSH under auto
+        assert_eq!(
+            resolve_screen(false, AltScreenMode::Auto, true, true),
+            (false, false)
+        );
+        assert_eq!(
+            resolve_screen(false, AltScreenMode::Always, true, true),
+            (true, true)
+        );
+        assert_eq!(
+            resolve_screen(false, AltScreenMode::Never, true, false),
+            (false, false)
+        );
+        // the 0.147 behaviour: inline chat, overlays on the alternate screen
+        assert_eq!(
+            resolve_screen(false, AltScreenMode::Auto, false, false),
+            (true, false)
+        );
     }
 
     #[test]

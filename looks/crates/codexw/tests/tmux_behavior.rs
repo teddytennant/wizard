@@ -1,7 +1,9 @@
-//! Real-terminal behaviour in a private tmux server: the conversation stays in the terminal's
-//! own scrollback after exit, a resize replays it at the new width, Ctrl+C follows Codex's
-//! order, the exit summary is printed after the terminal is restored, and the chat never
-//! touches the alternate screen. Skipped when tmux or script(1) is missing.
+//! Real-terminal behaviour in a private tmux server. With `--no-alt-screen` (the inline renderer):
+//! the conversation stays in the terminal's own scrollback after exit, a resize replays it at the
+//! new width, Ctrl+C follows Codex's order, the exit summary is printed after the terminal is
+//! restored, and the chat never touches the alternate screen. By default (Codex 0.174's owned
+//! screen) the chat runs on the alternate screen with the pointer captured and gives both back on
+//! exit. Skipped when tmux or script(1) is missing.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -22,7 +24,12 @@ fn have(cmd: &str) -> bool {
 }
 
 impl Tmux {
+    /// The inline renderer, which most of these tests are about.
     fn new(name: &str, cols: u16, rows: u16) -> Option<Tmux> {
+        Self::with_flags(name, cols, rows, "--no-alt-screen")
+    }
+
+    fn with_flags(name: &str, cols: u16, rows: u16, flags: &str) -> Option<Tmux> {
         if !have("tmux") || !have("script") {
             eprintln!("skipping: tmux or script missing");
             return None;
@@ -37,14 +44,16 @@ impl Tmux {
         let typescript = home.join("typescript");
         let bin = env!("CARGO_BIN_EXE_codexw");
         let inner = format!(
-            "cd {home}/proj; env HOME={home} CODEXW_BACKEND=mock CODEXW_PLACEHOLDER=7 TERM=xterm-256color COLORTERM=truecolor {bin} -m gpt-5.5; echo \"[codexw exited $?]\"; sleep 20",
+            "cd {home}/proj; env HOME={home} CODEXW_BACKEND=mock CODEXW_PLACEHOLDER=7 TERM=xterm-256color COLORTERM=truecolor {bin} -m gpt-5.5 {flags}; echo \"[codexw exited $?]\"; sleep 20",
             home = home.display()
         );
-        let cmd = format!(
-            "script -q -f -c '{}' {}",
-            inner.replace('\'', "'\\''"),
-            typescript.display()
-        );
+        let quoted = inner.replace('\'', "'\\''");
+        // util-linux and BSD script(1) take the command and the file differently.
+        let cmd = if cfg!(target_os = "linux") {
+            format!("script -q -f -c '{quoted}' {}", typescript.display())
+        } else {
+            format!("script -q -F {} sh -c '{quoted}'", typescript.display())
+        };
         let t = Tmux {
             sock,
             home,
@@ -258,6 +267,39 @@ fn chat_never_uses_the_alternate_screen() {
     assert!(!has(b"\x1b[?1000h"), "mouse capture must stay off");
     // A resize wipes and replays: one scrollback purge.
     assert!(has(b"\x1b[3J"), "no scrollback purge on resize");
+}
+
+#[test]
+fn the_default_chat_owns_the_alternate_screen() {
+    let Some(t) = Tmux::with_flags("owned", 120, 36, "") else {
+        return;
+    };
+    t.wait("header", |s| s.contains("Wizard"));
+    t.submit("hello there");
+    t.wait("the turn to finish", |s| {
+        s.contains("hello there") && !s.contains("esc to interrupt") && s.contains("•")
+    });
+    t.keys(&["C-c"]);
+    t.wait("exit", |s| s.contains("[codexw exited 0]"));
+    let bytes = std::fs::read(&t.typescript).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"\x1b[?1049h"), "alt screen not entered");
+    assert!(has(b"\x1b[?1049l"), "alt screen not left");
+    assert!(
+        has(b"\x1b[?1003h") && has(b"\x1b[?1000l"),
+        "pointer not paired"
+    );
+    assert!(
+        !has(b"\x1b[3J"),
+        "the shell's scrollback must not be purged"
+    );
+    // The summary is printed on the main screen after the alternate one is gone.
+    let full = t.full();
+    assert!(
+        full.contains("To continue this session, run wizard-ui-codex resume mock-1"),
+        "{full}"
+    );
+    assert!(!full.contains("› hello there"), "{full}");
 }
 
 /// CPU ticks (utime + stime) of the codexw process that carries `marker` in its environment.

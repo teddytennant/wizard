@@ -1,7 +1,9 @@
-//! `/copy` and Ctrl+O. A local session copies through the platform tool (`wl-copy`, `xclip`,
-//! `xsel`, `pbcopy`); with none of them, or over SSH, the text goes out as an OSC 52 escape for
-//! the terminal to put on the clipboard, wrapped for tmux when `$TMUX` is set (Codex
-//! `clipboard_copy.rs`).
+//! `/copy` and Ctrl+O. The route is Codex's (`clipboard_copy.rs` and
+//! `terminal_capabilities.rs` `ClipboardCapabilities`, 0.174.0-alpha.6): inside tmux the text goes
+//! to tmux's own clipboard (`load-buffer -w`), which forwards it to the attached terminal; over
+//! SSH it goes out as an OSC 52 escape; a local session uses the platform tool (`wl-copy`,
+//! `xclip`, `xsel`, `pbcopy`). Whatever fails falls back to OSC 52, wrapped for tmux or GNU screen
+//! when one is in the way.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -10,11 +12,23 @@ use std::process::{Command, Stdio};
 pub const OSC52_MAX_BYTES: usize = 100_000;
 
 pub fn copy(text: &str) -> Result<(), String> {
-    let ssh = std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some();
-    if !ssh && native(text) {
-        return Ok(());
+    use crate::term::capabilities::{ClipboardCopyMode, clipboard_copy_mode, process_env};
+    match clipboard_copy_mode(&process_env) {
+        ClipboardCopyMode::ClientBuffer if text.len() <= OSC52_MAX_BYTES => {
+            match crate::term::capabilities::tmux_client_buffer_copy(text) {
+                Ok(()) => Ok(()),
+                Err(tmux) => osc52_to_tty(text).map_err(|osc| format!("{tmux}; {osc}")),
+            }
+        }
+        ClipboardCopyMode::ClientBuffer | ClipboardCopyMode::Osc52 => osc52_to_tty(text),
+        ClipboardCopyMode::FallbackOsc52 => {
+            if native(text) {
+                Ok(())
+            } else {
+                osc52_to_tty(text)
+            }
+        }
     }
-    osc52_to_tty(text)
 }
 
 fn native(text: &str) -> bool {
@@ -55,22 +69,42 @@ fn native(text: &str) -> bool {
 
 /// `ESC ] 52 ; c ; <base64> BEL`, or tmux's passthrough form.
 pub fn osc52_sequence(text: &str, tmux: bool) -> Result<Vec<u8>, String> {
+    use crate::term::capabilities::Osc52Target;
+    osc52_for(
+        text,
+        if tmux {
+            Osc52Target::EscapedDcs
+        } else {
+            Osc52Target::Direct
+        },
+    )
+}
+
+/// The OSC 52 write for what sits between codexw and the terminal (Codex `osc52_sequence`).
+pub fn osc52_for(
+    text: &str,
+    target: crate::term::capabilities::Osc52Target,
+) -> Result<Vec<u8>, String> {
+    use crate::term::capabilities::{Osc52Target, chunked_dcs, escaped_dcs};
     if text.len() > OSC52_MAX_BYTES {
         return Err(format!(
             "text is {} bytes; the terminal clipboard route takes at most {OSC52_MAX_BYTES}",
             text.len()
         ));
     }
-    let b64 = base64(text.as_bytes());
-    Ok(if tmux {
-        format!("\x1bPtmux;\x1b\x1b]52;c;{b64}\x07\x1b\\").into_bytes()
-    } else {
-        format!("\x1b]52;c;{b64}\x07").into_bytes()
-    })
+    let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    Ok(match target {
+        Osc52Target::Direct => osc,
+        Osc52Target::EscapedDcs => escaped_dcs(&osc),
+        Osc52Target::ChunkedDcs => chunked_dcs(&osc),
+    }
+    .into_bytes())
 }
 
 fn osc52_to_tty(text: &str) -> Result<(), String> {
-    let seq = osc52_sequence(text, std::env::var_os("TMUX").is_some())?;
+    let target =
+        crate::term::capabilities::Osc52Target::detect(&crate::term::capabilities::process_env);
+    let seq = osc52_for(text, target)?;
     let mut out: Box<dyn Write> = match std::fs::OpenOptions::new().write(true).open("/dev/tty") {
         Ok(f) => Box::new(f),
         Err(_) => Box::new(std::io::stdout()),

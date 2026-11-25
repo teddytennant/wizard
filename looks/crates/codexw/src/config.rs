@@ -1,5 +1,6 @@
 //! `~/.config/codexw/config.toml`: the few settings codexw keeps itself (`theme`,
-//! `session_picker_view`). Flat `key = "value"` lines; a write changes one key and leaves every
+//! `session_picker_view`, and the screen: `alternate_screen`, `fullscreen_transcript`). A table
+//! header such as Codex's `[tui]` is skipped, so the keys read the same under it. Flat `key = "value"` lines; a write changes one key and leaves every
 //! other line, comment and blank as it was.
 
 use std::path::{Path, PathBuf};

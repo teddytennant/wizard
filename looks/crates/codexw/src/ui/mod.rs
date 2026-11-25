@@ -5,6 +5,9 @@
 //! then the bottom pane (inset one row): status indicator, queued input preview, composer band,
 //! footer. Everything above the viewport is scrollback, written once through
 //! `term::history_insert`.
+//!
+//! On the owned (alternate) screen the same bottom pane sits at the bottom, the gap row above it
+//! holds the return-to-bottom control, and `transcript_view` draws the cells above that.
 
 pub mod approval;
 pub mod bottom_pane;
@@ -26,6 +29,7 @@ pub mod skill_popup;
 pub mod slash_popup;
 pub mod status_indicator;
 pub mod textarea;
+pub mod transcript_view;
 
 use std::fmt::Debug;
 

@@ -2,8 +2,10 @@
 //! The application state and its loop.
 //!
 //! Everything above the viewport is scrollback, written once; `cells` is the source of truth and
-//! a resize replays it (spec A.5). The loop is event driven: with nothing animating and nothing
-//! to draw there is no timer, so an idle codexw uses no CPU.
+//! a resize replays it (spec A.5). When the session owns the alternate screen (Codex 0.174's
+//! default, `term::alt_screen`) nothing goes to scrollback: `transcript` draws the cells above
+//! the composer every frame and scrolls them. The loop is event driven: with nothing animating
+//! and nothing to draw there is no timer, so an idle codexw uses no CPU.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -14,7 +16,7 @@ use agent_core::{
     Usage,
 };
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
@@ -28,11 +30,13 @@ use crate::ui::bottom_pane::{BottomPane, PaneEvent};
 use crate::ui::composer::PLACEHOLDERS;
 use crate::ui::history_cells::{ChatLog, ErrorCell, InfoCell, UserCell};
 use crate::ui::session_header::{DEFAULT_TIP, SessionHeaderCell, SessionInfoCell, TooltipCell};
+use crate::ui::transcript_view::TranscriptView;
 use crate::ui::{AppAction, BoxedCell, HistoryCell, Overlay, OverlayResult};
 use crate::wrap::{WrapOpts, word_wrap_line};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const CODEX_VERSION: &str = "0.147.0";
+/// The Codex release the look follows (`openai/codex` 06f334aa).
+pub const CODEX_VERSION: &str = "0.174.0-alpha.6";
 /// 120 frames per second at most.
 pub const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(8_333_334);
 pub const ANIMATION_INTERVAL: Duration = Duration::from_millis(32);
@@ -52,7 +56,16 @@ pub struct AppOpts {
     pub model: Option<String>,
     pub prompt: Option<String>,
     pub mock: bool,
+    /// `--no-alt-screen`, or the resolved screen choice ruled the alternate screen out: the chat
+    /// is inline and overlays stay on the main screen too.
     pub no_alt_screen: bool,
+    /// `-c tui.alternate_screen=…` (`auto`, `always`, `never`); `None` reads the config file.
+    pub alt_screen_mode: Option<crate::term::alt_screen::AltScreenMode>,
+    /// `-c tui.fullscreen_transcript=…`; `None` reads the config file, then `true`.
+    pub fullscreen_transcript: Option<bool>,
+    /// Resolved at startup: the session owns the alternate screen and draws its own scrollable
+    /// transcript. `false` (the headless default) is the inline renderer.
+    pub owned_screen: bool,
     /// Pick the composer placeholder (tests); `None` picks one at random.
     pub placeholder: Option<usize>,
     /// Home directory for `~` display; `None` reads `$HOME`.
@@ -108,6 +121,8 @@ pub struct App<W: Write> {
     has_emitted_history: bool,
     pub log: ChatLog,
     pub pane: BottomPane,
+    /// The scrollable transcript of the owned screen.
+    pub transcript: TranscriptView,
     pub overlay: Option<Box<dyn Overlay>>,
     /// The `loading` header shown until the session is configured.
     pub placeholder_header: Option<SessionHeaderCell>,
@@ -219,8 +234,10 @@ impl<W: Write> App<W> {
             !opts.status_line_off && !pane.footer.status_items.is_empty();
         pane.footer.model = opts.model.clone().unwrap_or_else(|| "loading".into());
         let header = SessionHeaderCell::new(None, "", &dir);
+        let mut term = InlineTerminal::new(out, screen, cursor);
+        term.set_owned(opts.owned_screen);
         Self {
-            term: InlineTerminal::new(out, screen, cursor),
+            term,
             screen,
             tx,
             export: Default::default(),
@@ -230,6 +247,7 @@ impl<W: Write> App<W> {
             has_emitted_history: false,
             log: ChatLog::new(),
             pane,
+            transcript: TranscriptView::new(),
             overlay: None,
             placeholder_header: Some(header),
             tip: DEFAULT_TIP,
@@ -314,6 +332,10 @@ impl<W: Write> App<W> {
     }
 
     fn queue_cell_lines(&mut self, cell: &dyn HistoryCell) {
+        if self.term.is_owned() {
+            // The owned transcript lays the cell out itself on the next frame.
+            return;
+        }
         let lines = self.separated_lines(cell);
         if !lines.is_empty() {
             self.term.queue_history_with(lines, self.wrap_policy());
@@ -637,10 +659,19 @@ impl<W: Write> App<W> {
         if let Some(c) = &self.input_ctl {
             c.pause();
         }
+        // An owned screen is handed back to the shell for the editor, its pointer and keyboard
+        // frame released first (Codex `leave_alt_screen_for_handoff`), and taken again after.
+        let owned = self.term.is_owned() && self.term.alt_active();
+        if owned {
+            let _ = self.term.leave_owned_screen();
+        }
         crate::term::modes::restore_after_exit();
         let result = crate::editor::run_editor(&seed, &cmd);
         let _ = crate::term::modes::set_modes(self.term.writer());
         crate::term::modes::flush_input();
+        if owned {
+            let _ = self.term.enter_owned_screen(self.screen);
+        }
         if let Some(c) = &self.input_ctl {
             c.resume();
         }
@@ -682,6 +713,9 @@ impl<W: Write> App<W> {
 
     /// Send text to the backend as a new turn and show it as a user cell.
     pub fn submit_prompt(&mut self, text: String) {
+        // Sending something returns the owned transcript to the latest row (Codex
+        // `owned_transcript.rs`).
+        self.transcript.jump_to_latest();
         self.esc_primed = false;
         self.pane.footer.esc_hint = false;
         self.push_cell(Box::new(UserCell { text: text.clone() }));
@@ -776,6 +810,16 @@ impl<W: Write> App<W> {
                     self.apply_action(a);
                 }
             }
+            self.request_draw();
+            return;
+        }
+        // The owned transcript's page keys, jumps, and Esc back to the latest row while reading
+        // (Codex `handle_scroll_key`), unless a view or a popup has the keys.
+        if self.term.is_owned()
+            && self.pane.view.is_none()
+            && !self.pane.composer.popup_active()
+            && self.transcript.handle_scroll_key(key)
+        {
             self.request_draw();
             return;
         }
@@ -998,6 +1042,24 @@ impl<W: Write> App<W> {
         self.request_draw();
     }
 
+    /// Mouse input, which only the owned screen asks for. The wheel scrolls the transcript, or
+    /// moves an open overlay as the terminal's alternate scroll would; the pointer drives the
+    /// return-to-bottom control.
+    pub fn on_mouse(&mut self, m: MouseEvent) {
+        if self.overlay.is_some() {
+            let code = match m.kind {
+                MouseEventKind::ScrollUp => KeyCode::Up,
+                MouseEventKind::ScrollDown => KeyCode::Down,
+                _ => return,
+            };
+            self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+            return;
+        }
+        if self.term.is_owned() && self.transcript.handle_mouse(m) {
+            self.request_draw();
+        }
+    }
+
     pub fn apply_action(&mut self, a: AppAction) {
         match a {
             AppAction::SetModel(m) => {
@@ -1076,8 +1138,7 @@ impl<W: Write> App<W> {
 
     /// Ctrl+L: wipe screen and scrollback, show only the header and the composer.
     pub fn clear_ui(&mut self) {
-        self.term.clear_pending_history();
-        let _ = self.term.clear_scrollback_and_screen();
+        self.wipe_screen();
         self.has_emitted_history = false;
         self.replay_from = self.cells.len();
         let mut header = SessionHeaderCell::new(
@@ -1090,10 +1151,24 @@ impl<W: Write> App<W> {
     }
 
     fn clear_screen_for_new_chat(&mut self) {
-        self.term.clear_pending_history();
-        let _ = self.term.clear_scrollback_and_screen();
+        self.wipe_screen();
         self.has_emitted_history = false;
         self.replay_from = self.cells.len();
+    }
+
+    /// Start the screen over. Inline: the screen and the terminal's scrollback. Owned: only the
+    /// alternate screen, since a scrollback purge there would take the shell's history with it.
+    fn wipe_screen(&mut self) {
+        self.term.clear_pending_history();
+        if self.term.is_owned() {
+            if self.term.alt_active() {
+                let _ = self.term.clear_visible_screen();
+            }
+            self.transcript.invalidate();
+            self.transcript.jump_to_latest();
+        } else {
+            let _ = self.term.clear_scrollback_and_screen();
+        }
     }
 
     /// `/clear`: start a new chat; the screen is wiped once the backend confirms the new session.
@@ -1108,6 +1183,12 @@ impl<W: Write> App<W> {
     /// Wipe and re-emit every stored cell at the current width (spec A.5.2), newest rows only.
     pub fn reflow_now(&mut self) {
         self.reflow_at = None;
+        if self.term.is_owned() {
+            // The owned transcript is laid out from the cells on every frame.
+            self.transcript.invalidate();
+            self.request_draw();
+            return;
+        }
         self.term.clear_pending_history();
         let _ = self.term.clear_scrollback_and_screen();
         self.has_emitted_history = false;
@@ -1143,6 +1224,11 @@ impl<W: Write> App<W> {
         let width_changed = new.width != self.screen.width;
         let height_changed = new.height != self.screen.height;
         self.screen = new;
+        if self.term.is_owned() {
+            // No scrollback to replay: the next frame lays the transcript out at the new size.
+            self.request_draw();
+            return;
+        }
         if width_changed || height_changed {
             self.term.clear_pending_history();
             if self.overlay.is_some() {
@@ -1189,6 +1275,9 @@ impl<W: Write> App<W> {
             st.header = self.log.status_header().unwrap_or_else(|| "Working".into());
         }
         self.pane.status_hidden = self.log.text_streaming();
+        if self.term.is_owned() {
+            return self.draw_owned();
+        }
         let height = self.desired_height();
         let active = self.active_lines(screen.width);
         let pane = &mut self.pane;
@@ -1213,6 +1302,40 @@ impl<W: Write> App<W> {
                 area.width,
                 pane_h.saturating_sub(1),
             );
+            let cursor = pane.render(pane_area, f.buffer_mut());
+            if let Some(c) = cursor {
+                f.set_cursor_position(c);
+            }
+            if pane.view.is_none() && pane.composer.editor.uses_vim_insert_cursor() {
+                f.set_cursor_style(crossterm::cursor::SetCursorStyle::SteadyBar);
+            }
+        })
+    }
+
+    /// One frame of the owned screen (Codex `owned_transcript.rs` `paint_conversation`): the
+    /// bottom pane at the bottom, the gap row above it, the transcript in the rows above that.
+    fn draw_owned(&mut self) -> std::io::Result<()> {
+        let screen = self.screen;
+        if !self.term.alt_active() {
+            self.term.enter_owned_screen(screen)?;
+        }
+        let live = self.active_lines(screen.width);
+        self.transcript
+            .sync(&self.cells, self.replay_from, screen.width, self.raw_output);
+        let pane = &mut self.pane;
+        let transcript = &mut self.transcript;
+        self.term.draw_alt(screen, |f| {
+            let area = f.area();
+            if area.is_empty() {
+                return;
+            }
+            let pane_h = pane.desired_height(area.width).min(area.height);
+            let above = area.height - pane_h;
+            let pane_area = Rect::new(area.x, area.bottom() - pane_h, area.width, pane_h);
+            let gap = (above > 0).then(|| Rect::new(area.x, pane_area.y - 1, area.width, 1));
+            let transcript_area = Rect::new(area.x, area.y, area.width, above.saturating_sub(1));
+            transcript.render(&live, transcript_area, f.buffer_mut());
+            transcript.render_follow_control(gap, f.buffer_mut());
             let cursor = pane.render(pane_area, f.buffer_mut());
             if let Some(c) = cursor {
                 f.set_cursor_position(c);
@@ -1440,6 +1563,9 @@ impl<W: Write> App<W> {
         if self.overlay.is_some() {
             self.close_overlay();
         }
+        // An owned screen goes back to the shell; the main screen's (empty) viewport is cleared
+        // below as in the inline case.
+        let _ = self.term.leave_owned_screen();
         let _ = self.term.clear();
         let _ = self.term.writer().flush();
         let _ = crate::term::modes::set_title(self.term.writer(), "");
@@ -1564,6 +1690,7 @@ pub async fn run<W: Write + Send>(app: &mut App<W>, mut pump: EventPump<Msg>) ->
                 Some(TermEvent::Key(k)) => app.on_key(k),
                 Some(TermEvent::Paste(s)) => app.on_paste(&s),
                 Some(TermEvent::Resize(w, h)) => app.on_resize(w, h),
+                Some(TermEvent::Mouse(m)) => app.on_mouse(m),
                 Some(TermEvent::Msg(Msg::Backend(e))) => app.on_backend(e),
                 Some(TermEvent::Msg(Msg::Shell(o))) => app.on_shell_output(o),
                 Some(_) => {}

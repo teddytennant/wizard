@@ -16,7 +16,10 @@ Copyright (c) OpenAI
 Licensed under the Apache License, Version 2.0.
 
 Ported from codex-rs/tui/src/ into src/ui/codex.rs, src/ui/mod.rs,
-src/skin/blend.rs, src/skin/motion.rs and src/skin/layout.rs.
+src/skin/blend.rs, src/skin/motion.rs and src/skin/layout.rs, and into
+looks/crates/codexw/ (the codex full look, wizard-ui-codex), which follows
+Codex 0.174.0-alpha.6 (openai/codex commit 06f334aa) with the modifications
+noted at each ported site.
 
 --------------------------------------------------------------------------------
 

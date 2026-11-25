@@ -1,5 +1,5 @@
 // OWNER: shared
-//! `codexw`: the OpenAI Codex CLI 0.147.0 terminal UI on the wizard backend.
+//! `codexw`: the OpenAI Codex CLI terminal UI (0.174.0-alpha.6) on the wizard backend.
 
 // Edition 2024 turns on let chains; code written before that nests `if let` on purpose.
 #![allow(clippy::collapsible_if)]

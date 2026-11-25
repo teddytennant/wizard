@@ -36,6 +36,11 @@ impl ColorLevel {
             ColorLevel::TrueColor
         } else if term.contains("256color") {
             ColorLevel::Ansi256
+        } else if crate::term::capabilities::ghostty_truecolor(
+            &crate::term::capabilities::process_env,
+        ) {
+            // Ghostty over SSH without COLORTERM (Codex terminal-detection `ansi_color_level`).
+            ColorLevel::TrueColor
         } else {
             ColorLevel::Ansi16
         }

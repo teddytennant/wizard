@@ -6,6 +6,11 @@
 //! the double buffer and the scrollback writes, so this module follows that design
 //! (`custom_terminal.rs` / `tui.rs` in Codex 0.147.0, spec Part A.4, A.16) and reproduces its
 //! byte stream. The diff and draw loop is derived from ratatui's own `Terminal` (MIT).
+//!
+//! When the session owns the screen (Codex 0.174's default, `alt_screen.rs`) the same terminal
+//! draws full-screen frames on the alternate screen instead and writes nothing into scrollback;
+//! `enter_owned_screen` and `leave_owned_screen` move it there and back (Codex `tui.rs`
+//! `enter_alt_screen` and `leave_alt_screen_for_handoff`).
 
 use std::io::{self, Write};
 
@@ -81,6 +86,10 @@ pub struct InlineTerminal<W: Write> {
     hidden_cursor: bool,
     alt_saved: Option<Rect>,
     alt_active: bool,
+    /// The session owns the alternate screen: overlays open and close on it without leaving.
+    owned: bool,
+    /// What the owned screen's entry turned on, so leaving undoes exactly that.
+    owned_state: super::alt_screen::ScreenState,
     pending_history: Vec<(Line<'static>, WrapPolicy)>,
 }
 
@@ -98,6 +107,8 @@ impl<W: Write> InlineTerminal<W> {
             hidden_cursor: false,
             alt_saved: None,
             alt_active: false,
+            owned: false,
+            owned_state: Default::default(),
             pending_history: Vec::new(),
         }
     }
@@ -107,6 +118,18 @@ impl<W: Write> InlineTerminal<W> {
     }
     pub fn alt_active(&self) -> bool {
         self.alt_active
+    }
+    /// The session owns the screen (it may be handed to an editor right now).
+    pub fn is_owned(&self) -> bool {
+        self.owned
+    }
+    /// Mark the session as owning the screen; the first owned frame enters it.
+    pub fn set_owned(&mut self, owned: bool) {
+        self.owned = owned;
+    }
+    /// The owned screen is entered and has the pointer.
+    pub fn owned_mouse_captured(&self) -> bool {
+        self.owned_state.mouse
     }
     pub fn pending_history_len(&self) -> usize {
         self.pending_history.len()
@@ -331,7 +354,41 @@ impl<W: Write> InlineTerminal<W> {
 
     // ---- alternate screen -------------------------------------------------------------------
 
-    /// `?1049h`, `?1007h`, viewport becomes the whole screen.
+    /// Enter the alternate screen for the session (Codex `Tui::enter_alt_screen` with the screen
+    /// owned): its keyboard frame and pointer capture come with it, the viewport becomes the whole
+    /// screen and the inline viewport is kept for the way back.
+    pub fn enter_owned_screen(&mut self, screen: Size) -> io::Result<()> {
+        if self.alt_active {
+            return Ok(());
+        }
+        self.pending_history.clear();
+        self.owned_state = super::alt_screen::enter(&mut self.out, true)?;
+        self.alt_saved = Some(self.viewport_area);
+        self.last_known_screen_size = screen;
+        self.set_viewport_area(Rect::new(0, 0, screen.width, screen.height));
+        self.clear()?;
+        self.alt_active = true;
+        Ok(())
+    }
+
+    /// Give the main screen back (Codex `leave_alt_screen_for_handoff`): for an editor, and on
+    /// exit. The pointer and the keyboard frame go first, then the screen.
+    pub fn leave_owned_screen(&mut self) -> io::Result<()> {
+        if !self.alt_active || !self.owned {
+            return Ok(());
+        }
+        let r = super::alt_screen::leave(&mut self.out, &mut self.owned_state);
+        if let Some(saved) = self.alt_saved.take() {
+            self.set_viewport_area(saved);
+        }
+        // The main screen does not hold the alternate screen's diff baseline.
+        self.invalidate_viewport();
+        self.alt_active = false;
+        r
+    }
+
+    /// `?1049h`, `?1007h`, viewport becomes the whole screen. On an owned screen an overlay is
+    /// already there.
     pub fn enter_alt_screen(&mut self, screen: Size) -> io::Result<()> {
         if self.alt_active {
             return Ok(());
@@ -345,9 +402,15 @@ impl<W: Write> InlineTerminal<W> {
         Ok(())
     }
 
-    /// `?1007l`, `?1049l`, the inline viewport comes back.
+    /// `?1007l`, `?1049l`, the inline viewport comes back. Closing an overlay on an owned screen
+    /// keeps the screen (Codex `Tui::leave_alt_screen`) and only repaints.
     pub fn leave_alt_screen(&mut self) -> io::Result<()> {
         if !self.alt_active {
+            return Ok(());
+        }
+        if self.owned {
+            // The overlay's rows are still on screen: wipe them, then repaint in full.
+            self.clear_after_position(Position::new(0, 0))?;
             return Ok(());
         }
         self.out.write_all(b"\x1b[?1007l\x1b[?1049l")?;
