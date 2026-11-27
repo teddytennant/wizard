@@ -173,6 +173,12 @@ fn take_backticks(
     }
 }
 
+/// A bare number, or one with a `timeout` unit suffix (`5s`, `2m`, `1h`, `1d`).
+fn is_duration(word: &str) -> bool {
+    let number = word.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(word);
+    number.parse::<f64>().is_ok()
+}
+
 /// Words that run another command; rules see the command underneath.
 const WRAPPERS: [&str; 5] = ["time", "nohup", "nice", "timeout", "command"];
 
@@ -188,7 +194,7 @@ pub fn strip_prefixes(cmd: &str) -> String {
             // `timeout 5`, `nice -n 5`: drop the wrapper's own arguments.
             while words
                 .first()
-                .is_some_and(|w| w.starts_with('-') || w.parse::<f64>().is_ok())
+                .is_some_and(|w| w.starts_with('-') || is_duration(w))
             {
                 words.remove(0);
             }
@@ -395,6 +401,8 @@ mod tests {
     fn prefixes_and_wrappers_are_stripped() {
         assert_eq!(strip_prefixes("FOO=1 BAR=2 rm x"), "rm x");
         assert_eq!(strip_prefixes("timeout 5 rm x"), "rm x");
+        assert_eq!(strip_prefixes("timeout 5s rm x"), "rm x");
+        assert_eq!(strip_prefixes("timeout 1.5m rm x"), "rm x");
         assert_eq!(strip_prefixes("nice -n 5 time rm x"), "rm x");
         assert_eq!(strip_prefixes("rm FOO=1"), "rm FOO=1");
     }
