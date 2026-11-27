@@ -225,6 +225,7 @@ pub fn kernel() -> &'static Kernel {
         if let Some(root) = PROJECT_ROOT.get() {
             options.project_root = root.clone();
         }
+        options.config = crate::config::Config::plugins_on_disk();
         // The host is built from the same root the kernel confines file
         // helpers to, so a `wizard.process.run` with no agent bound runs where
         // a sandboxed plugin can already read and write.
