@@ -8,6 +8,8 @@ Releases before 2.0.0 (v1.6.0 through v1.8.0) predate this file; their notes are
 
 ## [Unreleased]
 
+## [2026.11.27] - 2026-11-27
+
 ### Added
 
 - Wizard tells the terminal what a session is doing. In Rex the tab shows a turn running, a permission prompt waiting, and a turn that finished, through the Program Status Protocol (OSC 7501) that Claude Code also speaks. The window title becomes the first prompt of the session in every terminal. This covers the house UI and all six full looks; `codex` and `opencode` keep their own titles.
