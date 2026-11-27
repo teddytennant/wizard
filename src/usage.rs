@@ -625,7 +625,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
     // Wizard picker offers one, and tabling them would force FALLBACK_PRICE
     // up to $30/$180 and make every unknown model read three times worse than
     // it does now. Their *base* ids are absent for hazard 2 above.
-    ("gpt-5.6-sol", ModelPrice::per_mtok_cached(5.0, 30.0, 0.5)),
+    ("gpt-5.6-sol", ModelPrice::per_mtok_cached(4.0, 20.0, 0.4)),
     ("gpt-5.6-terra", ModelPrice::per_mtok_cached(2.0, 12.0, 0.2)),
     ("gpt-5.6-luna", ModelPrice::per_mtok_cached(0.2, 1.2, 0.02)),
     (
@@ -965,7 +965,21 @@ fn lookup_price(model: &str, endpoint: &str) -> Option<ModelPrice> {
     open.chain(sellers)
         .filter(|(key, _, _)| id.contains(key))
         .max_by_key(|(key, _, from_seller)| (key.len(), *from_seller))
-        .map(|(_, price, _)| price)
+        .map(|(key, price, from_seller)| match from_seller {
+            true => price,
+            false => openai_list_price(key).unwrap_or(price),
+        })
+}
+
+/// OpenAI's current list price for a table key, from the dated, id-exact
+/// rows in `llm-prices`, so the OpenAI block cannot drift from the vendor page.
+fn openai_list_price(key: &str) -> Option<ModelPrice> {
+    let p = llm_prices::lookup_provider("openai", key).filter(|p| p.model == key)?;
+    Some(ModelPrice::per_mtok_cached(
+        p.input?,
+        p.output?,
+        p.cache_read?,
+    ))
 }
 
 /// Contracted rates from managed settings (`modelPricing`): a multiplier on every
@@ -1968,7 +1982,7 @@ mod tests {
 
     #[test]
     fn openai_models_price_at_their_published_rates() {
-        assert_rate(headline("gpt-5.6-sol"), 5.0 + 30.0, "gpt-5.6-sol");
+        assert_rate(headline("gpt-5.6-sol"), 4.0 + 20.0, "gpt-5.6-sol");
         assert_rate(headline("gpt-5.6-terra"), 2.0 + 12.0, "gpt-5.6-terra");
         assert_rate(headline("gpt-5.6-luna"), 0.2 + 1.2, "gpt-5.6-luna");
         assert_rate(headline("gpt-5.3-codex"), 1.75 + 14.0, "gpt-5.3-codex");
@@ -1979,8 +1993,8 @@ mod tests {
             "the whole point is that these no longer read as the fallback"
         );
 
-        // Cached input is 0.1x: 100k fresh at $5 + 900k cached at $0.50.
-        assert_rate(warm("gpt-5.6-sol"), 0.5 + 0.45, "gpt-5.6-sol cache read");
+        // Cached input is 0.1x: 100k fresh at $4 + 900k cached at $0.40.
+        assert_rate(warm("gpt-5.6-sol"), 0.4 + 0.36, "gpt-5.6-sol cache read");
 
         // A cache *write* on an automatic cache costs exactly what a fresh
         // input token costs — there is no seeding premium to charge, unlike
@@ -1996,9 +2010,26 @@ mod tests {
             },
         );
         assert!(
-            (seeding.usd - headline("gpt-5.6-sol").usd + 30.0).abs() < 1e-9,
+            (seeding.usd - headline("gpt-5.6-sol").usd + 20.0).abs() < 1e-9,
             "seeding an automatic cache is priced as plain input: {seeding:?}"
         );
+    }
+
+    #[test]
+    fn openai_rows_follow_llm_prices() {
+        for (key, _) in PRICES.iter().filter(|(key, _)| key.starts_with("gpt-")) {
+            let listed = llm_prices::lookup_provider("openai", key).unwrap();
+            let price = lookup_price(key, "").unwrap();
+            assert_eq!(
+                (
+                    Some(price.input),
+                    Some(price.output),
+                    Some(price.cache_read)
+                ),
+                (listed.input, listed.output, listed.cache_read),
+                "{key}"
+            );
+        }
     }
 
     #[test]
