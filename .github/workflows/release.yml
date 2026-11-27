@@ -892,7 +892,9 @@ jobs:
           persist-credentials: false
       # ort-sys 2.0.0-rc.13 finds target/ by counting up from OUT_DIR, which
       # Rust 1.100's build-dir layout broke. rc.14 fixes that, but the
-      # parakeet-rs Zeron pins needs rc.13.
+      # parakeet-rs Zeron pins needs rc.13. RUSTUP_TOOLCHAIN on Package is
+      # what makes the pin stick: gui/rust-toolchain.toml says stable and
+      # outranks the default this action sets.
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: 1.99.1
@@ -905,6 +907,8 @@ jobs:
       # zeron-update.json marks the unpacked zip as the portable install the
       # in-app updater may replace; the updater itself reads GitHub releases.
       - name: Package
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
         run: ./scripts/package-windows.ps1 -ReleasesUrl "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
