@@ -266,6 +266,7 @@ async fn real_main(mut opts: AppOpts) -> Result<()> {
     let cursor = pr.cursor.map_or(Position::new(0, 0), |(x, y)| {
         Position::new(x, y.min(h.saturating_sub(1)))
     });
+    tuikit::status::keep_own_title();
     let _ = modes::set_title(
         &mut out,
         &opts

@@ -474,6 +474,7 @@ pub async fn run_tui(
     // something restored it while the TUI was still using it.
     let mut draw_faults = DrawFaults::new();
     let mut watchdog = TerminalWatchdog::new();
+    let mut program_status = super::program_status::Reporter::new();
     // Consecutive background rebuilds that came back empty-handed. Reset on
     // the first one that produces an agent.
     let mut failed_rebuilds: u32 = 0;
@@ -512,6 +513,7 @@ pub async fn run_tui(
         } else {
             draw_faults.succeeded();
         }
+        program_status.sync(&app, &mut std::io::stdout());
 
         // Refresh this session's heartbeat so other dashboards see it live.
         if last_heartbeat.elapsed() >= Duration::from_secs(3) {

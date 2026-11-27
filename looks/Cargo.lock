@@ -2122,6 +2122,7 @@ version = "0.1.0"
 dependencies = [
  "agent-core",
  "anyhow",
+ "base64 0.22.1",
  "crossterm",
  "futures-util",
  "libc",

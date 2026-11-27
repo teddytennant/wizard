@@ -93,6 +93,7 @@ pub(super) fn setup_terminal() -> Result<Tui> {
         crossterm::event::EnableMouseCapture,
     )
     .context("entering alternate screen")?;
+    super::program_status::armed(&mut stdout);
     // Kitty keyboard protocol (best-effort): with disambiguation on, terminals
     // report Shift+Enter as Enter+SHIFT instead of a bare Enter, which lets the
     // composer bind it to a newline. Push unconditionally — unsupported
@@ -1046,6 +1047,7 @@ fn restore_terminal() -> Result<()> {
         std::io::stdout(),
         crossterm::event::PopKeyboardEnhancementFlags,
     );
+    super::program_status::disarmed(&mut std::io::stdout());
     crossterm::execute!(
         std::io::stdout(),
         crossterm::event::DisableMouseCapture,

@@ -244,6 +244,7 @@ async fn run(args: Args) -> Result<String> {
     if std::env::var("OPENC_GLYPH_WIDTHS").is_ok_and(|v| v == "codepoint") {
         tuikit::width::set_cluster_widths(false);
     }
+    tuikit::status::keep_own_title();
     let _ = guard.set_title(&term::window_title(glyphs.sep, &cwd));
     if caps.grapheme {
         let _ = guard.enable_grapheme_clusters();

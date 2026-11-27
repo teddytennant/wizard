@@ -6,6 +6,7 @@ mod command;
 mod goal;
 mod paste;
 mod picker;
+mod program_status;
 mod prompts;
 mod recover;
 mod runtime;

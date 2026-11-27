@@ -455,6 +455,8 @@ struct Link {
     turn_ended: bool,
     /// Sent right after the next `Ready`, once the transcript replay has replaced the screen.
     after_ready: Option<String>,
+    /// What the session is doing, for the terminal's tab.
+    status: agent_core::status::Tracker,
 }
 
 impl Link {
@@ -476,7 +478,11 @@ impl Link {
                     } else {
                         format!("{msg}\n{t}")
                     };
-                    let _ = self.ev_tx.send(Event::Fatal(text));
+                    let fatal = Event::Fatal(text);
+                    if self.status.on_event(&fatal) {
+                        agent_core::status::post(self.status.status().clone());
+                    }
+                    let _ = self.ev_tx.send(fatal);
                     keep = false;
                 }
                 Action::Emit(e) => {
@@ -499,6 +505,12 @@ impl Link {
                         _ => {}
                     }
                     let ready = matches!(e, Event::Ready { .. });
+                    // Before the event, so the status is there when the frontend wakes for it.
+                    // `Ready` says so even with nothing changed: it is the first word from a
+                    // session, and a restarted one has to say where it stands again.
+                    if self.status.on_event(&e) || ready {
+                        agent_core::status::post(self.status.status().clone());
+                    }
                     if self.ev_tx.send(e).is_err() {
                         keep = false;
                     }
@@ -579,6 +591,9 @@ async fn serve(
                     }
                 }
                 Some(r) => {
+                    if link.status.on_request(&r) {
+                        agent_core::status::post(link.status.status().clone());
+                    }
                     let acts = core.on_request(r);
                     if !link.dispatch(p, acts) {
                         return End::Dead;
@@ -636,6 +651,7 @@ async fn run(
         running: HashMap::new(),
         turn_ended: false,
         after_ready: None,
+        status: Default::default(),
     };
     let cwd_s = cwd.to_string_lossy().into_owned();
     let mut core = Core::new(cwd_s.clone(), resume, version.clone());

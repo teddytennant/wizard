@@ -746,7 +746,12 @@ impl<T: Send + 'static> EventPump<T> {
 
     /// Next event, or `None` when the terminal source has closed.
     pub async fn next(&mut self) -> Option<Event<T>> {
+        // The loop that awaits this is the one that draws, and it is between frames on both
+        // sides of the wait. The second call is the one that counts: a status is posted just
+        // ahead of the event that wakes this up.
+        crate::status::flush();
         let ev = self.rx.recv().await;
+        crate::status::flush();
         if matches!(ev, Some(Event::Tick)) {
             self.tick_pending.store(false, Ordering::SeqCst);
         }
@@ -756,6 +761,7 @@ impl<T: Send + 'static> EventPump<T> {
 
 impl<T> Drop for EventPump<T> {
     fn drop(&mut self) {
+        crate::status::clear();
         self.task.abort();
     }
 }
@@ -764,6 +770,8 @@ impl<T: Send + 'static> Stream for EventPump<T> {
     type Item = Event<T>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // As in `next`. A poll that finds nothing is polled again when something arrives.
+        crate::status::flush();
         let poll = self.rx.poll_recv(cx);
         if let Poll::Ready(Some(Event::Tick)) = &poll {
             self.tick_pending.store(false, Ordering::SeqCst);

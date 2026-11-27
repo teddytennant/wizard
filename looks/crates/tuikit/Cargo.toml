@@ -9,6 +9,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+base64 = "0.22"
 ratatui.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 unicode-width.workspace = true

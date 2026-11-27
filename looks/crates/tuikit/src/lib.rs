@@ -32,6 +32,7 @@ pub mod pump;
 pub mod scroll;
 pub mod select;
 pub mod spinner;
+pub mod status;
 pub mod syntax;
 pub mod term;
 pub mod testing;

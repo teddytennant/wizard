@@ -9,6 +9,7 @@ pub mod commands;
 pub mod export;
 pub mod mock;
 pub mod procs;
+pub mod status;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};
