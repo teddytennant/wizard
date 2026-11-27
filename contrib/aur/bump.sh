@@ -22,13 +22,23 @@ digest_of() {
   printf '%s' "$sum"
 }
 
+# Into a file rather than a pipe, so a retry starts over instead of hashing a
+# partial body twice. errexit does not reach inside $(...), so a failed
+# download has to fail the function by hand or the empty file gets hashed.
 fetch_digest() {
-  curl -fsSL "$1" | sha256sum | cut -d' ' -f1
+  local tmp status=0
+  tmp="$(mktemp)"
+  curl -fsSL --retry 6 --retry-delay 20 --retry-all-errors -o "$tmp" "$1" \
+    && sha256sum "$tmp" | cut -d' ' -f1 || status=$?
+  rm -f "$tmp"
+  return "$status"
 }
 
 x86_64="$(digest_of wizard-x86_64-unknown-linux-gnu.tar.gz)"
 aarch64="$(digest_of wizard-aarch64-unknown-linux-gnu.tar.gz)"
-license="$(fetch_digest "$repo/raw/v$version/LICENSE-MIT")"
+# Not $repo/raw/: that redirect takes about 11s to answer on this repo and
+# GitHub's edge gives up at 10 with a 504.
+license="$(fetch_digest "https://raw.githubusercontent.com/teddytennant/wizard/v$version/LICENSE-MIT")"
 source_tar="$(fetch_digest "$repo/archive/refs/tags/v$version.tar.gz")"
 
 # Set one key in a PKGBUILD (`key=value`) or .SRCINFO (`key = value`) line.
