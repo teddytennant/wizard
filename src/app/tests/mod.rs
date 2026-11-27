@@ -3323,6 +3323,19 @@ fn esc_enters_normal_x_deletes_and_i_returns_to_insert() {
 }
 
 #[test]
+fn submitting_from_normal_mode_returns_the_composer_to_insert() {
+    let mut app = vim_app();
+    type_str(&mut app, "hello");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.vim.mode, VimMode::Normal);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.input.is_empty());
+    assert_eq!(app.vim.mode, VimMode::Insert);
+    type_str(&mut app, "next");
+    assert_eq!(app.input, "next");
+}
+
+#[test]
 fn word_motions_and_dw_in_normal_mode() {
     let mut app = vim_app();
     type_str(&mut app, "foo bar baz");

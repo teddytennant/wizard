@@ -4026,6 +4026,13 @@ impl App {
         if input.is_empty() {
             return None;
         }
+        // A submitted prompt leaves the composer in INSERT, as `reset_to_insert`
+        // documents; Enter in NORMAL reaches here without changing the mode.
+        let mode = self.vim.mode;
+        self.vim.reset_to_insert();
+        if self.vim.mode != mode {
+            self.statusline_trigger();
+        }
         if let Some(arg) = input
             .strip_prefix("/statusline")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
